@@ -1,0 +1,379 @@
+{
+  "scenarios": {
+    "isolation": {
+      "run": {
+        "elapsed_s": 10.04,
+        "dropped_buffers": 0,
+        "failed_tracks": [],
+        "cpu_avg_percent_total": 0.0,
+        "peak_working_set_mb": 10.26,
+        "silence_fill_events": 2
+      },
+      "tracks": {
+        "a": {
+          "levels_db_vs_own": {
+            "a": 0.0,
+            "b": -69.7,
+            "c": -76.5,
+            "outside": -73.8
+          },
+          "own_present": true,
+          "worst_other_db": -69.7,
+          "rms_dbfs": -44.7,
+          "pass": true
+        },
+        "b": {
+          "levels_db_vs_own": {
+            "a": -74.8,
+            "b": 0.0,
+            "c": -77.7,
+            "outside": -62.3
+          },
+          "own_present": true,
+          "worst_other_db": -62.3,
+          "rms_dbfs": -44.7,
+          "pass": true
+        },
+        "c": {
+          "levels_db_vs_own": {
+            "a": -75.6,
+            "b": -76.6,
+            "c": 0.0,
+            "outside": -77.5
+          },
+          "own_present": true,
+          "worst_other_db": -75.6,
+          "rms_dbfs": -44.7,
+          "pass": true
+        }
+      },
+      "system_reference_levels_db_vs_loudest": {
+        "a": -0.0,
+        "b": 0.0,
+        "c": -0.0,
+        "outside": -0.0
+      },
+      "reference_has_all_tones": true,
+      "limit_db": -40.0,
+      "pass": true
+    },
+    "tree": {
+      "cmd_pid": 25624,
+      "ffplay_child_pid": 15936,
+      "session_owner_of_child": {
+        "pid": 15936,
+        "parent_pid": 25624,
+        "process": "ffplay.exe"
+      },
+      "include_tree_on_parent_cmd": {
+        "description": "records the ffplay child, not the outside tone",
+        "levels_db_vs_own": {
+          "child_tone": 0.0,
+          "outside_tone": -62.3
+        },
+        "own_present": true,
+        "worst_other_db": -62.3,
+        "rms_dbfs": -44.2,
+        "pass": true
+      },
+      "exclude_mode_on_parent_cmd": {
+        "description": "records everything except the tree: outside tone present, child tone absent",
+        "levels_db_vs_own": {
+          "child_tone": -76.2,
+          "outside_tone": 0.0
+        },
+        "own_present": true,
+        "worst_other_db": -76.2,
+        "rms_dbfs": -44.1,
+        "pass": true
+      },
+      "child_pid_direct": {
+        "levels_db_vs_own": {
+          "child_tone": 0.0,
+          "outside_tone": -62.3
+        },
+        "own_present": true,
+        "worst_other_db": -62.3,
+        "rms_dbfs": -44.3,
+        "pass": true
+      },
+      "run": {
+        "elapsed_s": 10.02,
+        "dropped_buffers": 0,
+        "failed_tracks": [],
+        "cpu_avg_percent_total": 0.0,
+        "peak_working_set_mb": 9.91,
+        "silence_fill_events": 0
+      },
+      "run_kid": {
+        "elapsed_s": 6.02,
+        "dropped_buffers": 0,
+        "failed_tracks": [],
+        "cpu_avg_percent_total": 0.0,
+        "peak_working_set_mb": 9.08,
+        "silence_fill_events": 1
+      },
+      "pass": true
+    },
+    "chrome": {
+      "browser_root_pid": 12628,
+      "audio_session_owner_pids": {
+        "24512": "utility:audio.mojom.AudioService"
+      },
+      "process_roles": {
+        "4800": "crashpad-handler",
+        "7556": "renderer",
+        "8328": "renderer",
+        "12256": "renderer",
+        "12628": "browser",
+        "24512": "utility:audio.mojom.AudioService",
+        "25460": "utility:network.mojom.NetworkService",
+        "26300": "renderer",
+        "27484": "utility:storage.mojom.StorageService",
+        "27812": "gpu-process"
+      },
+      "record_browser_root_with_tree": {
+        "levels_db_vs_own": {
+          "chrome_tone": 0.0,
+          "outside_tone": -107.1
+        },
+        "own_present": true,
+        "worst_other_db": -107.1,
+        "rms_dbfs": -13.5,
+        "pass": true
+      },
+      "record_audio_session_process_only": {
+        "levels_db_vs_own": {
+          "chrome_tone": 0.0,
+          "outside_tone": -107.1
+        },
+        "own_present": true,
+        "worst_other_db": -107.1,
+        "rms_dbfs": -13.5,
+        "pass": true
+      },
+      "recommendation": "record the browser root process with its tree: the audio is played by a child utility process (audio service), which the tree includes",
+      "run": {
+        "elapsed_s": 10.02,
+        "dropped_buffers": 0,
+        "failed_tracks": [],
+        "cpu_avg_percent_total": 0.0292,
+        "peak_working_set_mb": 9.83,
+        "silence_fill_events": 0
+      },
+      "pass": true
+    },
+    "align": {
+      "run": {
+        "elapsed_s": 20.02,
+        "dropped_buffers": 0,
+        "failed_tracks": [],
+        "cpu_avg_percent_total": 0.0146,
+        "peak_working_set_mb": 9.85,
+        "silence_fill_events": 0
+      },
+      "clicks_found": {
+        "a": 20,
+        "b": 20,
+        "system": 40
+      },
+      "matched": {
+        "a": 20,
+        "b": 20
+      },
+      "track_a_minus_system_ms": {
+        "mean": 10.74,
+        "std": 0.0,
+        "max_abs": 10.74
+      },
+      "track_b_minus_system_ms": {
+        "mean": 10.74,
+        "std": 0.0,
+        "max_abs": 10.74
+      },
+      "track_a_vs_b_offset_ms": 0.0,
+      "worst_alignment_error_ms": 10.74,
+      "worst_pairwise_error_ms": 0.0,
+      "limit_ms": 50.0,
+      "method": "Two ffplay processes play the same click file started at different times; every click is located in its own track and in the system loopback track (which holds both). Deltas are on the session clock (track offset + sample position).",
+      "pass": true
+    },
+    "version": {
+      "windows_version": "10.0.19045",
+      "windows_release": "10",
+      "probe_output": [
+        "os: Windows 10 Pro (build 19045)",
+        "target pid: 29140",
+        "include_tree=false 16 kHz mono i16 (engine conversion): ok",
+        "include_tree=false 48 kHz stereo f32 (own resampling): ok",
+        "include_tree=true 16 kHz mono i16 (engine conversion): ok",
+        "include_tree=true 48 kHz stereo f32 (own resampling): ok"
+      ],
+      "activation_ok_all": true,
+      "pass": true
+    },
+    "apps": {
+      "teams": {
+        "processes_running": 0,
+        "in_sessions": 0,
+        "session_states": [],
+        "installed_packages": [
+          "MSTeams 26288.2004.5269.3420"
+        ]
+      },
+      "discord": {
+        "processes_running": 0,
+        "in_sessions": 0,
+        "session_states": [],
+        "installed": true
+      },
+      "chrome": {
+        "processes_running": 31,
+        "in_sessions": 0,
+        "session_states": []
+      },
+      "note": "Only listing; nothing was started, no account was used. Apps that are not running cannot appear in the session list.",
+      "pass": null
+    },
+    "crash": {
+      "recorded_before_kill_s": 26.5,
+      "journaled_complete_segments_s": 20.0,
+      "audio_readable_on_disk_s": 26.25,
+      "audio_lost_s": 0.25,
+      "limit_s": 60.0,
+      "replay_output": [
+        "session: 16000 Hz, 160000 samples per segment, ended: false, undecodable lines: 0",
+        "pid-29324: 2 segments, 20.0 s, 2.5 ms .. 20002.5 ms, loss events 0, silence fills 0, ended false",
+        "ok"
+      ],
+      "pass": true
+    }
+  },
+  "prototype": "P1",
+  "generated_utc": "2026-11-13T19:04:31+00:00",
+  "windows": {
+    "version": "10.0.19045",
+    "release": "10",
+    "machine": "reference machine class: RTX 3080, Windows 10 Pro"
+  },
+  "criteria": {
+    "no_dropped_buffers_2h": {
+      "target": "0 dropped buffers over 2 h",
+      "measured": {
+        "soak": null,
+        "short_runs_total": 0
+      },
+      "status": "not measured",
+      "note": "short runs are informational; the 2 h run decides"
+    },
+    "tracks_contain_only_own_audio": {
+      "target": "other tones at or below -40.0 dB relative to own tone",
+      "measured": {
+        "three_ffplay_processes": {
+          "a": {
+            "levels_db_vs_own": {
+              "a": 0.0,
+              "b": -69.7,
+              "c": -76.5,
+              "outside": -73.8
+            },
+            "own_present": true,
+            "worst_other_db": -69.7,
+            "rms_dbfs": -44.7,
+            "pass": true
+          },
+          "b": {
+            "levels_db_vs_own": {
+              "a": -74.8,
+              "b": 0.0,
+              "c": -77.7,
+              "outside": -62.3
+            },
+            "own_present": true,
+            "worst_other_db": -62.3,
+            "rms_dbfs": -44.7,
+            "pass": true
+          },
+          "c": {
+            "levels_db_vs_own": {
+              "a": -75.6,
+              "b": -76.6,
+              "c": 0.0,
+              "outside": -77.5
+            },
+            "own_present": true,
+            "worst_other_db": -75.6,
+            "rms_dbfs": -44.7,
+            "pass": true
+          }
+        },
+        "include_tree_child_process": {
+          "description": "records the ffplay child, not the outside tone",
+          "levels_db_vs_own": {
+            "child_tone": 0.0,
+            "outside_tone": -62.3
+          },
+          "own_present": true,
+          "worst_other_db": -62.3,
+          "rms_dbfs": -44.2,
+          "pass": true
+        },
+        "chrome_browser_tree": {
+          "levels_db_vs_own": {
+            "chrome_tone": 0.0,
+            "outside_tone": -107.1
+          },
+          "own_present": true,
+          "worst_other_db": -107.1,
+          "rms_dbfs": -13.5,
+          "pass": true
+        }
+      },
+      "status": "pass"
+    },
+    "alignment_error_ms": {
+      "target": "50.0 ms or less",
+      "measured": {
+        "click_test_worst_ms": 10.74,
+        "drift_over_run_ms": null,
+        "drift_run_minutes": null
+      },
+      "status": "not measured"
+    },
+    "cpu_percent_total": {
+      "target": "3.0 % or less",
+      "measured": {
+        "soak_avg": null,
+        "short_runs": [
+          0.0,
+          0.0,
+          0.0292,
+          0.0146
+        ]
+      },
+      "status": "not measured",
+      "note": "short runs: max 0.029 %"
+    },
+    "memory_mb": {
+      "target": "200.0 MB or less",
+      "measured": {
+        "soak_peak": null
+      },
+      "status": "not measured"
+    },
+    "audio_lost_on_kill_s": {
+      "target": "60.0 s or less",
+      "measured": 0.25,
+      "status": "pass"
+    },
+    "works_on_minimum_windows_build": {
+      "target": "application loopback works on the minimum supported build",
+      "measured": {
+        "build_tested": "10.0.19045",
+        "activation_ok": true
+      },
+      "status": "pass",
+      "note": "Windows 10 build 19045 is the oldest build available for testing; Microsoft documents build 20348, so 19045 working extends the supported range"
+    }
+  }
+}
