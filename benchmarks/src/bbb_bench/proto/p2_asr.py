@@ -35,6 +35,7 @@ def load_whisper(name: str):
 
 
 def transcribe_whisper(model, wav: Path, language: str, glossary: bool):
+    """`language` is 'auto' or a language code ('forced' is resolved by the caller)."""
     kwargs: dict[str, Any] = {"word_timestamps": True, "vad_filter": True, "beam_size": 5}
     if language != "auto":
         kwargs["language"] = language
@@ -76,7 +77,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             ann = json.loads((meeting / "annotation.json").read_text(encoding="utf-8"))
             reference = (meeting / "reference.txt").read_text(encoding="utf-8")
             with harness.timer() as elapsed:
-                segs, _lang = transcribe(model, wav, args.language, args.glossary)
+                language = ann["lang"] if args.language == "forced" else args.language
+                segs, _lang = transcribe(model, wav, language, args.glossary)
             dur = audio_seconds(wav)
             hyp = " ".join(s["text"] for s in segs)
             score = wer(reference, hyp)
@@ -120,7 +122,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--model", choices=["large-v3", "turbo", "parakeet"], required=True)
-    p.add_argument("--language", choices=["auto", "pl", "en"], default="auto")
+    p.add_argument(
+        "--language",
+        choices=["auto", "pl", "en", "forced"],
+        default="auto",
+        help="forced = the language of each meeting",
+    )
     p.add_argument("--glossary", action="store_true")
     p.add_argument("--meetings", nargs="+", required=True)
     p.add_argument("--name", default=None, help="Result file suffix; defaults to the configuration")

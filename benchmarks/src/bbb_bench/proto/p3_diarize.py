@@ -49,7 +49,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         "embedding_shape": list(emb.shape) if emb is not None else None,
                     }
                 )
+    import torch
+
     return {
+        "torch_peak_allocated_mib": round(torch.cuda.max_memory_allocated() / 2**20),
         "runs": results,
         "rtfx": rtfx(total_audio, total_proc),
         "peak_vram_above_baseline_mib": vram.peak_above_baseline_mib,
