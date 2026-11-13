@@ -18,8 +18,12 @@ dev = [
 asr = [
     "faster-whisper>=1.2.1",
     "nvidia-cublas-cu12==12.8.4.1",
+    "nvidia-cuda-runtime-cu12>=12.8,<12.9",
+    "nvidia-cufft-cu12>=11.3,<11.4",
+    "nvidia-curand-cu12>=10.3,<10.4",
     "nvidia-cudnn-cu12>=9,<10",
     "onnx-asr[gpu,hub]>=0.12",
+    "onnxruntime-gpu>=1.20,<1.24",
 ]
 vision = [
     "pillow>=10",
@@ -27,6 +31,9 @@ vision = [
 diar = [
     "pyannote.audio>=4.0.7",
     "torch>=2.8",
+]
+p7 = [
+    "websockets>=13",
 ]
 
 [[tool.uv.index]]

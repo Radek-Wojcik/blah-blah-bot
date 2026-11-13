@@ -48,7 +48,11 @@ def transcribe_whisper(model, wav: Path, language: str, glossary: bool):
 
 def load_parakeet():
     import onnx_asr
+    import onnxruntime
 
+    # Make the CUDA and cuDNN libraries from the nvidia-* wheels visible to onnxruntime.
+    if hasattr(onnxruntime, "preload_dlls"):
+        onnxruntime.preload_dlls()
     model = onnx_asr.load_model(
         "nemo-parakeet-tdt-0.6b-v3", providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
     )
