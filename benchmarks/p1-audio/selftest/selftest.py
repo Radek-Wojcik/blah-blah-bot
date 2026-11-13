@@ -307,6 +307,7 @@ class Context:
         self.audible = audible
         self.output_device = output_device
         self.keep_mic_audio = False
+        self.mic_device: str | None = None
         self.work = data / "p1-selftest"
         self.work.mkdir(parents=True, exist_ok=True)
         self.tones: dict[int, Path] = {}
@@ -614,7 +615,8 @@ def scenario_align(ctx: Context) -> dict:
         res = ctx.rec.record(
             ctx.work / "align",
             dur,
-            ["--system", "--pid", str(a.pid), "--pid", str(b.pid)],
+            ["--system", "--pid", str(a.pid), "--pid", str(b.pid)]
+            + (["--mic-device", ctx.mic_device] if ctx.mic_device else []),
         )
     finally:
         a.stop()
@@ -661,6 +663,18 @@ def scenario_align(ctx: Context) -> dict:
         max(abs(mean_a - mean_b), float(np.max(np.abs(da))), float(np.max(np.abs(db)))), 2
     )
     out["worst_pairwise_error_ms"] = round(spread, 2)
+    if ctx.mic_device:
+        om, xm = read_track(d, "mic")
+        tm = click_times_ms(om, xm)
+        dma, dmb = pair_clicks(ta, tm, tb), pair_clicks(tb, tm, ta)
+        out["microphone_track"] = {
+            "device": ctx.mic_device,
+            "clicks_found": len(tm),
+            "matched": {"a": len(dma), "b": len(dmb)},
+            "track_a_minus_mic_ms": round(float(np.mean(dma)), 2) if dma else None,
+            "track_b_minus_mic_ms": round(float(np.mean(dmb)), 2) if dmb else None,
+            "note": "informational: the virtual cable adds its own buffering latency",
+        }
     out["limit_ms"] = ALIGNMENT_LIMIT_MS
     out["method"] = (
         "Two ffplay processes play the same click file started at different times; "
@@ -754,14 +768,24 @@ def scenario_drift(ctx: Context) -> dict:
     audio is deleted after the measurement unless --keep-mic-audio is given."""
     minutes = 2 if ctx.quick else 12
     silent = [SilentProcess(minutes * 60 + 120) for _ in range(2)]
+    tone = None
     try:
-        args = ["--mic"]
+        args = ["--mic-device", ctx.mic_device] if ctx.mic_device else ["--mic"]
+        if ctx.mic_device:
+            # A real signal for the microphone track: a tone on the output that the chosen
+            # capture device carries.
+            tone = ctx.player(TONES["a"], limit_s=minutes * 60 + 120, volume=20)
+            if not ctx.rec.wait_session(tone.pid):
+                return {"pass": False, "error": "tone player has no active session"}
+            args += ["--pid", str(tone.pid)]
         for p in silent:
             args += ["--pid", str(p.pid)]
         res = ctx.rec.record(ctx.work / "drift", minutes * 60, args)
     finally:
         for p in silent:
             p.stop()
+        if tone:
+            tone.stop()
     s = res["summary"]
     tracks = {}
     for name, t in s.get("tracks", {}).items():
@@ -786,13 +810,23 @@ def scenario_drift(ctx: Context) -> dict:
         "pairs": pairs,
         "worst_pair_drift_ms_over_run": worst,
         "projected_ms_over_10h": max((abs(p["ms_over_10h"]) for p in mic_pairs), default=None),
+        "projected_ms_over_2h": max(
+            (abs(p["ppm_difference"]) * 7.2 for p in mic_pairs), default=None
+        ),
         "note": "drift = rate difference of the sources measured on packet arrival times; "
         "the alignment target is 50 ms, so sources must stay within it over a recording",
-        "pass": bool(
-            worst is not None and worst <= ALIGNMENT_LIMIT_MS and not s["totals"]["failed_tracks"]
-        ),
+        "pass": None,
     }
+    over_2h = out["projected_ms_over_2h"]
+    # The P1 recording lasts 2 hours, so the drift is judged over that length.
+    out["pass"] = bool(
+        over_2h is not None and over_2h <= ALIGNMENT_LIMIT_MS and not s["totals"]["failed_tracks"]
+    )
     mic_dir = ctx.work / "drift" / "mic"
+    if ctx.mic_device and mic_dir.exists():
+        x = read_track(ctx.work / "drift", "mic")[1]
+        out["mic_tone"] = tone_report(x, TONES["a"], TONES)
+        out["mic_device"] = ctx.mic_device
     if mic_dir.exists() and not ctx.keep_mic_audio:
         shutil.rmtree(mic_dir)
         out["mic_audio_deleted"] = True
@@ -959,6 +993,7 @@ def evaluate(results: dict) -> dict:
             "measured": {
                 "click_test_worst_ms": ali.get("worst_alignment_error_ms"),
                 "drift_over_run_ms": drift.get("worst_pair_drift_ms_over_run"),
+                "projected_drift_over_2h_ms": drift.get("projected_ms_over_2h"),
                 "drift_run_minutes": drift.get("minutes"),
             },
             "status": status(
@@ -1061,6 +1096,10 @@ def main() -> int:
     ap.add_argument("--mic", action="store_true", help="soak-start: also record the microphone")
     ap.add_argument("--keep-mic-audio", action="store_true")
     ap.add_argument(
+        "--mic-device",
+        help="capture device used as the microphone track (e.g. a virtual cable output)",
+    )
+    ap.add_argument(
         "--audible",
         action="store_true",
         help="allow scenarios that play sound on the default output device",
@@ -1079,6 +1118,7 @@ def main() -> int:
         return 2
     ctx = Context(Recorder(args.exe), args.data_dir, args.quick, args.audible, args.output_device)
     ctx.keep_mic_audio = args.keep_mic_audio
+    ctx.mic_device = args.mic_device
     names = args.scenarios or [
         n for n in SCENARIOS if n not in AUDIBLE or args.audible or args.output_device
     ]

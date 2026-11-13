@@ -203,7 +203,7 @@
       "windows_release": "10",
       "probe_output": [
         "os: Windows 10 Pro (build 19045)",
-        "target pid: 29140",
+        "target pid: 25480",
         "include_tree=false 16 kHz mono i16 (engine conversion): ok",
         "include_tree=false 48 kHz stereo f32 (own resampling): ok",
         "include_tree=true 16 kHz mono i16 (engine conversion): ok",
@@ -228,7 +228,7 @@
         "installed": true
       },
       "chrome": {
-        "processes_running": 31,
+        "processes_running": 29,
         "in_sessions": 0,
         "session_states": []
       },
@@ -243,14 +243,164 @@
       "limit_s": 60.0,
       "replay_output": [
         "session: 16000 Hz, 160000 samples per segment, ended: false, undecodable lines: 0",
-        "pid-29324: 2 segments, 20.0 s, 2.5 ms .. 20002.5 ms, loss events 0, silence fills 0, ended false",
+        "pid-19072: 2 segments, 20.0 s, 202.9 ms .. 20202.9 ms, loss events 0, silence fills 0, ended false",
         "ok"
       ],
       "pass": true
+    },
+    "drift": {
+      "minutes": 12,
+      "run": {
+        "elapsed_s": 720.08,
+        "dropped_buffers": 4,
+        "failed_tracks": [],
+        "cpu_avg_percent_total": 0.0216,
+        "peak_working_set_mb": 10.29,
+        "silence_fill_events": 0
+      },
+      "tracks": {
+        "mic": {
+          "state": "stopped",
+          "error": null,
+          "stored_s": 720.078,
+          "clock_ratio_ppm": 54.23090942044314,
+          "timestamp_ratio_ppm": 51.162567924255924,
+          "dropped_buffers": 4,
+          "continuity_ok": true,
+          "silence_fill_events": 0,
+          "max_packet_interval_ms": 10.71
+        },
+        "pid-26844": {
+          "state": "stopped",
+          "error": null,
+          "stored_s": 720.07,
+          "clock_ratio_ppm": 0.001169062297890744,
+          "timestamp_ratio_ppm": 8.044252398295055e-11,
+          "dropped_buffers": 0,
+          "continuity_ok": true,
+          "silence_fill_events": 0,
+          "max_packet_interval_ms": 10.0
+        },
+        "pid-28072": {
+          "state": "stopped",
+          "error": null,
+          "stored_s": 720.07,
+          "clock_ratio_ppm": 0.0007892378770179119,
+          "timestamp_ratio_ppm": -2.068296494949268e-11,
+          "dropped_buffers": 0,
+          "continuity_ok": true,
+          "silence_fill_events": 0,
+          "max_packet_interval_ms": 10.0
+        }
+      },
+      "pairs": [
+        {
+          "a": "mic",
+          "b": "pid-26844",
+          "ppm_difference": 54.22974035814525,
+          "ms_over_run": 39.04985220137379,
+          "ms_over_10h": 1952.270652893229
+        },
+        {
+          "a": "mic",
+          "b": "pid-28072",
+          "ppm_difference": 54.230120182566125,
+          "ms_over_run": 39.05012570604852,
+          "ms_over_10h": 1952.2843265723805
+        },
+        {
+          "a": "pid-26844",
+          "b": "pid-28072",
+          "ppm_difference": 0.0003798244208728321,
+          "ms_over_run": 0.00027350467473386534,
+          "ms_over_10h": 0.013673679151421956
+        }
+      ],
+      "worst_pair_drift_ms_over_run": 39.05012570604852,
+      "projected_ms_over_10h": 1952.2843265723805,
+      "note": "drift = rate difference of the sources measured on packet arrival times; the alignment target is 50 ms, so sources must stay within it over a recording",
+      "pass": false,
+      "mic_audio_deleted": true,
+      "projected_ms_over_2h": 390.4568653144761
+    },
+    "soak": {
+      "status": "running",
+      "launch": {
+        "started_utc": "2026-11-13T19:10:36+00:00",
+        "hours": 2.0,
+        "silent_source_pids": [
+          7360,
+          22200,
+          2356
+        ],
+        "recorder_pid": 23752,
+        "out": "benchmarks/data/p1-soak",
+        "mic": false,
+        "tones_hz": {}
+      },
+      "elapsed_s": 1020.8,
+      "requested_s": 7200.0,
+      "dropped_buffers": 0,
+      "timestamp_errors": 0,
+      "silence_fill_events": 0,
+      "failed_tracks": [],
+      "cpu_avg_percent_total": 0.0233,
+      "cpu_max_5s_window_percent_total": 0.0338,
+      "peak_working_set_mb": 10.1,
+      "drift_pairs": [
+        {
+          "a": "pid-22200",
+          "b": "pid-2356",
+          "ppm_difference": 5.83268586385674e-05,
+          "ms_over_run": 5.953983909747144e-05,
+          "ms_over_10h": 0.002099766910988427
+        },
+        {
+          "a": "pid-22200",
+          "b": "pid-7360",
+          "ppm_difference": 0.0004098948031907349,
+          "ms_over_run": 0.00041841908168064343,
+          "ms_over_10h": 0.014756212914866456
+        },
+        {
+          "a": "pid-2356",
+          "b": "pid-7360",
+          "ppm_difference": 0.0003515679445521675,
+          "ms_over_run": 0.000358879242583172,
+          "ms_over_10h": 0.01265644600387803
+        }
+      ],
+      "tracks": {
+        "pid-22200": {
+          "state": "running",
+          "segments": 17,
+          "continuity_ok": true,
+          "stored_s": 1016.18,
+          "dropped_buffers": 0,
+          "clock_ratio_ppm": 0.0018180625611600714
+        },
+        "pid-2356": {
+          "state": "running",
+          "segments": 17,
+          "continuity_ok": true,
+          "stored_s": 1016.18,
+          "dropped_buffers": 0,
+          "clock_ratio_ppm": 0.001759735702521504
+        },
+        "pid-7360": {
+          "state": "running",
+          "segments": 17,
+          "continuity_ok": true,
+          "stored_s": 1016.23,
+          "dropped_buffers": 0,
+          "clock_ratio_ppm": 0.0014081677579693365
+        }
+      },
+      "pass": null
     }
   },
   "prototype": "P1",
-  "generated_utc": "2026-11-13T19:04:31+00:00",
+  "generated_utc": "2026-11-13T19:28:03+00:00",
   "windows": {
     "version": "10.0.19045",
     "release": "10",
@@ -260,8 +410,8 @@
     "no_dropped_buffers_2h": {
       "target": "0 dropped buffers over 2 h",
       "measured": {
-        "soak": null,
-        "short_runs_total": 0
+        "soak": 0,
+        "short_runs_total": 4
       },
       "status": "not measured",
       "note": "short runs are informational; the 2 h run decides"
@@ -335,20 +485,22 @@
       "target": "50.0 ms or less",
       "measured": {
         "click_test_worst_ms": 10.74,
-        "drift_over_run_ms": null,
-        "drift_run_minutes": null
+        "drift_over_run_ms": 39.05012570604852,
+        "projected_drift_over_2h_ms": 390.4568653144761,
+        "drift_run_minutes": 12
       },
-      "status": "not measured"
+      "status": "fail"
     },
     "cpu_percent_total": {
       "target": "3.0 % or less",
       "measured": {
-        "soak_avg": null,
+        "soak_avg": 0.0233,
         "short_runs": [
           0.0,
           0.0,
           0.0292,
-          0.0146
+          0.0146,
+          0.0216
         ]
       },
       "status": "not measured",
@@ -357,7 +509,7 @@
     "memory_mb": {
       "target": "200.0 MB or less",
       "measured": {
-        "soak_peak": null
+        "soak_peak": 10.1
       },
       "status": "not measured"
     },
@@ -375,5 +527,10 @@
       "status": "pass",
       "note": "Windows 10 build 19045 is the oldest build available for testing; Microsoft documents build 20348, so 19045 working extends the supported range"
     }
-  }
+  },
+  "notes": [
+    "isolation, tree, chrome and align were run once in quick mode (10 to 20 s) with ffplay (volume 40 %) and an isolated Chrome instance on the default output device; further audible runs wait for the user's consent",
+    "drift and the long soak use silent source processes: they measure continuity, dropped buffers, CPU, memory and clock drift, not track content",
+    "the microphone is recorded in drift only; the 2 h soak runs without it unless started with --mic"
+  ]
 }

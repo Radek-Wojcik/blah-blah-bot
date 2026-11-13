@@ -43,6 +43,11 @@ enum Cmd {
         /// Record the default microphone as track `mic`.
         #[arg(long)]
         mic: bool,
+        /// Record the capture device whose name contains this text as track `mic`
+        /// (for example `CABLE Output`, a virtual input that carries what is played to
+        /// `CABLE Input`).
+        #[arg(long)]
+        mic_device: Option<String>,
         /// Record everything played on the default device as track `system` (reference).
         #[arg(long)]
         system: bool,
@@ -242,14 +247,15 @@ fn run(cli: Cli) -> Result<(), String> {
             out,
             duration,
             mic,
+            mic_device,
             system,
             pids,
             format: _,
             segment_s,
         } => {
             let mut sources = Vec::new();
-            if mic {
-                sources.push(Source::Mic);
+            if mic || mic_device.is_some() {
+                sources.push(Source::Mic(mic_device));
             }
             if system {
                 sources.push(Source::System);

@@ -21,7 +21,8 @@ use crate::tracker::{PacketFlags, Plan, Stats, Tracker};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
     /// Default capture device.
-    Mic,
+    /// Capture device whose name contains the text, or the default one.
+    Mic(Option<String>),
     /// Everything played on the default render device (reference track).
     System,
     /// One process with its child processes (`tree`), or everything except them.
@@ -55,7 +56,7 @@ impl Source {
     /// Track name, also the directory name.
     pub fn track_name(&self) -> String {
         match self {
-            Source::Mic => "mic".into(),
+            Source::Mic(_) => "mic".into(),
             Source::System => "system".into(),
             Source::Process { pid, tree: true } => format!("pid-{pid}"),
             Source::Process { pid, tree: false } => format!("pid-{pid}-excl"),
@@ -64,7 +65,7 @@ impl Source {
 
     pub fn kind(&self) -> &'static str {
         match self {
-            Source::Mic => "mic",
+            Source::Mic(_) => "mic",
             Source::System => "system-loopback",
             Source::Process { .. } => "process-loopback",
         }
@@ -130,9 +131,26 @@ pub fn try_format(source: &Source, format: Format) -> Result<AudioClient, String
             Source::Process { pid, tree } => {
                 AudioClient::new_application_loopback_client(*pid, *tree)?
             }
-            Source::Mic => DeviceEnumerator::new()?
+            Source::Mic(None) => DeviceEnumerator::new()?
                 .get_default_device(Direction::Capture)?
                 .get_iaudioclient()?,
+            Source::Mic(Some(name)) => {
+                let wanted = name.to_lowercase();
+                let devices = DeviceEnumerator::new()?.get_device_collection(Direction::Capture)?;
+                let mut found = None;
+                for d in &devices {
+                    let d = d?;
+                    if d.get_friendlyname()
+                        .is_ok_and(|n| n.to_lowercase().contains(&wanted))
+                    {
+                        found = Some(d);
+                        break;
+                    }
+                }
+                found
+                    .ok_or_else(|| WasapiError::DeviceNotFound(name.clone()))?
+                    .get_iaudioclient()?
+            }
             Source::System => DeviceEnumerator::new()?
                 .get_default_device(Direction::Render)?
                 .get_iaudioclient()?,

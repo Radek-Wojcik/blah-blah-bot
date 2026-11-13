@@ -21,7 +21,7 @@ cargo run --release -- selftest  # silent hardware tests, see below
 
 | Command | Purpose |
 |---|---|
-| `record --out DIR --duration S [--mic] [--system] [--pid PID[:tree]]... [--segment-s 60]` | Record tracks. Stops after the duration, or when a file named `STOP` appears in `DIR`. |
+| `record --out DIR --duration S [--mic \| --mic-device NAME] [--system] [--pid PID[:tree]]... [--segment-s 60]` | Record tracks (`--mic-device` picks a capture device by name, e.g. a virtual cable output). Stops after the duration, or when a file named `STOP` appears in `DIR`. |
 | `sessions [--json]` | List audio sessions: process id, parent, process name, state, session volume, peak level. |
 | `replay DIR` | Check a recording against its journal (segment numbering, offsets, file sizes). |
 | `probe [--pid PID]` | Report whether application loopback can be activated on this Windows build, per format. |
@@ -42,7 +42,7 @@ cargo run --release -- selftest  # silent hardware tests, see below
 
 Journal entries (one JSON object per line, `event` field): `session_start`, `track_start` (source, pid, `offset_ms` on the session clock), `segment` (file, `offset_ms`, samples; written when a segment is complete), `discontinuity` (`data_discontinuity`, `timestamp_error`, `silence_filled`), `track_end`, `session_end`. The session clock is the Windows performance counter, so tracks that start at different moments share one time base: sample *i* of a track is at `track offset_ms + i / 16`. A crash loses at most the open segment; `replay` ignores a torn last line, and a segment left open by a crash is still a readable WAV (the length field is patched when a segment is closed).
 
-`summary.json` holds, per track and in total: dropped buffers (data-discontinuity flags, the first packet of a stream excluded because the engine flags it by design), timestamp errors, silence filled, clock drift in ppm and between track pairs, journal continuity check; CPU of the recorder as percent of total CPU (average and worst 5 s window, from `GetProcessTimes`); peak working set.
+`summary.json` holds, per track and in total: dropped buffers (data-discontinuity flags, the first packet of a stream excluded because the engine flags it by design), timestamp errors, silence filled, clock drift in ppm and between track pairs, journal continuity check; CPU of the recorder as percent of total CPU (average and worst 5 s window; the larger of a `GetProcessTimes` estimate and one from the exact process cycle counter at a calibrated clock rate, because the scheduler-tick based figure reads 0 for a thread that wakes for microseconds every 10 ms); peak working set.
 
 ## Measured on this prototype
 
@@ -53,6 +53,7 @@ Reference run: Windows 10 Pro build 19045, RTX 3080 machine. Full numbers and pa
 - Chrome plays through a child *audio service* utility process. Recording the **browser root process** (the one without `--type=`) captures it; the tree is needed because Chrome has many processes and the one owning the audio session is not the root.
 - Process loopback delivers a continuous stream of 10 ms packets even when the process is silent or suspended; packet timestamps are synthesized from the sample count, so a drop cannot be seen from them. Dropped buffers are counted from the data-discontinuity flag. Drift is measured from packet arrival times instead.
 - The loopback signal is captured **after** the session volume: a muted or volume-0 player records as silence (RMS 74 at 100 %, 0.5 at 0 %). Muting a test player is therefore not a way to make a test silent. Windows also remembers the level per application, so a player that was once muted starts muted; `sessions` shows this in the VOLUME column and `session-volume` repairs it.
+- Clock drift: a USB microphone ran 54 ppm fast against the performance counter and the loopback tracks (39 ms after 12 minutes, 390 ms projected over 2 hours, 1.95 s over 10 hours), so the 50 ms alignment target is missed on long recordings unless the microphone track is resampled or its start offset is corrected. Process loopback of a silent process followed the performance counter to within 0.002 ppm. The same microphone logged one data-discontinuity flag about every 186.6 s (four in 12 minutes, regular spacing), which looks like the audio engine correcting that clock rather than lost buffers; it is counted as dropped.
 - FLAC: not implemented in the recorder. Encoding with ffmpeg offline gives 47 % of the PCM size for a few seconds of ambient microphone audio, 77 % for white noise at -26 dBFS (worst case), 0.7 % for silence; encoding 10 minutes takes about 0.2 s. At that cost FLAC segments are worth adopting in the product through a pure-Rust encoder (license to be verified before use).
 
 ## Hardware tests (`selftest`)
@@ -62,14 +63,14 @@ Reference run: Windows 10 Pro build 19045, RTX 3080 machine. Full numbers and pa
 | `version` | no | Application loopback activates (Windows build recorded). |
 | `crash` | no | Recorder killed in the middle of a segment: audio left readable, journal replay. |
 | `apps` | no | Whether Teams, Discord and Chrome are installed, running, and listed in `sessions`. |
-| `drift` | no | 12 minutes of microphone plus two loopback tracks of silent processes: drift between sources (`--quick`: 2 minutes). The microphone audio is deleted afterwards unless `--keep-mic-audio`. |
+| `drift` | no | 12 minutes of the default microphone (or `--mic-device NAME`, with a tone on the output it carries) plus loopback tracks of silent processes: drift between sources, projected over 2 and 10 hours (`--quick`: 2 minutes). The microphone audio is deleted afterwards unless `--keep-mic-audio`. |
 | `soak-start` / `soak-report` | no | Starts a 2 hour recording of three silent processes in the background (`--hours`, `--mic` to add the microphone); `soak-report` reads `summary.json`, checks continuity and the criteria. |
 | `isolation` | **yes** | Three players with 440, 1000 and 2000 Hz plus a fourth, unrecorded 3000 Hz player; each track must hold only its own tone (other tones 40 dB or more below), the system loopback track must hold all four. |
 | `tree` | **yes** | `cmd /c <player>` recorded through the parent in include mode; exclude mode; direct child pid. |
 | `chrome` | **yes** | An isolated Chrome instance (own `--user-data-dir`, autoplay allowed) plays a 600 Hz oscillator; checks which process to record. Only that instance is stopped afterwards. |
 | `align` | **yes** | Two players play the same click file, started at different times; every click is located in its own track and in the system loopback track, which holds both; the deltas on the session clock give the alignment error. |
 
-Scenarios that play sound refuse to run unless you choose where the sound goes: `--output-device NAME` renders the signals with the built-in `play` helper to the named device (for example a virtual cable that nobody monitors); `--audible` plays through the default output device with `ffplay` and, for `chrome`, Chrome. Without either, `selftest` runs only the silent scenarios. Test signals are quiet (ffplay volume 40 %), but they are audible on the default device.
+Run the audible scenarios with the default output device set to a virtual cable that nobody monitors (for example VB-Audio `CABLE Input`) and pass `--mic-device "CABLE Output"` to get a real signal on the microphone track; `sessions` shows on which device a player's session lives. Scenarios that play sound refuse to run unless you choose where the sound goes: `--output-device NAME` renders the signals with the built-in `play` helper to the named device (for example a virtual cable that nobody monitors); `--audible` plays through the default output device with `ffplay` and, for `chrome`, Chrome. Without either, `selftest` runs only the silent scenarios. Test signals are quiet (ffplay volume 40 %), but they are audible on the default device.
 
 The silent long runs measure continuity, dropped buffers, CPU, memory and clock drift. They do not exercise the audio content of the tracks; the content checks are the audible scenarios.
 
