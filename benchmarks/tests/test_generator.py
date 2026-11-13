@@ -67,3 +67,15 @@ def test_files_written(tmp_path):
     generator.to_files(m, tmp_path / "m", pools.GLOSSARY)
     names = {p.name for p in (tmp_path / "m").iterdir()}
     assert names == {"script.json", "annotation.json", "reference.txt", "transcript.txt"}
+
+
+def test_fixed_people_are_used_in_order():
+    m = generator.generate_meeting("pl", 3, 3, seed=4, people=["alex", "kasia", "jan"])
+    assert m.speakers == ["alex", "kasia", "jan"]
+
+
+def test_fixed_people_validation():
+    with pytest.raises(ValueError):
+        generator.generate_meeting("pl", 3, 3, seed=4, people=["alex", "nobody", "jan"])
+    with pytest.raises(ValueError):
+        generator.generate_meeting("pl", 3, 3, seed=4, people=["alex", "kasia"])

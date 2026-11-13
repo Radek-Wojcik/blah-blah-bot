@@ -94,7 +94,7 @@ def extract(base: str, script: dict[str, Any], meeting_date: str, max_retries: i
     payload = {
         "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}],
         "temperature": 0,
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "response_format": {
             "type": "json_schema",
             "json_schema": {"name": "extraction", "strict": True, "schema": EXTRACTION_SCHEMA},

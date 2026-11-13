@@ -208,18 +208,24 @@ def generate_meeting(
     seed: int,
     mixed: bool = False,
     meeting_date: date = MEETING_DATE,
+    people: list[str] | None = None,
 ) -> Meeting:
     """Generate a scripted meeting.
 
     `lang` is the dominant language ("pl" or "en"). With `mixed`, Polish
     sentences contain English technical terms and some turns are fully English.
+    `people` fixes the participants (their ids); otherwise they are sampled.
     """
     if lang not in ("pl", "en"):
         raise ValueError("lang must be 'pl' or 'en'")
+    if people is not None:
+        unknown = [p for p in people if p not in pools.PEOPLE]
+        if unknown or len(people) != n_speakers:
+            raise ValueError("people must be known ids and match n_speakers")
     if not 2 <= n_speakers <= len(pools.PEOPLE):
         raise ValueError(f"n_speakers must be between 2 and {len(pools.PEOPLE)}")
     rng = random.Random(seed)
-    speakers = rng.sample(pools.PEOPLE, n_speakers)
+    speakers = list(people) if people is not None else rng.sample(pools.PEOPLE, n_speakers)
     m = Meeting(lang=lang, meeting_date=meeting_date, speakers=speakers)
     target_words = int(minutes * WORDS_PER_MINUTE)
     events = [_task_event, _decision_event, _budget_event, _filler_event]
@@ -276,9 +282,13 @@ def main() -> None:
     p.add_argument("--speakers", type=int, required=True)
     p.add_argument("--minutes", type=float, required=True)
     p.add_argument("--seed", type=int, default=1)
+    p.add_argument("--people", default=None, help="Comma-separated participant ids")
     p.add_argument("--out", type=Path, required=True)
     args = p.parse_args()
-    m = generate_meeting(args.lang, args.speakers, args.minutes, args.seed, args.mixed)
+    people = args.people.split(",") if args.people else None
+    m = generate_meeting(
+        args.lang, args.speakers, args.minutes, args.seed, args.mixed, people=people
+    )
     to_files(m, args.out, pools.GLOSSARY if args.mixed else None)
     print(f"{args.out}: {len(m.turns)} turns, {m.words()} words, {len(m.tasks)} tasks")
 
