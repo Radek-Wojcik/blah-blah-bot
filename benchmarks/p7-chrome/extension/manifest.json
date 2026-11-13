@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "BBB P7 tab capture prototype",
+  "version": "0.1.0",
+  "description": "Prototype P7: streams tab audio as PCM 16 kHz mono to a local WebSocket (127.0.0.1).",
+  "minimum_chrome_version": "116",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAkxwvC7JcEDNOP35vC+JPMiw4bdiAJu+jaXZeTy64q2pvkBIR+23jMNdco92JNpr9fY/r28ZnGbMnZgoZiK8ymhVkLrcsik+kEmiZPApEOC7VSyvmvGDdUogNEqZtZAqk6UFua6Tf6dEdbU9GLXf18P6uRx4C8/QQJhIvIqfyjgbzAknBfCPmRUqqb+HVhCxS8VtsJ1RTtgNbJ/BUsP4mosRYmzrC5tJTDFWI99B7p7MZ/zbo8MCxv02pRHtw85SMAsmuvSVIyI5pdjbUONTjo/1I8zqDcyxxZUSWPyXnQElnO7AHcpetk/1xi0NH+VJejW9wC/2lc7T8H3oUoGntOQIDAQAB",
+  "permissions": ["tabCapture", "offscreen", "activeTab", "storage"],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Capture this tab (P7)",
+    "default_popup": "popup.html"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' ws://127.0.0.1:*"
+  }
+}

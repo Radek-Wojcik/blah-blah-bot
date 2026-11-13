@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>P7 capture</title>
+    <style>
+      body { font: 13px system-ui, sans-serif; width: 280px; margin: 12px; }
+      label { display: block; margin: 6px 0 2px; }
+      input[type="text"], input[type="number"] { width: 100%; box-sizing: border-box; padding: 4px; }
+      button { margin-top: 8px; padding: 6px 10px; width: 100%; }
+      #status { margin-top: 10px; min-height: 2.4em; }
+      .err { color: #b71c1c; }
+      .ok { color: #1b5e20; }
+      small { color: #555; }
+    </style>
+  </head>
+  <body>
+    <section id="pair">
+      <label for="port">Receiver port</label>
+      <input id="port" type="number" min="1024" max="65535" value="17555">
+      <label for="token">Pairing token (single use)</label>
+      <input id="token" type="text" autocomplete="off" spellcheck="false">
+      <button id="pairBtn">Pair</button>
+    </section>
+    <section id="capture" hidden>
+      <button id="captureBtn">Capture this tab</button>
+      <label><input id="auto" type="checkbox" checked> Start when the popup opens</label>
+      <button id="disconnectBtn">Stop all and disconnect</button>
+    </section>
+    <div id="status"></div>
+    <small>Active streams: <span id="count">0</span></small>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
