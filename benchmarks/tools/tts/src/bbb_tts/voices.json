@@ -1,0 +1,148 @@
+{
+ "source_model": "en_US-libritts-high",
+ "source_url": "https://huggingface.co/rhasspy/piper-voices/tree/main/en/en_US/libritts/high",
+ "license": "CC BY 4.0 (LibriTTS speakers)",
+ "selection_seed": 20260101,
+ "voices": [
+  {
+   "id": "f01",
+   "gender": "f",
+   "piper_speaker": "p1422",
+   "median_f0_hz": 201.2,
+   "centroid_hz": 2697.1
+  },
+  {
+   "id": "f02",
+   "gender": "f",
+   "piper_speaker": "p5570",
+   "median_f0_hz": 206.6,
+   "centroid_hz": 1906.1
+  },
+  {
+   "id": "f03",
+   "gender": "f",
+   "piper_speaker": "p2230",
+   "median_f0_hz": 188.5,
+   "centroid_hz": 3345.8
+  },
+  {
+   "id": "f04",
+   "gender": "f",
+   "piper_speaker": "p3728",
+   "median_f0_hz": 173.8,
+   "centroid_hz": 2133.5
+  },
+  {
+   "id": "f05",
+   "gender": "f",
+   "piper_speaker": "p8388",
+   "median_f0_hz": 172.4,
+   "centroid_hz": 1966.3
+  },
+  {
+   "id": "f06",
+   "gender": "f",
+   "piper_speaker": "p7145",
+   "median_f0_hz": 183.7,
+   "centroid_hz": 2399.0
+  },
+  {
+   "id": "f07",
+   "gender": "f",
+   "piper_speaker": "p3380",
+   "median_f0_hz": 210.9,
+   "centroid_hz": 3125.2
+  },
+  {
+   "id": "f08",
+   "gender": "f",
+   "piper_speaker": "p4433",
+   "median_f0_hz": 171.2,
+   "centroid_hz": 2545.0
+  },
+  {
+   "id": "f09",
+   "gender": "f",
+   "piper_speaker": "p6388",
+   "median_f0_hz": 193.1,
+   "centroid_hz": 2702.5
+  },
+  {
+   "id": "f10",
+   "gender": "f",
+   "piper_speaker": "p3733",
+   "median_f0_hz": 243.9,
+   "centroid_hz": 2899.0
+  },
+  {
+   "id": "m01",
+   "gender": "m",
+   "piper_speaker": "p345",
+   "median_f0_hz": 114.7,
+   "centroid_hz": 2566.1
+  },
+  {
+   "id": "m02",
+   "gender": "m",
+   "piper_speaker": "p2149",
+   "median_f0_hz": 146.2,
+   "centroid_hz": 2882.8
+  },
+  {
+   "id": "m03",
+   "gender": "m",
+   "piper_speaker": "p559",
+   "median_f0_hz": 125.3,
+   "centroid_hz": 1509.1
+  },
+  {
+   "id": "m04",
+   "gender": "m",
+   "piper_speaker": "p6037",
+   "median_f0_hz": 82.2,
+   "centroid_hz": 2207.8
+  },
+  {
+   "id": "m05",
+   "gender": "m",
+   "piper_speaker": "p8138",
+   "median_f0_hz": 121.8,
+   "centroid_hz": 2128.3
+  },
+  {
+   "id": "m06",
+   "gender": "m",
+   "piper_speaker": "p6575",
+   "median_f0_hz": 146.2,
+   "centroid_hz": 3169.3
+  },
+  {
+   "id": "m07",
+   "gender": "m",
+   "piper_speaker": "p5918",
+   "median_f0_hz": 98.6,
+   "centroid_hz": 3958.1
+  },
+  {
+   "id": "m08",
+   "gender": "m",
+   "piper_speaker": "p8705",
+   "median_f0_hz": 119.3,
+   "centroid_hz": 1508.9
+  },
+  {
+   "id": "m09",
+   "gender": "m",
+   "piper_speaker": "p1769",
+   "median_f0_hz": 130.9,
+   "centroid_hz": 1997.4
+  },
+  {
+   "id": "m10",
+   "gender": "m",
+   "piper_speaker": "p4734",
+   "median_f0_hz": 145.0,
+   "centroid_hz": 2362.5
+  }
+ ]
+}
