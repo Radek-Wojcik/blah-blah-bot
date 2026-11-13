@@ -1,0 +1,287 @@
+"""Deterministic generator of scripted meetings with planted ground truth.
+
+Each meeting is a list of speaker turns plus an annotation file listing the
+tasks, decisions and budget figures that were planted in the dialogue. Audio is
+produced from the script by a text-to-speech tool and is never committed.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import random
+from dataclasses import dataclass, field
+from datetime import date, timedelta
+from pathlib import Path
+from typing import Any
+
+from . import pools
+
+WORDS_PER_MINUTE = 140
+MEETING_DATE = date(2026, 11, 13)
+
+
+@dataclass
+class Meeting:
+    lang: str
+    meeting_date: date
+    speakers: list[str]
+    turns: list[dict[str, Any]] = field(default_factory=list)
+    tasks: list[dict[str, Any]] = field(default_factory=list)
+    decisions: list[dict[str, Any]] = field(default_factory=list)
+    budgets: list[dict[str, Any]] = field(default_factory=list)
+
+    def say(self, speaker: str, text: str, lang: str | None = None) -> int:
+        self.turns.append({"speaker": speaker, "lang": lang or self.lang, "text": text})
+        return len(self.turns) - 1
+
+    def words(self) -> int:
+        return sum(len(t["text"].split()) for t in self.turns)
+
+
+def _due_phrase(due: date, today: date, lang: str, rng: random.Random) -> str:
+    """Spoken form of a due date: a weekday when within a week, else day and month."""
+    delta = (due - today).days
+    use_weekday = 1 <= delta <= 7 and rng.random() < 0.6
+    if lang == "pl":
+        if use_weekday:
+            return pools.WEEKDAYS_PL[due.weekday()]
+        return f"{pools.day_pl(due.day)} {pools.MONTHS_PL[due.month - 1]}"
+    if use_weekday:
+        return pools.WEEKDAYS_EN[due.weekday()]
+    return f"{pools.MONTHS_EN[due.month - 1]} {pools.day_en(due.day)}"
+
+
+def _random_due(today: date, rng: random.Random) -> date:
+    due = today + timedelta(days=rng.randint(2, 21))
+    while due.weekday() >= 5:  # weekdays only
+        due += timedelta(days=1)
+    return due
+
+
+def _pick_action(lang: str, mixed: bool, rng: random.Random) -> tuple[str, list[str]]:
+    """Return an action phrase in the turn language and the glossary terms it contains."""
+    if lang == "pl":
+        if mixed and rng.random() < 0.7:
+            return rng.choice(pools.ACTIONS_MIXED)
+        return rng.choice(pools.ACTIONS_PLAIN)[0], []
+    return rng.choice(pools.ACTIONS_PLAIN)[1], []
+
+
+def _others(speakers: list[str], *excluded: str) -> list[str]:
+    return [s for s in speakers if s not in excluded]
+
+
+def _task_event(m: Meeting, rng: random.Random, mixed: bool) -> None:
+    """A task is requested and accepted; variants: request, self-assign, reassign, decline."""
+    lang = m.lang
+    # In mixed meetings a fifth of the turns are fully English.
+    turn_lang = "en" if (mixed and rng.random() < 0.2) else lang
+    a, b = rng.sample(m.speakers, 2)
+    action, _terms = _pick_action(turn_lang, mixed, rng)
+    due = _random_due(m.meeting_date, rng)
+    due_s = _due_phrase(due, m.meeting_date, turn_lang, rng)
+    variant = rng.choices(["request", "self", "reassign", "declined"], [6, 2, 1, 1])[0]
+    pl = turn_lang == "pl"
+
+    if variant == "declined":
+        # Proposed and dropped: not a task.
+        m.say(a, f"{b}, {'a może ty mógłbyś' if pl else 'maybe you could'} {action}?", turn_lang)
+        m.say(
+            b,
+            "Nie, to nie ma sensu, odpuśćmy to."
+            if pl
+            else "No, that makes no sense, let us drop it.",
+            turn_lang,
+        )
+        return
+
+    if variant == "self":
+        t = m.say(
+            a,
+            f"Wezmę to na siebie: {action} do {due_s}."
+            if pl
+            else f"I will take this one: {action} by {due_s}.",
+            turn_lang,
+        )
+        m.say(b, "Super, dziękuję." if pl else "Great, thank you.", turn_lang)
+        assignee = a
+    elif variant == "reassign":
+        c = rng.choice(_others(m.speakers, a, b))
+        t = m.say(
+            a,
+            f"{b}, czy możesz {action} do {due_s}?" if pl else f"{b}, can you {action} by {due_s}?",
+            turn_lang,
+        )
+        m.say(
+            b,
+            f"Mam za dużo na głowie, niech to zrobi {c}."
+            if pl
+            else f"I have too much on my plate, let {c} do it.",
+            turn_lang,
+        )
+        m.say(
+            c,
+            f"Dobrze, ja to zrobię do {due_s}." if pl else f"Fine, I will do it by {due_s}.",
+            turn_lang,
+        )
+        assignee = c
+    else:
+        t = m.say(
+            a,
+            f"{b}, czy możesz {action} do {due_s}?" if pl else f"{b}, can you {action} by {due_s}?",
+            turn_lang,
+        )
+        m.say(
+            b,
+            f"Tak, zrobię to do {due_s}." if pl else f"Sure, I will have it done by {due_s}.",
+            turn_lang,
+        )
+        assignee = b
+
+    m.tasks.append(
+        {
+            "text": action,
+            "assignee": assignee,
+            "due": due.isoformat(),
+            "turn": t,
+            "quote": m.turns[t]["text"],
+        }
+    )
+
+
+def _decision_event(m: Meeting, rng: random.Random, mixed: bool) -> None:
+    lang = "en" if (mixed and rng.random() < 0.2) else m.lang
+    a, b = rng.sample(m.speakers, 2)
+    if lang == "pl":
+        pool = pools.DECISIONS_MIXED if mixed and rng.random() < 0.6 else pools.DECISIONS_PL
+        text = rng.choice(pool)
+        t = m.say(a, f"Ustalmy, że {text}.", lang)
+        m.say(b, "Zgoda.", lang)
+    else:
+        text = rng.choice(pools.DECISIONS_EN)
+        t = m.say(a, f"Let us agree that {text}.", lang)
+        m.say(b, "Agreed.", lang)
+    m.decisions.append({"text": text, "turn": t, "quote": m.turns[t]["text"]})
+
+
+def _budget_event(m: Meeting, rng: random.Random, mixed: bool) -> None:
+    lang = "en" if (mixed and rng.random() < 0.2) else m.lang
+    a, b = rng.sample(m.speakers, 2)
+    pl_amount, en_amount, value = rng.choice(pools.AMOUNTS)
+    pl_item, en_item = rng.choice(pools.BUDGET_ITEMS)
+    if lang == "pl":
+        t = m.say(a, f"Budżet na {pl_item} to {pl_amount} złotych.", lang)
+        m.say(b, "Przyjąłem, wpisuję do planu.", lang)
+        item, currency = pl_item, "PLN"
+    else:
+        t = m.say(a, f"The budget for {en_item} is {en_amount} euros.", lang)
+        m.say(b, "Got it, adding it to the plan.", lang)
+        item, currency = en_item, "EUR"
+    m.budgets.append(
+        {
+            "item": item,
+            "amount": value,
+            "currency": currency,
+            "turn": t,
+            "quote": m.turns[t]["text"],
+        }
+    )
+
+
+def _filler_event(m: Meeting, rng: random.Random, mixed: bool) -> None:
+    a, b = rng.sample(m.speakers, 2)
+    if m.lang == "en":
+        pool = pools.FILLER_EN
+    elif mixed:
+        pool = pools.FILLER_MIXED + pools.FILLER_PL
+    else:
+        pool = pools.FILLER_PL
+    m.say(a, rng.choice(pool), "pl" if pool is not pools.FILLER_EN else "en")
+    m.say(b, rng.choice(pool), "pl" if pool is not pools.FILLER_EN else "en")
+
+
+def generate_meeting(
+    lang: str,
+    n_speakers: int,
+    minutes: float,
+    seed: int,
+    mixed: bool = False,
+    meeting_date: date = MEETING_DATE,
+) -> Meeting:
+    """Generate a scripted meeting.
+
+    `lang` is the dominant language ("pl" or "en"). With `mixed`, Polish
+    sentences contain English technical terms and some turns are fully English.
+    """
+    if lang not in ("pl", "en"):
+        raise ValueError("lang must be 'pl' or 'en'")
+    if not 2 <= n_speakers <= len(pools.PEOPLE):
+        raise ValueError(f"n_speakers must be between 2 and {len(pools.PEOPLE)}")
+    rng = random.Random(seed)
+    speakers = rng.sample(pools.PEOPLE, n_speakers)
+    m = Meeting(lang=lang, meeting_date=meeting_date, speakers=speakers)
+    target_words = int(minutes * WORDS_PER_MINUTE)
+    events = [_task_event, _decision_event, _budget_event, _filler_event]
+    weights = [5, 2, 1, 4]
+    opener = speakers[0]
+    m.say(
+        opener,
+        "Dzień dobry wszystkim, zaczynamy spotkanie."
+        if lang == "pl"
+        else "Good morning everyone, let us begin.",
+    )
+    while m.words() < target_words:
+        rng.choices(events, weights)[0](m, rng, mixed)
+    m.say(
+        opener,
+        "Dziękuję wszystkim, to na dziś wszystko."
+        if lang == "pl"
+        else "Thank you all, that is all for today.",
+    )
+    return m
+
+
+def to_files(m: Meeting, out: Path, glossary: list[str] | None = None) -> None:
+    """Write script.json, annotation.json, reference.txt and transcript.txt."""
+    out.mkdir(parents=True, exist_ok=True)
+    script = {"lang": m.lang, "speakers": m.speakers, "turns": m.turns}
+    full_text = " ".join(t["text"] for t in m.turns)
+    terms = []
+    for term in glossary or []:
+        terms.extend([term] * full_text.lower().count(term.lower()))
+    annotation = {
+        "meeting_date": m.meeting_date.isoformat(),
+        "lang": m.lang,
+        "speakers": m.speakers,
+        "tasks": m.tasks,
+        "decisions": m.decisions,
+        "budgets": m.budgets,
+        "terms": terms,
+    }
+    (out / "script.json").write_text(json.dumps(script, ensure_ascii=False, indent=1), "utf-8")
+    (out / "annotation.json").write_text(
+        json.dumps(annotation, ensure_ascii=False, indent=1), "utf-8"
+    )
+    (out / "reference.txt").write_text(full_text + "\n", "utf-8")
+    (out / "transcript.txt").write_text(
+        "\n".join(f"{t['speaker']}: {t['text']}" for t in m.turns) + "\n", "utf-8"
+    )
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(description="Generate a scripted meeting.")
+    p.add_argument("--lang", choices=["pl", "en"], required=True)
+    p.add_argument("--mixed", action="store_true", help="Polish with English terms")
+    p.add_argument("--speakers", type=int, required=True)
+    p.add_argument("--minutes", type=float, required=True)
+    p.add_argument("--seed", type=int, default=1)
+    p.add_argument("--out", type=Path, required=True)
+    args = p.parse_args()
+    m = generate_meeting(args.lang, args.speakers, args.minutes, args.seed, args.mixed)
+    to_files(m, args.out, pools.GLOSSARY if args.mixed else None)
+    print(f"{args.out}: {len(m.turns)} turns, {m.words()} words, {len(m.tasks)} tasks")
+
+
+if __name__ == "__main__":
+    main()
