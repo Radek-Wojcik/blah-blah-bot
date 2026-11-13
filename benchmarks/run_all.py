@@ -165,6 +165,7 @@ STEPS = {
     "p4": step_p4,
     "p5": step_p5,
     "p6": step_p6,
+    "p8": step_p8,
 }
 
 
