@@ -29,7 +29,7 @@ DIAR_MEETINGS = ["pl-03", "pl-08", "pl-16", "en-03", "mixed-04"]
 LLM_CANDIDATES = {
     "qwen3-14b-q4": "Qwen3-14B-Q4_K_M.gguf",
     "mistral-nemo-12b-q4": "Mistral-Nemo-Instruct-2407-Q4_K_M.gguf",
-    "gemma-4-12b-q4": "gemma-4-12B-it-Q4_K_M.gguf",
+    "gemma-4-12b-q4": "gemma-4-12b-it-Q4_K_M.gguf",
 }
 
 

@@ -50,7 +50,7 @@ def main() -> None:
         to_files(m, args.root / "scripts" / name, pools.GLOSSARY if mixed else None)
         print(f"scripts/{name}: {len(m.turns)} turns, {m.words()} words")
     for name, lang, mixed, n, minutes, seed in EXTRACTION:
-        m = generate_meeting(lang, n, minutes, seed, mixed)
+        m = generate_meeting(lang, n, minutes, seed, mixed, task_density="sparse")
         to_files(m, args.root / "extraction" / name, pools.GLOSSARY if mixed else None)
         print(f"extraction/{name}: {len(m.tasks)} tasks")
 

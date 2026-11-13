@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -86,15 +86,21 @@ def _stamp_ms(stamp: str) -> int:
 def extract(base: str, script: dict[str, Any], meeting_date: str, max_retries: int = 2):
     """Run extraction on one transcript; returns (items, attempts, usage, seconds, valid)."""
     d = date.fromisoformat(meeting_date)
+    calendar = ", ".join(
+        f"{(d + timedelta(days=i)).strftime('%A')} {(d + timedelta(days=i)).isoformat()}"
+        for i in range(1, 29)
+    )
     lines, entries = transcript_lines(script)
     user = (
         f"Meeting date: {meeting_date} ({d.strftime('%A')}). Speakers: "
-        f"{', '.join(script['speakers'])}.\n\nTranscript:\n" + "\n".join(lines)
+        f"{', '.join(script['speakers'])}.\nCalendar of the next 28 days: {calendar}.\n\n"
+        "Transcript:\n" + "\n".join(lines)
     )
     payload = {
         "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}],
         "temperature": 0,
         "max_tokens": 8192,
+        "chat_template_kwargs": {"enable_thinking": False},
         "response_format": {
             "type": "json_schema",
             "json_schema": {"name": "extraction", "strict": True, "schema": EXTRACTION_SCHEMA},

@@ -209,12 +209,14 @@ def generate_meeting(
     mixed: bool = False,
     meeting_date: date = MEETING_DATE,
     people: list[str] | None = None,
+    task_density: str = "dense",
 ) -> Meeting:
     """Generate a scripted meeting.
 
     `lang` is the dominant language ("pl" or "en"). With `mixed`, Polish
     sentences contain English technical terms and some turns are fully English.
     `people` fixes the participants (their ids); otherwise they are sampled.
+    `task_density` is "dense" (many commitments, stress test) or "sparse" (realistic).
     """
     if lang not in ("pl", "en"):
         raise ValueError("lang must be 'pl' or 'en'")
@@ -229,7 +231,8 @@ def generate_meeting(
     m = Meeting(lang=lang, meeting_date=meeting_date, speakers=speakers)
     target_words = int(minutes * WORDS_PER_MINUTE)
     events = [_task_event, _decision_event, _budget_event, _filler_event]
-    weights = [5, 2, 1, 4]
+    # events: task, decision, budget, filler. `sparse` gives about 15-25 tasks per 15 minutes.
+    weights = [2, 1, 1, 10] if task_density == "sparse" else [5, 2, 1, 4]
     opener = speakers[0]
     m.say(
         opener,
