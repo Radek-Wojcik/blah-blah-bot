@@ -154,6 +154,10 @@ def step_p6() -> None:
     run("p6", cmd, ROOT, _server_env())
 
 
+def step_p8() -> None:
+    run("p8", uv("python", "-m", "bbb_bench.proto.p8_env"), ROOT)
+
+
 STEPS = {
     "synth": step_synth,
     "p2": step_p2,
