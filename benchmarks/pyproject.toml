@@ -21,6 +21,9 @@ asr = [
     "nvidia-cudnn-cu12>=9,<10",
     "onnx-asr[gpu,hub]>=0.12",
 ]
+vision = [
+    "pillow>=10",
+]
 diar = [
     "pyannote.audio>=4.0.7",
     "torch>=2.8",
@@ -50,3 +53,6 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/bbb_bench/datasets/slides.py" = ["E501"]
