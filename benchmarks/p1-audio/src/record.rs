@@ -22,6 +22,7 @@ pub struct RecordArgs {
     pub duration_s: f64,
     pub sources: Vec<Source>,
     pub segment_s: u32,
+    pub no_drift_correction: bool,
 }
 
 #[derive(Serialize)]
@@ -297,6 +298,7 @@ pub fn record(args: RecordArgs) -> Result<(), String> {
         journal: journal.clone(),
         out_dir: args.out.clone(),
         seg_samples,
+        no_drift_correction: args.no_drift_correction,
     });
     journal
         .lock()

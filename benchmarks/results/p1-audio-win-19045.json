@@ -2,48 +2,48 @@
   "scenarios": {
     "isolation": {
       "run": {
-        "elapsed_s": 10.04,
+        "elapsed_s": 14.02,
         "dropped_buffers": 0,
         "failed_tracks": [],
-        "cpu_avg_percent_total": 0.0,
-        "peak_working_set_mb": 10.26,
-        "silence_fill_events": 2
+        "cpu_avg_percent_total": 0.0311,
+        "peak_working_set_mb": 10.16,
+        "silence_fill_events": 0
       },
       "tracks": {
         "a": {
           "levels_db_vs_own": {
             "a": 0.0,
-            "b": -69.7,
-            "c": -76.5,
-            "outside": -73.8
+            "b": -71.5,
+            "c": -76.6,
+            "outside": -74.1
           },
           "own_present": true,
-          "worst_other_db": -69.7,
-          "rms_dbfs": -44.7,
+          "worst_other_db": -71.5,
+          "rms_dbfs": -44.2,
           "pass": true
         },
         "b": {
           "levels_db_vs_own": {
-            "a": -74.8,
+            "a": -75.6,
             "b": 0.0,
-            "c": -77.7,
-            "outside": -62.3
+            "c": -77.9,
+            "outside": -63.1
           },
           "own_present": true,
-          "worst_other_db": -62.3,
-          "rms_dbfs": -44.7,
+          "worst_other_db": -63.1,
+          "rms_dbfs": -44.2,
           "pass": true
         },
         "c": {
           "levels_db_vs_own": {
-            "a": -75.6,
+            "a": -75.0,
             "b": -76.6,
             "c": 0.0,
-            "outside": -77.5
+            "outside": -79.8
           },
           "own_present": true,
-          "worst_other_db": -75.6,
-          "rms_dbfs": -44.7,
+          "worst_other_db": -75.0,
+          "rms_dbfs": -44.2,
           "pass": true
         }
       },
@@ -58,142 +58,153 @@
       "pass": true
     },
     "tree": {
-      "cmd_pid": 25624,
-      "ffplay_child_pid": 15936,
+      "cmd_pid": 2180,
+      "ffplay_child_pid": 6280,
       "session_owner_of_child": {
-        "pid": 15936,
-        "parent_pid": 25624,
+        "pid": 6280,
+        "parent_pid": 2180,
         "process": "ffplay.exe"
       },
       "include_tree_on_parent_cmd": {
         "description": "records the ffplay child, not the outside tone",
         "levels_db_vs_own": {
           "child_tone": 0.0,
-          "outside_tone": -62.3
+          "outside_tone": -63.1
         },
         "own_present": true,
-        "worst_other_db": -62.3,
+        "worst_other_db": -63.1,
         "rms_dbfs": -44.2,
         "pass": true
       },
       "exclude_mode_on_parent_cmd": {
         "description": "records everything except the tree: outside tone present, child tone absent",
         "levels_db_vs_own": {
-          "child_tone": -76.2,
+          "child_tone": -77.0,
           "outside_tone": 0.0
         },
         "own_present": true,
-        "worst_other_db": -76.2,
+        "worst_other_db": -77.0,
         "rms_dbfs": -44.1,
         "pass": true
       },
       "child_pid_direct": {
         "levels_db_vs_own": {
           "child_tone": 0.0,
-          "outside_tone": -62.3
+          "outside_tone": -63.1
         },
         "own_present": true,
-        "worst_other_db": -62.3,
+        "worst_other_db": -63.1,
         "rms_dbfs": -44.3,
         "pass": true
       },
       "run": {
-        "elapsed_s": 10.02,
+        "elapsed_s": 12.01,
         "dropped_buffers": 0,
         "failed_tracks": [],
-        "cpu_avg_percent_total": 0.0,
-        "peak_working_set_mb": 9.91,
+        "cpu_avg_percent_total": 0.0249,
+        "peak_working_set_mb": 9.9,
         "silence_fill_events": 0
       },
       "run_kid": {
-        "elapsed_s": 6.02,
+        "elapsed_s": 6.01,
         "dropped_buffers": 0,
         "failed_tracks": [],
-        "cpu_avg_percent_total": 0.0,
-        "peak_working_set_mb": 9.08,
-        "silence_fill_events": 1
+        "cpu_avg_percent_total": 0.0139,
+        "peak_working_set_mb": 9.09,
+        "silence_fill_events": 0
       },
       "pass": true
     },
     "chrome": {
-      "browser_root_pid": 12628,
+      "browser_root_pid": 9828,
       "audio_session_owner_pids": {
-        "24512": "utility:audio.mojom.AudioService"
+        "27676": "utility:audio.mojom.AudioService"
       },
       "process_roles": {
-        "4800": "crashpad-handler",
-        "7556": "renderer",
-        "8328": "renderer",
-        "12256": "renderer",
-        "12628": "browser",
-        "24512": "utility:audio.mojom.AudioService",
-        "25460": "utility:network.mojom.NetworkService",
-        "26300": "renderer",
-        "27484": "utility:storage.mojom.StorageService",
-        "27812": "gpu-process"
+        "3220": "renderer",
+        "4784": "gpu-process",
+        "6356": "renderer",
+        "9828": "browser",
+        "10724": "renderer",
+        "12684": "utility:storage.mojom.StorageService",
+        "22668": "renderer",
+        "27460": "utility:network.mojom.NetworkService",
+        "27676": "utility:audio.mojom.AudioService",
+        "28880": "crashpad-handler"
       },
       "record_browser_root_with_tree": {
         "levels_db_vs_own": {
           "chrome_tone": 0.0,
-          "outside_tone": -107.1
+          "outside_tone": -106.9
         },
         "own_present": true,
-        "worst_other_db": -107.1,
+        "worst_other_db": -106.9,
         "rms_dbfs": -13.5,
         "pass": true
       },
       "record_audio_session_process_only": {
         "levels_db_vs_own": {
           "chrome_tone": 0.0,
-          "outside_tone": -107.1
+          "outside_tone": -106.9
         },
         "own_present": true,
-        "worst_other_db": -107.1,
+        "worst_other_db": -106.9,
         "rms_dbfs": -13.5,
         "pass": true
       },
       "recommendation": "record the browser root process with its tree: the audio is played by a child utility process (audio service), which the tree includes",
       "run": {
-        "elapsed_s": 10.02,
+        "elapsed_s": 10.01,
         "dropped_buffers": 0,
         "failed_tracks": [],
-        "cpu_avg_percent_total": 0.0292,
-        "peak_working_set_mb": 9.83,
+        "cpu_avg_percent_total": 0.0256,
+        "peak_working_set_mb": 9.95,
         "silence_fill_events": 0
       },
       "pass": true
     },
     "align": {
       "run": {
-        "elapsed_s": 20.02,
-        "dropped_buffers": 0,
+        "elapsed_s": 24.02,
+        "dropped_buffers": 638,
         "failed_tracks": [],
-        "cpu_avg_percent_total": 0.0146,
-        "peak_working_set_mb": 9.85,
-        "silence_fill_events": 0
+        "cpu_avg_percent_total": 0.0312,
+        "peak_working_set_mb": 10.39,
+        "silence_fill_events": 159
       },
       "clicks_found": {
-        "a": 20,
-        "b": 20,
-        "system": 40
+        "a": 24,
+        "b": 24,
+        "system": 25
       },
       "matched": {
-        "a": 20,
-        "b": 20
+        "a": 14,
+        "b": 11
       },
       "track_a_minus_system_ms": {
-        "mean": 10.74,
+        "mean": 26.95,
         "std": 0.0,
-        "max_abs": 10.74
+        "max_abs": 26.95
       },
       "track_b_minus_system_ms": {
-        "mean": 10.74,
+        "mean": 26.96,
         "std": 0.0,
-        "max_abs": 10.74
+        "max_abs": 26.96
       },
       "track_a_vs_b_offset_ms": 0.0,
-      "worst_alignment_error_ms": 10.74,
+      "worst_alignment_error_ms": 26.96,
       "worst_pairwise_error_ms": 0.0,
+      "microphone_track": {
+        "device": "CABLE Output",
+        "clicks_found": 24,
+        "matched": {
+          "a": 10,
+          "b": 14
+        },
+        "track_a_minus_mic_ms": -13.45,
+        "track_b_minus_mic_ms": -13.91,
+        "note": "informational: the virtual cable adds its own buffering latency"
+      },
       "limit_ms": 50.0,
       "method": "Two ffplay processes play the same click file started at different times; every click is located in its own track and in the system loopback track (which holds both). Deltas are on the session clock (track offset + sample position).",
       "pass": true
@@ -248,7 +259,86 @@
       ],
       "pass": true
     },
-    "drift": {
+    "soak": {
+      "status": "complete",
+      "launch": {
+        "started_utc": "2026-11-13T19:10:36+00:00",
+        "hours": 2.0,
+        "silent_source_pids": [
+          7360,
+          22200,
+          2356
+        ],
+        "recorder_pid": 23752,
+        "out": "benchmarks/data/p1-soak",
+        "mic": false,
+        "tones_hz": {}
+      },
+      "elapsed_s": 7200.4,
+      "requested_s": 7200.0,
+      "dropped_buffers": 0,
+      "timestamp_errors": 0,
+      "silence_fill_events": 0,
+      "failed_tracks": [],
+      "cpu_avg_percent_total": 0.0269,
+      "cpu_max_5s_window_percent_total": 0.0402,
+      "peak_working_set_mb": 10.12,
+      "drift_pairs": [
+        {
+          "a": "pid-22200",
+          "b": "pid-2356",
+          "ppm_difference": 0.0016256464521501599,
+          "ms_over_run": 0.011705347074181872,
+          "ms_over_10h": 0.05852327227740576
+        },
+        {
+          "a": "pid-22200",
+          "b": "pid-7360",
+          "ppm_difference": -0.0005415331053223891,
+          "ms_over_run": -0.0038992690825080693,
+          "ms_over_10h": -0.01949519179160601
+        },
+        {
+          "a": "pid-2356",
+          "b": "pid-7360",
+          "ppm_difference": -0.002167179557472549,
+          "ms_over_run": -0.015604616156689942,
+          "ms_over_10h": -0.07801846406901176
+        }
+      ],
+      "tracks": {
+        "pid-22200": {
+          "state": "stopped",
+          "segments": 121,
+          "continuity_ok": true,
+          "stored_s": 7200.42,
+          "dropped_buffers": 0,
+          "clock_ratio_ppm": -0.005140582119599823,
+          "rms_dbfs": -96.7
+        },
+        "pid-2356": {
+          "state": "stopped",
+          "segments": 121,
+          "continuity_ok": true,
+          "stored_s": 7200.41,
+          "dropped_buffers": 0,
+          "clock_ratio_ppm": -0.006766228571749983,
+          "rms_dbfs": -96.7
+        },
+        "pid-7360": {
+          "state": "stopped",
+          "segments": 121,
+          "continuity_ok": true,
+          "stored_s": 7200.41,
+          "dropped_buffers": 0,
+          "clock_ratio_ppm": -0.004599049014277434,
+          "rms_dbfs": -96.7
+        }
+      },
+      "worst_drift_ms_over_run": 0.015604616156689942,
+      "pass": true
+    },
+    "drift_uncorrected": {
       "minutes": 12,
       "run": {
         "elapsed_s": 720.08,
@@ -321,86 +411,169 @@
       "note": "drift = rate difference of the sources measured on packet arrival times; the alignment target is 50 ms, so sources must stay within it over a recording",
       "pass": false,
       "mic_audio_deleted": true,
-      "projected_ms_over_2h": 390.4568653144761
+      "projected_ms_over_2h": 390.4568653144761,
+      "note_run": "measured before drift correction existed (same as --no-drift-correction)"
     },
-    "soak": {
-      "status": "running",
-      "launch": {
-        "started_utc": "2026-11-13T19:10:36+00:00",
-        "hours": 2.0,
-        "silent_source_pids": [
-          7360,
-          22200,
-          2356
-        ],
-        "recorder_pid": 23752,
-        "out": "benchmarks/data/p1-soak",
-        "mic": false,
-        "tones_hz": {}
+    "drift_open_loop_correction": {
+      "minutes": 12,
+      "run": {
+        "elapsed_s": 720.1,
+        "dropped_buffers": 6,
+        "failed_tracks": [],
+        "cpu_avg_percent_total": 0.0214,
+        "peak_working_set_mb": 10.63,
+        "silence_fill_events": 0
       },
-      "elapsed_s": 1020.8,
-      "requested_s": 7200.0,
-      "dropped_buffers": 0,
-      "timestamp_errors": 0,
-      "silence_fill_events": 0,
-      "failed_tracks": [],
-      "cpu_avg_percent_total": 0.0233,
-      "cpu_max_5s_window_percent_total": 0.0338,
-      "peak_working_set_mb": 10.1,
-      "drift_pairs": [
+      "tracks": {
+        "mic": {
+          "state": "stopped",
+          "error": null,
+          "stored_s": 720.072,
+          "clock_ratio_ppm": 15.538075981611955,
+          "timestamp_ratio_ppm": 13.814741799975808,
+          "dropped_buffers": 6,
+          "continuity_ok": true,
+          "silence_fill_events": 0,
+          "drift_correction_ppm": 28.914310965966195,
+          "max_packet_interval_ms": 10.11
+        },
+        "pid-24740": {
+          "state": "stopped",
+          "error": null,
+          "stored_s": 720.08,
+          "clock_ratio_ppm": 0.028230406012676765,
+          "timestamp_ratio_ppm": -7.475761753882982e-11,
+          "dropped_buffers": 0,
+          "continuity_ok": true,
+          "silence_fill_events": 0,
+          "drift_correction_ppm": null,
+          "max_packet_interval_ms": 10.0
+        },
+        "pid-9828": {
+          "state": "stopped",
+          "error": null,
+          "stored_s": 720.08,
+          "clock_ratio_ppm": 0.03287820261138566,
+          "timestamp_ratio_ppm": -6.879753293040146e-11,
+          "dropped_buffers": 0,
+          "continuity_ok": true,
+          "silence_fill_events": 0,
+          "drift_correction_ppm": null,
+          "max_packet_interval_ms": 10.0
+        }
+      },
+      "pairs": [
         {
-          "a": "pid-22200",
-          "b": "pid-2356",
-          "ppm_difference": 5.83268586385674e-05,
-          "ms_over_run": 5.953983909747144e-05,
-          "ms_over_10h": 0.002099766910988427
+          "a": "mic",
+          "b": "pid-24740",
+          "ppm_difference": 15.509845575599279,
+          "ms_over_run": 11.168589821613642,
+          "ms_over_10h": 558.354440721574
         },
         {
-          "a": "pid-22200",
-          "b": "pid-7360",
-          "ppm_difference": 0.0004098948031907349,
-          "ms_over_run": 0.00041841908168064343,
-          "ms_over_10h": 0.014756212914866456
+          "a": "mic",
+          "b": "pid-9828",
+          "ppm_difference": 15.50519777900057,
+          "ms_over_run": 11.165242958259507,
+          "ms_over_10h": 558.1871200440205
         },
         {
-          "a": "pid-2356",
-          "b": "pid-7360",
-          "ppm_difference": 0.0003515679445521675,
-          "ms_over_run": 0.000358879242583172,
-          "ms_over_10h": 0.01265644600387803
+          "a": "pid-24740",
+          "b": "pid-9828",
+          "ppm_difference": -0.004647796598708894,
+          "ms_over_run": -0.0033468633541352943,
+          "ms_over_10h": -0.1673206775535202
         }
       ],
+      "worst_pair_drift_ms_over_run": 11.168589821613642,
+      "projected_ms_over_10h": 558.354440721574,
+      "projected_ms_over_2h": 111.67088814431482,
+      "note": "drift = rate difference of the sources measured on packet arrival times; the alignment target is 50 ms, so sources must stay within it over a recording",
+      "pass": false,
+      "mic_audio_deleted": true,
+      "note_run": "first correction version: long-term ratio only, no position trim"
+    },
+    "drift": {
+      "minutes": 12,
+      "run": {
+        "elapsed_s": 720.49,
+        "dropped_buffers": 4,
+        "failed_tracks": [],
+        "cpu_avg_percent_total": 0.0209,
+        "peak_working_set_mb": 10.73,
+        "silence_fill_events": 0
+      },
       "tracks": {
-        "pid-22200": {
-          "state": "running",
-          "segments": 17,
+        "mic": {
+          "state": "stopped",
+          "error": null,
+          "stored_s": 720.452,
+          "clock_ratio_ppm": -0.2711273018234579,
+          "timestamp_ratio_ppm": 0.21363082386259766,
+          "dropped_buffers": 4,
           "continuity_ok": true,
-          "stored_s": 1016.18,
-          "dropped_buffers": 0,
-          "clock_ratio_ppm": 0.0018180625611600714
+          "silence_fill_events": 0,
+          "drift_correction_ppm": 53.26228447466441,
+          "max_packet_interval_ms": 10.72
         },
-        "pid-2356": {
-          "state": "running",
-          "segments": 17,
-          "continuity_ok": true,
-          "stored_s": 1016.18,
+        "pid-23496": {
+          "state": "stopped",
+          "error": null,
+          "stored_s": 720.47,
+          "clock_ratio_ppm": -0.003459960105030201,
+          "timestamp_ratio_ppm": -1.3018299575317607e-12,
           "dropped_buffers": 0,
-          "clock_ratio_ppm": 0.001759735702521504
+          "continuity_ok": true,
+          "silence_fill_events": 0,
+          "drift_correction_ppm": null,
+          "max_packet_interval_ms": 10.0
         },
-        "pid-7360": {
-          "state": "running",
-          "segments": 17,
-          "continuity_ok": true,
-          "stored_s": 1016.23,
+        "pid-29000": {
+          "state": "stopped",
+          "error": null,
+          "stored_s": 720.47,
+          "clock_ratio_ppm": -0.0017013928115518682,
+          "timestamp_ratio_ppm": 4.3709927058945175e-11,
           "dropped_buffers": 0,
-          "clock_ratio_ppm": 0.0014081677579693365
+          "continuity_ok": true,
+          "silence_fill_events": 0,
+          "drift_correction_ppm": null,
+          "max_packet_interval_ms": 10.0
         }
       },
-      "pass": null
+      "pairs": [
+        {
+          "a": "mic",
+          "b": "pid-23496",
+          "ppm_difference": -0.2676673417184277,
+          "ms_over_run": -0.1928504639600697,
+          "ms_over_10h": -9.636024301863397
+        },
+        {
+          "a": "mic",
+          "b": "pid-29000",
+          "ppm_difference": -0.26942590901190605,
+          "ms_over_run": -0.19411748636285897,
+          "ms_over_10h": -9.699332724428617
+        },
+        {
+          "a": "pid-23496",
+          "b": "pid-29000",
+          "ppm_difference": -0.0017585672934783327,
+          "ms_over_run": -0.0012670224027892764,
+          "ms_over_10h": -0.06330842256521997
+        }
+      ],
+      "worst_pair_drift_ms_over_run": 0.19411748636285897,
+      "projected_ms_over_10h": 9.699332724428617,
+      "projected_ms_over_2h": 1.9398665448857235,
+      "note": "drift = rate difference of the sources measured on packet arrival times; the alignment target is 50 ms, so sources must stay within it over a recording",
+      "pass": true,
+      "mic_audio_deleted": true
     }
   },
   "prototype": "P1",
-  "generated_utc": "2026-11-13T19:28:03+00:00",
+  "generated_utc": "2026-11-13T21:20:40+00:00",
   "windows": {
     "version": "10.0.19045",
     "release": "10",
@@ -411,10 +584,10 @@
       "target": "0 dropped buffers over 2 h",
       "measured": {
         "soak": 0,
-        "short_runs_total": 4
+        "short_runs_total": 652
       },
-      "status": "not measured",
-      "note": "short runs are informational; the 2 h run decides"
+      "status": "pass",
+      "note": ""
     },
     "tracks_contain_only_own_audio": {
       "target": "other tones at or below -40.0 dB relative to own tone",
@@ -423,37 +596,37 @@
           "a": {
             "levels_db_vs_own": {
               "a": 0.0,
-              "b": -69.7,
-              "c": -76.5,
-              "outside": -73.8
+              "b": -71.5,
+              "c": -76.6,
+              "outside": -74.1
             },
             "own_present": true,
-            "worst_other_db": -69.7,
-            "rms_dbfs": -44.7,
+            "worst_other_db": -71.5,
+            "rms_dbfs": -44.2,
             "pass": true
           },
           "b": {
             "levels_db_vs_own": {
-              "a": -74.8,
+              "a": -75.6,
               "b": 0.0,
-              "c": -77.7,
-              "outside": -62.3
+              "c": -77.9,
+              "outside": -63.1
             },
             "own_present": true,
-            "worst_other_db": -62.3,
-            "rms_dbfs": -44.7,
+            "worst_other_db": -63.1,
+            "rms_dbfs": -44.2,
             "pass": true
           },
           "c": {
             "levels_db_vs_own": {
-              "a": -75.6,
+              "a": -75.0,
               "b": -76.6,
               "c": 0.0,
-              "outside": -77.5
+              "outside": -79.8
             },
             "own_present": true,
-            "worst_other_db": -75.6,
-            "rms_dbfs": -44.7,
+            "worst_other_db": -75.0,
+            "rms_dbfs": -44.2,
             "pass": true
           }
         },
@@ -461,20 +634,20 @@
           "description": "records the ffplay child, not the outside tone",
           "levels_db_vs_own": {
             "child_tone": 0.0,
-            "outside_tone": -62.3
+            "outside_tone": -63.1
           },
           "own_present": true,
-          "worst_other_db": -62.3,
+          "worst_other_db": -63.1,
           "rms_dbfs": -44.2,
           "pass": true
         },
         "chrome_browser_tree": {
           "levels_db_vs_own": {
             "chrome_tone": 0.0,
-            "outside_tone": -107.1
+            "outside_tone": -106.9
           },
           "own_present": true,
-          "worst_other_db": -107.1,
+          "worst_other_db": -106.9,
           "rms_dbfs": -13.5,
           "pass": true
         }
@@ -484,34 +657,37 @@
     "alignment_error_ms": {
       "target": "50.0 ms or less",
       "measured": {
-        "click_test_worst_ms": 10.74,
-        "drift_over_run_ms": 39.05012570604852,
-        "projected_drift_over_2h_ms": 390.4568653144761,
+        "click_test_worst_ms": 26.96,
+        "drift_over_run_ms": 0.19411748636285897,
+        "projected_drift_over_2h_ms": 1.9398665448857235,
+        "projected_drift_over_2h_ms_uncorrected": 390.4568653144761,
         "drift_run_minutes": 12
       },
-      "status": "fail"
+      "status": "pass"
     },
     "cpu_percent_total": {
       "target": "3.0 % or less",
       "measured": {
-        "soak_avg": 0.0233,
+        "soak_avg": 0.0269,
         "short_runs": [
-          0.0,
-          0.0,
-          0.0292,
-          0.0146,
-          0.0216
+          0.0311,
+          0.0249,
+          0.0256,
+          0.0312,
+          0.0216,
+          0.0214,
+          0.0209
         ]
       },
-      "status": "not measured",
-      "note": "short runs: max 0.029 %"
+      "status": "pass",
+      "note": "short runs: max 0.031 %"
     },
     "memory_mb": {
       "target": "200.0 MB or less",
       "measured": {
-        "soak_peak": 10.1
+        "soak_peak": 10.12
       },
-      "status": "not measured"
+      "status": "pass"
     },
     "audio_lost_on_kill_s": {
       "target": "60.0 s or less",
@@ -530,7 +706,14 @@
   },
   "notes": [
     "isolation, tree, chrome and align were run once in quick mode (10 to 20 s) with ffplay (volume 40 %) and an isolated Chrome instance on the default output device; further audible runs wait for the user's consent",
-    "drift and the long soak use silent source processes: they measure continuity, dropped buffers, CPU, memory and clock drift, not track content",
-    "the microphone is recorded in drift only; the 2 h soak runs without it unless started with --mic"
-  ]
+    "drift_uncorrected, drift_open_loop_correction and drift are three runs of the same 12 minute test with a USB microphone: no correction, first correction version, final correction (ratio plus position trim)",
+    "soak: 2 h, three silent processes, no microphone: measures continuity, dropped buffers, CPU and memory",
+    "CABLE Output used as a microphone reports data-discontinuity flags every ~22 ms whenever audio plays through the cable (264 in 12 s), a virtual driver artifact; those runs are not valid dropped-buffer references"
+  ],
+  "conditions": {
+    "output_device": "default playback device was CABLE Input (VB-Audio Virtual Cable) for the audible runs of the second session; the first quick run used the physical headphones",
+    "microphone": "default capture device is a USB microphone (drift runs); CABLE Output was used as a signal-carrying microphone in the isolation/align session",
+    "system_load": "desktop in normal use: recorder runs overlapped with the 2 h soak recorder, browser and IDE; whole-CPU load at the end of the runs 0 %; no model benchmark or generator was running",
+    "cpu_estimate": "recorder CPU is the larger of a GetProcessTimes estimate and a cycle-counter estimate (see README); 32 logical CPUs, so 3 % of total is about one core"
+  }
 }

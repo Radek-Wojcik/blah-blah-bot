@@ -11,6 +11,7 @@ use wasapi::{
 };
 
 use crate::convert::{Converter, Format};
+use crate::drift::Corrector;
 use crate::journal::{Entry, Journal};
 use crate::sysutil::qpc_now_hns;
 use crate::timeline::{hns_to_ms, SAMPLE_RATE};
@@ -79,6 +80,8 @@ pub struct Shared {
     pub journal: Arc<Mutex<Journal>>,
     pub out_dir: PathBuf,
     pub seg_samples: u64,
+    /// Store sources as captured, without drift correction (for comparison runs).
+    pub no_drift_correction: bool,
 }
 
 impl Shared {
@@ -103,6 +106,8 @@ pub struct TrackState {
     pub offset_ms: f64,
     pub stored_samples: u64,
     pub stats: Stats,
+    /// Drift correction applied to the stream in ppm (None when not used).
+    pub drift_correction_ppm: Option<f64>,
 }
 
 pub type SharedState = Arc<Mutex<TrackState>>;
@@ -284,6 +289,11 @@ fn run_track_inner(
     // One second of audio is far more than a packet; the buffer is reused.
     let mut buf = vec![0u8; frame_bytes * 48_000];
     let mut samples: Vec<i16> = Vec::with_capacity(48_000);
+    let mut corrected: Vec<i16> = Vec::with_capacity(48_000);
+    // Process loopback derives its timestamps from the sample count, so only sources with
+    // real device timestamps can be corrected.
+    let drift_correction = !matches!(source, Source::Process { .. }) && !shared.no_drift_correction;
+    let mut corrector = Corrector::new(drift_correction);
     let mut last_publish = std::time::Instant::now();
 
     let io_err = |e: std::io::Error| format!("io: {e}");
@@ -293,9 +303,11 @@ fn run_track_inner(
             last_publish = std::time::Instant::now();
             let stats = tracker.stats.clone();
             let stored = writer.written();
+            let ppm = drift_correction.then(|| corrector.correction_ppm());
             set_state(state, |s| {
                 s.stats = stats;
                 s.stored_samples = stored;
+                s.drift_correction_ppm = ppm;
             });
         }
         match event.wait_for_event(200) {
@@ -331,9 +343,11 @@ fn run_track_inner(
             } else {
                 Some(shared.ts_to_ms(info.timestamp))
             };
-            let plan = tracker.on_packet(due, samples.len() as u64, shared.now_ms(), flags);
+            corrected.clear();
+            corrector.process(due, &samples, &mut corrected);
+            let plan = tracker.on_packet(due, corrected.len() as u64, shared.now_ms(), flags);
             apply_plan(&plan, &mut writer, shared, name, tracker.position_ms()).map_err(io_err)?;
-            writer.push(&samples).map_err(io_err)?;
+            writer.push(&corrected).map_err(io_err)?;
             if shared.stop.load(Ordering::Relaxed) {
                 break 'outer;
             }
@@ -355,9 +369,11 @@ fn run_track_inner(
         })
         .map_err(|e| format!("journal: {e}"))?;
     let stats = tracker.stats.clone();
+    let ppm = drift_correction.then(|| corrector.correction_ppm());
     set_state(state, |s| {
         s.stats = stats;
         s.stored_samples = total;
+        s.drift_correction_ppm = ppm;
         s.state = "stopped".into();
     });
     Ok(())

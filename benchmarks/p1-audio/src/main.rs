@@ -2,6 +2,7 @@
 
 mod capture;
 mod convert;
+mod drift;
 mod journal;
 mod play;
 mod record;
@@ -61,6 +62,10 @@ enum Cmd {
         /// Segment length in seconds.
         #[arg(long, default_value_t = 60)]
         segment_s: u32,
+        /// Store the microphone and system tracks as captured, without correcting their
+        /// clock drift against the session clock (for comparison runs).
+        #[arg(long)]
+        no_drift_correction: bool,
     },
     /// List audio sessions (process id, parent, process name, state).
     Sessions {
@@ -252,6 +257,7 @@ fn run(cli: Cli) -> Result<(), String> {
             pids,
             format: _,
             segment_s,
+            no_drift_correction,
         } => {
             let mut sources = Vec::new();
             if mic || mic_device.is_some() {
@@ -268,6 +274,7 @@ fn run(cli: Cli) -> Result<(), String> {
                 duration_s: duration,
                 sources,
                 segment_s,
+                no_drift_correction,
             })
         }
         Cmd::Sessions { json } => cmd_sessions(json),

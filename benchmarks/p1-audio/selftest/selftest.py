@@ -308,6 +308,7 @@ class Context:
         self.output_device = output_device
         self.keep_mic_audio = False
         self.mic_device: str | None = None
+        self.no_drift_correction = False
         self.work = data / "p1-selftest"
         self.work.mkdir(parents=True, exist_ok=True)
         self.tones: dict[int, Path] = {}
@@ -771,6 +772,8 @@ def scenario_drift(ctx: Context) -> dict:
     tone = None
     try:
         args = ["--mic-device", ctx.mic_device] if ctx.mic_device else ["--mic"]
+        if ctx.no_drift_correction:
+            args.append("--no-drift-correction")
         if ctx.mic_device:
             # A real signal for the microphone track: a tone on the output that the chosen
             # capture device carries.
@@ -798,6 +801,7 @@ def scenario_drift(ctx: Context) -> dict:
             "dropped_buffers": t["dropped_buffers"],
             "continuity_ok": (t["continuity"] or {}).get("ok"),
             "silence_fill_events": t["stats"]["silence_fill_events"],
+            "drift_correction_ppm": t.get("drift_correction_ppm"),
             "max_packet_interval_ms": round(t["stats"]["max_packet_interval_ms"], 2),
         }
     pairs = s.get("drift_pairs", [])
@@ -994,6 +998,9 @@ def evaluate(results: dict) -> dict:
                 "click_test_worst_ms": ali.get("worst_alignment_error_ms"),
                 "drift_over_run_ms": drift.get("worst_pair_drift_ms_over_run"),
                 "projected_drift_over_2h_ms": drift.get("projected_ms_over_2h"),
+                "projected_drift_over_2h_ms_uncorrected": sc.get("drift_uncorrected", {}).get(
+                    "projected_ms_over_2h"
+                ),
                 "drift_run_minutes": drift.get("minutes"),
             },
             "status": status(
@@ -1096,6 +1103,11 @@ def main() -> int:
     ap.add_argument("--mic", action="store_true", help="soak-start: also record the microphone")
     ap.add_argument("--keep-mic-audio", action="store_true")
     ap.add_argument(
+        "--no-drift-correction",
+        action="store_true",
+        help="drift: record without correction (stored as drift_uncorrected)",
+    )
+    ap.add_argument(
         "--mic-device",
         help="capture device used as the microphone track (e.g. a virtual cable output)",
     )
@@ -1119,6 +1131,7 @@ def main() -> int:
     ctx = Context(Recorder(args.exe), args.data_dir, args.quick, args.audible, args.output_device)
     ctx.keep_mic_audio = args.keep_mic_audio
     ctx.mic_device = args.mic_device
+    ctx.no_drift_correction = args.no_drift_correction
     names = args.scenarios or [
         n for n in SCENARIOS if n not in AUDIBLE or args.audible or args.output_device
     ]
@@ -1135,7 +1148,7 @@ def main() -> int:
             new["soak"] = result
         elif name == "drift":
             result = scenario_drift(ctx)
-            new["drift"] = result
+            new["drift_uncorrected" if ctx.no_drift_correction else "drift"] = result
         elif name in SCENARIOS:
             try:
                 result = SCENARIOS[name](ctx)
