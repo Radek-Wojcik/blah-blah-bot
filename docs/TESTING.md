@@ -1,0 +1,149 @@
+# Testing strategy
+
+## 1. Principles
+
+- Fast tests run on every push. Tests that need a GPU or real models run locally before each release and their results are published with the release.
+- Model quality is measured, not assumed. Every model-dependent feature has a labeled data set, a metric and a threshold.
+- Test data never contains real meetings or real people. Audio is scripted or synthetic.
+- Schemas are the contract between components and are tested from both sides.
+
+## 2. Test levels
+
+| Level | Scope | Tools | Runs |
+|---|---|---|---|
+| Unit (Rust) | Journal, queue state machine, GPU guard decisions, template rendering, message splitting, cycle file validation | `cargo test` | CI |
+| Unit (Python) | Windowing, quote matching, deduplication, metric code, merge of tracks | `pytest` (CPU only, no models) | CI |
+| Unit (TypeScript) | UI state, formatting, bridge protocol in the extension | `vitest` | CI |
+| Contract | JSON Schemas validated against fixtures produced by Python and consumed by Rust and the UI | Schema validators in each language | CI |
+| Integration | Recorder with a virtual audio device; pipeline with real models; publishers against mock servers | Dedicated harness | Recorder and publishers in CI where possible; models locally |
+| End-to-end | User flows through the UI | Playwright on the UI with a mock backend; smoke test of the packaged application | UI flows in CI; packaged smoke test locally |
+| Measurement | Quality and performance on the reference machine | `benchmarks/` | Locally, before each release |
+| Resilience | Faults injected during recording, processing and publishing | Scripts in `benchmarks/resilience/` | Locally, before each release |
+
+## 3. Test data
+
+| Set | Content | Ground truth | Location |
+|---|---|---|---|
+| `tones` | Generated sine sweeps and clicks per track | Exact sample positions | Generated in the test |
+| `mini` | Three clips of 30–60 s: Polish, English, mixed | Transcript, speakers | Repository (small files) |
+| `scripted` | Scripted meetings of 10–30 min, 2–10 voices, with planted tasks, owners, dates, decisions and budget figures; Polish, English and mixed | Script and annotation file | Outside the repository, regenerated from scripts |
+| `long` | Concatenation and variation of `scripted` up to 10 h | Derived | Generated |
+| `extraction` | 10 transcripts with hand-labeled tasks, assignees, due dates, decisions and topics | Annotation file | Repository (text only) |
+| `slides` | Demo slides, charts and diagrams as images | Key facts per image | Repository |
+| `demo` | Fictional cycle with fictional participants for screenshots and demos | Not applicable | Repository |
+
+- Scripts and annotations are versioned. Audio for the larger sets is produced from the scripts with a text-to-speech tool or recorded by volunteers reading them, and is not committed.
+- The mixed-language scripts use Polish sentences with English technical terms from a glossary, so term recall can be scored.
+
+## 4. Metrics
+
+| Metric | Definition |
+|---|---|
+| WER | Word error rate after normalization (case, punctuation, numerals) |
+| Term recall | Share of glossary terms transcribed correctly |
+| Translation rate | Share of segments output in a language other than the spoken one |
+| DER | Diarization error rate, no collar, overlap included |
+| Speaker accuracy | Share of speech time attributed to the correct named participant |
+| False accept rate | Share of unknown voices assigned to a known profile |
+| Task recall and precision | Against labeled tasks; a match requires the same action and object |
+| Assignee and due-date accuracy | Among correctly found tasks |
+| Quote validity | Share of items whose quote is found in the transcript near the stated time |
+| Schema validity | Share of model responses valid after the allowed retries |
+| RTFx | Audio duration divided by processing time |
+
+## 5. Thresholds
+
+Targets for the reference machine (RTX 3080 12 GB, 32 GB RAM). Stage 0 measures the baselines; a missed target triggers the decision gate.
+
+**Recorder**
+
+| Measure | Target |
+|---|---|
+| CPU while recording three tracks | 3% of total CPU on average or less |
+| Memory | 200 MB or less |
+| Dropped buffers in a 10-hour run | 0 |
+| Audio lost when the process is killed | 60 s or less per track |
+| Track alignment error | 50 ms or less |
+
+**Transcription and speakers**
+
+| Measure | Target |
+|---|---|
+| WER, Polish scripted set | 15% or less |
+| WER, mixed set | 20% or less |
+| Term recall, mixed set | 85% or more |
+| Translation rate | 1% or less |
+| DER, 2–4 speakers | 15% or less |
+| DER, 6–10 speakers | 30% or less |
+| DER, 15+ speakers | Measured and reported; no target |
+| Speaker accuracy for enrolled voices (turns of 5 s or longer) | 90% or more |
+| False accept rate | 2% or less |
+
+**Extraction**
+
+| Measure | Target |
+|---|---|
+| Schema validity (up to two retries) | 100% |
+| Task recall | 80% or more |
+| Task precision | 80% or more |
+| Assignee accuracy | 85% or more |
+| Due-date accuracy | 85% or more |
+| Quote validity | 95% or more |
+
+**Processing time**
+
+| Measure | Target |
+|---|---|
+| 2-hour meeting, full pipeline | 45 min or less |
+| 10-hour meeting, full pipeline | 4 h or less |
+| Peak VRAM in any stage | 11.5 GB or less |
+
+Regression tolerance after Stage 0: quality metrics may not drop by more than two percentage points against the recorded baseline without an explicit decision.
+
+## 6. Resilience tests
+
+| Fault | Expected result |
+|---|---|
+| Recorder process killed during recording | Meeting recovered, loss within the threshold |
+| Captured application closed during recording | Its track ends, others continue |
+| Audio device unplugged | Track ends cleanly, notification shown |
+| Disk nearly full | Recording stops with a clear message, existing segments intact |
+| Worker killed in each stage | Retry resumes from that stage |
+| GPU occupied by another process | Job waits; starts when the GPU is free |
+| Model server returns invalid JSON | Retries, then a flagged window |
+| No network at briefing | Cached state with its date |
+| No network at publishing | Outbox, automatic retry |
+| Concurrent push to the cycle repository | Rebase and retry succeeds |
+| Extension service worker restarted | Stream reconnects; gap recorded in the journal |
+
+## 7. Model comparison set
+
+The `extraction` set is used to compare language models and prompts under identical conditions: same transcripts, same schema, same scoring script. A run records model name, quantization, context size, backend, speed and all extraction metrics. Results are stored as JSON under `benchmarks/results/` and summarized in the README. A model becomes a default only with a recorded run.
+
+## 8. UI tests and reproducible screenshots
+
+- The UI runs against a mock IPC layer that serves the `demo` data set, so tests need no audio devices, models or network.
+- Playwright drives the flows listed in the roadmap for each stage.
+- A screenshot script opens fixed routes at a fixed window size, theme and scale, and writes PNG files to `docs/img/`. Running it twice on the same commit produces identical images.
+- Demo GIFs are captured from the packaged application in demo mode with a fixed script of actions.
+
+## 9. Publishing tests
+
+- Mock HTTP servers emulate the GitHub, Discord and Notion endpoints used by the publishers, including error and rate-limit responses.
+- Before each release the publishers run against a dedicated test repository, a test Discord webhook and a test Notion database. Credentials for these exist only on the release machine.
+- Limits are tested at the boundary: message length, number of embeds, number and size of attachments.
+
+## 10. Continuous integration
+
+Workflows on Windows runners:
+
+| Job | Content |
+|---|---|
+| `lint` | `cargo fmt --check`, `cargo clippy`, ESLint, Prettier, Ruff |
+| `test` | Rust, Python and TypeScript unit tests; contract tests |
+| `ui` | Playwright flows on the mock backend |
+| `build` | Debug build of the application and the extension |
+| `checks` | Secret scanning over files and history; commit message convention; no large or binary files outside allowed folders |
+| `release` (on tag) | Installer build, checksums, draft GitHub release |
+
+A pull request or push is mergeable only when all jobs pass.
