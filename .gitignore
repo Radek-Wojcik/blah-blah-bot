@@ -1,0 +1,27 @@
+# Rust
+target/
+
+# Node
+node_modules/
+dist/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Models and benchmark data
+models/
+benchmarks/data/
+
+# Environment and logs
+.env
+.env.*
+!.env.example
+*.log
+
+# OS and editors
+Thumbs.db
+.DS_Store
+.idea/
+.vscode/
