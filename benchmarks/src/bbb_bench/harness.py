@@ -6,6 +6,7 @@ import json
 import platform
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -55,6 +56,36 @@ def environment() -> dict[str, Any]:
         "machine": platform.machine(),
         "gpu": gpu_info(),
     }
+
+
+class VramSampler:
+    """Samples total GPU memory in use in a background thread; reports the peak."""
+
+    def __init__(self, interval_s: float = 0.5):
+        self.interval_s = interval_s
+        self.peak_mib = 0
+        self.baseline_mib = gpu_memory_used_mib() or 0
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            used = gpu_memory_used_mib()
+            if used is not None:
+                self.peak_mib = max(self.peak_mib, used)
+            self._stop.wait(self.interval_s)
+
+    def __enter__(self) -> VramSampler:
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._stop.set()
+        self._thread.join()
+
+    @property
+    def peak_above_baseline_mib(self) -> int:
+        return max(0, self.peak_mib - self.baseline_mib)
 
 
 @contextmanager
