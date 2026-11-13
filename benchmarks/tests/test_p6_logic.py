@@ -14,3 +14,7 @@ def test_facts_with_units():
 
 def test_invented_numbers():
     assert p6_vision.invented_numbers("12 of 14 parts and 99 more", ["12", "14"]) == ["99"]
+
+
+def test_single_digits_are_not_counted_as_invented():
+    assert p6_vision.invented_numbers("1. First 2. Second 3D", ["x"]) == []

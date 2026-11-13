@@ -35,9 +35,13 @@ def facts_present(description: str, facts: list[str]) -> list[str]:
 
 
 def invented_numbers(description: str, facts: list[str]) -> list[str]:
-    """Numbers in the description that do not occur in any fact of the image."""
+    """Numbers of two or more digits in the description that occur in no fact of the image.
+
+    Single digits are ignored because they are usually list numbering or unit names
+    such as "3D"; they are covered by the manual review of the descriptions.
+    """
     allowed = {n for f in facts for n in re.findall(r"\d+", f)}
-    return sorted({n for n in re.findall(r"\d+", description) if n not in allowed})
+    return sorted({n for n in re.findall(r"\d{2,}", description) if n not in allowed})
 
 
 def describe(base: str, image: Path) -> tuple[str, float]:
