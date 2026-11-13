@@ -448,15 +448,18 @@ See [ADR 0005](decisions/0005-llm-backend.md).
 
 | Component | Role | License | Status |
 |---|---|---|---|
-| Tauri 2 | Application shell | MIT or Apache-2.0 | To confirm in Stage 0 audit |
-| `wasapi` crate | Audio capture | MIT | Confirmed |
-| faster-whisper, Whisper large-v3 | ASR | MIT | Confirmed |
+| Tauri 2 | Application shell | Apache-2.0 OR MIT | Confirmed (crates.io, 2.12.5) |
+| `wasapi` crate | Audio capture | MIT | Confirmed (0.27.0) |
+| `windows` crate | Win32 bindings | MIT OR Apache-2.0 | Confirmed (0.62.2) |
+| `nvml-wrapper`, `keyring` crates | GPU guard, secret storage | MIT OR Apache-2.0 | Confirmed (0.13.0, 4.2.0) |
+| faster-whisper, Whisper large-v3 | ASR | MIT | Confirmed (1.2.1) |
 | Parakeet-TDT-0.6B-v3 | ASR alternative | CC-BY-4.0 | Confirmed |
-| pyannote.audio | Diarization toolkit | MIT | Confirmed |
+| pyannote.audio | Diarization toolkit | MIT | Confirmed (4.0.7) |
 | speaker-diarization-community-1 | Diarization weights | CC-BY-4.0, gated download | Confirmed |
 | Qwen3-VL-8B | Screenshot description | Apache-2.0 | Confirmed |
-| Bielik 11B v3 | Default LLM candidate | Apache-2.0, with publisher terms of use | License confirmed; terms to review |
-| llama.cpp | Model server | MIT | To confirm in Stage 0 audit |
+| Bielik 11B v3 | Default LLM candidate | Apache-2.0 for the weights; publisher terms of use v1.1 list "processing any personal data" as a prohibited use | **Conflict**: meeting transcripts contain personal data; decided at the gate |
+| llama.cpp | Model server | MIT | Confirmed |
+| uv | Python environment management | MIT OR Apache-2.0 | Confirmed |
 
 Rules:
 

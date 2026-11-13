@@ -1,0 +1,39 @@
+Blah Blah Bot
+Copyright (c) 2026 Radosław Wójcik
+
+This project is released under the MIT License (see LICENSE). It depends on the
+third-party components below. Model weights are not distributed with this
+repository; they are downloaded by the user on first use.
+
+Draft for Stage 0. Versions are those verified on 2026-11-13 and are updated
+whenever a dependency changes.
+
+Software dependencies
+---------------------
+Tauri 2                      Apache-2.0 OR MIT       https://github.com/tauri-apps/tauri
+wasapi (Rust crate)          MIT                     https://github.com/HEnquist/wasapi-rs
+windows (Rust crate)         MIT OR Apache-2.0       https://github.com/microsoft/windows-rs
+nvml-wrapper (Rust crate)    MIT OR Apache-2.0       https://github.com/rust-nvml/nvml-wrapper
+keyring (Rust crate)         MIT OR Apache-2.0       https://github.com/hwchen/keyring-rs
+faster-whisper               MIT                     https://github.com/SYSTRAN/faster-whisper
+CTranslate2                  MIT                     https://github.com/OpenNMT/CTranslate2
+pyannote.audio               MIT                     https://github.com/pyannote/pyannote-audio
+llama.cpp                    MIT                     https://github.com/ggml-org/llama.cpp
+uv                           MIT OR Apache-2.0       https://github.com/astral-sh/uv
+
+Models (downloaded by the user, not redistributed)
+--------------------------------------------------
+Whisper large-v3 (Systran/faster-whisper-large-v3)
+    MIT. https://huggingface.co/Systran/faster-whisper-large-v3
+NVIDIA Parakeet-TDT-0.6B-v3
+    CC-BY-4.0, Copyright NVIDIA. https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3
+pyannote/speaker-diarization-community-1
+    CC-BY-4.0, Copyright pyannote. Gated download.
+    https://huggingface.co/pyannote/speaker-diarization-community-1
+Qwen3-VL-8B-Instruct
+    Apache-2.0, Copyright Alibaba Cloud. https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct
+
+Test data tooling (audio is generated locally and is not committed)
+-------------------------------------------------------------------
+Entries for the speech synthesis tools and voices are added when the test data
+tooling is finalized.
