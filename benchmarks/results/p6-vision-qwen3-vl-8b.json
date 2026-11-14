@@ -1,0 +1,124 @@
+{
+  "prototype": "p6-vision",
+  "name": "qwen3-vl-8b",
+  "timestamp": "2026-11-14T04:10:10+00:00",
+  "environment": {
+    "os": "Windows-10-10.0.19045-SP0",
+    "os_build": "10.0.19045",
+    "python": "3.11.9",
+    "machine": "AMD64",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 3080",
+      "memory_total_mib": 12288,
+      "memory_used_mib": 439,
+      "driver": "617.42"
+    }
+  },
+  "status": "ok",
+  "config": {
+    "model": "Qwen3VL-8B-Instruct-Q4_K_M.gguf",
+    "mmproj": "mmproj-Qwen3VL-8B-Instruct-F16.gguf"
+  },
+  "images": [
+    {
+      "image": "bullets-1.png",
+      "seconds": 1.2927657999971416,
+      "fact_recall": 1.0,
+      "missing": [],
+      "invented_numbers": [],
+      "description": "Slide Title: Rover test status\n\nBullet Points:\n- Chassis frame built: 12 of 14 parts\n- Motor torque: 48 Nm measured\n- Battery pack: 24 V, 20 Ah\n- Field trial planned for 3 December\n\nThe slide contains no charts, tables, or diagrams. It is a simple bulleted list of test status updates for a rover."
+    },
+    {
+      "image": "bullets-2.png",
+      "seconds": 1.060340999996697,
+      "fact_recall": 1.0,
+      "missing": [],
+      "invented_numbers": [],
+      "description": "Title: Budget decisions\n\nBullet points:\n- Sensors: 8000 EUR approved\n- 3D printing: 5000 EUR approved\n- Trade fair trip postponed to March\n- Supplier contract renewed for 2 years\n\nThe slide contains no charts, tables, or diagrams. It is a bulleted list of budget-related decisions."
+    },
+    {
+      "image": "bullets-3.png",
+      "seconds": 1.109630199993262,
+      "fact_recall": 1.0,
+      "missing": [],
+      "invented_numbers": [],
+      "description": "Slide Title: Open risks\n\nBullet Points:\n- GNSS signal weak indoors\n- LiDAR calibration takes 6 hours\n- Firmware v2.4 not yet released\n- Two team members on leave in week 47\n\nThe slide contains a bulleted list of four items under the heading \"Open risks\". There are no charts, tables, or diagrams visible."
+    },
+    {
+      "image": "bars-1.png",
+      "seconds": 1.3955404000007547,
+      "fact_recall": 1.0,
+      "missing": [],
+      "invented_numbers": [],
+      "description": "Title: Tasks closed per week\n\nLabel on vertical axis: tasks\n\nBar chart showing the number of tasks closed per week for four weeks:\n\n- Bar for W44: value 14\n- Bar for W45: value 22\n- Bar for W46: value 9\n- Bar for W47: value 31\n\nThe chart displays the number of tasks closed during weeks W44, W45, W46, and W47. The values are shown on top of each bar."
+    },
+    {
+      "image": "bars-2.png",
+      "seconds": 1.3819625999967684,
+      "fact_recall": 1.0,
+      "missing": [],
+      "invented_numbers": [],
+      "description": "Title: Monthly cost\n\nLabel: thousand EUR\n\nX-axis labels (months): Aug, Sep, Oct, Nov, Dec\n\nBar values (monthly cost in thousand EUR):\n- Aug: 48\n- Sep: 52\n- Oct: 61\n- Nov: 57\n- Dec: 66\n\nThe chart is a bar chart showing the monthly cost in thousand EUR for the months of August through December. The bars increase from August to October, then decrease slightly in November, and increase again in December."
+    },
+    {
+      "image": "bars-3.png",
+      "seconds": 1.4653955999965547,
+      "fact_recall": 1.0,
+      "missing": [],
+      "invented_numbers": [],
+      "description": "Title: Test runs by outcome\n\nY-axis label: runs\n\nX-axis categories (from left to right):\n- Pass\n- Fail\n- Skipped\n\nBar values:\n- The bar for \"Pass\" has the value 87.\n- The bar for \"Fail\" has the value 13.\n- The bar for \"Skipped\" has the value 5.\n\nThe chart is a bar chart that shows the number of test runs categorized by their outcome: Pass, Fail, or Skipped. The height of each bar corresponds to the count of test runs for that outcome."
+    },
+    {
+      "image": "table-1.png",
+      "seconds": 2.008446699997876,
+      "fact_recall": 1.0,
+      "missing": [],
+      "invented_numbers": [],
+      "description": "Title: Supplier comparison\n\nLabels/Column Headers:\n- Supplier\n- Price\n- Delivery\n\nNames/Supplier Names:\n- Northwind\n- Contoso\n- Fabrikam\n\nNumbers/Values:\n- Northwind: Price = 4200, Delivery = 10 days\n- Contoso: Price = 3900, Delivery = 21 days\n- Fabrikam: Price = 4500, Delivery = 7 days\n\nWhat the table shows:\nThe table presents a comparison of three suppliers (Northwind, Contoso, and Fabrikam) based on two criteria: Price and Delivery time (in days). It shows that Contoso offers the lowest price (3900), while Fabrikam offers the shortest delivery time (7 days). Northwind has a price of 4200 and a delivery time of 10 days."
+    },
+    {
+      "image": "table-2.png",
+      "seconds": 1.2515082000027178,
+      "fact_recall": 1.0,
+      "missing": [],
+      "invented_numbers": [],
+      "description": "Slide Title: Owner assignments\n\nTable Columns:\n- Task\n- Owner\n- Due\n\nTable Rows:\n1. Task: Mount design, Owner: Alex, Due: 20 Nov\n2. Task: GNSS order, Owner: Kasia, Due: 25 Nov\n3. Task: Test plan, Owner: Jan, Due: 01 Dec\n\nThe slide displays a table that lists three tasks with their assigned owners and due dates."
+    },
+    {
+      "image": "table-3.png",
+      "seconds": 1.8443914000017685,
+      "fact_recall": 1.0,
+      "missing": [],
+      "invented_numbers": [],
+      "description": "Slide Title: Sensor specification\n\nTable Columns:\n- Sensor\n- Range\n- Rate\n\nTable Rows:\n- Sensor: LiDAR, Range: 100 m, Rate: 20 Hz\n- Sensor: GNSS, Range: global, Rate: 10 Hz\n- Sensor: IMU, Range: n/a, Rate: 200 Hz\n\nThe table shows the specifications for three sensors: LiDAR, GNSS, and IMU. For each sensor, it lists its range and rate. LiDAR has a range of 100 meters and a rate of 20 Hz. GNSS has a global range and a rate of 10 Hz. IMU has no specified range (n/a) and a rate of 200 Hz."
+    },
+    {
+      "image": "diagram-1.png",
+      "seconds": 1.8049140000002808,
+      "fact_recall": 1.0,
+      "missing": [],
+      "invented_numbers": [],
+      "description": "Slide Title: Data path\n\nDiagram Description:\n- The diagram shows a linear data flow with four rectangular boxes connected by arrows.\n- Box 1: \"Sensor\"\n- Box 2: \"CAN bus\"\n- Box 3: \"Controller\"\n- Box 4: \"Telemetry\"\n\nLabels/Annotations on Arrows:\n- Arrow from \"Sensor\" to \"CAN bus\": labeled \"raw\"\n- Arrow from \"CAN bus\" to \"Controller\": labeled \"frames\"\n- Arrow from \"Controller\" to \"Telemetry\": labeled \"5 Hz\"\n\nThe diagram illustrates the sequence of data transmission: data originates from the Sensor in its raw form, is transmitted over the CAN bus as frames, then processed by the Controller, and finally sent to Telemetry at a rate of 5 Hz."
+    },
+    {
+      "image": "diagram-2.png",
+      "seconds": 2.179041400006099,
+      "fact_recall": 1.0,
+      "missing": [],
+      "invented_numbers": [],
+      "description": "Slide Title: Release pipeline\n\nVisible Elements:\n\n- Four rectangular boxes with blue borders, each containing a stage name:\n  - Commit\n  - Build\n  - Test\n  - Deploy\n\n- Arrows connecting the boxes in sequence from left to right:\n  - Arrow from \"Commit\" to \"Build\" labeled: push\n  - Arrow from \"Build\" to \"Test\" labeled: artifact\n  - Arrow from \"Test\" to \"Deploy\" labeled: approved\n\nWhat the diagram shows:\n\nThe diagram illustrates a linear, sequential workflow for a software release pipeline. It shows four stages: Commit, Build, Test, and Deploy. Each stage is triggered by the completion of the previous stage, with specific actions or outputs indicated by the labels on the connecting arrows. The \"push\" action triggers the \"Build\" stage, the \"artifact\" (a built product) is passed from \"Build\" to \"Test\", and the \"approved\" status from \"Test\" triggers the \"Deploy\" stage."
+    },
+    {
+      "image": "diagram-3.png",
+      "seconds": 1.1819137999991653,
+      "fact_recall": 1.0,
+      "missing": [],
+      "invented_numbers": [],
+      "description": "Slide Title: Power system\n\nDiagram Components:\n- Box labeled: Battery\n- Box labeled: Converter\n- Box labeled: Motor\n\nConnections:\n- Arrow from Battery to Converter, labeled: 24 V\n- Arrow from Converter to Motor, labeled: 12 V\n\nThe diagram shows a power system where a 24 V battery powers a converter, which then supplies 12 V to a motor."
+    }
+  ],
+  "mean_fact_recall": 1.0,
+  "mean_seconds": 1.4979875916657572,
+  "images_with_invented_numbers": 0,
+  "peak_vram_above_baseline_mib": 7675
+}

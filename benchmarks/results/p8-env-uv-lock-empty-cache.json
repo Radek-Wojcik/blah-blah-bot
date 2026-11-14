@@ -1,0 +1,53 @@
+{
+  "prototype": "p8-env",
+  "name": "uv-lock-empty-cache",
+  "timestamp": "2026-11-14T04:13:04+00:00",
+  "environment": {
+    "os": "Windows-10-10.0.19045-SP0",
+    "os_build": "10.0.19045",
+    "python": "3.11.9",
+    "machine": "AMD64",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 3080",
+      "memory_total_mib": 12288,
+      "memory_used_mib": 435,
+      "driver": "617.42"
+    }
+  },
+  "status": "ok",
+  "runs": {
+    "asr": {
+      "groups": [
+        "asr"
+      ],
+      "ok": true,
+      "seconds": 30.0,
+      "stderr_tail": "",
+      "environment_mb": 2981.5,
+      "download_cache_mb": 3028.0
+    },
+    "diarization": {
+      "groups": [
+        "diar"
+      ],
+      "ok": true,
+      "seconds": 49.7,
+      "stderr_tail": "",
+      "environment_mb": 4597.0,
+      "download_cache_mb": 4595.3,
+      "gpu_detected": true
+    },
+    "asr+diarization": {
+      "groups": [
+        "asr",
+        "diar"
+      ],
+      "ok": true,
+      "seconds": 70.1,
+      "stderr_tail": "",
+      "environment_mb": 7356.8,
+      "download_cache_mb": 7391.8,
+      "gpu_detected": true
+    }
+  }
+}
