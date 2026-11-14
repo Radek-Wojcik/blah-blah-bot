@@ -6,6 +6,14 @@ Every step runs as a subprocess and writes its own JSON result file under
 `results/`. A failing step is logged and the run continues. Logs go to
 `data/logs/`. Audio is synthesized first (it is not committed). The expected
 locations of models and tools are described in README.md.
+
+Known problem on Windows: when this script is started through `uv run`, the
+synthesis step can fail with "No Python at ..." because the speech tool's own
+environment does not start from a child process of that interpreter; the same
+command works from a plain shell. Run the synthesis from a shell once
+(`cd tools/tts && uv run python -m bbb_tts synth --script ... --out ... --seed 1`),
+copy `annotation.json` and `reference.txt` next to `mixed.wav`, and start this script
+afterwards: finished audio is skipped.
 """
 
 from __future__ import annotations
@@ -77,6 +85,8 @@ def step_synth() -> None:
             src, dst = DATA / "scripts" / name / extra, out / extra
             if src.exists() and out.exists():
                 dst.write_bytes(src.read_bytes())
+        if not (out / "mixed.wav").exists():
+            print(f"    no audio for {name}: see the note at the top of this file", flush=True)
 
 
 def step_p2() -> None:
