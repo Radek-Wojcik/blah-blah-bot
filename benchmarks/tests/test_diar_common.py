@@ -39,3 +39,18 @@ def test_read_wav_rejects_stereo(tmp_path):
         w.writeframes(b"\x00" * 400)
     with pytest.raises(ValueError):
         dc.read_wav_mono16k(f)
+
+
+def test_voiced_reference_trims_silence_and_bridges_short_gaps():
+    rate = 16000
+    t = np.arange(rate * 10) / rate
+    tone = 0.3 * np.sin(2 * np.pi * 200 * t)
+    audio = np.zeros(rate * 10)
+    audio[rate * 1 : rate * 4] = tone[rate * 1 : rate * 4]  # 1-4 s
+    audio[rate * 5 : int(rate * 5.2)] = tone[rate * 5 : int(rate * 5.2)]  # 5.0-5.2 s
+    audio[int(rate * 5.4) : rate * 7] = tone[int(rate * 5.4) : rate * 7]  # gap of 0.2 s bridged
+    out = dc.voiced_reference(audio.astype(np.float32), rate, [(0.0, 9.0, "alex")])
+    covered = sum(b - a for a, b, _ in out)
+    assert covered == pytest.approx(3.0 + 2.0, abs=0.1)
+    assert all(s == "alex" for _, _, s in out)
+    assert dc.voiced_reference(np.zeros(100, dtype=np.float32), rate, [(0, 1, "x")]) == []

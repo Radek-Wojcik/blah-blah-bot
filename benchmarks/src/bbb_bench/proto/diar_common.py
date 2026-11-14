@@ -33,6 +33,53 @@ def read_wav_mono16k(path: Path) -> tuple[np.ndarray, int]:
     return data.astype(np.float32) / 32768.0, rate
 
 
+def voiced_reference(
+    samples: np.ndarray,
+    rate: int,
+    reference: list[Segment],
+    frame_s: float = 0.02,
+    bridge_s: float = 0.3,
+    relative_floor: float = 0.1,
+) -> list[Segment]:
+    """Cut a reference down to the stretches where the recording actually has sound.
+
+    Synthesized turns carry silence at their start, end and inside (generation
+    padding), so the clip-level reference marks pauses as speech. A frame counts as
+    voiced when its RMS exceeds `relative_floor` times the 95th percentile of all
+    frame levels; gaps shorter than `bridge_s` between voiced frames are closed. Each
+    reference segment is intersected with the voiced stretches, keeping its speaker.
+    """
+    hop = max(1, int(rate * frame_s))
+    n = len(samples) // hop
+    if n == 0:
+        return []
+    frames = samples[: n * hop].reshape(n, hop)
+    rms = np.sqrt((frames.astype(np.float64) ** 2).mean(axis=1))
+    voiced = rms > max(1e-4, relative_floor * float(np.percentile(rms, 95)))
+    bridge = int(round(bridge_s / frame_s))
+    idx = np.flatnonzero(voiced)
+    for a, b in zip(idx, idx[1:], strict=False):
+        if 1 < b - a <= bridge:
+            voiced[a:b] = True
+    runs: list[tuple[float, float]] = []
+    start = None
+    for i, v in enumerate(voiced):
+        if v and start is None:
+            start = i
+        elif not v and start is not None:
+            runs.append((start * frame_s, i * frame_s))
+            start = None
+    if start is not None:
+        runs.append((start * frame_s, n * frame_s))
+    out: list[Segment] = []
+    for r_start, r_end, speaker in reference:
+        for v_start, v_end in runs:
+            a, b = max(r_start, v_start), min(r_end, v_end)
+            if b > a:
+                out.append((a, b, speaker))
+    return out
+
+
 def load_pipeline(device: str = "cuda"):
     """Load the community-1 pipeline using the Hugging Face login of the current user."""
     import torch
