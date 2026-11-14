@@ -1,0 +1,31 @@
+# 0014. Recorder control, IPC conventions and region screenshots
+
+**Status:** Accepted (Stage 1)
+
+## Context
+
+Stage 1 turns the audio prototype into an application: a tray widget starts and stops recordings, sources are added and removed while recording, and a hotkey captures a region of the screen with the offset of that moment. The UI must be testable without audio devices, and the real application must be testable end to end.
+
+## Decision
+
+**Session and journal.** A recording is a `Session` owning the session clock and the journal. Every source runs on its own capture thread with its own stop flag, so removing one source never touches the others. A removed source cannot be reused as the same track: adding it again creates a new track (`name-2`), so earlier segments are never overwritten. The database is filled by replaying the journal, both when a recording stops and when a crashed one is recovered, so there is one code path for both.
+
+**Capture behind a trait.** `CaptureBackend` has a WASAPI implementation and a tone generator that goes through the same clock, writer and journal. Tests, demo mode and the end-to-end suite use tones; only the audio hardware is replaced.
+
+**IPC.** Commands are snake_case and return `Result<T, IpcError>` with a stable `code` and a `message`. Payloads are camelCase JSON. Events (`recording-state`, `meetings-changed`) carry the complete new state, so the UI never merges partial updates. The UI talks to a `Backend` interface only; the Tauri implementation and an in-memory mock implement it. The mock serves a fictional cycle and drives UI tests and the screenshot script.
+
+**Region screenshots.** The desktop is captured first (GDI, all monitors as one frame) and shown frozen in a borderless window that covers every monitor. The UI reports the selection as fractions of the shown image, which keeps the mapping independent of monitor scaling and mixed DPI. The PNG is written first and the journal entry second, so the journal never points at a missing file. The offset is taken when the hotkey is pressed, not when the selection ends.
+
+**Testing the real application.** The debug build runs in demo mode (`BBB_DEMO`) with its data in a temporary folder (`BBB_DATA_DIR`) and is driven through the WebView2 remote debugging port with Playwright. This covers the real IPC path, windows and file output; the recovery test kills the whole process tree.
+
+## Consequences
+
+- A hotkey that another program already owns is reported to the user and is not saved.
+- Windows are created from async commands or from a separate thread. Creating a window in a synchronous command deadlocks on Windows (found in testing).
+- The embedded UI is not rebuilt by cargo when only the front-end files change; the build has to be forced after `npm run build`.
+
+## Alternatives
+
+- **A native overlay window drawn in Rust:** no web view cost, but all selection drawing and accessibility work would be duplicated.
+- **Selection in physical pixels reported by the web view:** wrong on mixed-DPI setups where one window spans monitors with different scale factors.
+- **Writing database rows during recording:** two sources of truth that can disagree after a crash.

@@ -121,6 +121,8 @@ Rust modules are crates in one Cargo workspace. Licenses of third-party parts ar
 
 - **Responsibility:** process lifetime, tray icon, recording widget, main window, global hotkeys, IPC commands exposed to the UI, single-instance lock.
 - **Interfaces:** Tauri commands and events; calls into every other crate.
+- **IPC conventions:** commands are snake_case and return `Result<T, IpcError>` with a stable `code` and a `message`; payloads are camelCase JSON; events (`recording-state`, `meetings-changed`) carry the complete new state. See [ADR 0014](decisions/0014-recorder-ipc-and-screenshot-overlay.md).
+- **Environment switches** for development and tests: `BBB_DEMO` replaces audio capture with generated tones, `BBB_DATA_DIR` keeps all data in one folder, `BBB_LOG` sets the log filter.
 
 ### 4.2 `ui` (TypeScript, React)
 
@@ -320,7 +322,7 @@ Schemas are versioned files under `schemas/` and are the contract between the Py
 ### 7.1 Recording format and crash safety
 
 - Each track is written as 16 kHz mono 16-bit PCM in 60-second segments (about 115 MB per track per hour). FLAC is evaluated in Stage 0 as a smaller alternative.
-- A session journal (append-only, flushed after every segment) records tracks, offsets, segments, screenshots and source changes.
+- A session journal (append-only, flushed after every segment) records tracks, offsets, segments, screenshots and source changes. The database is filled by replaying the journal, both when a recording stops and when a crashed one is recovered.
 - After a crash or power loss the journal is replayed on next start; at most the last unfinished segment is lost. The meeting appears in the queue as recoverable.
 
 ### 7.2 Job stages

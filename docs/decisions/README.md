@@ -17,3 +17,4 @@ Each record states the context, the decision, its consequences and the alternati
 | [0011](0011-secret-storage.md) | Secret storage | Accepted |
 | [0012](0012-model-licensing.md) | Model licensing and distribution | Accepted |
 | [0013](0013-languages.md) | Interface and content languages | Accepted |
+| [0014](0014-recorder-ipc-and-screenshot-overlay.md) | Recorder control, IPC conventions and region screenshots | Accepted |
