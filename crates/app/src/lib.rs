@@ -1,16 +1,25 @@
 //! Desktop shell: tray icon, windows, global hotkeys and IPC commands.
 
 mod commands;
+mod hotkeys;
 mod ipc;
 mod logging;
+mod overlay;
+mod recording;
+mod recording_dto;
 mod settings;
 mod state;
+
+use std::time::Duration;
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, WindowEvent};
 
 use state::AppState;
+
+/// How often the widget gets a fresh recording state (levels, elapsed time).
+const TICK: Duration = Duration::from_millis(250);
 
 /// Show the main window and bring it to the front.
 fn show_main(app: &AppHandle) {
@@ -77,6 +86,22 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Background thread that pushes the recording state to the UI while recording.
+fn start_ticker(app: AppHandle) {
+    let spawned = std::thread::Builder::new()
+        .name("recording-ticker".into())
+        .spawn(move || loop {
+            std::thread::sleep(TICK);
+            let state = app.state::<AppState>();
+            if let Some(s) = state.recorder.tick() {
+                commands::emit_state(&app, &s);
+            }
+        });
+    if let Err(e) = spawned {
+        tracing::error!(error = %e, "could not start the state ticker");
+    }
+}
+
 /// Entry point called from `main`.
 pub fn run() {
     let result = tauri::Builder::default()
@@ -95,15 +120,21 @@ pub fn run() {
             if !recovered.is_empty() {
                 tracing::warn!(count = recovered.len(), "found interrupted recordings");
             }
+            let settings = state.settings()?;
             app.manage(state);
 
+            // A taken hotkey must not stop the application from starting.
+            if let Err(e) = hotkeys::register(&handle, &settings) {
+                tracing::warn!(error = %e, "hotkeys not registered");
+            }
             build_tray(&handle)?;
+            start_ticker(handle.clone());
             show_main(&handle);
             Ok(())
         })
         .on_window_event(|window, event| match event {
             // Closing the main window keeps the application in the tray.
-            WindowEvent::CloseRequested { api, .. } => {
+            WindowEvent::CloseRequested { api, .. } if window.label() != "overlay" => {
                 api.prevent_close();
                 let _ = window.hide();
             }
@@ -117,8 +148,18 @@ pub fn run() {
             commands::list_meetings,
             commands::get_meeting,
             commands::delete_meeting,
+            commands::recover_meeting,
+            commands::list_sources,
+            commands::recording_state,
+            commands::start_recording,
+            commands::stop_recording,
+            commands::add_source,
+            commands::remove_source,
+            commands::take_screenshot,
             commands::get_settings,
             commands::save_settings,
+            overlay::overlay_image,
+            overlay::overlay_finish,
         ])
         .run(tauri::generate_context!());
 

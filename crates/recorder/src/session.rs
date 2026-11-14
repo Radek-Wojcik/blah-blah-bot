@@ -420,10 +420,10 @@ impl Session {
         }
     }
 
-    /// Save the position of a screenshot taken now. Returns its file name relative to the
-    /// recording folder and its offset; the caller writes the image to that name.
-    pub fn next_screenshot(&mut self) -> Result<(String, f64)> {
-        let offset_ms = self.now_ms();
+    /// Journal a screenshot that was taken at `offset_ms` on the session clock. Returns its
+    /// file name relative to the recording folder; the caller has written, or writes, the
+    /// image to that name.
+    pub fn log_screenshot(&mut self, offset_ms: f64) -> Result<String> {
         let name = crate::screenshot::screenshot_file_name(self.next_screenshot, offset_ms as u64);
         let file = format!("img/{name}");
         self.journal
@@ -434,7 +434,21 @@ impl Session {
                 offset_ms,
             })?;
         self.next_screenshot += 1;
-        Ok((file, offset_ms))
+        Ok(file)
+    }
+
+    /// Journal a screenshot taken now. Returns its file name and offset.
+    pub fn next_screenshot(&mut self) -> Result<(String, f64)> {
+        let offset_ms = self.now_ms();
+        Ok((self.log_screenshot(offset_ms)?, offset_ms))
+    }
+
+    /// File name the next screenshot will get for a given offset, without journaling it.
+    pub fn peek_screenshot_name(&self, offset_ms: f64) -> String {
+        format!(
+            "img/{}",
+            crate::screenshot::screenshot_file_name(self.next_screenshot, offset_ms as u64)
+        )
     }
 
     /// Current state of every source. Reading resets the level meters.
