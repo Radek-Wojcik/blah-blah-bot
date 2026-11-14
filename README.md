@@ -47,7 +47,7 @@ Prototype results on the reference machine (RTX 3080 with 12 GB, Windows 10 buil
 | Task extraction, Gemma 4 12B | recall 89%, precision 95%, assignee 91%, due date 88%, all quotes verified | 80%, 80%, 85%, 85% |
 | Slide description, Qwen3-VL 8B | 100% of key facts, 1.5 s per image | not set |
 | 10 hours of audio, all stages | about 58 minutes (extraction extrapolated) | 4 hours |
-| Browser tab capture | no lost frames in two 30-minute runs, but gaps of 218 to 667 ms | gaps of 100 ms or less (not met) |
+| Browser tab capture | idle machine: no lost frames, longest gap 47 ms in 31 minutes; with the machine in use: gaps of 218 to 667 ms | gaps of 100 ms or less (met only when idle) |
 | Python environment from lock file | 70 s and 7.4 GB for speech and diarization groups | unattended |
 
 ## Roadmap

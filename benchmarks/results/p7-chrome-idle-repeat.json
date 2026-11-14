@@ -1,0 +1,58 @@
+{
+  "prototype": "p7-chrome",
+  "name": "idle-repeat",
+  "timestamp": "2026-11-14T10:28:48+00:00",
+  "environment": {
+    "os": "Windows-10-10.0.19045-SP0",
+    "os_build": "10.0.19045",
+    "python": "3.11.9",
+    "machine": "AMD64",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 3080",
+      "memory_total_mib": 12288,
+      "memory_used_mib": 683,
+      "driver": "617.42"
+    }
+  },
+  "status": "ok",
+  "started_at": "2026-11-14T10:57:08+01:00",
+  "gap_limit_ms": 100.0,
+  "connections_accepted": 1,
+  "streams": [
+    {
+      "stream": 1,
+      "tab_id": 91124129,
+      "title": "Tone 440 Hz",
+      "file": "tab91124129-stream1.wav",
+      "started_s": 44.104,
+      "ended_s": 1899.985,
+      "stop_reason": "connection_closed",
+      "clean_stop": false,
+      "frames": 92794,
+      "samples": 29694080,
+      "audio_duration_s": 1855.88,
+      "wall_duration_s": 1855.848,
+      "max_gap_wall_ms": 47.45,
+      "max_gap_samples_ms": 27.45,
+      "max_gap_sender_ms": 47.3,
+      "drift_ms": -11.71,
+      "frame_seq_lost": 0,
+      "sender_frames_dropped": 0,
+      "sender_frames_sent": null,
+      "sender_samples_sent": null,
+      "gaps_over_report_ms": [],
+      "gap_ok": true
+    }
+  ],
+  "criteria": {
+    "no_gap_over_100ms": true,
+    "long_run_30min": true,
+    "clean_stop_restart": null,
+    "second_tab_without_restart": null
+  },
+  "manual": {
+    "tab_audible": true
+  },
+  "overall": "incomplete",
+  "notes": "criteria: true = met, false = not met, null = not exercised in this session; manual.tab_audible is a listening test set with --audible."
+}

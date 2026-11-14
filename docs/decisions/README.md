@@ -11,7 +11,7 @@ Each record states the context, the decision, its consequences and the alternati
 | [0005](0005-llm-backend.md) | Language model and backend | Accepted |
 | [0006](0006-vision.md) | Screenshot description | Accepted |
 | [0007](0007-long-transcripts.md) | Long transcripts and structured extraction | Accepted |
-| [0008](0008-chrome-extension.md) | Browser tab capture | Proposed |
+| [0008](0008-chrome-extension.md) | Browser tab capture | Accepted |
 | [0009](0009-git-as-source-of-truth.md) | Git repository as the source of truth | Accepted |
 | [0010](0010-discord-webhook-and-bot.md) | Discord webhook and bot | Accepted |
 | [0011](0011-secret-storage.md) | Secret storage | Accepted |
