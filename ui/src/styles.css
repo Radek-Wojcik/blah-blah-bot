@@ -800,7 +800,7 @@ select {
 
 .btn:hover:not(:disabled),
 .btn:focus-visible:not(:disabled) {
-  animation: btn-glitch 0.5s steps(1, end) 1;
+  animation: btn-glitch 0.7s ease-in-out 1;
 }
 .btn::after {
   content: "";
@@ -821,7 +821,7 @@ select {
 }
 .btn:hover:not(:disabled)::after,
 .btn:focus-visible:not(:disabled)::after {
-  animation: btn-slices 0.5s steps(1, end) 1;
+  animation: btn-slices 0.7s ease-in-out 1;
 }
 .btn-record:not(:disabled) {
   animation: hue 12s ease-in-out infinite;
@@ -875,82 +875,46 @@ select {
   }
 }
 
-/* One short glitch burst when a button is hovered or focused (Cyberpunk-style signal tear). */
+/* One short, light glitch on hover or focus: mostly the label, the block barely moves. */
 @keyframes btn-glitch {
-  0% {
-    transform: translate(0);
-    text-shadow: none;
-    filter: none;
-  }
-  10% {
-    transform: translate(-3px, 0) skewX(-8deg);
-    text-shadow:
-      -2px 0 var(--magenta),
-      2px 0 var(--cyan);
-    filter: brightness(1.6);
-  }
-  22% {
-    transform: translate(3px, 1px) skewX(6deg);
-    text-shadow:
-      2px 0 var(--magenta),
-      -2px 0 var(--cyan);
-    filter: none;
-  }
-  34% {
-    transform: translate(-1px, -1px);
-    text-shadow:
-      -1px 0 var(--cyan),
-      1px 0 var(--magenta);
-    filter: brightness(1.3) hue-rotate(20deg);
-  }
-  48% {
-    transform: translate(2px, 0) skewX(-4deg);
-    text-shadow: none;
-    filter: none;
-  }
-  62% {
-    transform: translate(-2px, 0);
-    text-shadow:
-      -2px 0 var(--magenta),
-      2px 0 var(--cyan);
-    filter: brightness(1.4);
-  }
-  78% {
-    transform: translate(1px, 0);
-    text-shadow: none;
-    filter: none;
-  }
+  0%,
   100% {
     transform: translate(0);
     text-shadow: none;
-    filter: none;
+  }
+  20% {
+    transform: translate(-1px, 0);
+    text-shadow:
+      -1px 0 rgba(255, 42, 109, 0.8),
+      1px 0 rgba(0, 240, 255, 0.8);
+  }
+  45% {
+    transform: translate(1px, 0);
+    text-shadow:
+      1px 0 rgba(255, 42, 109, 0.6),
+      -1px 0 rgba(0, 240, 255, 0.6);
+  }
+  70% {
+    transform: translate(0);
+    text-shadow:
+      -1px 0 rgba(255, 42, 109, 0.35),
+      1px 0 rgba(0, 240, 255, 0.35);
   }
 }
 @keyframes btn-slices {
   0%,
   100% {
     opacity: 0;
-    transform: translateX(0);
   }
-  12% {
-    opacity: 0.85;
-    transform: translateX(-6px);
+  25% {
+    opacity: 0.22;
+    transform: translateX(-2px);
   }
-  26% {
+  50% {
     opacity: 0;
   }
-  40% {
-    opacity: 0.7;
-    transform: translateX(7px);
-  }
-  54% {
-    opacity: 0;
-  }
-  66% {
-    opacity: 0.6;
-    transform: translateX(-4px);
-  }
-  80% {
-    opacity: 0;
+  65% {
+    opacity: 0.14;
+    transform: translateX(2px);
   }
 }
