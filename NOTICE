@@ -30,10 +30,31 @@ NVIDIA Parakeet-TDT-0.6B-v3
 pyannote/speaker-diarization-community-1
     CC-BY-4.0, Copyright pyannote. Gated download.
     https://huggingface.co/pyannote/speaker-diarization-community-1
+Whisper large-v3-turbo (mobiuslabsgmbh/faster-whisper-large-v3-turbo)
+    MIT. CTranslate2 conversion of openai/whisper-large-v3-turbo.
+    https://huggingface.co/mobiuslabsgmbh/faster-whisper-large-v3-turbo
+Gemma 4 12B instruction-tuned (google/gemma-4-12B-it)
+    Apache-2.0 as stated on the model card. https://huggingface.co/google/gemma-4-12B-it
+    The Q4_K_M quantization used in Stage 0 is a third-party GGUF conversion
+    (repository metadata: Apache-2.0).
+Qwen3-14B
+    Apache-2.0, Copyright Alibaba Cloud. https://huggingface.co/Qwen/Qwen3-14B
+Mistral-Nemo-Instruct-2407 (compared in Stage 0, not a candidate default)
+    Apache-2.0. https://huggingface.co/mistralai/Mistral-Nemo-Instruct-2407
 Qwen3-VL-8B-Instruct
     Apache-2.0, Copyright Alibaba Cloud. https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct
 
 Test data tooling (audio is generated locally and is not committed)
 -------------------------------------------------------------------
-Entries for the speech synthesis tools and voices are added when the test data
-tooling is finalized.
+Used only to generate synthetic meeting audio in a separate environment
+(benchmarks/tools/tts). Nothing below is linked into or shipped with the
+application. Full list with versions: benchmarks/tools/tts/LICENSES.md.
+
+Chatterbox Multilingual (ResembleAI/chatterbox)
+    MIT. https://huggingface.co/ResembleAI/chatterbox
+Piper voice en_US-libritts-high (reference voices only)
+    CC-BY-4.0, from the LibriTTS corpus (Zen et al., 2019), https://www.openslr.org/60/
+    Attribution required if audio produced with it is ever redistributed.
+piper-tts and pykakasi
+    GPL-3.0-or-later. Used as local build-time tools only; no GPL code is
+    distributed with the application.
