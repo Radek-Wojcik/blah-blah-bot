@@ -1,0 +1,58 @@
+{
+  "prototype": "p2-asr",
+  "name": "large-v3-forced-gloss",
+  "timestamp": "2026-11-14T03:21:45+00:00",
+  "environment": {
+    "os": "Windows-10-10.0.19045-SP0",
+    "os_build": "10.0.19045",
+    "python": "3.11.9",
+    "machine": "AMD64",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 3080",
+      "memory_total_mib": 12288,
+      "memory_used_mib": 1587,
+      "driver": "617.42"
+    }
+  },
+  "status": "ok",
+  "config": {
+    "model": "large-v3",
+    "language": "forced",
+    "glossary": true
+  },
+  "meetings": [
+    {
+      "meeting": "pl-03",
+      "lang": "pl",
+      "audio_s": 1389.140375,
+      "processing_s": 281.7426104000042,
+      "wer": 0.16919431279620853,
+      "ref_words": 2110,
+      "term_recall": null,
+      "translation_rate": 0.04632152588555858
+    },
+    {
+      "meeting": "en-03",
+      "lang": "en",
+      "audio_s": 867.8290625,
+      "processing_s": 125.35433219999686,
+      "wer": 0.15294117647058825,
+      "ref_words": 2125,
+      "term_recall": null,
+      "translation_rate": 0.0
+    },
+    {
+      "meeting": "mixed-04",
+      "lang": "pl",
+      "audio_s": 1222.3983125,
+      "processing_s": 300.9146404999992,
+      "wer": 0.2551984877126654,
+      "ref_words": 2116,
+      "term_recall": 0.35051546391752575,
+      "translation_rate": 0.116991643454039
+    }
+  ],
+  "rtfx": 4.914280864356915,
+  "peak_vram_above_baseline_mib": 1912,
+  "mean_wer": 0.19244465899315408
+}
