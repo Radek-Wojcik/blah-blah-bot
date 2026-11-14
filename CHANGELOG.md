@@ -17,5 +17,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Pipeline timing for a ten-hour recording.
 - Continuous integration (lint, tests, secret scan, commit message check) and contribution templates.
 - Measured results in the architecture decision records, license notices for models and tools.
-- Stage 0 decision gate: Whisper large-v3-turbo as the primary speech recognition model and Gemma 4 12B as the default language model; ADRs 0002 to 0006 accepted, ADR 0008 stays proposed until the tab capture test is repeated on an idle machine.
+- Stage 0 decision gate: Whisper large-v3-turbo as the primary speech recognition model and Gemma 4 12B as the default language model; ADRs 0002 to 0006 accepted. The Chrome tab capture test was repeated on an idle machine and met the 100 ms gap criterion (longest gap 47 ms), so ADR 0008 is accepted too.
 
