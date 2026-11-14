@@ -17,6 +17,11 @@ export function createTauriBackend(): Backend {
     addSource: (sourceId) => invoke("add_source", { sourceId }),
     removeSource: (sourceId) => invoke("remove_source", { sourceId }),
     takeScreenshot: () => invoke("take_screenshot"),
+    overlayImage: async () => {
+      const bytes = await invoke<ArrayBuffer>("overlay_image");
+      return URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
+    },
+    overlayFinish: (region) => invoke("overlay_finish", { region }),
     getSettings: () => invoke("get_settings"),
     saveSettings: (settings) => invoke("save_settings", { settings }),
     onRecordingState: (cb) => listen("recording-state", (e) => cb(e.payload as never)),

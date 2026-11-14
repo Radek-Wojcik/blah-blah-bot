@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useBackend } from "../backend-context";
 import { formatDuration } from "../format";
 import { errorMessage, useRecordingState, useSources } from "../hooks";
@@ -12,8 +12,18 @@ export function Widget() {
   const state = useRecordingState();
   const recording = state.status === "recording";
   const sources = useSources(recording);
-  const [picked, setPicked] = useState<Set<string>>(new Set(["mic:default"]));
+  const [picked, setPicked] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+
+  // Preselect the microphone (or the first source) once the list is known.
+  useEffect(() => {
+    if (sources.length === 0) return;
+    setPicked((prev) => {
+      if (prev.size > 0) return prev;
+      const first = sources.find((s) => s.kind === "microphone") ?? sources[0];
+      return new Set([first.id]);
+    });
+  }, [sources]);
 
   const run = (p: Promise<unknown>) => {
     setError(null);

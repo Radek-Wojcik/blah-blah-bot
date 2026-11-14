@@ -1,6 +1,7 @@
 import type {
   MeetingDetails,
   MeetingSummary,
+  Region,
   RecordingState,
   Settings,
   SourceInfo,
@@ -27,6 +28,10 @@ export interface Backend {
   addSource(sourceId: string): Promise<void>;
   removeSource(sourceId: string): Promise<void>;
   takeScreenshot(): Promise<void>;
+  /** The frozen desktop shown by the screenshot overlay, as a URL usable in an img tag. */
+  overlayImage(): Promise<string>;
+  /** Save the chosen region, or only close the overlay when `region` is null. */
+  overlayFinish(region: Region | null): Promise<void>;
 
   getSettings(): Promise<Settings>;
   saveSettings(settings: Settings): Promise<void>;

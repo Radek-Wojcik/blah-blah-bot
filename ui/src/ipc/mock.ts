@@ -65,13 +65,13 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     sources: [],
     screenshotCount: 0,
   };
-  const stateListeners = new Set<(s: RecordingState) => void>();
-  const meetingListeners = new Set<() => void>();
+  const stateListeners = new Set<{ cb: (s: RecordingState) => void }>();
+  const meetingListeners = new Set<{ cb: () => void }>();
   let timer: ReturnType<typeof setInterval> | null = null;
   const rate = opts.clockRate ?? 1000;
 
-  const emit = () => stateListeners.forEach((cb) => cb(structuredClone(state)));
-  const emitMeetings = () => meetingListeners.forEach((cb) => cb());
+  const emit = () => stateListeners.forEach((l) => l.cb(structuredClone(state)));
+  const emitMeetings = () => meetingListeners.forEach((l) => l.cb());
 
   function active(id: string, offsetMs: number): ActiveSource {
     const src = demoSources.find((s) => s.id === id);
@@ -105,9 +105,12 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
 
   if (opts.recording) begin(["mic:default", "app:discord"], 12 * MIN + 41_000);
 
-  const subscribe = <T>(set: Set<T>, cb: T): Promise<Unsubscribe> => {
-    set.add(cb);
-    return Promise.resolve(() => void set.delete(cb));
+  // Every subscription is its own entry, even when the same callback is registered twice
+  // (React StrictMode does that): removing one must not remove the other.
+  const subscribe = <T>(set: Set<{ cb: T }>, cb: T): Promise<Unsubscribe> => {
+    const entry = { cb };
+    set.add(entry);
+    return Promise.resolve(() => void set.delete(entry));
   };
 
   return {
@@ -183,6 +186,17 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     takeScreenshot: async () => {
       state = { ...state, screenshotCount: state.screenshotCount + 1 };
       emit();
+    },
+    overlayImage: async () => {
+      const svg =
+        '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#101a33"/><stop offset="1" stop-color="#3a1030"/></linearGradient></defs><rect width="1600" height="900" fill="url(#g)"/><g fill="#00f0ff" opacity=".5"><rect x="120" y="120" width="560" height="320"/><rect x="760" y="200" width="680" height="480"/></g></svg>';
+      return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+    },
+    overlayFinish: async (region) => {
+      if (region && state.status === "recording") {
+        state = { ...state, screenshotCount: state.screenshotCount + 1 };
+        emit();
+      }
     },
     getSettings: async () => ({ ...settings }),
     saveSettings: async (s) => void Object.assign(settings, s),

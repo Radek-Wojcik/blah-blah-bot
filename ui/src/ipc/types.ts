@@ -90,3 +90,11 @@ export interface StartRecordingRequest {
   title?: string;
   sourceIds: string[];
 }
+
+/** A selection as fractions (0 to 1) of the frozen screenshot shown in the overlay. */
+export interface Region {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
