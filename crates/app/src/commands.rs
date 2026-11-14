@@ -111,7 +111,8 @@ pub fn remove_source(
 }
 
 #[tauri::command]
-pub fn take_screenshot(app: AppHandle) -> IpcResult<()> {
+/// Async on purpose: creating a window from a synchronous command deadlocks on Windows.
+pub async fn take_screenshot(app: AppHandle) -> IpcResult<()> {
     overlay::begin(&app)
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useBackend } from "../backend-context";
 import { formatDuration } from "../format";
 import { errorMessage, useRecordingState, useSources } from "../hooks";
@@ -12,18 +12,15 @@ export function Widget() {
   const state = useRecordingState();
   const recording = state.status === "recording";
   const sources = useSources(recording);
-  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [choice, setChoice] = useState<Set<string> | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Preselect the microphone (or the first source) once the list is known.
-  useEffect(() => {
-    if (sources.length === 0) return;
-    setPicked((prev) => {
-      if (prev.size > 0) return prev;
-      const first = sources.find((s) => s.kind === "microphone") ?? sources[0];
-      return new Set([first.id]);
-    });
-  }, [sources]);
+  // Until the user chooses, the microphone (or the first source) is preselected.
+  const picked =
+    choice ??
+    new Set(
+      sources.length === 0 ? [] : [(sources.find((s) => s.kind === "microphone") ?? sources[0]).id],
+    );
 
   const run = (p: Promise<unknown>) => {
     setError(null);
@@ -74,13 +71,11 @@ export function Widget() {
                   key={s.id}
                   source={s}
                   checked={picked.has(s.id)}
-                  onToggle={() =>
-                    setPicked((prev) => {
-                      const next = new Set(prev);
-                      if (!next.delete(s.id)) next.add(s.id);
-                      return next;
-                    })
-                  }
+                  onToggle={() => {
+                    const next = new Set(picked);
+                    if (!next.delete(s.id)) next.add(s.id);
+                    setChoice(next);
+                  }}
                 />
               ))}
             </fieldset>

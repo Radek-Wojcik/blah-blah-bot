@@ -24,9 +24,13 @@ pub fn register(app: &AppHandle, settings: &Settings) -> IpcResult<()> {
         .map_err(|e| hotkey_error(&settings.record_hotkey, &e))?;
         gs.on_shortcut(settings.screenshot_hotkey.as_str(), |app, _, event| {
             if event.state() == ShortcutState::Pressed {
-                if let Err(e) = overlay::begin(app) {
-                    tracing::info!(error = %e, "screenshot hotkey ignored");
-                }
+                // Window creation must not run on the thread that delivers the hotkey.
+                let app = app.clone();
+                std::thread::spawn(move || {
+                    if let Err(e) = overlay::begin(&app) {
+                        tracing::info!(error = %e, "screenshot hotkey ignored");
+                    }
+                });
             }
         })
         .map_err(|e| hotkey_error(&settings.screenshot_hotkey, &e))?;
