@@ -96,6 +96,13 @@ pub enum Entry {
         /// Session-clock position where the stored audio ends, in milliseconds.
         end_offset_ms: f64,
     },
+    /// A region screenshot was saved.
+    Screenshot {
+        /// File path relative to the recording folder.
+        file: String,
+        /// Position on the session clock in milliseconds.
+        offset_ms: f64,
+    },
     /// The session ended.
     SessionEnd {
         /// Length of the session in milliseconds.
@@ -270,6 +277,8 @@ pub struct Replay {
     pub format: String,
     /// Tracks by name.
     pub tracks: BTreeMap<String, TrackReplay>,
+    /// Screenshots as `(file, offset_ms)` in journal order.
+    pub screenshots: Vec<(String, f64)>,
     /// True when a `session_end` entry was found.
     pub session_ended: bool,
     /// Session length declared by `session_end`.
@@ -360,6 +369,7 @@ pub fn replay<R: Read>(reader: R) -> Result<Replay> {
                 t.ended = true;
                 t.declared_total_samples = Some(total_samples);
             }
+            Entry::Screenshot { file, offset_ms } => r.screenshots.push((file, offset_ms)),
             Entry::SessionEnd { duration_ms } => {
                 r.session_ended = true;
                 r.duration_ms = Some(duration_ms);

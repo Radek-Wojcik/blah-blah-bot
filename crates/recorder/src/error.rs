@@ -26,12 +26,30 @@ pub enum RecorderError {
         /// Message reported by the system.
         message: String,
     },
+    /// Capturing or encoding a screenshot failed.
+    #[error("{context}: {message}")]
+    Screenshot {
+        /// What the recorder was doing.
+        context: &'static str,
+        /// Message reported by the system or the encoder.
+        message: String,
+    },
 }
 
 impl RecorderError {
     /// Build an [`RecorderError::Audio`] from a context and any displayable error.
     pub fn audio(context: &'static str, error: impl std::fmt::Display) -> Self {
         RecorderError::Audio {
+            context,
+            message: error.to_string(),
+        }
+    }
+}
+
+impl RecorderError {
+    /// Build an [`RecorderError::Screenshot`] from a context and any displayable error.
+    pub fn screenshot(context: &'static str, error: impl std::fmt::Display) -> Self {
+        RecorderError::Screenshot {
             context,
             message: error.to_string(),
         }

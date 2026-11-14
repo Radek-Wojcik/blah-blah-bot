@@ -5,7 +5,7 @@
 //! [`SharedState`] of each track.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
@@ -83,6 +83,8 @@ impl Source {
 
 /// Data shared by all capture threads of a recording.
 pub struct CaptureContext {
+    /// Largest absolute sample (0 to 32768) seen since the last [`CaptureContext::take_peak`].
+    pub peak: AtomicU32,
     /// Performance counter value (100 ns units) that is time 0 of the session clock.
     pub clock_start_hns: u64,
     /// Set to true to ask every capture thread to finish.
@@ -99,6 +101,21 @@ pub struct CaptureContext {
 }
 
 impl CaptureContext {
+    /// Read and reset the peak level, scaled to 0.0 to 1.0.
+    pub fn take_peak(&self) -> f32 {
+        self.peak.swap(0, Ordering::Relaxed) as f32 / 32768.0
+    }
+
+    /// Record the peak of a block of samples.
+    pub fn note_peak(&self, samples: &[i16]) {
+        let p = samples
+            .iter()
+            .map(|s| u32::from(s.unsigned_abs()))
+            .max()
+            .unwrap_or(0);
+        self.peak.fetch_max(p, Ordering::Relaxed);
+    }
+
     /// Milliseconds on the session clock now.
     pub fn now_ms(&self) -> f64 {
         hns_to_ms(qpc_now_hns().saturating_sub(self.clock_start_hns))
@@ -256,8 +273,7 @@ fn apply_plan(
 /// Thread body for one track: opens the source, captures until `shared.stop` is set (or an
 /// error occurs) and finishes the track. Progress and failure are reported through `state`;
 /// nothing is returned because the thread has no caller to hand an error to.
-pub fn run_track(source: Source, shared: Arc<CaptureContext>, state: SharedState) {
-    let name = source.track_name();
+pub fn run_track(source: Source, name: String, shared: Arc<CaptureContext>, state: SharedState) {
     tracing::info!(track = %name, "capture thread started");
     match run_track_inner(&source, &shared, &state, &name) {
         Ok(()) => tracing::info!(track = %name, "capture thread finished"),
@@ -389,6 +405,7 @@ fn run_track_inner(
             };
             corrected.clear();
             corrector.process(due, &samples, &mut corrected);
+            shared.note_peak(&corrected);
             let plan = tracker.on_packet(due, corrected.len() as u64, shared.now_ms(), flags);
             apply_plan(&plan, &mut writer, shared, name, tracker.position_ms())?;
             writer.push(&corrected)?;

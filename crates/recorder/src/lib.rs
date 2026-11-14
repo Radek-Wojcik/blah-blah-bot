@@ -13,6 +13,9 @@ pub mod convert;
 pub mod drift;
 pub mod error;
 pub mod journal;
+pub mod recovery;
+pub mod screenshot;
+pub mod source_state;
 pub mod timeline;
 pub mod track;
 pub mod tracker;
@@ -20,6 +23,8 @@ pub mod wav;
 
 #[cfg(windows)]
 pub mod capture;
+#[cfg(windows)]
+pub mod session;
 #[cfg(windows)]
 pub mod sessions;
 #[cfg(windows)]
