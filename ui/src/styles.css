@@ -882,23 +882,37 @@ select {
     transform: translate(0);
     text-shadow: none;
   }
-  20% {
+  12% {
     transform: translate(-1px, 0);
     text-shadow:
-      -1px 0 rgba(255, 42, 109, 0.8),
-      1px 0 rgba(0, 240, 255, 0.8);
+      -3px 0 var(--magenta),
+      3px 0 var(--cyan);
   }
-  45% {
+  28% {
     transform: translate(1px, 0);
     text-shadow:
-      1px 0 rgba(255, 42, 109, 0.6),
-      -1px 0 rgba(0, 240, 255, 0.6);
+      3px 0 var(--magenta),
+      -3px 0 var(--cyan),
+      0 0 8px currentColor;
   }
-  70% {
+  44% {
     transform: translate(0);
     text-shadow:
-      -1px 0 rgba(255, 42, 109, 0.35),
-      1px 0 rgba(0, 240, 255, 0.35);
+      -2px 1px var(--magenta),
+      2px -1px var(--cyan);
+  }
+  60% {
+    transform: translate(-1px, 0);
+    text-shadow:
+      2px 0 var(--magenta),
+      -2px 0 var(--cyan),
+      0 0 6px currentColor;
+  }
+  80% {
+    transform: translate(0);
+    text-shadow:
+      -1px 0 var(--magenta),
+      1px 0 var(--cyan);
   }
 }
 @keyframes btn-slices {
