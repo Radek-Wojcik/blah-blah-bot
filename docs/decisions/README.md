@@ -5,11 +5,11 @@ Each record states the context, the decision, its consequences and the alternati
 | No. | Decision | Status |
 |---|---|---|
 | [0001](0001-technology-stack.md) | Technology stack and build-versus-fork strategy | Accepted |
-| [0002](0002-audio-capture.md) | Audio capture and recording format | Proposed |
-| [0003](0003-speech-recognition.md) | Speech recognition | Proposed |
-| [0004](0004-diarization-and-speaker-recognition.md) | Diarization and speaker recognition | Proposed |
-| [0005](0005-llm-backend.md) | Language model and backend | Proposed |
-| [0006](0006-vision.md) | Screenshot description | Proposed |
+| [0002](0002-audio-capture.md) | Audio capture and recording format | Accepted |
+| [0003](0003-speech-recognition.md) | Speech recognition | Accepted |
+| [0004](0004-diarization-and-speaker-recognition.md) | Diarization and speaker recognition | Accepted |
+| [0005](0005-llm-backend.md) | Language model and backend | Accepted |
+| [0006](0006-vision.md) | Screenshot description | Accepted |
 | [0007](0007-long-transcripts.md) | Long transcripts and structured extraction | Accepted |
 | [0008](0008-chrome-extension.md) | Browser tab capture | Proposed |
 | [0009](0009-git-as-source-of-truth.md) | Git repository as the source of truth | Accepted |

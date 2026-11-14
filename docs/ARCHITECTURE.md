@@ -163,7 +163,7 @@ Runs only while a job is processing. The environment is created with `uv` on fir
 
 | Step | Function | Technology |
 |---|---|---|
-| `asr` | Transcription per track with word timestamps | faster-whisper large-v3 (**pending**: Parakeet-TDT-0.6B-v3 as alternative) |
+| `asr` | Transcription per track with word timestamps | faster-whisper large-v3-turbo, language `auto` (alternative: Parakeet-TDT-0.6B-v3; large-v3 as an option) |
 | `diarize` | Speaker segments per multi-speaker track | pyannote.audio 4 with `speaker-diarization-community-1` |
 | `speaker-id` | Voice embeddings per detected speaker, matching against cycle voice profiles | Embedding model shipped with the diarization pipeline (**pending** API confirmation) |
 | `clips` | Sample clips per detected voice for labeling | ffmpeg or direct PCM slicing |
@@ -202,14 +202,14 @@ Each target has its own template and its own rule: publish automatically, or wai
 
 ## 5. Model loading order on a 12 GB GPU
 
-Reference hardware: RTX 3080 12 GB, 32 GB RAM. Models run strictly one after another; each process exits before the next starts.
+Reference hardware: RTX 3080 12 GB, 32 GB RAM. Models run strictly one after another; each process exits before the next starts. VRAM values are peaks above the idle baseline from the Stage 0 prototypes (`benchmarks/results/`); after a model is released 285 to 326 MiB remain allocated, which is why stages run in separate processes. Measured on synthetic data; a ten-hour recording takes about 58 minutes end to end (extraction extrapolated).
 
 | Order | Step | Model | VRAM (*estimate*) |
 |---|---|---|---|
-| 1 | ASR | faster-whisper large-v3, `int8_float16` | 3–5 GB |
-| 2 | Diarization and voice embeddings | pyannote community-1 | 1–2 GB |
-| 3 | Vision | Qwen3-VL-8B, GGUF Q4_K_M with mmproj | 6–8 GB |
-| 4 | Extraction and summary | 11–14B model, GGUF Q4–Q5, 16–32k context (default candidate: Bielik 11B v3) | 8–11 GB |
+| 1 | ASR | faster-whisper large-v3-turbo, `int8_float16` | 1.5 GB (measured on a 10 h file) |
+| 2 | Diarization and voice embeddings | pyannote community-1 | 2.3 GB (measured on a 10 h file) |
+| 3 | Vision | Qwen3-VL-8B, GGUF Q4_K_M with mmproj | 7.7 GB (measured) |
+| 4 | Extraction and summary | Gemma 4 12B, GGUF Q4_K_M (default; see ADR 0005) | 8.9 GB (measured) |
 
 When an external server (Ollama, LM Studio, Strata) is configured, steps 3 and 4 call that endpoint and the application does not manage its memory. The user is responsible for the server being able to load the configured model.
 
@@ -414,7 +414,7 @@ See [ADR 0005](decisions/0005-llm-backend.md).
 ## 9. Languages
 
 - **Interface:** English only.
-- **Transcription language** (per cycle): `auto`, `pl` or `en`. The default is set after Stage 0 measurements, because automatic detection can translate instead of transcribe on mixed speech.
+- **Transcription language** (per cycle): `auto`, `pl` or `en`. The default is `auto` with no glossary in the ASR prompt (Stage 0: forcing the language did not change turbo's result, and the glossary did not improve term recall, so it stays optional). The translation rate on mixed speech was 1.3% at best against a 1% requirement; it is re-measured on real recordings.
 - **Output language** (per cycle, overridable per meeting): `auto`, `pl` or `en`. `auto` writes the report in the dominant language of the meeting.
 - The cycle glossary is passed to the ASR prompt and to the extraction prompt.
 
@@ -457,7 +457,9 @@ See [ADR 0005](decisions/0005-llm-backend.md).
 | pyannote.audio | Diarization toolkit | MIT | Confirmed (4.0.7) |
 | speaker-diarization-community-1 | Diarization weights | CC-BY-4.0, gated download | Confirmed |
 | Qwen3-VL-8B | Screenshot description | Apache-2.0 | Confirmed |
-| Bielik 11B v3 | Default LLM candidate | Apache-2.0 for the weights; publisher terms of use v1.1 list "processing any personal data" as a prohibited use | **Conflict**: meeting transcripts contain personal data; decided at the gate |
+| Bielik 11B v3 | Dropped | Apache-2.0 for the weights; publisher terms of use v1.1 list "processing any personal data" as a prohibited use | Not used: meeting transcripts contain personal data (ADR 0012) |
+| Gemma 4 12B (GGUF Q4_K_M) | Default LLM | Apache-2.0 (third-party GGUF conversion) | Confirmed, measured in Stage 0 |
+| Whisper large-v3-turbo | Default ASR | MIT | Confirmed, measured in Stage 0 |
 | llama.cpp | Model server | MIT | Confirmed |
 | uv | Python environment management | MIT OR Apache-2.0 | Confirmed |
 
@@ -471,7 +473,7 @@ Rules:
 
 | | Minimum | Reference |
 |---|---|---|
-| OS | Windows 10 version 2004 or newer (**pending** Stage 0 verification), Windows 11 | Windows 11 |
+| OS | Windows 10 version 2004 or newer (process loopback verified on build 19045), Windows 11 (**pending** verification) | Windows 11 |
 | GPU | NVIDIA with 8 GB VRAM (smaller models) | RTX 3080 12 GB |
 | RAM | 16 GB | 32 GB |
 | Disk | SSD; space for models and about 115 MB per track per recorded hour | NVMe |

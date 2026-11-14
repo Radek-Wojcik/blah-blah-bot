@@ -1,6 +1,6 @@
 # 0005. Language model and backend
 
-**Status:** Proposed (prototype P5)
+**Status:** Accepted (prototype P5, Stage 0 gate)
 
 ## Context
 
@@ -9,7 +9,7 @@ Extraction and summarization must run on a 12 GB GPU with 32 GB of RAM and work 
 ## Decision
 
 - Talk to any server that exposes an OpenAI-compatible chat completions API.
-- Default: a `llama-server` process managed by the application with an 11–14B model in GGUF Q4–Q5. Default candidate: Bielik 11B v3 Instruct; comparison candidates include a Qwen3 model of similar size.
+- Default: a `llama-server` process managed by the application with an 11–14B model in GGUF Q4–Q5. Default: Gemma 4 12B Q4_K_M with the calendar in the prompt. Qwen3 14B is an optional alternative. Mistral Nemo is dropped from the candidates (see ADR 0012 for Bielik and Llama).
 - Supported external servers: Ollama, LM Studio, Strata and others with a compatible API.
 - Cloud models are selected per meeting, confirmed in a dialog, and never used as a fallback. Only text is sent.
 - A model becomes the default only with a recorded run on the comparison set.
@@ -51,3 +51,7 @@ Observations:
 - The data is synthetic and sparse; the task language is simple and explicit, so real meetings will be harder.
 
 **Recommendation for the gate:** accept Gemma 4 12B Q4_K_M as the default, keep the calendar in the prompt, keep Qwen3 14B as an alternative for users who prefer it and drop Mistral Nemo from the candidate list. Confirm on a real meeting transcript before moving this ADR to Accepted.
+
+## Gate decision (Stage 0)
+
+Gemma 4 12B Q4_K_M accepted as the default. Confirmation on a real meeting transcript is a Stage 1 acceptance test; the default changes only if that test fails.

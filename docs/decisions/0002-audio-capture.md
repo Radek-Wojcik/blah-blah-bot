@@ -1,6 +1,6 @@
 # 0002. Audio capture and recording format
 
-**Status:** Proposed (prototype P1)
+**Status:** Accepted (prototype P1, Stage 0 gate)
 
 ## Context
 
@@ -56,3 +56,7 @@ Notes and limits:
 - FLAC was measured offline with ffmpeg, not in the recorder: 47% of the PCM size for microphone noise, 77% for white noise and under 1% for silence. Real speech was not measured. FLAC is not implemented in the recorder.
 
 **Recommendation for the gate:** accept the design (WASAPI process loopback, 16 kHz mono PCM segments, journal, drift correction). Keep PCM for the first release (about 115 MB per track per hour); revisit FLAC when real speech sizes are known. Treat Windows 11 and the real Teams and Discord checks as Stage 1 acceptance tests.
+
+## Gate decision (Stage 0)
+
+Accepted as recommended. Windows 11 and the real Teams and Discord checks stay open as Stage 1 acceptance tests; PCM is the format for the first release.

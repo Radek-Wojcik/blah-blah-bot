@@ -6,7 +6,7 @@ Local meeting recorder for Windows that turns calls into GitHub issues and Disco
 ![Platform: Windows](https://img.shields.io/badge/platform-Windows-blue)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
-> **Project status:** Stage 0. The architecture and roadmap are complete and the prototypes have been measured (see below); the decision gate that fixes the model choices comes next. Nothing described below is available as a release yet.
+> **Project status:** Stage 0 is complete. The architecture and roadmap are done, the prototypes have been measured (see below) and the decision gate fixed the model choices. Several requirements are not yet met on synthetic data and are re-checked on real recordings in Stage 1. There is no application to install yet.
 
 ## What it will do
 
@@ -54,7 +54,7 @@ Prototype results on the reference machine (RTX 3080 with 12 GB, Windows 10 buil
 
 | Stage | Scope | Release | Status |
 |---|---|---|---|
-| 0 | Prototypes and decision gate | v0.1.0 | Measured, decision gate pending |
+| 0 | Prototypes and decision gate | v0.1.0 | Done, gate passed; open checks in the decision records |
 | 1 | Recorder | v0.2.0 | Planned |
 | 2 | Processing pipeline | v0.3.0 | Planned |
 | 3 | Speakers and voice profiles | v0.4.0 | Planned |

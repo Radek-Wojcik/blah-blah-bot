@@ -49,3 +49,7 @@ What this shows and does not show:
 - Meet detection by tab URL, tab groups and service worker restarts were not exercised.
 
 The 100 ms gap criterion is **not met**. **Recommendation for the gate:** keep the extension design, but do not accept it yet: either repeat the 30 minute run on an otherwise idle machine to see whether the gaps disappear, or relax the criterion to gaps that the receiver can bridge (sequence numbers contiguous, drift corrected) and record the gap length in the journal. This is a requirement decision for the project owner.
+
+## Gate decision (Stage 0)
+
+Remains **Proposed**. Decision: repeat the 30 minute run on an otherwise idle machine before accepting; the 100 ms criterion is unchanged. If the repeat still fails, the criterion is revisited as a separate decision.

@@ -1,6 +1,6 @@
 # 0003. Speech recognition
 
-**Status:** Proposed (prototype P2)
+**Status:** Accepted (prototype P2, Stage 0 gate)
 
 ## Context
 
@@ -8,10 +8,11 @@ Meetings are in Polish, in English, or in Polish with English technical terms. P
 
 ## Decision
 
-- Primary: faster-whisper with Whisper large-v3, word timestamps, cycle glossary passed as the initial prompt.
+- Primary: faster-whisper with Whisper large-v3-turbo, word timestamps, language `auto`, no glossary in the initial prompt by default.
 - Alternative: Parakeet-TDT-0.6B-v3, considerably faster, without prompt-based vocabulary.
-- Transcription language is a cycle setting (`auto`, `pl`, `en`). The default is chosen from P2 results.
-- The final model choice is made at the Stage 0 gate on own recordings.
+- Whisper large-v3 stays available as an option for single-language audio.
+- Transcription language is a cycle setting (`auto`, `pl`, `en`); the default is `auto` (P2 results).
+- Decided at the Stage 0 gate on synthetic data; to be re-checked on real recordings.
 
 ## Consequences
 
@@ -63,3 +64,7 @@ Observations:
 - The test audio is synthetic with an English accent on Polish text, so absolute numbers (especially term recall of English words said inside Polish sentences) are not a prediction for real meetings. The ranking should be confirmed on a real recording before the choice is final.
 
 **Recommendation for the gate:** switch the primary model to Whisper large-v3-turbo with automatic language (no glossary by default); keep Parakeet as the fast alternative; keep large-v3 only as an option for single-language audio. Term recall and translation rate need a decision: keep the requirements and confirm on real recordings, or lower them.
+
+## Gate decision (Stage 0)
+
+The switch to Whisper large-v3-turbo was accepted. The term recall (85%) and translation rate (1%) requirements are kept unchanged and are not met on synthetic data (best 51% and 1.3%). They are re-measured on real recordings in Stage 1; the thresholds change only on that evidence.

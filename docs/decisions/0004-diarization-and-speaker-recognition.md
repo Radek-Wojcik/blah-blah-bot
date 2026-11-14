@@ -1,6 +1,6 @@
 # 0004. Diarization and speaker recognition
 
-**Status:** Proposed (prototypes P3 and P4)
+**Status:** Accepted (prototypes P3 and P4, Stage 0 gate)
 
 ## Context
 
@@ -57,3 +57,7 @@ Diarization error rate (no collar, overlap included), speaker count bounded by t
 Speaker recognition (P4): four enrolled voices (alex, kasia, jan, marta) from one synthesized meeting, tested on a second meeting with three of them and one unknown voice (ewa). Embedding dimension 256. With a cosine similarity threshold of 0.5 to 0.8, speaker accuracy for enrolled voices was 100% and the unknown voice was rejected (false accept rate 0%); at 0.3 and 0.4 the unknown voice was accepted. The threshold of 90% or more is met, but the test is easy: four voices cloned from distinct reference voices, one meeting each, no channel or microphone variation. A threshold of 0.5 or higher is the starting point, to be tuned on real recordings.
 
 **Recommendation for the gate:** accept pyannote community-1 with embedding-based voice profiles for 6 or more speakers; for 2 to 4 speakers the 15% DER requirement is not met on synthetic data, so either confirm it on real recordings (where speakers are not cloned from similar voices and the reference is manual) or relax the requirement to about 25%. Keep using the participant list as a bound and the profile matching to name voices.
+
+## Gate decision (Stage 0)
+
+Accepted as recommended. The 15% DER requirement for 2 to 4 speakers is kept and is not met on synthetic data (20.5 to 23.3% against speech-only references); it is re-measured on real recordings with manual references in Stage 1. Requirements for 6 or more speakers and for speaker recognition are met.

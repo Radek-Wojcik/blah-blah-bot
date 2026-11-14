@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-14
+
 ### Added
 
 - Architecture overview, roadmap to 1.0, testing strategy, risk register and architecture decision records.
@@ -15,4 +17,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Pipeline timing for a ten-hour recording.
 - Continuous integration (lint, tests, secret scan, commit message check) and contribution templates.
 - Measured results in the architecture decision records, license notices for models and tools.
+- Stage 0 decision gate: Whisper large-v3-turbo as the primary speech recognition model and Gemma 4 12B as the default language model; ADRs 0002 to 0006 accepted, ADR 0008 stays proposed until the tab capture test is repeated on an idle machine.
 
