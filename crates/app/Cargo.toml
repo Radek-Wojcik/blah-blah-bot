@@ -1,0 +1,31 @@
+[package]
+name = "app"
+description = "Blah Blah Bot desktop shell: tray, windows and IPC commands"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+
+[dependencies]
+tauri = { version = "2.12", features = ["tray-icon"] }
+tauri-plugin-global-shortcut = "2.4"
+tauri-plugin-single-instance = "2.5"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+store = { path = "../store" }
+recorder = { path = "../recorder" }
+
+[features]
+# Embeds the built UI instead of loading the dev server. Enabled for release builds.
+custom-protocol = ["tauri/custom-protocol"]
+
+[lints]
+workspace = true
