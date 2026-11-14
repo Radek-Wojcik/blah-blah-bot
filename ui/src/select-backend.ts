@@ -10,5 +10,10 @@ export function selectBackend(search: string = window.location.search): Backend 
   const params = new URLSearchParams(search);
   const inTauri = "__TAURI_INTERNALS__" in window;
   if (inTauri && params.get("backend") !== "mock") return createTauriBackend();
-  return createMockBackend({ recording: params.get("state") === "recording" });
+  // `rate=0` freezes the simulated clock, which makes screenshots reproducible.
+  const rate = params.get("rate");
+  return createMockBackend({
+    recording: params.get("state") === "recording",
+    ...(rate === null ? {} : { clockRate: Number(rate) }),
+  });
 }

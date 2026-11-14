@@ -651,6 +651,9 @@ select {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .panel::after {
+    display: none;
+  }
   *,
   *::before,
   *::after {

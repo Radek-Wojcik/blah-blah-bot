@@ -23,6 +23,11 @@ export default defineConfig({
       },
     },
     { name: "real", testDir: "./e2e", timeout: 120_000 },
+    {
+      name: "screenshots",
+      testDir: "./screenshots",
+      use: { baseURL: "http://localhost:1420", channel: "msedge" },
+    },
   ],
   webServer: {
     command: "npm run dev",
