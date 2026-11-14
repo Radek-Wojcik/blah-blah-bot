@@ -104,6 +104,14 @@ pub struct Screenshot {
     pub offset_ms: f64,
 }
 
+/// A meeting row with counts, for lists.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MeetingSummary {
+    pub meeting: Meeting,
+    pub track_count: u32,
+    pub screenshot_count: u32,
+}
+
 /// A meeting with everything attached to it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MeetingDetails {
@@ -238,6 +246,30 @@ impl Store {
         let mut out = Vec::new();
         for r in rows {
             out.push(r??);
+        }
+        Ok(out)
+    }
+
+    /// Meetings with track and screenshot counts, newest first.
+    pub fn list_summaries(&self) -> Result<Vec<MeetingSummary>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT m.id, m.title, m.started_unix_ms, m.duration_ms, m.state, m.dir,
+                    (SELECT COUNT(*) FROM tracks t WHERE t.meeting_id = m.id),
+                    (SELECT COUNT(*) FROM screenshots s WHERE s.meeting_id = m.id)
+             FROM meetings m ORDER BY m.started_unix_ms DESC, m.id DESC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            let meeting = meeting_row(r)?;
+            Ok((meeting, r.get::<_, u32>(6)?, r.get::<_, u32>(7)?))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            let (meeting, track_count, screenshot_count) = r?;
+            out.push(MeetingSummary {
+                meeting: meeting?,
+                track_count,
+                screenshot_count,
+            });
         }
         Ok(out)
     }
@@ -472,6 +504,24 @@ mod tests {
         assert_eq!(d.segments.len(), 3);
         assert_eq!(d.segments[2].offset_ms, 120_000.0);
         assert_eq!(d.screenshots[0].offset_ms, 761_000.0);
+    }
+
+    #[test]
+    fn summaries_carry_counts() {
+        let s = Store::open_in_memory().unwrap();
+        s.create_meeting(&meeting("m", 1)).unwrap();
+        s.upsert_track("m", &track("mic", 0.0)).unwrap();
+        s.upsert_track("m", &track("app", 0.0)).unwrap();
+        s.add_screenshot(
+            "m",
+            &Screenshot {
+                file: "a.png".into(),
+                offset_ms: 1.0,
+            },
+        )
+        .unwrap();
+        let list = s.list_summaries().unwrap();
+        assert_eq!((list[0].track_count, list[0].screenshot_count), (2, 1));
     }
 
     #[test]
