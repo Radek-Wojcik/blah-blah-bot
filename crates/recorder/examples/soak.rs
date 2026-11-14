@@ -56,8 +56,20 @@ fn parse() -> Result<Args, String> {
     Ok(a)
 }
 
+/// Ask Windows not to sleep while this thread lives (the screen may still turn off).
+fn keep_system_awake() {
+    use windows::Win32::System::Power::{
+        SetThreadExecutionState, ES_CONTINUOUS, ES_SYSTEM_REQUIRED,
+    };
+    // SAFETY: plain Win32 call with flag constants; it only sets a per-thread request.
+    unsafe {
+        SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = parse()?;
+    keep_system_awake();
     let mut session = Session::start(&args.dir, 60, Arc::new(WasapiBackend))?;
     if args.mic {
         session.add_source(SourceSpec::Microphone, "microphone")?;
