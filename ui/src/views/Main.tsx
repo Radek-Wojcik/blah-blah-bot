@@ -13,7 +13,7 @@ export function Main() {
     <div className="main">
       <nav className="panel sidebar" aria-label="Main navigation">
         <div className="panel-body">
-          <h1 className="brand">
+          <h1 className="brand glitch" data-text="BlahBlahBot">
             Blah<span>Blah</span>Bot
           </h1>
           <button
@@ -28,6 +28,13 @@ export function Main() {
           >
             Settings
           </button>
+          <div className="ticker" aria-hidden="true">
+            <span>
+              SYS::ONLINE // LOCAL ONLY // NO TELEMETRY // WASAPI LOOPBACK READY // SEGMENT 60S //
+              JOURNAL FLUSHED // SYS::ONLINE // LOCAL ONLY // NO TELEMETRY // WASAPI LOOPBACK READY
+              // SEGMENT 60S // JOURNAL FLUSHED //
+            </span>
+          </div>
           {recording.status === "recording" && (
             <p className="side-live">
               <span className="dot dot-live" aria-hidden="true" /> REC{" "}
@@ -69,7 +76,11 @@ function MeetingList() {
   return (
     <>
       <div className="page-head">
-        <h2>Meetings</h2>
+        <h2>
+          <span className="glitch" data-text="Meetings">
+            Meetings
+          </span>
+        </h2>
         <span className="chip">{meetings.length} stored</span>
       </div>
       {error && (
@@ -144,7 +155,11 @@ function SettingsView() {
   return (
     <>
       <div className="page-head">
-        <h2>Settings</h2>
+        <h2>
+          <span className="glitch" data-text="Settings">
+            Settings
+          </span>
+        </h2>
       </div>
       <div className="panel quiet" style={{ maxWidth: 620 }}>
         <div className="panel-body">

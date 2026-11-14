@@ -32,7 +32,11 @@ export function Widget() {
             {recording ? "Recording" : "Standby"}
           </span>
           <div className="readout">
-            <span className="timer" aria-label="Elapsed time">
+            <span
+              className={recording ? "timer glitch glitch-fast" : "timer glitch"}
+              data-text={formatDuration(state.elapsedMs)}
+              aria-label="Elapsed time"
+            >
               {formatDuration(state.elapsedMs)}
             </span>
             <span className={recording ? "eq eq-live" : "eq"} aria-hidden="true">
