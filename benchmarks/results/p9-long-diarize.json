@@ -1,0 +1,27 @@
+{
+  "prototype": "p9-long",
+  "name": "diarize",
+  "timestamp": "2026-11-14T04:53:43+00:00",
+  "environment": {
+    "os": "Windows-10-10.0.19045-SP0",
+    "os_build": "10.0.19045",
+    "python": "3.11.9",
+    "machine": "AMD64",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 3080",
+      "memory_total_mib": 12288,
+      "memory_used_mib": 802,
+      "driver": "617.42"
+    }
+  },
+  "status": "ok",
+  "audio_s": 36000.0,
+  "model_load_s": 7.3835436000008485,
+  "processing_s": 727.9334719000035,
+  "rtfx": 49.455068889791804,
+  "segments": 12793,
+  "detected_speakers": 19,
+  "torch_peak_allocated_mib": 1630,
+  "peak_vram_above_baseline_mib": 2286,
+  "vram_after_release_above_baseline_mib": 326
+}
