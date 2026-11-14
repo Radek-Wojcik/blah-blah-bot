@@ -1,0 +1,163 @@
+{
+  "prototype": "p5-llm",
+  "name": "gemma-4-12b-q4",
+  "timestamp": "2026-11-14T04:09:43+00:00",
+  "environment": {
+    "os": "Windows-10-10.0.19045-SP0",
+    "os_build": "10.0.19045",
+    "python": "3.11.9",
+    "machine": "AMD64",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 3080",
+      "memory_total_mib": 12288,
+      "memory_used_mib": 387,
+      "driver": "617.42"
+    }
+  },
+  "status": "ok",
+  "config": {
+    "model": "gemma-4-12b-it-Q4_K_M.gguf",
+    "ctx": 16384
+  },
+  "meetings": [
+    {
+      "meeting": "en-0",
+      "valid_schema": true,
+      "attempts": 1,
+      "seconds": 31.282743300005677,
+      "prompt_tokens": 6207,
+      "completion_tokens": 2045,
+      "task_recall": 0.9473684210526315,
+      "task_precision": 1.0,
+      "assignee_accuracy": 0.9444444444444444,
+      "due_accuracy": 0.8888888888888888,
+      "quote_validity": 1.0
+    },
+    {
+      "meeting": "en-1",
+      "valid_schema": true,
+      "attempts": 1,
+      "seconds": 39.56056700000045,
+      "prompt_tokens": 6240,
+      "completion_tokens": 2635,
+      "task_recall": 1.0,
+      "task_precision": 1.0,
+      "assignee_accuracy": 1.0,
+      "due_accuracy": 1.0,
+      "quote_validity": 1.0
+    },
+    {
+      "meeting": "en-2",
+      "valid_schema": true,
+      "attempts": 1,
+      "seconds": 39.91646550000587,
+      "prompt_tokens": 6137,
+      "completion_tokens": 2660,
+      "task_recall": 1.0,
+      "task_precision": 1.0,
+      "assignee_accuracy": 1.0,
+      "due_accuracy": 1.0,
+      "quote_validity": 1.0
+    },
+    {
+      "meeting": "mixed-0",
+      "valid_schema": true,
+      "attempts": 1,
+      "seconds": 57.185755999998946,
+      "prompt_tokens": 8129,
+      "completion_tokens": 3777,
+      "task_recall": 0.9565217391304348,
+      "task_precision": 1.0,
+      "assignee_accuracy": 0.9090909090909091,
+      "due_accuracy": 0.9090909090909091,
+      "quote_validity": 1.0
+    },
+    {
+      "meeting": "mixed-1",
+      "valid_schema": true,
+      "attempts": 1,
+      "seconds": 48.7718789999999,
+      "prompt_tokens": 7752,
+      "completion_tokens": 3200,
+      "task_recall": 0.5217391304347826,
+      "task_precision": 0.5217391304347826,
+      "assignee_accuracy": 1.0,
+      "due_accuracy": 1.0,
+      "quote_validity": 1.0
+    },
+    {
+      "meeting": "mixed-2",
+      "valid_schema": true,
+      "attempts": 1,
+      "seconds": 55.778997499997786,
+      "prompt_tokens": 7803,
+      "completion_tokens": 3694,
+      "task_recall": 0.92,
+      "task_precision": 1.0,
+      "assignee_accuracy": 0.9565217391304348,
+      "due_accuracy": 1.0,
+      "quote_validity": 1.0
+    },
+    {
+      "meeting": "pl-0",
+      "valid_schema": true,
+      "attempts": 1,
+      "seconds": 63.485503800002334,
+      "prompt_tokens": 8630,
+      "completion_tokens": 4193,
+      "task_recall": 0.9259259259259259,
+      "task_precision": 1.0,
+      "assignee_accuracy": 0.72,
+      "due_accuracy": 0.68,
+      "quote_validity": 1.0
+    },
+    {
+      "meeting": "pl-1",
+      "valid_schema": true,
+      "attempts": 1,
+      "seconds": 53.264673999998195,
+      "prompt_tokens": 8466,
+      "completion_tokens": 3471,
+      "task_recall": 1.0,
+      "task_precision": 1.0,
+      "assignee_accuracy": 1.0,
+      "due_accuracy": 0.84,
+      "quote_validity": 1.0
+    },
+    {
+      "meeting": "pl-2",
+      "valid_schema": true,
+      "attempts": 1,
+      "seconds": 58.94307090000075,
+      "prompt_tokens": 8635,
+      "completion_tokens": 3867,
+      "task_recall": 0.9545454545454546,
+      "task_precision": 1.0,
+      "assignee_accuracy": 1.0,
+      "due_accuracy": 0.8571428571428571,
+      "quote_validity": 1.0
+    },
+    {
+      "meeting": "pl-3",
+      "valid_schema": true,
+      "attempts": 1,
+      "seconds": 35.2704681000032,
+      "prompt_tokens": 8792,
+      "completion_tokens": 2175,
+      "task_recall": 0.6956521739130435,
+      "task_precision": 1.0,
+      "assignee_accuracy": 0.5625,
+      "due_accuracy": 0.625,
+      "quote_validity": 1.0
+    }
+  ],
+  "schema_validity": 1.0,
+  "task_recall": 0.8921752845002272,
+  "task_precision": 0.9521739130434781,
+  "assignee_accuracy": 0.909255709266579,
+  "due_accuracy": 0.8800122655122655,
+  "quote_validity": 1.0,
+  "seconds_per_1000_words": 22.87594043247909,
+  "completion_tokens_per_second": 65.60416951333623,
+  "peak_vram_above_baseline_mib": 8875
+}
