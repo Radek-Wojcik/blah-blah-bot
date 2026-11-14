@@ -1,0 +1,69 @@
+{
+  "prototype": "p4-speaker-id",
+  "name": "community-1",
+  "timestamp": "2026-11-14T03:37:23+00:00",
+  "environment": {
+    "os": "Windows-10-10.0.19045-SP0",
+    "os_build": "10.0.19045",
+    "python": "3.11.9",
+    "machine": "AMD64",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 3080",
+      "memory_total_mib": 12288,
+      "memory_used_mib": 11690,
+      "driver": "617.42"
+    }
+  },
+  "status": "ok",
+  "enrolled_speakers": [
+    "alex",
+    "jan",
+    "kasia",
+    "marta"
+  ],
+  "test_speakers": [
+    "alex",
+    "ewa",
+    "jan",
+    "kasia"
+  ],
+  "embedding_dim": 256,
+  "thresholds": [
+    {
+      "threshold": 0.3,
+      "speaker_accuracy": 1.0,
+      "false_accept_rate": 1.0,
+      "unknown_speakers": 1
+    },
+    {
+      "threshold": 0.4,
+      "speaker_accuracy": 1.0,
+      "false_accept_rate": 1.0,
+      "unknown_speakers": 1
+    },
+    {
+      "threshold": 0.5,
+      "speaker_accuracy": 1.0,
+      "false_accept_rate": 0.0,
+      "unknown_speakers": 1
+    },
+    {
+      "threshold": 0.6,
+      "speaker_accuracy": 1.0,
+      "false_accept_rate": 0.0,
+      "unknown_speakers": 1
+    },
+    {
+      "threshold": 0.7,
+      "speaker_accuracy": 1.0,
+      "false_accept_rate": 0.0,
+      "unknown_speakers": 1
+    },
+    {
+      "threshold": 0.8,
+      "speaker_accuracy": 1.0,
+      "false_accept_rate": 0.0,
+      "unknown_speakers": 1
+    }
+  ]
+}

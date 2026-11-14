@@ -1,0 +1,183 @@
+{
+  "prototype": "p3-diarize",
+  "name": "community-1",
+  "timestamp": "2026-11-14T03:36:50+00:00",
+  "environment": {
+    "os": "Windows-10-10.0.19045-SP0",
+    "os_build": "10.0.19045",
+    "python": "3.11.9",
+    "machine": "AMD64",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 3080",
+      "memory_total_mib": 12288,
+      "memory_used_mib": 11119,
+      "driver": "617.42"
+    }
+  },
+  "status": "ok",
+  "torch_peak_allocated_mib": 10315,
+  "runs": [
+    {
+      "meeting": "pl-03",
+      "mode": "unbounded",
+      "reference_speakers": 3,
+      "detected_speakers": 3,
+      "audio_s": 1389.14,
+      "processing_s": 19.05868190000183,
+      "der": 0.2944808132920647,
+      "missed": 0.23209117117080855,
+      "false_alarm": 0.006588681095313131,
+      "confusion": 0.055800961025943056,
+      "embedding_shape": [
+        3,
+        256
+      ]
+    },
+    {
+      "meeting": "pl-03",
+      "mode": "bounded",
+      "reference_speakers": 3,
+      "detected_speakers": 3,
+      "audio_s": 1389.14,
+      "processing_s": 22.433012400004372,
+      "der": 0.2944808132920647,
+      "missed": 0.23209117117080855,
+      "false_alarm": 0.006588681095313131,
+      "confusion": 0.055800961025943056,
+      "embedding_shape": [
+        3,
+        256
+      ]
+    },
+    {
+      "meeting": "pl-08",
+      "mode": "unbounded",
+      "reference_speakers": 8,
+      "detected_speakers": 8,
+      "audio_s": 1301.104,
+      "processing_s": 20.680133699999715,
+      "der": 0.2565139837921922,
+      "missed": 0.1859259777050599,
+      "false_alarm": 0.009394196242385576,
+      "confusion": 0.06119380984474674,
+      "embedding_shape": [
+        8,
+        256
+      ]
+    },
+    {
+      "meeting": "pl-08",
+      "mode": "bounded",
+      "reference_speakers": 8,
+      "detected_speakers": 8,
+      "audio_s": 1301.104,
+      "processing_s": 20.68038749999687,
+      "der": 0.2565139837921922,
+      "missed": 0.1859259777050599,
+      "false_alarm": 0.009394196242385576,
+      "confusion": 0.06119380984474674,
+      "embedding_shape": [
+        8,
+        256
+      ]
+    },
+    {
+      "meeting": "pl-16",
+      "mode": "unbounded",
+      "reference_speakers": 16,
+      "detected_speakers": 16,
+      "audio_s": 1335.752,
+      "processing_s": 22.19909390000248,
+      "der": 0.2738925234463304,
+      "missed": 0.212916384117878,
+      "false_alarm": 0.005215501314526865,
+      "confusion": 0.05576063801392558,
+      "embedding_shape": [
+        16,
+        256
+      ]
+    },
+    {
+      "meeting": "pl-16",
+      "mode": "bounded",
+      "reference_speakers": 16,
+      "detected_speakers": 16,
+      "audio_s": 1335.752,
+      "processing_s": 21.991576699998404,
+      "der": 0.2738925234463304,
+      "missed": 0.212916384117878,
+      "false_alarm": 0.005215501314526865,
+      "confusion": 0.05576063801392558,
+      "embedding_shape": [
+        16,
+        256
+      ]
+    },
+    {
+      "meeting": "en-03",
+      "mode": "unbounded",
+      "reference_speakers": 3,
+      "detected_speakers": 3,
+      "audio_s": 867.829,
+      "processing_s": 28.857172999996692,
+      "der": 0.2485411616400042,
+      "missed": 0.166549674290597,
+      "false_alarm": 0.013093225952856793,
+      "confusion": 0.06889826139655045,
+      "embedding_shape": [
+        3,
+        256
+      ]
+    },
+    {
+      "meeting": "en-03",
+      "mode": "bounded",
+      "reference_speakers": 3,
+      "detected_speakers": 3,
+      "audio_s": 867.829,
+      "processing_s": 27.655050699999265,
+      "der": 0.2485411616400042,
+      "missed": 0.166549674290597,
+      "false_alarm": 0.013093225952856793,
+      "confusion": 0.06889826139655045,
+      "embedding_shape": [
+        3,
+        256
+      ]
+    },
+    {
+      "meeting": "mixed-04",
+      "mode": "unbounded",
+      "reference_speakers": 4,
+      "detected_speakers": 4,
+      "audio_s": 1222.3980000000001,
+      "processing_s": 23.121505699993577,
+      "der": 0.21953759243185236,
+      "missed": 0.17412203907419682,
+      "false_alarm": 0.0076719121433649826,
+      "confusion": 0.03774364121429055,
+      "embedding_shape": [
+        4,
+        256
+      ]
+    },
+    {
+      "meeting": "mixed-04",
+      "mode": "bounded",
+      "reference_speakers": 4,
+      "detected_speakers": 4,
+      "audio_s": 1222.3980000000001,
+      "processing_s": 16.854528700001538,
+      "der": 0.21953759243185236,
+      "missed": 0.17412203907419682,
+      "false_alarm": 0.0076719121433649826,
+      "confusion": 0.03774364121429055,
+      "embedding_shape": [
+        4,
+        256
+      ]
+    }
+  ],
+  "rtfx": 54.77444861858774,
+  "peak_vram_above_baseline_mib": 10388
+}
