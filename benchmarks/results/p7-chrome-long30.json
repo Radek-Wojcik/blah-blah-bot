@@ -1,0 +1,116 @@
+{
+  "prototype": "p7-chrome",
+  "name": "long30",
+  "timestamp": "2026-11-13T22:34:52+00:00",
+  "environment": {
+    "os": "Windows-10-10.0.19045-SP0",
+    "os_build": "10.0.19045",
+    "python": "3.11.9",
+    "machine": "AMD64",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 3080",
+      "memory_total_mib": 12288,
+      "memory_used_mib": 8375,
+      "driver": "617.42"
+    }
+  },
+  "status": "ok",
+  "started_at": "2026-11-13T23:03:52+01:00",
+  "gap_limit_ms": 100.0,
+  "connections_accepted": 1,
+  "streams": [
+    {
+      "stream": 1,
+      "tab_id": 91124094,
+      "title": "Tone 440 Hz",
+      "file": "tab91124094-stream1.wav",
+      "started_s": 133.042,
+      "ended_s": 1859.996,
+      "stop_reason": "connection_closed",
+      "clean_stop": false,
+      "frames": 86337,
+      "samples": 27627840,
+      "audio_duration_s": 1726.74,
+      "wall_duration_s": 1726.938,
+      "max_gap_wall_ms": 217.65,
+      "max_gap_samples_ms": 197.65,
+      "max_gap_sender_ms": 217.6,
+      "drift_ms": 217.51,
+      "frame_seq_lost": 0,
+      "sender_frames_dropped": 0,
+      "sender_frames_sent": null,
+      "sender_samples_sent": null,
+      "gaps_over_report_ms": [
+        [
+          386.198,
+          217.6
+        ]
+      ],
+      "gap_ok": false
+    },
+    {
+      "stream": 2,
+      "tab_id": 91124097,
+      "title": "Tone 660 Hz",
+      "file": "tab91124097-stream2.wav",
+      "started_s": 312.071,
+      "ended_s": 390.303,
+      "stop_reason": "user_stop",
+      "clean_stop": true,
+      "frames": 3912,
+      "samples": 1251584,
+      "audio_duration_s": 78.224,
+      "wall_duration_s": 78.208,
+      "max_gap_wall_ms": 21.69,
+      "max_gap_samples_ms": 1.69,
+      "max_gap_sender_ms": 21.2,
+      "drift_ms": -11.92,
+      "frame_seq_lost": 0,
+      "sender_frames_dropped": 0,
+      "sender_frames_sent": 3912,
+      "sender_samples_sent": 1251584,
+      "gaps_over_report_ms": [],
+      "gap_ok": true
+    },
+    {
+      "stream": 3,
+      "tab_id": 91124097,
+      "title": "Tone 660 Hz",
+      "file": "tab91124097-stream3.wav",
+      "started_s": 433.417,
+      "ended_s": 1859.996,
+      "stop_reason": "connection_closed",
+      "clean_stop": false,
+      "frames": 71319,
+      "samples": 22822080,
+      "audio_duration_s": 1426.38,
+      "wall_duration_s": 1426.548,
+      "max_gap_wall_ms": 217.64,
+      "max_gap_samples_ms": 197.64,
+      "max_gap_sender_ms": 217.5,
+      "drift_ms": 188.23,
+      "frame_seq_lost": 0,
+      "sender_frames_dropped": 0,
+      "sender_frames_sent": null,
+      "sender_samples_sent": null,
+      "gaps_over_report_ms": [
+        [
+          85.81,
+          217.6
+        ]
+      ],
+      "gap_ok": false
+    }
+  ],
+  "criteria": {
+    "no_gap_over_100ms": false,
+    "long_run_30min": null,
+    "clean_stop_restart": true,
+    "second_tab_without_restart": true
+  },
+  "manual": {
+    "tab_audible": null
+  },
+  "overall": "fail",
+  "notes": "criteria: true = met, false = not met, null = not exercised in this session; manual.tab_audible is a listening test set with --audible."
+}

@@ -1,0 +1,30 @@
+{
+  "prototype": "p9-long",
+  "name": "estimate",
+  "timestamp": "2026-11-14T04:53:44+00:00",
+  "environment": {
+    "os": "Windows-10-10.0.19045-SP0",
+    "os_build": "10.0.19045",
+    "python": "3.11.9",
+    "machine": "AMD64",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 3080",
+      "memory_total_mib": 12288,
+      "memory_used_mib": 493,
+      "driver": "617.42"
+    }
+  },
+  "status": "ok",
+  "audio_hours": 10.0,
+  "words_used": 61554,
+  "language_model": "gemma-4-12b-it-Q4_K_M.gguf",
+  "stages": {
+    "transcription_s": 1352.5975647000087,
+    "diarization_s": 735.3170155000043,
+    "extraction_s": 1408.1056373808178
+  },
+  "total_s": 3496.020217580831,
+  "total_hours": 0.9711167271057863,
+  "peak_vram_above_baseline_mib": 8875,
+  "note": "Transcription and diarization are measured on the long file. Extraction is extrapolated from seconds per 1000 words in P5 (chunked, linear in words). Summary levels and publishing are not included."
+}

@@ -1,0 +1,31 @@
+[package]
+name = "p1-audio"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Prototype P1: per-process loopback and microphone capture as segmented tracks"
+license = "MIT"
+publish = false
+
+[dependencies]
+wasapi = "0.27"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sysinfo = { version = "0.38", default-features = false, features = ["system"] }
+clap = { version = "4", features = ["derive"] }
+
+[dependencies.windows]
+version = "0.62.2"
+features = [
+  "Win32_Foundation",
+  "Win32_System_Threading",
+  "Win32_System_ProcessStatus",
+  "Win32_System_Performance",
+  "Win32_System_WindowsProgramming",
+  "Win32_Media_Audio",
+  "Win32_Media_Audio_Endpoints",
+  "Win32_System_Com",
+]
+
+[profile.release]
+debug = false

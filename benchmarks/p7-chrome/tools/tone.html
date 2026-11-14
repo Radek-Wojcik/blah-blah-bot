@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Tone</title>
+    <style>
+      body { font: 16px system-ui, sans-serif; margin: 2em; }
+      button { font-size: 1.2em; padding: 0.5em 1em; }
+    </style>
+  </head>
+  <body>
+    <h1 id="h"></h1>
+    <p>A quiet sine tone with a slow beep pattern, so that gaps and tab audibility are easy to hear.
+       Use <code>?f=440</code> to pick the frequency.</p>
+    <button id="b">Start tone</button>
+    <script>
+      const f = Number(new URLSearchParams(location.search).get("f")) || 440;
+      document.getElementById("h").textContent = `Tone ${f} Hz`;
+      document.title = `Tone ${f} Hz`;
+      document.getElementById("b").onclick = () => {
+        const ctx = new AudioContext();
+        const osc = ctx.createOscillator();
+        osc.frequency.value = f;
+        const gain = ctx.createGain();
+        const lfo = ctx.createOscillator(); // 1 Hz on/off pattern
+        lfo.type = "square";
+        lfo.frequency.value = 1;
+        const depth = ctx.createGain();
+        depth.gain.value = 0.05;
+        lfo.connect(depth).connect(gain.gain);
+        gain.gain.value = 0.05;
+        osc.connect(gain).connect(ctx.destination);
+        osc.start();
+        lfo.start();
+        document.getElementById("b").disabled = true;
+      };
+    </script>
+  </body>
+</html>

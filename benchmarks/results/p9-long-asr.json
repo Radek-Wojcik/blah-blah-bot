@@ -1,0 +1,31 @@
+{
+  "prototype": "p9-long",
+  "name": "asr",
+  "timestamp": "2026-11-14T04:41:20+00:00",
+  "environment": {
+    "os": "Windows-10-10.0.19045-SP0",
+    "os_build": "10.0.19045",
+    "python": "3.11.9",
+    "machine": "AMD64",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 3080",
+      "memory_total_mib": 12288,
+      "memory_used_mib": 724,
+      "driver": "617.42"
+    }
+  },
+  "status": "ok",
+  "config": {
+    "model": "turbo",
+    "language": "auto"
+  },
+  "audio_s": 36000.0,
+  "model_load_s": 4.943982200005848,
+  "processing_s": 1347.6535825000028,
+  "rtfx": 26.713096353157155,
+  "segments": 9990,
+  "words": 61554,
+  "detected_language": "en",
+  "peak_vram_above_baseline_mib": 1533,
+  "vram_after_release_above_baseline_mib": 285
+}

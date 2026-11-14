@@ -30,3 +30,16 @@ The application needs a lightweight always-on recorder, a desktop UI, and a mode
 ## Licenses and requirements
 
 Tauri: MIT or Apache-2.0. Windows 10 version 2004 or newer, subject to Stage 0 verification.
+
+## Measurements (Stage 0, prototype P8)
+
+The Python environment was created from `benchmarks/uv.lock` with `uv sync --frozen` and an empty uv cache, unattended, in a temporary directory (`benchmarks/results/p8-env-uv-lock-empty-cache.json`). The interpreter and the network connection were already present, so this approximates a first run and does not replace a test on a clean machine.
+
+| Groups | Time | Environment size | Download cache | GPU seen by PyTorch |
+|---|---|---|---|---|
+| Speech recognition | 30 s | 3.0 GB | 3.0 GB | not checked |
+| Diarization | 50 s | 4.6 GB | 4.6 GB | yes |
+| Both | 70 s | 7.4 GB | 7.4 GB | yes |
+
+The fallback in `docs/RISKS-AND-POC.md` (a prebuilt environment archive) is not needed on this evidence; model weights (several GB) come on top and are downloaded separately.
+
