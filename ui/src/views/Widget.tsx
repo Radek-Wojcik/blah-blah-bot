@@ -4,6 +4,8 @@ import { formatDuration } from "../format";
 import { errorMessage, useRecordingState, useSources } from "../hooks";
 import type { ActiveSource, SourceInfo } from "../ipc/types";
 
+const EQ_BARS = 12;
+
 /** The tray popup: Record and Stop, the sources being recorded, add and remove, screenshot. */
 export function Widget() {
   const backend = useBackend();
@@ -23,39 +25,82 @@ export function Widget() {
 
   return (
     <div className="widget" role="region" aria-label="Recorder">
-      <header className="widget-head">
-        <span className={recording ? "dot dot-live" : "dot"} aria-hidden="true" />
-        <span className="widget-title">{recording ? "Recording" : "Ready to record"}</span>
-        <span className="timer" aria-label="Elapsed time">
-          {formatDuration(state.elapsedMs)}
-        </span>
-      </header>
+      <div className="panel">
+        <div className="panel-body">
+          <span className={recording ? "chip chip-live" : "chip"}>
+            <span className={recording ? "dot dot-live" : "dot"} aria-hidden="true" />
+            {recording ? "Recording" : "Standby"}
+          </span>
+          <div className="readout">
+            <span className="timer" aria-label="Elapsed time">
+              {formatDuration(state.elapsedMs)}
+            </span>
+            <span className={recording ? "eq eq-live" : "eq"} aria-hidden="true">
+              {Array.from({ length: EQ_BARS }, (_, i) => (
+                <i key={i} />
+              ))}
+            </span>
+          </div>
+        </div>
+      </div>
 
-      {recording ? (
-        <>
-          <ul className="source-list" aria-label="Recorded sources">
-            {state.sources.map((s) => (
-              <ActiveRow key={s.id} source={s} onRemove={() => run(backend.removeSource(s.id))} />
-            ))}
-          </ul>
-          {addable.length > 0 && (
-            <div className="add-row">
-              <label htmlFor="add-source">Add source</label>
-              <select
-                id="add-source"
-                value=""
-                onChange={(e) => e.target.value && run(backend.addSource(e.target.value))}
-              >
-                <option value="">Choose…</option>
-                {addable.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.label}
-                  </option>
-                ))}
-              </select>
-            </div>
+      <div className="panel quiet grow">
+        <div className="panel-body">
+          {recording ? (
+            <ul className="source-list" aria-label="Recorded sources">
+              {state.sources.map((s) => (
+                <ActiveRow key={s.id} source={s} onRemove={() => run(backend.removeSource(s.id))} />
+              ))}
+            </ul>
+          ) : (
+            <fieldset className="picker">
+              <legend>Sources</legend>
+              {sources.map((s) => (
+                <PickRow
+                  key={s.id}
+                  source={s}
+                  checked={picked.has(s.id)}
+                  onToggle={() =>
+                    setPicked((prev) => {
+                      const next = new Set(prev);
+                      if (!next.delete(s.id)) next.add(s.id);
+                      return next;
+                    })
+                  }
+                />
+              ))}
+            </fieldset>
           )}
-          <div className="actions">
+        </div>
+      </div>
+
+      {recording && addable.length > 0 && (
+        <div className="add-row">
+          <label htmlFor="add-source">Add source</label>
+          <select
+            id="add-source"
+            value=""
+            onChange={(e) => e.target.value && run(backend.addSource(e.target.value))}
+          >
+            <option value="">Choose…</option>
+            {addable.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+
+      <div className="actions">
+        {recording ? (
+          <>
             <button className="btn" onClick={() => run(backend.takeScreenshot())}>
               Screenshot
               {state.screenshotCount > 0 && <span className="count">{state.screenshotCount}</span>}
@@ -63,43 +108,17 @@ export function Widget() {
             <button className="btn btn-stop" onClick={() => run(backend.stopRecording())}>
               Stop
             </button>
-          </div>
-        </>
-      ) : (
-        <>
-          <fieldset className="picker">
-            <legend>Sources</legend>
-            {sources.map((s) => (
-              <PickRow
-                key={s.id}
-                source={s}
-                checked={picked.has(s.id)}
-                onToggle={() =>
-                  setPicked((prev) => {
-                    const next = new Set(prev);
-                    if (!next.delete(s.id)) next.add(s.id);
-                    return next;
-                  })
-                }
-              />
-            ))}
-          </fieldset>
-          <div className="actions">
-            <button
-              className="btn btn-record"
-              disabled={picked.size === 0}
-              onClick={() => run(backend.startRecording({ sourceIds: [...picked] }))}
-            >
-              Record
-            </button>
-          </div>
-        </>
-      )}
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
+          </>
+        ) : (
+          <button
+            className="btn btn-record"
+            disabled={picked.size === 0}
+            onClick={() => run(backend.startRecording({ sourceIds: [...picked] }))}
+          >
+            Record
+          </button>
+        )}
+      </div>
     </div>
   );
 }

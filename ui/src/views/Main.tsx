@@ -11,29 +11,35 @@ export function Main() {
   const recording = useRecordingState();
   return (
     <div className="main">
-      <nav className="sidebar" aria-label="Main navigation">
-        <h1 className="brand">Blah Blah Bot</h1>
-        <button
-          className={page === "meetings" ? "nav nav-on" : "nav"}
-          onClick={() => setPage("meetings")}
-        >
-          Meetings
-        </button>
-        <button
-          className={page === "settings" ? "nav nav-on" : "nav"}
-          onClick={() => setPage("settings")}
-        >
-          Settings
-        </button>
-        {recording.status === "recording" && (
-          <p className="side-live">
-            <span className="dot dot-live" aria-hidden="true" /> Recording{" "}
-            {formatDuration(recording.elapsedMs)}
-          </p>
-        )}
+      <nav className="panel sidebar" aria-label="Main navigation">
+        <div className="panel-body">
+          <h1 className="brand">
+            Blah<span>Blah</span>Bot
+          </h1>
+          <button
+            className={page === "meetings" ? "nav nav-on" : "nav"}
+            onClick={() => setPage("meetings")}
+          >
+            Meetings
+          </button>
+          <button
+            className={page === "settings" ? "nav nav-on" : "nav"}
+            onClick={() => setPage("settings")}
+          >
+            Settings
+          </button>
+          {recording.status === "recording" && (
+            <p className="side-live">
+              <span className="dot dot-live" aria-hidden="true" /> REC{" "}
+              {formatDuration(recording.elapsedMs)}
+            </p>
+          )}
+        </div>
       </nav>
       <section className="content">
-        {page === "meetings" ? <MeetingList /> : <SettingsView />}
+        <div className="content-inner">
+          {page === "meetings" ? <MeetingList /> : <SettingsView />}
+        </div>
       </section>
     </div>
   );
@@ -62,7 +68,10 @@ function MeetingList() {
 
   return (
     <>
-      <h2>Meetings</h2>
+      <div className="page-head">
+        <h2>Meetings</h2>
+        <span className="chip">{meetings.length} stored</span>
+      </div>
       {error && (
         <p className="error" role="alert">
           {error}
@@ -71,47 +80,50 @@ function MeetingList() {
       {meetings.length === 0 ? (
         <p className="empty">No recordings yet. Press Record in the tray widget.</p>
       ) : (
-        <table className="meetings">
-          <thead>
-            <tr>
-              <th>Meeting</th>
-              <th>Started (UTC)</th>
-              <th>Length</th>
-              <th>Tracks</th>
-              <th>Shots</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {meetings.map((m) => (
-              <tr key={m.id}>
-                <td>
-                  {m.title} <StateBadge meeting={m} />
-                </td>
-                <td>{formatDateTimeUtc(m.startedUnixMs)}</td>
-                <td>{m.durationMs === null ? "–" : formatDuration(m.durationMs)}</td>
-                <td>{m.trackCount}</td>
-                <td>{m.screenshotCount}</td>
-                <td className="row-actions">
-                  {m.state === "recoverable" && (
+        <ul className="cards">
+          {meetings.map((m) => (
+            <li key={m.id}>
+              <article className="panel">
+                <div className="panel-body">
+                  <h3 className="card-title">
+                    {m.title} <StateBadge meeting={m} />
+                  </h3>
+                  <p className="card-when">{formatDateTimeUtc(m.startedUnixMs)} UTC</p>
+                  <dl className="stats">
+                    <div>
+                      <dt>Length</dt>
+                      <dd>{m.durationMs === null ? "–" : formatDuration(m.durationMs)}</dd>
+                    </div>
+                    <div>
+                      <dt>Tracks</dt>
+                      <dd>{m.trackCount}</dd>
+                    </div>
+                    <div>
+                      <dt>Shots</dt>
+                      <dd>{m.screenshotCount}</dd>
+                    </div>
+                  </dl>
+                  <div className="card-actions">
+                    {m.state === "recoverable" && (
+                      <button
+                        className="btn btn-small btn-stop"
+                        onClick={() => act(backend.recoverMeeting(m.id))}
+                      >
+                        Recover
+                      </button>
+                    )}
                     <button
-                      className="btn btn-small"
-                      onClick={() => act(backend.recoverMeeting(m.id))}
+                      className="btn btn-small btn-ghost"
+                      onClick={() => act(backend.deleteMeeting(m.id))}
                     >
-                      Recover
+                      Delete
                     </button>
-                  )}
-                  <button
-                    className="btn btn-small"
-                    onClick={() => act(backend.deleteMeeting(m.id))}
-                  >
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                  </div>
+                </div>
+              </article>
+            </li>
+          ))}
+        </ul>
       )}
     </>
   );
@@ -131,47 +143,53 @@ function SettingsView() {
 
   return (
     <>
-      <h2>Settings</h2>
-      <form
-        className="form"
-        onSubmit={(e) => {
-          e.preventDefault();
-          setMessage(null);
-          backend
-            .saveSettings(settings)
-            .then(() => setMessage("Saved"))
-            .catch((err) => setMessage(errorMessage(err)));
-        }}
-      >
-        <label>
-          Recordings folder
-          <input
-            value={settings.recordingsDir}
-            onChange={(e) => set({ recordingsDir: e.target.value })}
-          />
-          <small>Leave empty to use the default folder in Documents.</small>
-        </label>
-        <label>
-          Record / Stop hotkey
-          <input
-            value={settings.recordHotkey}
-            onChange={(e) => set({ recordHotkey: e.target.value })}
-          />
-        </label>
-        <label>
-          Region screenshot hotkey
-          <input
-            value={settings.screenshotHotkey}
-            onChange={(e) => set({ screenshotHotkey: e.target.value })}
-          />
-        </label>
-        <div className="actions">
-          <button className="btn btn-record" type="submit">
-            Save
-          </button>
-          {message && <span role="status">{message}</span>}
+      <div className="page-head">
+        <h2>Settings</h2>
+      </div>
+      <div className="panel quiet" style={{ maxWidth: 620 }}>
+        <div className="panel-body">
+          <form
+            className="form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              setMessage(null);
+              backend
+                .saveSettings(settings)
+                .then(() => setMessage("Saved"))
+                .catch((err) => setMessage(errorMessage(err)));
+            }}
+          >
+            <label>
+              Recordings folder
+              <input
+                value={settings.recordingsDir}
+                onChange={(e) => set({ recordingsDir: e.target.value })}
+              />
+              <small>Leave empty to use the default folder in Documents.</small>
+            </label>
+            <label>
+              Record / Stop hotkey
+              <input
+                value={settings.recordHotkey}
+                onChange={(e) => set({ recordHotkey: e.target.value })}
+              />
+            </label>
+            <label>
+              Region screenshot hotkey
+              <input
+                value={settings.screenshotHotkey}
+                onChange={(e) => set({ screenshotHotkey: e.target.value })}
+              />
+            </label>
+            <div className="actions">
+              {message && <span role="status">{message}</span>}
+              <button className="btn btn-record" type="submit">
+                Save
+              </button>
+            </div>
+          </form>
         </div>
-      </form>
+      </div>
     </>
   );
 }
