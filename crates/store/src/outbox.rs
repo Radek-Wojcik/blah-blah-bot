@@ -269,7 +269,9 @@ fn checked(tx: &Transaction<'_>, id: i64, to: OpState) -> Result<OutboxOp> {
 
 impl Store {
     /// Add an operation. When the meeting already has one with the same `op_key` nothing
-    /// changes and the existing row is returned with `false`: enqueueing twice is safe.
+    /// changes and the existing row is returned with `false`: enqueueing twice is safe. The
+    /// exception is a cancelled one: the user changed their mind, so the row starts over
+    /// (queued, no attempts, the new payload) and is returned with `true`.
     pub fn enqueue_op(&self, new: &NewOp, now_ms: i64) -> Result<(OutboxOp, bool)> {
         let tx = self.conn.unchecked_transaction()?;
         let existing: Option<i64> = tx
@@ -279,10 +281,6 @@ impl Store {
                 |r| r.get(0),
             )
             .optional()?;
-        if let Some(id) = existing {
-            let op = fetch(&tx, id)?;
-            return Ok((op, false));
-        }
         let after_id = match &new.after_op_key {
             None => None,
             Some(key) => Some(
@@ -297,6 +295,21 @@ impl Store {
                 })?,
             ),
         };
+        if let Some(id) = existing {
+            let op = fetch(&tx, id)?;
+            if op.state != OpState::Cancelled {
+                return Ok((op, false));
+            }
+            tx.execute(
+                "UPDATE outbox SET state = 'queued', payload = ?2, after_id = ?3, attempts = 0,
+                    next_attempt_unix_ms = NULL, last_error = NULL, result = NULL,
+                    updated_unix_ms = ?4 WHERE id = ?1",
+                params![id, new.payload, after_id, now_ms],
+            )?;
+            let op = fetch(&tx, id)?;
+            tx.commit()?;
+            return Ok((op, true));
+        }
         tx.execute(
             "INSERT INTO outbox (meeting_id, target, kind, op_key, payload, state, after_id,
                                  created_unix_ms, updated_unix_ms)
@@ -1119,5 +1132,21 @@ mod tests {
             s.get_op(op.id).unwrap().unwrap().result.as_deref(),
             Some(r#"{"sent":3}"#)
         );
+    }
+
+    #[test]
+    fn enqueueing_a_cancelled_operation_again_starts_it_over() {
+        let s = store();
+        let (op, _) = s.enqueue_op(&commit("m1"), 1).unwrap();
+        s.cancel_op(op.id, 2).unwrap();
+        let mut again = commit("m1");
+        again.payload = r#"{"v":2}"#.into();
+        let (revived, created) = s.enqueue_op(&again, 3).unwrap();
+        assert!(created);
+        assert_eq!(revived.id, op.id, "the same row, so the key stays unique");
+        assert_eq!(revived.state, OpState::Queued);
+        assert_eq!(revived.payload, r#"{"v":2}"#);
+        assert_eq!(revived.attempts, 0);
+        assert!(s.claim_next_op(10, &[]).unwrap().is_some());
     }
 }
