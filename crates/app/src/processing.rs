@@ -793,6 +793,8 @@ fn worker_config(s: &ProcessingSettings, env_dir: &Path) -> WorkerConfig {
         hf_token: secrets::get(secrets::HF_TOKEN),
         // The reference estimate for a 10-hour meeting is below 4 hours; stop after 6.
         step_timeout: Duration::from_secs(6 * 3600),
+        // Read by the extraction settings when a meeting uses an external or cloud model.
+        llm_api_key: None,
     }
 }
 

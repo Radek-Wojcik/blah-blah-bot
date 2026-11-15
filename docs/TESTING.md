@@ -170,3 +170,15 @@ The GPU guard is tested on recorded traces: a real trace of the idle reference m
 | Enrollment from one meeting and recognition in the next with real models; a new voice stays unknown | `BBB_AUDIO_DIR=... cargo test -p queue --test speakers_models a_voice_named -- --ignored --test-threads=1` | Locally before a release |
 | Speaker accuracy and false accept rate over seven synthetic meetings in sequence (profiles are taught after each meeting); writes `benchmarks/results/stage3-speaker-recognition.json` when `BBB_RESULTS_OUT` is set | `BBB_AUDIO_DIR=... BBB_RESULTS_OUT=... cargo test -p queue --test speakers_models recognition_accuracy -- --ignored --test-threads=1 --nocapture` | Locally before a release |
 | Distribution of similarity for the same and for different voices, clean and narrowband with noise | `cd benchmarks && uv run --group diar python -m bbb_bench.proto.p4_similarity data/audio/<meeting> ...` | When thresholds change |
+
+## 13. Stage 4 test commands
+
+| What | Command | Runs |
+|---|---|---|
+| Cycle files, templates, git handling, issue cache, context builder and report rendering (`cycle-store`); schema v4 migration from v3 data, report settings, backend choice and cloud confirmation, cycle participants (`store`); extract and reduce stages with the GPU gate per backend, cloud refusal, key redaction, context and named transcript, draft editing operations and rendering, contract tests on the shared fixtures, and a job through the supervisor with a fake worker script (`queue`) | `cargo test -p cycle-store -p store -p queue` | CI |
+| Worker: windows, quotes, deduplication, language, extract and reduce steps against a mock server, contracts on the shared fixtures | `cd worker && uv sync --frozen --only-group dev && uv run --no-sync pytest` | CI |
+| Draft editor, report mode choice, backend dialog and cycle screens on the mock backend | `cd ui && npm test && npm run test:e2e` | CI |
+| Extraction quality on the reference meetings (precision and recall of items, wrong assignee rate, quote verification, time per hour of audio, per model and backend); writes `benchmarks/results/stage4-*.json`. The command is added by the measurement step | `cd benchmarks && uv run python -m bbb_bench.proto.stage4_extraction ...` | Locally, when the model or the prompts change |
+| Extract and reduce with the real model through `llama-server` on the reference transcripts (valid draft, quotes verified, no network beyond the local server). The model tests are added by the measurement step | `cd worker && BBB_LLAMA_SERVER=... uv run pytest -m models` | Locally before a release |
+
+The fake worker in `crates/queue/tests/stage4_fake_worker.rs` is a small Python script started in place of `python -m bbb_worker`; it needs only a Python 3 interpreter on `PATH`, no models and no GPU. Cloud is tested against a mock server only; no test sends text to a hosted service.

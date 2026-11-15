@@ -48,6 +48,9 @@ pub struct StageRow {
     pub started_unix_ms: Option<i64>,
     pub finished_unix_ms: Option<i64>,
     pub error: Option<String>,
+    /// Why a stage that is `done` did nothing (for example "the meeting has no cycle").
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 /// A job with its stages, in the order they were created.
@@ -67,6 +70,7 @@ type StageTuple = (
     u32,
     Option<i64>,
     Option<i64>,
+    Option<String>,
     Option<String>,
 );
 
@@ -117,7 +121,7 @@ impl Store {
             return Ok(None);
         };
         let mut stmt = self.conn.prepare(
-            "SELECT stage, status, attempts, started_unix_ms, finished_unix_ms, error
+            "SELECT stage, status, attempts, started_unix_ms, finished_unix_ms, error, note
              FROM job_stages WHERE meeting_id = ?1 ORDER BY rowid",
         )?;
         let rows = stmt.query_map(params![meeting_id], |r| {
@@ -128,11 +132,12 @@ impl Store {
                 r.get(3)?,
                 r.get(4)?,
                 r.get(5)?,
+                r.get(6)?,
             ))
         })?;
         let mut stages = Vec::new();
         for row in rows {
-            let (stage, status, attempts, started_unix_ms, finished_unix_ms, error) = row?;
+            let (stage, status, attempts, started_unix_ms, finished_unix_ms, error, note) = row?;
             stages.push(StageRow {
                 stage,
                 status: StageStatus::parse(&status)?,
@@ -140,6 +145,7 @@ impl Store {
                 started_unix_ms,
                 finished_unix_ms,
                 error,
+                note,
             });
         }
         Ok(Some(JobRow {
@@ -180,12 +186,12 @@ impl Store {
         match status {
             StageStatus::Running => tx.execute(
                 "UPDATE job_stages SET status = 'running', attempts = attempts + 1,
-                    started_unix_ms = ?3, finished_unix_ms = NULL, error = NULL
+                    started_unix_ms = ?3, finished_unix_ms = NULL, error = NULL, note = NULL
                  WHERE meeting_id = ?1 AND stage = ?2",
                 params![meeting_id, stage, now_ms],
             )?,
             StageStatus::Done => tx.execute(
-                "UPDATE job_stages SET status = 'done', finished_unix_ms = ?3, error = NULL
+                "UPDATE job_stages SET status = 'done', finished_unix_ms = ?3, error = NULL, note = NULL
                  WHERE meeting_id = ?1 AND stage = ?2",
                 params![meeting_id, stage, now_ms],
             )?,
@@ -195,7 +201,7 @@ impl Store {
                 params![meeting_id, stage, now_ms, error],
             )?,
             StageStatus::Pending => tx.execute(
-                "UPDATE job_stages SET status = 'pending', error = NULL
+                "UPDATE job_stages SET status = 'pending', error = NULL, note = NULL
                  WHERE meeting_id = ?1 AND stage = ?2",
                 params![meeting_id, stage],
             )?,
@@ -205,6 +211,22 @@ impl Store {
             params![meeting_id, now_ms],
         )?;
         tx.commit()?;
+        Ok(())
+    }
+
+    /// Mark a stage `done` without running it, with the reason as a note.
+    pub fn mark_stage_skipped(
+        &self,
+        meeting_id: &str,
+        stage: &str,
+        note: &str,
+        now_ms: i64,
+    ) -> Result<()> {
+        self.set_stage_status(meeting_id, stage, StageStatus::Done, None, now_ms)?;
+        self.conn.execute(
+            "UPDATE job_stages SET note = ?3 WHERE meeting_id = ?1 AND stage = ?2",
+            params![meeting_id, stage, note],
+        )?;
         Ok(())
     }
 
@@ -280,6 +302,21 @@ mod tests {
         assert_eq!(st.attempts, 2);
         assert_eq!(st.status, StageStatus::Failed);
         assert_eq!(st.error.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn a_skipped_stage_is_done_with_a_note_that_a_rerun_clears() {
+        let s = store_with_meeting();
+        s.create_job("m1", &["asr"], "{}", 10).unwrap();
+        s.mark_stage_skipped("m1", "asr", "nothing to do", 20)
+            .unwrap();
+        let st = &s.get_job("m1").unwrap().unwrap().stages[0];
+        assert_eq!(st.status, StageStatus::Done);
+        assert_eq!(st.note.as_deref(), Some("nothing to do"));
+        assert_eq!(st.error, None);
+        s.set_stage_status("m1", "asr", StageStatus::Pending, None, 30)
+            .unwrap();
+        assert_eq!(s.get_job("m1").unwrap().unwrap().stages[0].note, None);
     }
 
     #[test]

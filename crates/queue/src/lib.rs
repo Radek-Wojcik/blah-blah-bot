@@ -6,6 +6,8 @@
 //! was interrupted.
 
 pub mod cleanup;
+pub mod context;
+pub mod draft;
 pub mod gpu;
 pub mod runner;
 pub mod stage;

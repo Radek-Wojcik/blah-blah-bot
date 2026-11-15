@@ -98,10 +98,25 @@ pub fn voice_id(track: &str, label: &str) -> String {
     format!("{track}:{label}")
 }
 
-/// Profiles ready for matching.
+/// Profiles ready for matching: every participant's, whatever the cycle.
 pub fn load_profiles(store: &Store) -> Result<Vec<ProfileRef>, store::StoreError> {
+    profile_refs(store.all_profiles()?)
+}
+
+/// Profiles a meeting of `cycle_id` is matched against: those of the cycle's participants
+/// and no others. `None` is a meeting without a cycle, which uses the legacy local list.
+pub fn load_profiles_for(
+    store: &Store,
+    cycle_id: Option<&str>,
+) -> Result<Vec<ProfileRef>, store::StoreError> {
+    profile_refs(store.profiles_for(cycle_id)?)
+}
+
+fn profile_refs(
+    profiles: Vec<(String, Vec<SampleRow>)>,
+) -> Result<Vec<ProfileRef>, store::StoreError> {
     let mut out = Vec::new();
-    for (participant_id, rows) in store.all_profiles()? {
+    for (participant_id, rows) in profiles {
         let set = SampleSet::new(rows.into_iter().map(to_sample).collect());
         if let Some(centroid) = set.centroid() {
             out.push(ProfileRef {
@@ -136,7 +151,12 @@ pub fn run_speaker_id(
         .get_meeting(meeting_id)
         .map_err(err)?
         .ok_or_else(|| RunError::new("the meeting no longer exists"))?;
-    let profiles = load_profiles(store).map_err(err)?;
+    // A meeting is matched against the voices of its own cycle only.
+    let cycle_id = store
+        .get_report_settings(meeting_id)
+        .map_err(err)?
+        .and_then(|s| s.cycle_id);
+    let profiles = load_profiles_for(store, cycle_id.as_deref()).map_err(err)?;
 
     let mut rows: Vec<VoiceRow> = Vec::new();
     let mut candidates: Vec<Candidate> = Vec::new();
@@ -606,6 +626,39 @@ fn is_merged_with_confirmed(voices: &[VoiceRow], voice_id: &str) -> bool {
         }
     }
     false
+}
+
+/// The participants a meeting can name its voices after: those of its cycle and no others,
+/// or the legacy local list when the meeting has no cycle.
+pub fn participants_for_meeting(
+    store: &Store,
+    meeting_id: &str,
+) -> Result<Vec<ParticipantInfo>, store::StoreError> {
+    let cycle = store
+        .get_report_settings(meeting_id)?
+        .and_then(|s| s.cycle_id);
+    store.list_participants_for(cycle.as_deref())
+}
+
+/// The participant to name a voice after when the user types `name`: the one of the
+/// meeting's cycle (or of the legacy list for a meeting without a cycle) with that name,
+/// ignoring case, created with `new_id` when there is none. Participants of other cycles
+/// are never found. Returns the participant's id.
+pub fn find_or_create_participant(
+    store: &Store,
+    meeting_id: &str,
+    name: &str,
+    new_id: &str,
+    now_ms: i64,
+) -> Result<String, store::StoreError> {
+    let cycle = store
+        .get_report_settings(meeting_id)?
+        .and_then(|s| s.cycle_id);
+    if let Some(p) = store.find_participant_by_name_in(cycle.as_deref(), name)? {
+        return Ok(p.id);
+    }
+    store.create_participant_in(cycle.as_deref(), new_id, name, now_ms)?;
+    Ok(new_id.to_string())
 }
 
 /// Name a voice as the user's decision (`None` leaves it deliberately unnamed), then update
@@ -1095,6 +1148,7 @@ mod tests {
             name: "Ola".into(),
             sample_count: 0,
             speech_ms: 0,
+            cycle_id: None,
         }];
         let sp = |id: &str, label: &str| Speaker {
             id: id.into(),
@@ -1117,5 +1171,79 @@ mod tests {
         assert_eq!(view.speakers[0].label, "Ola");
         assert_eq!(view.speakers[1].label, "Speaker 3");
         assert_eq!(view.speakers[2].label, "Speaker 3");
+    }
+
+    #[test]
+    fn a_meeting_is_matched_against_and_names_voices_after_its_own_cycle_only() {
+        let s = Store::open_in_memory().unwrap();
+        for id in ["with-cycle", "without"] {
+            s.create_meeting(&Meeting {
+                id: id.into(),
+                title: id.into(),
+                started_unix_ms: 1,
+                duration_ms: None,
+                state: MeetingState::Stopped,
+                dir: id.into(),
+            })
+            .unwrap();
+        }
+        s.set_report_settings(
+            "with-cycle",
+            &store::ReportSettings {
+                cycle_id: Some("TEAM".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.sync_cycle_participants("TEAM", &[("ola", "Ola")])
+            .unwrap();
+        s.sync_cycle_participants("OTHER", &[("jan", "Jan")])
+            .unwrap();
+        s.create_participant("legacy", "Ewa", 1).unwrap();
+
+        let names = |meeting: &str| -> Vec<String> {
+            participants_for_meeting(&s, meeting)
+                .unwrap()
+                .into_iter()
+                .map(|p| p.name)
+                .collect()
+        };
+        assert_eq!(names("with-cycle"), ["Ola"]);
+        assert_eq!(names("without"), ["Ewa"]);
+
+        // Typing a name finds the participant of the meeting's cycle or creates one there.
+        let ola = find_or_create_participant(&s, "with-cycle", "OLA", "new-1", 5).unwrap();
+        assert_eq!(ola, "TEAM:ola");
+        let jan = find_or_create_participant(&s, "with-cycle", "Jan", "new-2", 5).unwrap();
+        assert_eq!(jan, "new-2", "Jan of the other cycle is not found");
+        assert_eq!(names("with-cycle"), ["Jan", "Ola"]);
+        let ewa = find_or_create_participant(&s, "without", "ewa", "new-3", 5).unwrap();
+        assert_eq!(ewa, "legacy");
+
+        // Matching only looks at the cycle's own voice profiles.
+        let sample = SampleRow {
+            source_key: "k".into(),
+            embedding: vec![1.0, 0.0],
+            speech_ms: 12_000,
+        };
+        for id in ["TEAM:ola", "legacy"] {
+            s.put_sample(id, &sample, 1).unwrap();
+        }
+        s.put_sample(
+            &s.participants_for_cycle("OTHER").unwrap()[0].id,
+            &sample,
+            1,
+        )
+        .unwrap();
+        let ids = |cycle: Option<&str>| -> Vec<String> {
+            load_profiles_for(&s, cycle)
+                .unwrap()
+                .into_iter()
+                .map(|p| p.participant_id)
+                .collect()
+        };
+        assert_eq!(ids(Some("TEAM")), ["TEAM:ola"]);
+        assert_eq!(ids(None), ["legacy"]);
+        assert_eq!(load_profiles(&s).unwrap().len(), 3);
     }
 }

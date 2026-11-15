@@ -95,6 +95,7 @@ fn lab(name: &str) -> Lab {
                 llama_server: None,
                 hf_token: None,
                 step_timeout: Duration::from_secs(3600),
+                llm_api_key: None,
             },
             meeting_root: runner_root.clone(),
             retention: AudioRetention::Delete,

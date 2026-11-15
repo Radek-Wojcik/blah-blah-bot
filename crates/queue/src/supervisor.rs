@@ -5,9 +5,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
-use store::{StageStatus, Store};
+use store::{JobRow, LlmKind, StageStatus, Store};
 
 use crate::stage::{next_step, Next, Stage, STAGES};
+use crate::worker::{confirmed_for_run, JobOptions};
 
 /// Milliseconds since the Unix epoch.
 pub fn now_ms() -> i64 {
@@ -107,6 +108,17 @@ pub enum QueueEvent {
 }
 
 type Listener = Box<dyn Fn(&QueueEvent) + Send + Sync>;
+
+/// What to do with a stage before it is started, decided from the store.
+enum Plan {
+    /// Run it; the kind is the language-model backend of the job, which decides whether the
+    /// stage needs the GPU.
+    Run(Option<LlmKind>),
+    /// Nothing to do for this meeting: mark the stage done with this note.
+    Skip(String),
+    /// Must not run: fail the stage with this message.
+    Refuse(String),
+}
 
 pub struct Supervisor {
     store: Arc<Mutex<Store>>,
@@ -225,6 +237,36 @@ impl Supervisor {
         }
     }
 
+    /// Decide what to do with `stage`. The language-model stages (`extract`, `reduce`) need a
+    /// backend chosen in the job options and a cycle on the meeting; without either they are
+    /// skipped, so old jobs and meetings without a cycle still finish. A cloud backend runs
+    /// only when the store holds the user's confirmation for it (the worker refuses too).
+    fn plan(&self, meeting_id: &str, job: &JobRow, stage: Stage) -> Result<Plan, QueueError> {
+        let options = JobOptions::from_json(&job.options);
+        let kind = options.llm.as_ref().map(|l| l.kind);
+        if !stage.uses_llm() {
+            return Ok(Plan::Run(kind));
+        }
+        let Some(llm) = options.llm.as_ref() else {
+            return Ok(Plan::Skip(
+                "no language model backend was chosen for this meeting".into(),
+            ));
+        };
+        let store = self.store()?;
+        let settings = store.get_report_settings(meeting_id)?.unwrap_or_default();
+        if settings.cycle_id.is_none() {
+            return Ok(Plan::Skip("the meeting has no cycle".into()));
+        }
+        if llm.kind == LlmKind::Cloud
+            && !confirmed_for_run(llm, store.get_llm_choice(meeting_id)?.as_ref())
+        {
+            return Ok(Plan::Refuse(
+                "the cloud language model was not confirmed for this meeting".into(),
+            ));
+        }
+        Ok(Plan::Run(kind))
+    }
+
     /// Run at most one stage of the job.
     pub fn step(&self, meeting_id: &str) -> Result<StepOutcome, QueueError> {
         let job = self
@@ -240,11 +282,41 @@ impl Supervisor {
             Next::Run { stage } => stage,
         };
 
+        let kind = match self.plan(meeting_id, &job, stage)? {
+            Plan::Run(kind) => kind,
+            Plan::Skip(note) => {
+                self.set_waiting(meeting_id, None);
+                self.store()?
+                    .mark_stage_skipped(meeting_id, stage.as_str(), &note, now_ms())?;
+                self.emit(QueueEvent::StageDone {
+                    meeting_id: meeting_id.to_string(),
+                    stage,
+                });
+                return Ok(StepOutcome::Ran { stage });
+            }
+            Plan::Refuse(error) => {
+                self.set_waiting(meeting_id, None);
+                self.store()?.set_stage_status(
+                    meeting_id,
+                    stage.as_str(),
+                    StageStatus::Failed,
+                    Some(&error),
+                    now_ms(),
+                )?;
+                self.emit(QueueEvent::StageFailed {
+                    meeting_id: meeting_id.to_string(),
+                    stage,
+                    error: error.clone(),
+                });
+                return Ok(StepOutcome::Failed { stage, error });
+            }
+        };
+
         let Ok(_guard) = self.running.try_lock() else {
             return Ok(StepOutcome::Busy);
         };
 
-        if stage.needs_gpu() {
+        if stage.needs_gpu(kind) {
             if let GateDecision::Wait(reason) = self.gate.check(stage) {
                 self.set_waiting(meeting_id, Some(reason.clone()));
                 self.emit(QueueEvent::Waiting {
@@ -326,6 +398,7 @@ impl Supervisor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::worker::LlmOptions;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use store::{Meeting, MeetingState};
 
@@ -365,6 +438,69 @@ mod tests {
         }
     }
 
+    /// Options that choose a backend for the language-model stages.
+    fn llm_options(kind: LlmKind) -> String {
+        serde_json::to_string(&JobOptions {
+            llm: Some(LlmOptions {
+                kind,
+                model_path: None,
+                ctx: None,
+                base_url: Some("https://api.example.com/v1".into()),
+                model: None,
+                // A claim in the stored options counts for nothing.
+                cloud_confirmed: true,
+            }),
+            ..JobOptions::default()
+        })
+        .unwrap()
+    }
+
+    /// A gate that records which stages it was asked about.
+    struct Spy(Mutex<Vec<Stage>>);
+
+    impl GpuGate for Spy {
+        fn check(&self, stage: Stage) -> GateDecision {
+            self.0.lock().unwrap().push(stage);
+            GateDecision::Go
+        }
+    }
+
+    fn setup_with(options: &str, cycle: Option<&str>) -> (Supervisor, Arc<Recording>, Arc<Spy>) {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .create_meeting(&Meeting {
+                id: "m1".into(),
+                title: "t".into(),
+                started_unix_ms: 1,
+                duration_ms: None,
+                state: MeetingState::Stopped,
+                dir: "m1".into(),
+            })
+            .unwrap();
+        store
+            .set_report_settings(
+                "m1",
+                &store::ReportSettings {
+                    cycle_id: cycle.map(str::to_string),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let runner = Recording::new();
+        let gate = Arc::new(Spy(Mutex::new(Vec::new())));
+        let sup = Supervisor::new(Arc::new(Mutex::new(store)), runner.clone(), gate.clone(), 3);
+        sup.enqueue("m1", options).unwrap();
+        (sup, runner, gate)
+    }
+
+    fn stage_row(sup: &Supervisor, stage: Stage) -> store::StageRow {
+        let job = sup.store().unwrap().get_job("m1").unwrap().unwrap();
+        job.stages
+            .into_iter()
+            .find(|s| s.stage == stage.as_str())
+            .unwrap()
+    }
+
     fn setup(gpu_free: bool) -> (Supervisor, Arc<Recording>, Arc<Gate>) {
         let store = Store::open_in_memory().unwrap();
         store
@@ -386,9 +522,147 @@ mod tests {
 
     #[test]
     fn drive_runs_every_stage_in_order() {
-        let (sup, runner, _) = setup(true);
+        let (sup, runner, _) = setup_with(&llm_options(LlmKind::Managed), Some("TEAM"));
         assert_eq!(sup.drive("m1").unwrap(), StepOutcome::Finished);
         assert_eq!(*runner.calls.lock().unwrap(), STAGES.to_vec());
+        assert_eq!(stage_row(&sup, Stage::Extract).note, None);
+    }
+
+    #[test]
+    fn a_job_without_a_backend_skips_the_language_model_stages_and_finishes() {
+        // The shape of every job made before cycles existed.
+        let (sup, runner, _) = setup(true);
+        assert_eq!(sup.drive("m1").unwrap(), StepOutcome::Finished);
+        assert_eq!(*runner.calls.lock().unwrap(), STAGES[..7].to_vec());
+        for stage in [Stage::Extract, Stage::Reduce] {
+            let row = stage_row(&sup, stage);
+            assert_eq!(row.status, StageStatus::Done);
+            assert!(row.note.as_deref().unwrap().contains("backend"));
+            assert_eq!(row.error, None);
+            assert_eq!(row.attempts, 0);
+        }
+    }
+
+    #[test]
+    fn a_meeting_without_a_cycle_skips_the_language_model_stages() {
+        let (sup, runner, gate) = setup_with(&llm_options(LlmKind::Managed), None);
+        assert_eq!(sup.drive("m1").unwrap(), StepOutcome::Finished);
+        assert_eq!(*runner.calls.lock().unwrap(), STAGES[..7].to_vec());
+        assert_eq!(
+            stage_row(&sup, Stage::Reduce).note.as_deref(),
+            Some("the meeting has no cycle")
+        );
+        // A skipped stage never waits for the GPU.
+        assert!(!gate.0.lock().unwrap().contains(&Stage::Extract));
+    }
+
+    #[test]
+    fn only_the_managed_backend_goes_through_the_gpu_gate() {
+        for (kind, gated) in [(LlmKind::Managed, true), (LlmKind::External, false)] {
+            let (sup, runner, gate) = setup_with(&llm_options(kind), Some("TEAM"));
+            assert_eq!(sup.drive("m1").unwrap(), StepOutcome::Finished);
+            assert_eq!(*runner.calls.lock().unwrap(), STAGES.to_vec());
+            let asked = gate.0.lock().unwrap().clone();
+            assert_eq!(asked.contains(&Stage::Extract), gated, "{kind:?}");
+            assert_eq!(asked.contains(&Stage::Reduce), gated, "{kind:?}");
+            // The speech stages are gated whatever the language-model backend.
+            assert!(asked.contains(&Stage::Asr));
+        }
+    }
+
+    #[test]
+    fn an_external_backend_runs_while_the_gpu_is_busy() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .create_meeting(&Meeting {
+                id: "m1".into(),
+                title: "t".into(),
+                started_unix_ms: 1,
+                duration_ms: None,
+                state: MeetingState::Stopped,
+                dir: "m1".into(),
+            })
+            .unwrap();
+        store
+            .set_report_settings(
+                "m1",
+                &store::ReportSettings {
+                    cycle_id: Some("TEAM".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let runner = Recording::new();
+        let gate = Arc::new(Gate(AtomicBool::new(false)));
+        let sup = Supervisor::new(Arc::new(Mutex::new(store)), runner.clone(), gate, 3);
+        sup.enqueue("m1", &llm_options(LlmKind::External)).unwrap();
+        for stage in &STAGES[..7] {
+            sup.store()
+                .unwrap()
+                .set_stage_status("m1", stage.as_str(), StageStatus::Done, None, 1)
+                .unwrap();
+        }
+        assert_eq!(sup.drive("m1").unwrap(), StepOutcome::Finished);
+        assert_eq!(
+            *runner.calls.lock().unwrap(),
+            vec![Stage::Extract, Stage::Reduce]
+        );
+    }
+
+    #[test]
+    fn the_cloud_runs_only_after_the_store_holds_a_confirmation() {
+        let (sup, runner, _) = setup_with(&llm_options(LlmKind::Cloud), Some("TEAM"));
+        for stage in &STAGES[..7] {
+            sup.store()
+                .unwrap()
+                .set_stage_status("m1", stage.as_str(), StageStatus::Done, None, 1)
+                .unwrap();
+        }
+        // The stored options claim `cloud_confirmed`, the store says nothing: refused.
+        let out = sup.drive("m1").unwrap();
+        assert!(
+            matches!(&out, StepOutcome::Failed { stage: Stage::Extract, error } if error.contains("not confirmed")),
+            "{out:?}"
+        );
+        assert!(runner.calls.lock().unwrap().is_empty());
+
+        // A choice that is not confirmed is refused as well.
+        sup.store()
+            .unwrap()
+            .set_llm_choice("m1", LlmKind::Cloud, Some("api.example.com"))
+            .unwrap();
+        sup.retry("m1").unwrap();
+        assert!(matches!(
+            sup.drive("m1").unwrap(),
+            StepOutcome::Failed { .. }
+        ));
+        assert!(runner.calls.lock().unwrap().is_empty());
+
+        // Confirmed for another host than the options name: refused.
+        sup.store()
+            .unwrap()
+            .set_llm_choice("m1", LlmKind::Cloud, Some("evil.example.net"))
+            .unwrap();
+        sup.store().unwrap().confirm_cloud("m1", 5).unwrap();
+        sup.retry("m1").unwrap();
+        assert!(matches!(
+            sup.drive("m1").unwrap(),
+            StepOutcome::Failed { .. }
+        ));
+        assert!(runner.calls.lock().unwrap().is_empty());
+
+        // Confirmed for the endpoint of the job: runs.
+        sup.store()
+            .unwrap()
+            .set_llm_choice("m1", LlmKind::Cloud, Some("api.example.com"))
+            .unwrap();
+        sup.store().unwrap().confirm_cloud("m1", 6).unwrap();
+        sup.retry("m1").unwrap();
+        assert_eq!(sup.drive("m1").unwrap(), StepOutcome::Finished);
+        assert_eq!(
+            *runner.calls.lock().unwrap(),
+            vec![Stage::Extract, Stage::Reduce]
+        );
     }
 
     #[test]

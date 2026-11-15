@@ -8,12 +8,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Result, Store};
 
-/// A person who can be named as a speaker. A minimal local list until cycles exist.
+/// A person who can be named as a speaker. `cycle_id` is the cycle the participant belongs
+/// to; `None` is the legacy local list of participants made before cycles existed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Participant {
     pub id: String,
     pub name: String,
     pub created_unix_ms: i64,
+    pub cycle_id: Option<String>,
 }
 
 /// A participant with the size of the voice profile.
@@ -23,6 +25,25 @@ pub struct ParticipantInfo {
     pub name: String,
     pub sample_count: u32,
     pub speech_ms: u64,
+    pub cycle_id: Option<String>,
+}
+
+impl ParticipantInfo {
+    /// The participant's id inside its cycle (`cycle.yaml`), for a cycle participant.
+    pub fn cycle_participant_id(&self) -> Option<&str> {
+        let cycle = self.cycle_id.as_deref()?;
+        self.id.strip_prefix(cycle)?.strip_prefix(KEY_SEPARATOR)
+    }
+}
+
+/// Separates the cycle id from the participant id in the key of a cycle participant.
+const KEY_SEPARATOR: char = ':';
+
+/// Row key of a cycle participant. Participants of different cycles may share an id in
+/// their `cycle.yaml` (the same person in two cycles), so the key carries the cycle; the
+/// voice profile of the same person in two cycles is deliberately kept apart.
+pub fn cycle_participant_key(cycle_id: &str, participant_id: &str) -> String {
+    format!("{cycle_id}{KEY_SEPARATOR}{participant_id}")
 }
 
 /// One confirmed voice of a participant.
@@ -107,25 +128,52 @@ pub fn blob_to_embedding(b: &[u8]) -> Vec<f32> {
 impl Store {
     // ----- participants -----
 
+    /// Create a participant of the legacy local list (no cycle).
     pub fn create_participant(&self, id: &str, name: &str, now_ms: i64) -> Result<()> {
+        self.create_participant_in(None, id, name, now_ms)
+    }
+
+    /// Create a participant of a cycle (or of the local list with `None`). Names are unique
+    /// per cycle, ignoring case.
+    pub fn create_participant_in(
+        &self,
+        cycle_id: Option<&str>,
+        id: &str,
+        name: &str,
+        now_ms: i64,
+    ) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO participants (id, name, created_unix_ms) VALUES (?1, ?2, ?3)",
-            params![id, name, now_ms],
+            "INSERT INTO participants (id, name, created_unix_ms, cycle_id)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![id, name, now_ms, cycle_id],
         )?;
         Ok(())
     }
 
+    /// Find a participant of the legacy local list by name.
     pub fn find_participant_by_name(&self, name: &str) -> Result<Option<Participant>> {
+        self.find_participant_by_name_in(None, name)
+    }
+
+    /// Find a participant of one cycle (or of the local list with `None`) by name. The
+    /// participants of other cycles are never found.
+    pub fn find_participant_by_name_in(
+        &self,
+        cycle_id: Option<&str>,
+        name: &str,
+    ) -> Result<Option<Participant>> {
         Ok(self
             .conn
             .query_row(
-                "SELECT id, name, created_unix_ms FROM participants WHERE name = ?1",
-                params![name],
+                "SELECT id, name, created_unix_ms, cycle_id FROM participants
+                 WHERE name = ?1 AND cycle_id IS ?2",
+                params![name, cycle_id],
                 |r| {
                     Ok(Participant {
                         id: r.get(0)?,
                         name: r.get(1)?,
                         created_unix_ms: r.get(2)?,
+                        cycle_id: r.get(3)?,
                     })
                 },
             )
@@ -148,18 +196,43 @@ impl Store {
             > 0)
     }
 
+    /// Every participant of every cycle and of the local list.
     pub fn list_participants(&self) -> Result<Vec<ParticipantInfo>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT p.id, p.name, COUNT(s.source_key), COALESCE(SUM(s.speech_ms), 0)
+        self.query_participants(None)
+    }
+
+    /// The participants a meeting of this cycle can use: the cycle's own, none of the others.
+    /// `None` is the legacy local list, which is what meetings without a cycle use.
+    pub fn list_participants_for(&self, cycle_id: Option<&str>) -> Result<Vec<ParticipantInfo>> {
+        self.query_participants(Some(cycle_id))
+    }
+
+    /// The participants of one cycle.
+    pub fn participants_for_cycle(&self, cycle_id: &str) -> Result<Vec<ParticipantInfo>> {
+        self.list_participants_for(Some(cycle_id))
+    }
+
+    fn query_participants(&self, scope: Option<Option<&str>>) -> Result<Vec<ParticipantInfo>> {
+        let filter = if scope.is_some() {
+            "p.cycle_id IS ?1"
+        } else {
+            "?1 IS NULL OR 1 = 1"
+        };
+        let cycle: Option<&str> = scope.flatten();
+        let sql = format!(
+            "SELECT p.id, p.name, COUNT(s.source_key), COALESCE(SUM(s.speech_ms), 0), p.cycle_id
              FROM participants p LEFT JOIN voice_samples s ON s.participant_id = p.id
-             GROUP BY p.id ORDER BY p.name COLLATE NOCASE",
-        )?;
-        let rows = stmt.query_map([], |r| {
+             WHERE {filter}
+             GROUP BY p.id ORDER BY p.name COLLATE NOCASE, p.id"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![cycle], |r| {
             Ok(ParticipantInfo {
                 id: r.get(0)?,
                 name: r.get(1)?,
                 sample_count: r.get(2)?,
                 speech_ms: r.get::<_, i64>(3)? as u64,
+                cycle_id: r.get(4)?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -224,6 +297,23 @@ impl Store {
                 "SELECT DISTINCT participant_id FROM voice_samples ORDER BY participant_id",
             )?;
             let rows = stmt.query_map([], |r| r.get(0))?;
+            rows.collect::<std::result::Result<_, _>>()?
+        };
+        ids.into_iter()
+            .map(|id| Ok((id.clone(), self.samples_of(&id)?)))
+            .collect()
+    }
+
+    /// The voice profiles a meeting of this cycle is matched against: those of the cycle's
+    /// participants only (`None`: the legacy local list, used by meetings without a cycle).
+    pub fn profiles_for(&self, cycle_id: Option<&str>) -> Result<Vec<(String, Vec<SampleRow>)>> {
+        let ids: Vec<String> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT DISTINCT s.participant_id FROM voice_samples s
+                 JOIN participants p ON p.id = s.participant_id
+                 WHERE p.cycle_id IS ?1 ORDER BY s.participant_id",
+            )?;
+            let rows = stmt.query_map(params![cycle_id], |r| r.get(0))?;
             rows.collect::<std::result::Result<_, _>>()?
         };
         ids.into_iter()

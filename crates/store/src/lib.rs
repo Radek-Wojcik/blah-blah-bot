@@ -4,14 +4,16 @@
 //! absolute paths. The schema is versioned with `PRAGMA user_version` and migrated forward
 //! on open.
 
+mod cycles;
 mod jobs;
 mod migrations;
 mod voices;
 
+pub use cycles::{LlmChoice, LlmKind, ReportSettings, SyncOutcome};
 pub use jobs::{JobRow, StageRow, StageStatus};
 pub use voices::{
-    blob_to_embedding, embedding_to_blob, ClipRow, Participant, ParticipantInfo, SampleRow,
-    VoiceDecision, VoiceRow,
+    blob_to_embedding, cycle_participant_key, embedding_to_blob, ClipRow, Participant,
+    ParticipantInfo, SampleRow, VoiceDecision, VoiceRow,
 };
 
 use std::path::Path;
@@ -28,6 +30,8 @@ pub enum StoreError {
     SchemaTooNew { found: u32, supported: u32 },
     #[error("unknown meeting state: {0}")]
     UnknownState(String),
+    #[error("invalid value: {0}")]
+    Invalid(String),
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;

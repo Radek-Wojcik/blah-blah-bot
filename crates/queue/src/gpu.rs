@@ -52,6 +52,8 @@ pub struct GuardPolicy {
     pub asr_mib: u64,
     pub diarize_mib: u64,
     pub vision_mib: u64,
+    /// Free memory the managed language model needs for `extract` and `reduce`, in MiB.
+    pub llm_mib: u64,
     pub on_unavailable: OnUnavailable,
 }
 
@@ -64,6 +66,8 @@ impl Default for GuardPolicy {
             asr_mib: 3_000,
             diarize_mib: 3_500,
             vision_mib: 9_500,
+            // Same budget as vision: the default model is of the same size class.
+            llm_mib: 9_500,
             on_unavailable: OnUnavailable::Block,
         }
     }
@@ -76,6 +80,7 @@ impl GuardPolicy {
             Stage::Asr => self.asr_mib,
             Stage::Diarize => self.diarize_mib,
             Stage::Vision => self.vision_mib,
+            Stage::Extract | Stage::Reduce => self.llm_mib,
             Stage::Merge | Stage::SpeakerId | Stage::Clips | Stage::AudioCleanup => 0,
         }
     }
@@ -305,6 +310,16 @@ mod tests {
         let t = trace("memory-held.json");
         assert!(first_go(&t, Stage::Asr).is_some());
         assert_eq!(first_go(&t, Stage::Vision), None);
+    }
+
+    #[test]
+    fn the_language_model_stages_need_as_much_memory_as_vision() {
+        let p = GuardPolicy::default();
+        assert_eq!(p.required_mib(Stage::Extract), p.vision_mib);
+        assert_eq!(p.required_mib(Stage::Reduce), 9_500);
+        let t = trace("memory-held.json");
+        assert_eq!(first_go(&t, Stage::Extract), None);
+        assert_eq!(first_go(&t, Stage::Reduce), None);
     }
 
     #[test]

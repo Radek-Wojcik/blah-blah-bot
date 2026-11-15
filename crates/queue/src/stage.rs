@@ -3,7 +3,7 @@
 //! This module is pure: it looks at the persisted rows and says what happens next.
 
 use serde::{Deserialize, Serialize};
-use store::{JobRow, StageStatus};
+use store::{JobRow, LlmKind, StageStatus};
 
 /// A step of the pipeline, in execution order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -23,10 +23,15 @@ pub enum Stage {
     AudioCleanup,
     /// Describes each screenshot with the transcript around it as context.
     Vision,
+    /// Finds tasks, decisions and other items in windows of the transcript (language model).
+    Extract,
+    /// Deduplicates the items, links them to topics and issues, writes the summary and the
+    /// draft report (language model).
+    Reduce,
 }
 
 /// Every stage in execution order.
-pub const STAGES: [Stage; 7] = [
+pub const STAGES: [Stage; 9] = [
     Stage::Asr,
     Stage::Diarize,
     Stage::Merge,
@@ -34,6 +39,8 @@ pub const STAGES: [Stage; 7] = [
     Stage::Clips,
     Stage::AudioCleanup,
     Stage::Vision,
+    Stage::Extract,
+    Stage::Reduce,
 ];
 
 /// Stages that read the full audio. Audio may be deleted only after all of them are done.
@@ -50,6 +57,8 @@ impl Stage {
             Self::Clips => "clips",
             Self::AudioCleanup => "audio_cleanup",
             Self::Vision => "vision",
+            Self::Extract => "extract",
+            Self::Reduce => "reduce",
         }
     }
 
@@ -57,9 +66,22 @@ impl Stage {
         STAGES.iter().copied().find(|st| st.as_str() == s)
     }
 
+    /// Whether the stage is one of the two that use a language model.
+    pub fn uses_llm(self) -> bool {
+        matches!(self, Self::Extract | Self::Reduce)
+    }
+
     /// Whether the stage loads a model onto the GPU and so must pass the GPU gate.
-    pub fn needs_gpu(self) -> bool {
-        matches!(self, Self::Asr | Self::Diarize | Self::Vision)
+    ///
+    /// `llm` is the backend chosen for the job. The language-model stages load a model
+    /// only with the managed `llama-server`; an external server or a hosted API uses no
+    /// GPU of this machine, and without a backend the stages do not run at all.
+    pub fn needs_gpu(self, llm: Option<LlmKind>) -> bool {
+        match self {
+            Self::Asr | Self::Diarize | Self::Vision => true,
+            Self::Extract | Self::Reduce => llm == Some(LlmKind::Managed),
+            Self::Merge | Self::SpeakerId | Self::Clips | Self::AudioCleanup => false,
+        }
     }
 }
 
@@ -123,7 +145,8 @@ mod tests {
     use super::*;
     use store::StageRow;
 
-    fn job(statuses: [StageStatus; 7]) -> JobRow {
+    /// A job whose first stages have the given statuses; the rest are pending.
+    fn job(statuses: &[StageStatus]) -> JobRow {
         JobRow {
             meeting_id: "m".into(),
             created_unix_ms: 0,
@@ -131,30 +154,31 @@ mod tests {
             options: "{}".into(),
             stages: STAGES
                 .iter()
-                .zip(statuses)
-                .map(|(st, status)| StageRow {
+                .enumerate()
+                .map(|(i, st)| StageRow {
                     stage: st.as_str().into(),
-                    status,
+                    status: statuses.get(i).copied().unwrap_or(StageStatus::Pending),
                     attempts: 0,
                     started_unix_ms: None,
                     finished_unix_ms: None,
                     error: None,
+                    note: None,
                 })
                 .collect(),
         }
     }
 
-    use StageStatus::{Done, Failed, Pending, Running};
+    use StageStatus::{Done, Failed, Running};
 
     #[test]
     fn fresh_job_starts_with_asr() {
-        let j = job([Pending; 7]);
+        let j = job(&[]);
         assert_eq!(next_step(&j), Next::Run { stage: Stage::Asr });
     }
 
     #[test]
     fn stages_run_in_order() {
-        let j = job([Done, Done, Pending, Pending, Pending, Pending, Pending]);
+        let j = job(&[Done, Done]);
         assert_eq!(
             next_step(&j),
             Next::Run {
@@ -164,8 +188,28 @@ mod tests {
     }
 
     #[test]
+    fn the_language_model_stages_come_last_in_order() {
+        assert_eq!(
+            STAGES[STAGES.len() - 3..],
+            [Stage::Vision, Stage::Extract, Stage::Reduce]
+        );
+        assert_eq!(
+            next_step(&job(&[Done; 7])),
+            Next::Run {
+                stage: Stage::Extract
+            }
+        );
+        assert_eq!(
+            next_step(&job(&[Done; 8])),
+            Next::Run {
+                stage: Stage::Reduce
+            }
+        );
+    }
+
+    #[test]
     fn running_stage_is_resumed() {
-        let j = job([Done, Running, Pending, Pending, Pending, Pending, Pending]);
+        let j = job(&[Done, Running]);
         assert_eq!(
             next_step(&j),
             Next::Run {
@@ -176,7 +220,7 @@ mod tests {
 
     #[test]
     fn failed_stage_blocks_later_ones() {
-        let j = job([Done, Failed, Pending, Pending, Pending, Pending, Pending]);
+        let j = job(&[Done, Failed]);
         assert_eq!(
             next_step(&j),
             Next::Failed {
@@ -187,32 +231,32 @@ mod tests {
 
     #[test]
     fn all_done_is_finished() {
-        assert_eq!(next_step(&job([Done; 7])), Next::Finished);
+        assert_eq!(next_step(&job(&[Done; 9])), Next::Finished);
+        // A job made before the language-model stages existed has no rows for them: they
+        // count as pending, so the job runs (or skips) them.
+        let mut old = job(&[Done; 7]);
+        old.stages.truncate(7);
+        assert_eq!(
+            next_step(&old),
+            Next::Run {
+                stage: Stage::Extract
+            }
+        );
     }
 
     #[test]
     fn audio_is_expendable_only_after_every_audio_stage() {
-        assert!(!audio_is_expendable(&job([
-            Done, Pending, Pending, Pending, Pending, Pending, Pending
-        ])));
-        assert!(!audio_is_expendable(&job([
-            Done, Failed, Pending, Pending, Pending, Pending, Pending
-        ])));
+        assert!(!audio_is_expendable(&job(&[Done])));
+        assert!(!audio_is_expendable(&job(&[Done, Failed])));
         // The clips are cut from the audio, so they must be done too.
-        assert!(!audio_is_expendable(&job([
-            Done, Done, Done, Done, Pending, Pending, Pending
-        ])));
-        assert!(audio_is_expendable(&job([
-            Done, Done, Done, Done, Done, Pending, Pending
-        ])));
+        assert!(!audio_is_expendable(&job(&[Done, Done, Done, Done])));
+        assert!(audio_is_expendable(&job(&[Done, Done, Done, Done, Done])));
     }
 
     #[test]
     fn progress_counts_done_stages() {
-        let p = progress(&job([
-            Done, Done, Pending, Pending, Pending, Pending, Pending,
-        ]));
-        assert!((p - 2.0 / 7.0).abs() < 1e-6);
+        let p = progress(&job(&[Done, Done]));
+        assert!((p - 2.0 / 9.0).abs() < 1e-6);
     }
 
     #[test]
@@ -220,6 +264,31 @@ mod tests {
         for st in STAGES {
             assert_eq!(Stage::parse(st.as_str()), Some(st));
         }
-        assert_eq!(Stage::parse("extract"), None);
+        assert_eq!(Stage::Extract.as_str(), "extract");
+        assert_eq!(Stage::Reduce.as_str(), "reduce");
+        assert_eq!(Stage::parse("publish"), None);
+    }
+
+    #[test]
+    fn only_the_managed_backend_puts_the_language_model_on_the_gpu() {
+        use LlmKind::{Cloud, External, Managed};
+        for stage in [Stage::Extract, Stage::Reduce] {
+            assert!(stage.uses_llm());
+            assert!(stage.needs_gpu(Some(Managed)));
+            assert!(!stage.needs_gpu(Some(External)));
+            assert!(!stage.needs_gpu(Some(Cloud)));
+            assert!(!stage.needs_gpu(None));
+        }
+        // The other stages do not depend on the backend.
+        for kind in [None, Some(Managed), Some(External), Some(Cloud)] {
+            assert!(Stage::Asr.needs_gpu(kind));
+            assert!(Stage::Diarize.needs_gpu(kind));
+            assert!(Stage::Vision.needs_gpu(kind));
+            assert!(!Stage::Merge.needs_gpu(kind));
+            assert!(!Stage::SpeakerId.needs_gpu(kind));
+            assert!(!Stage::Clips.needs_gpu(kind));
+            assert!(!Stage::AudioCleanup.needs_gpu(kind));
+            assert!(!Stage::Asr.uses_llm());
+        }
     }
 }

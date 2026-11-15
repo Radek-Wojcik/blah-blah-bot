@@ -164,6 +164,7 @@ fn supervisor(
                 llama_server: std::env::var_os("BBB_LLAMA_SERVER").map(PathBuf::from),
                 hf_token: None,
                 step_timeout: Duration::from_secs(timeout_secs.load(Ordering::SeqCst)),
+                llm_api_key: None,
             },
             meeting_root: root.clone(),
             retention,

@@ -6,7 +6,7 @@ use crate::{Result, StoreError};
 
 /// Each entry upgrades the schema by one version. Never edit an entry once released;
 /// add a new one.
-const MIGRATIONS: &[&str] = &[
+pub(crate) const MIGRATIONS: &[&str] = &[
     // Version 1: meetings, tracks, segments, screenshots.
     "
     CREATE TABLE meetings (
@@ -107,6 +107,45 @@ const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (meeting_id, voice_id, idx)
     );
     ",
+    // Version 4: cycles. A meeting belongs to a cycle and carries its report settings and
+    // the choice of language-model backend; participants belong to a cycle (NULL is the
+    // legacy local list) and their names are unique per cycle. `participants` is rebuilt
+    // to drop the global unique name: foreign keys are switched off around this migration
+    // (see `migrate`), so the voice profiles that reference the table survive the rebuild.
+    "
+    ALTER TABLE meetings ADD COLUMN cycle_id TEXT;
+    ALTER TABLE meetings ADD COLUMN report_mode TEXT
+        CHECK (report_mode IS NULL OR report_mode IN ('fixed','template','auto','by-type'));
+    ALTER TABLE meetings ADD COLUMN report_template TEXT;
+    ALTER TABLE meetings ADD COLUMN meeting_type TEXT;
+    ALTER TABLE meetings ADD COLUMN output_language TEXT
+        CHECK (output_language IS NULL OR output_language IN ('auto','pl','en'));
+    CREATE INDEX idx_meetings_cycle ON meetings(cycle_id);
+
+    CREATE TABLE meeting_llm (
+        meeting_id TEXT PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK (kind IN ('managed','external','cloud')),
+        cloud_confirmed INTEGER NOT NULL DEFAULT 0,
+        confirmed_unix_ms INTEGER,
+        endpoint_host TEXT
+    );
+
+    ALTER TABLE job_stages ADD COLUMN note TEXT;
+
+    CREATE TABLE participants_v4 (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL COLLATE NOCASE,
+        created_unix_ms INTEGER NOT NULL,
+        cycle_id TEXT
+    );
+    INSERT INTO participants_v4 (id, name, created_unix_ms)
+        SELECT id, name, created_unix_ms FROM participants;
+    DROP TABLE participants;
+    ALTER TABLE participants_v4 RENAME TO participants;
+    CREATE UNIQUE INDEX idx_participants_name_local ON participants(name) WHERE cycle_id IS NULL;
+    CREATE UNIQUE INDEX idx_participants_name_cycle
+        ON participants(cycle_id, name) WHERE cycle_id IS NOT NULL;
+    ",
 ];
 
 /// Schema version after all migrations have run.
@@ -120,9 +159,37 @@ pub fn migrate(conn: &Connection) -> Result<()> {
             supported: LATEST,
         });
     }
+    if current == LATEST {
+        return Ok(());
+    }
+    // Rebuilding a table that other tables reference needs foreign keys off: with them on,
+    // dropping the table would cascade into its children. The pragma has no effect inside
+    // a transaction, so it is switched here and restored afterwards.
+    let foreign_keys: bool = conn.pragma_query_value(None, "foreign_keys", |r| r.get(0))?;
+    conn.pragma_update(None, "foreign_keys", "OFF")?;
+    let result = run_pending(conn, current);
+    conn.pragma_update(None, "foreign_keys", foreign_keys)?;
+    result
+}
+
+fn run_pending(conn: &Connection, current: u32) -> Result<()> {
     for (i, sql) in MIGRATIONS.iter().enumerate().skip(current as usize) {
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch(sql)?;
+        // A migration must leave every reference intact.
+        let broken: Option<String> = tx
+            .query_row(
+                "SELECT \"table\" FROM pragma_foreign_key_check LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .ok();
+        if let Some(table) = broken {
+            return Err(StoreError::Invalid(format!(
+                "migration {} left a broken foreign key in {table}",
+                i + 1
+            )));
+        }
         tx.pragma_update(None, "user_version", i as u32 + 1)?;
         tx.commit()?;
     }

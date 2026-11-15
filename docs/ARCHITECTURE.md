@@ -156,7 +156,7 @@ Rust modules are crates in one Cargo workspace. Licenses of third-party parts ar
 ### 4.6 `queue` (Rust)
 
 - **Responsibility:** persistent job queue in SQLite, one job per meeting, split into resumable stages (section 7.2). Starts on user request ("Process"), never on its own.
-- **GPU guard:** reads utilization, free memory and the process list through NVML. A stage starts only when the GPU has stayed below a utilization limit for a configurable period (defaults 40 % and 10 s) and enough memory is free for that stage (3.0, 3.5 and 9.5 GB for ASR, diarization and vision). The guard is evaluated between stages, not during one; the reason for waiting is shown in the queue. Without NVML readings the job waits. See [ADR 0015](decisions/0015-processing-pipeline.md).
+- **GPU guard:** reads utilization, free memory and the process list through NVML. A stage starts only when the GPU has stayed below a utilization limit for a configurable period (defaults 40 % and 10 s) and enough memory is free for that stage (3.0, 3.5 and 9.5 GB for ASR, diarization and vision; `extract` and `reduce` need 9.5 GB as well, but only with the managed `llama-server`, an external or cloud backend skips the guard). The guard is evaluated between stages, not during one; the reason for waiting is shown in the queue. Without NVML readings the job waits. See [ADR 0015](decisions/0015-processing-pipeline.md).
 - **Supervisor:** runs one stage at a time (a second request is refused while a stage runs), spawns the AI worker, which starts the local `llama-server` for the vision step itself; kills the whole process tree on timeout; a stage interrupted by a crash resumes after the restart and is marked failed after three crashes in a row, and a failed stage waits for an explicit retry.
 
 ### 4.7 `ai-worker` (Python sidecar)
@@ -172,7 +172,7 @@ Runs only while a job is processing. The environment is created with `uv` on fir
 | `extract` | Map step: structured items per transcript window | HTTP client to the LLM server, JSON Schema constrained output |
 | `reduce` | Deduplication, linking to open tasks and topics, status proposals, hierarchical summary | Same |
 
-Each step is a separate process invocation with file inputs and outputs, so a crash or restart resumes from the last completed step. Stage 2 implements `asr`, `diarize`, `merge` and `vision`; the application also runs a `models` command (download with progress, cache status). The contract (manifest, outputs, progress lines, schemas under `schemas/`) is described in [ADR 0015](decisions/0015-processing-pipeline.md).
+Each step is a separate process invocation with file inputs and outputs, so a crash or restart resumes from the last completed step. Stage 2 implements `asr`, `diarize`, `merge` and `vision`, Stage 4 `extract` and `reduce` (reading `work/context.json`, `work/transcript.named.json` and `edits.json`, writing `work/extract/windows.json` and `work/draft.json`, or `work/draft.new.json` when the existing draft has user edits); the application also runs a `models` command (download with progress, cache status). The contract (manifest, outputs, progress lines, schemas under `schemas/`) is described in [ADR 0015](decisions/0015-processing-pipeline.md).
 
 ### 4.8 `store` (Rust, SQLite)
 
@@ -345,7 +345,7 @@ stateDiagram-v2
     failed --> queued: retry from failed stage
 ```
 
-Each stage writes its output to the meeting's working folder and records completion in the database. Stages are idempotent and resumable. Stage 3 adds `speaker_id` and `clips`, so the pipeline runs `asr`, `diarize`, `merge`, `speaker_id`, `clips`, `audio_cleanup` and `vision`; `extract` and `reduce` follow in later stages. `speaker_id` and `clips` run in the application process (crates `speakers` and `queue`), not in the worker: the embeddings are part of the diarization output, so no model is loaded and no GPU is needed. Only `clips` reads the audio and therefore counts as audio-dependent.
+Each stage writes its output to the meeting's working folder and records completion in the database. Stages are idempotent and resumable. Stage 3 adds `speaker_id` and `clips`, Stage 4 adds `extract` and `reduce`, so the pipeline runs `asr`, `diarize`, `merge`, `speaker_id`, `clips`, `audio_cleanup`, `vision`, `extract` and `reduce`. `extract` and `reduce` take their backend from `options.llm` of the job (`managed`, `external` or `cloud`); a managed backend passes the GPU gate, the others do not, and a cloud backend runs only when the store holds the user's confirmation for that endpoint (the supervisor refuses otherwise, and the worker too). A job whose meeting has no cycle, or whose options name no backend, marks both stages done with a note instead of failing, so older jobs and cycle-less meetings still finish. Before `extract` the application writes `work/context.json` and `work/transcript.named.json` (participant names instead of generic speaker labels). `speaker_id` and `clips` run in the application process (crates `speakers` and `queue`), not in the worker: the embeddings are part of the diarization output, so no model is loaded and no GPU is needed. Only `clips` reads the audio and therefore counts as audio-dependent.
 
 ### 7.3 Audio retention
 
@@ -368,7 +368,7 @@ Details (see [ADR 0016](decisions/0016-speaker-recognition.md)):
 - Thresholds are cosine similarities: automatic from 0.75 with a 0.10 lead over the runner-up, suggestion from 0.60; all three are settings. A participant is assigned automatically to at most one voice of a meeting.
 - An automatic name is applied to the transcript immediately but teaches the profile only after the user confirms it, so a wrong match cannot reinforce itself.
 - Clips are 2.5 to 8 s of one speaker, isolated from other speech by 0.5 s and mostly voiced; up to three per voice, spread over the meeting. They are deleted when every voice of the meeting is decided, after 30 days at the latest (setting), and with the meeting.
-- The labeling screen offers naming, a new participant, "same person as" merging, skipping and one-click confirmation of automatic matches. A minimal local participant list stands in for the cycle's participants until Stage 4.
+- The labeling screen offers naming, a new participant, "same person as" merging, skipping and one-click confirmation of automatic matches. Participants belong to a cycle (names are unique per cycle) and a meeting is matched only against the voice profiles of its own cycle; a meeting without a cycle uses the legacy local list.
 
 Voice profiles are biometric data. They are stored only in the local database, are never committed or published, and can be deleted per participant or per cycle.
 
@@ -383,7 +383,7 @@ Diarization accuracy drops sharply with many speakers in one mixed track. Above 
 5. **Summarize:** hierarchical summary (windows, then hours, then the whole meeting).
 6. **Render:** deterministic templates produce `report.md` and the per-target variants.
 
-The user can mark transcript passages as excluded before step 1; excluded text is not sent to the model and is omitted from the published transcript.
+Steps 1 to 5 are implemented by the `extract` and `reduce` stages (Stage 4); step 6 is done by the application on the draft, with no model. The user can mark transcript passages as excluded before step 1; excluded text is not sent to the model and is omitted from the published transcript.
 
 ### 7.6 Report modes and format customization
 
