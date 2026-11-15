@@ -32,6 +32,8 @@ export const STAGE_MESSAGES: Record<StageName, string> = {
   clips: "Cutting sample clips",
   audio_cleanup: "Applying the audio retention rule",
   vision: "Describing screenshots",
+  extract: "Finding tasks and decisions",
+  reduce: "Writing the draft report",
 };
 
 export function stageViews(

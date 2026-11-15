@@ -10,7 +10,7 @@ use tauri::{AppHandle, Manager};
 use crate::ipc::{IpcError, IpcResult};
 use crate::processing::Processing;
 use crate::recording::Recorder;
-use crate::settings::Settings;
+use crate::settings::{CycleRepoSetting, Settings};
 
 /// A desktop capture waiting for the user to choose a region, with the moment it was taken.
 pub struct PendingShot {
@@ -20,8 +20,9 @@ pub struct PendingShot {
 
 pub struct AppState {
     store: Arc<Mutex<store::Store>>,
-    settings: Mutex<Settings>,
+    settings: Arc<Mutex<Settings>>,
     settings_path: PathBuf,
+    data_dir: PathBuf,
     default_recordings: PathBuf,
     pub recorder: Recorder,
     processing: Arc<Processing>,
@@ -60,7 +61,9 @@ impl AppState {
         } else {
             Arc::new(WasapiBackend)
         };
+        let settings = Arc::new(Mutex::new(Settings::load(&settings_path)));
         let root_app = app.clone();
+        let repos_settings = settings.clone();
         let processing = Processing::new(
             app.clone(),
             store.clone(),
@@ -72,13 +75,20 @@ impl AppState {
                     .recordings_root()
                     .unwrap_or_default()
             },
+            move || {
+                repos_settings
+                    .lock()
+                    .map(|s| s.cycle_repos.clone())
+                    .unwrap_or_default()
+            },
         );
         Ok(Self {
             recorder: Recorder::new(store.clone(), backend, demo),
             processing,
             store,
-            settings: Mutex::new(Settings::load(&settings_path)),
+            settings,
             settings_path,
+            data_dir,
             default_recordings,
             pending_shot: Mutex::new(None),
         })
@@ -91,6 +101,28 @@ impl AppState {
             .lock()
             .map_err(|_| IpcError::new("internal", "store lock poisoned"))?;
         Ok(f(&guard)?)
+    }
+
+    /// Like [`AppState::with_store`] for code that has its own error type already.
+    pub fn with_store_ipc<T>(&self, f: impl FnOnce(&store::Store) -> IpcResult<T>) -> IpcResult<T> {
+        let guard = self
+            .store
+            .lock()
+            .map_err(|_| IpcError::new("internal", "store lock poisoned"))?;
+        f(&guard)
+    }
+
+    /// Folder of the database and of the repositories the application creates.
+    pub fn data_dir(&self) -> &std::path::Path {
+        &self.data_dir
+    }
+
+    /// The registered cycle repositories.
+    pub fn cycle_repos(&self) -> Vec<CycleRepoSetting> {
+        self.settings
+            .lock()
+            .map(|s| s.cycle_repos.clone())
+            .unwrap_or_default()
     }
 
     pub fn processing(&self) -> &Arc<Processing> {
@@ -108,13 +140,29 @@ impl AppState {
             .map_err(|_| IpcError::new("internal", "settings lock poisoned"))
     }
 
+    /// Save settings from the settings screen. The repository list and the last report are
+    /// kept as they are: only the cycle commands change them.
     pub fn save_settings(&self, new: Settings) -> IpcResult<()> {
-        new.save(&self.settings_path)?;
-        *self
+        self.update_settings(|s| {
+            *s = new.keeping_managed_from(s);
+            Ok(())
+        })
+    }
+
+    /// Change the settings under the lock and save them. Nothing is stored when `f` fails.
+    pub fn update_settings<T>(
+        &self,
+        f: impl FnOnce(&mut Settings) -> IpcResult<T>,
+    ) -> IpcResult<T> {
+        let mut guard = self
             .settings
             .lock()
-            .map_err(|_| IpcError::new("internal", "settings lock poisoned"))? = new;
-        Ok(())
+            .map_err(|_| IpcError::new("internal", "settings lock poisoned"))?;
+        let mut next = guard.clone();
+        let out = f(&mut next)?;
+        next.save(&self.settings_path)?;
+        *guard = next;
+        Ok(out)
     }
 
     /// Folder recordings are written to.

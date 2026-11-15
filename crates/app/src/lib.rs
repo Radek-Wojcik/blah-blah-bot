@@ -1,8 +1,12 @@
 //! Desktop shell: tray icon, windows, global hotkeys and IPC commands.
 
 mod commands;
+mod cycle_commands;
+mod cycles;
+mod draft_commands;
 mod hotkeys;
 mod ipc;
+mod llm;
 mod logging;
 mod overlay;
 mod processing;
@@ -197,6 +201,36 @@ pub fn run() {
             speaker_commands::delete_participant,
             speaker_commands::reset_profile,
             speaker_commands::delete_voice_data,
+            processing_commands::set_cloud_key,
+            processing_commands::clear_cloud_key,
+            processing_commands::cloud_key_present,
+            processing_commands::set_external_key,
+            processing_commands::clear_external_key,
+            processing_commands::external_key_present,
+            processing_commands::cloud_preview,
+            processing_commands::confirm_cloud,
+            cycle_commands::list_cycles,
+            cycle_commands::list_cycle_repos,
+            cycle_commands::get_cycle,
+            cycle_commands::create_cycle,
+            cycle_commands::save_cycle,
+            cycle_commands::list_templates,
+            cycle_commands::get_template,
+            cycle_commands::save_template,
+            cycle_commands::validate_template,
+            cycle_commands::add_cycle_repo,
+            cycle_commands::pull_cycle_repo,
+            cycle_commands::report_defaults,
+            draft_commands::get_draft,
+            draft_commands::update_draft_item,
+            draft_commands::move_draft_item,
+            draft_commands::delete_draft_item,
+            draft_commands::add_draft_item,
+            draft_commands::set_draft_sections,
+            draft_commands::set_report_mode,
+            draft_commands::accept_new_draft,
+            draft_commands::discard_new_draft,
+            draft_commands::render_report,
             overlay::overlay_image,
             overlay::overlay_finish,
         ])

@@ -17,6 +17,8 @@ const STAGE_LABELS: Record<StageName, string> = {
   clips: "Sample clips",
   audio_cleanup: "Audio cleanup",
   vision: "Screenshot analysis",
+  extract: "Extracting items",
+  reduce: "Draft report",
 };
 
 const STAGE_STATUS_LABELS: Record<StageStatus, string> = {

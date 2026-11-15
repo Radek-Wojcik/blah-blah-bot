@@ -2,6 +2,7 @@
 
 use tauri::{AppHandle, Emitter, State};
 
+use crate::cycles;
 use crate::hotkeys;
 use crate::ipc::{IpcError, IpcResult, MeetingDetails, MeetingSummary};
 use crate::overlay;
@@ -84,8 +85,32 @@ pub fn start_recording(
     state: State<'_, AppState>,
     req: StartRecordingRequest,
 ) -> IpcResult<()> {
+    // The report mode gate: no cycle and mode, no recording. Every way to start a recording
+    // (the main window, the widget, the tray) arrives here.
+    let settings = state.settings()?;
+    let repos = state.cycle_repos();
+    let report = cycles::prepare_recording(
+        &repos,
+        req.report.clone(),
+        req.use_last_report,
+        settings.last_report.as_ref(),
+    )?;
     let root = state.recordings_root()?;
-    state.recorder.start(&root, req)?;
+    state.recorder.start(&root, req, report.clone())?;
+    // Best effort from here on: the recording is running.
+    if let Some(last) = cycles::last_report_of(&report) {
+        if let Err(e) = state.update_settings(|s| {
+            s.last_report = Some(last);
+            Ok(())
+        }) {
+            tracing::warn!(error = %e, "could not remember the report settings");
+        }
+    }
+    if let Some(cycle) = &report.cycle_id {
+        if let Err(e) = state.with_store_ipc(|s| cycles::sync_cycle(&repos, s, cycle)) {
+            tracing::warn!(error = %e, "could not sync the cycle participants");
+        }
+    }
     emit_meetings_changed(&app);
     if let Some(s) = state.recorder.tick() {
         emit_state(&app, &s);

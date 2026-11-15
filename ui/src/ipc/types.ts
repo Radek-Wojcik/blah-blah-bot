@@ -72,6 +72,13 @@ export interface Settings {
   recordingsDir: string;
   recordHotkey: string;
   screenshotHotkey: string;
+  /**
+   * Registered cycle repositories. Read-only for the settings screen: they change only through
+   * `addCycleRepo` and the cycle commands, and a `saveSettings` keeps the stored list.
+   */
+  cycleRepos?: CycleRepoSetting[];
+  /** The report choice of the last recording that started; filled by the application. */
+  lastReport?: LastReport | null;
 }
 
 export type IpcErrorCode =
@@ -87,7 +94,24 @@ export type IpcErrorCode =
   | "not_found"
   | "duplicate"
   | "io"
-  | "internal";
+  | "internal"
+  | "busy"
+  | "invalid_state"
+  | "secrets"
+  // Stage 4: cycles, report modes, language-model backends and drafts.
+  /** A recording needs a valid cycle and report mode (also for a bad template or type). */
+  | "report_mode_required"
+  | "cycle_invalid"
+  | "git_unavailable"
+  | "git_failed"
+  /** Cloud processing without the user's confirmation for this meeting and endpoint. */
+  | "cloud_not_confirmed"
+  | "cloud_key_missing"
+  | "llm_not_configured"
+  /** The draft does not exist before the reduce stage has run. */
+  | "no_draft"
+  | "no_new_draft"
+  | "draft_invalid";
 
 export interface IpcError {
   code: IpcErrorCode;
@@ -97,6 +121,13 @@ export interface IpcError {
 export interface StartRecordingRequest {
   title?: string;
   sourceIds: string[];
+  /**
+   * The cycle and report mode. The backend refuses to start without it (`report_mode_required`)
+   * unless `useLastReport` is set and a last report exists.
+   */
+  report?: ReportChoice;
+  /** For the widget: when `report` is absent use the last one (still checked by the backend). */
+  useLastReport?: boolean;
 }
 
 /** A selection as fractions (0 to 1) of the frozen screenshot shown in the overlay. */
@@ -110,7 +141,15 @@ export interface Region {
 // ---------- Stage 2: processing pipeline ----------
 
 export type StageName =
-  "asr" | "diarize" | "merge" | "speaker_id" | "clips" | "audio_cleanup" | "vision";
+  | "asr"
+  | "diarize"
+  | "merge"
+  | "speaker_id"
+  | "clips"
+  | "audio_cleanup"
+  | "vision"
+  | "extract"
+  | "reduce";
 export type StageStatus = "pending" | "running" | "done" | "failed";
 export type JobState = "queued" | "waiting" | "running" | "failed" | "done";
 
@@ -119,6 +158,8 @@ export interface StageView {
   status: StageStatus;
   attempts: number;
   error: string | null;
+  /** Why a stage that is `done` did nothing, e.g. "the meeting has no cycle". */
+  note?: string | null;
   /** Live progress of the running stage, 0 to 1. */
   fraction: number | null;
   message: string | null;
@@ -145,6 +186,11 @@ export type LanguageChoice = "auto" | "pl" | "en";
 export interface ProcessOptions {
   language?: LanguageChoice;
   maxSpeakers?: number | null;
+  /**
+   * The language-model backend for this meeting; absent uses `ProcessingSettings.llm.defaultKind`.
+   * `cloud` fails with `cloud_not_confirmed` until `confirmCloud` was called for the meeting.
+   */
+  llm?: { kind: LlmKind };
 }
 
 export type SpeakerKind = "user" | "voice" | "source" | "unknown";
@@ -210,6 +256,8 @@ export interface ProcessingSettings {
   voiceMargin: number;
   /** Days after which unconfirmed sample clips are deleted (1 or more). */
   clipMaxDays: number;
+  /** Language-model backend settings (always present from the backend). */
+  llm?: LlmSettings;
 }
 
 export type ModelKey = "whisper-turbo" | "whisper-large-v3" | "diarization" | "vision";
@@ -260,8 +308,13 @@ export interface VoiceView {
 }
 
 export interface ParticipantView {
+  /** The key voices are assigned to; for a cycle participant it includes the cycle. */
   id: string;
   name: string;
+  /** The cycle of the participant; absent for the legacy local list. */
+  cycleId?: string;
+  /** The id in `cycle.yaml`: what an item's `assignee` refers to. */
+  cycleParticipantId?: string;
   /** Number of confirmed voice samples the profile was learned from. */
   sampleCount: number;
   speechMs: number;
@@ -273,3 +326,315 @@ export interface VoicesData {
   participants: ParticipantView[];
   allConfirmed: boolean;
 }
+
+// ---------- Stage 4: cycles, report modes, language-model backends, drafts ----------
+
+export type ReportMode = "fixed" | "template" | "auto" | "by-type";
+export type LanguageSetting = "auto" | "pl" | "en";
+export type PublishMode = "auto" | "on-approval" | "off";
+export type RepoKind = "local" | "clone";
+export type LlmKind = "managed" | "external" | "cloud";
+
+/** A registered cycle repository as stored in the settings. */
+export interface CycleRepoSetting {
+  id: string;
+  path: string;
+  remote: string | null;
+  kind: RepoKind;
+}
+
+export interface LastReport {
+  cycleId: string;
+  mode: ReportMode;
+  template?: string | null;
+  meetingType?: string | null;
+}
+
+/** A registered repository with what is known about its state. */
+export interface CycleRepoView extends CycleRepoSetting {
+  /** The folder exists. */
+  available: boolean;
+  /** `YYYY-MM-DD` of the last successful pull or clone; null for a local repository. */
+  stateAsOf: string | null;
+  /** The last attempt to update the clone failed, so what is shown may be stale. */
+  offline: boolean;
+  lastError: string | null;
+}
+
+export type PullOutcome = "updated" | "upToDate" | "noRemote" | "failed";
+
+export interface PullResult {
+  repo: CycleRepoView;
+  outcome: PullOutcome;
+  error: string | null;
+}
+
+/** `clone` needs `url`, `local` needs `path` (an existing folder). */
+export interface AddRepoRequest {
+  kind: RepoKind;
+  url?: string;
+  path?: string;
+}
+
+/** A problem found in a file, with the path of the offending value (e.g. `participants[2].id`). */
+export interface CycleIssue {
+  path: string;
+  message: string;
+}
+
+export interface CycleListItem {
+  id: string;
+  name: string;
+  participantsCount: number;
+  /** Null when `cycle.yaml` could not be read at all. */
+  defaultMode: ReportMode | null;
+  /** Usable for a recording: no issues. */
+  valid: boolean;
+  issues: CycleIssue[];
+  repoId: string;
+  stateAsOf: string | null;
+  offline: boolean;
+}
+
+export interface CycleParticipant {
+  id: string;
+  name: string;
+  github?: string;
+  discord?: { userId?: string; roleId?: string };
+}
+
+export interface CycleTargets {
+  github?: { path: string; publish: PublishMode } | null;
+  /** `webhook` is a `cred:` reference, never a URL. */
+  discord?: { webhook: string; publish: PublishMode; template?: string } | null;
+  notion?: { database: string; publish: PublishMode } | null;
+}
+
+/** `cycle.yaml` as the editor sees it. */
+export interface CycleDto {
+  id: string;
+  name: string;
+  languages: { asr: LanguageSetting; output: LanguageSetting };
+  participants: CycleParticipant[];
+  glossary: { term: string; hint?: string }[];
+  report: {
+    defaultMode: ReportMode;
+    defaultTemplate: string;
+    instruction: string;
+    /** Meeting type to template name. */
+    byType: Record<string, string>;
+  };
+  targets: CycleTargets;
+}
+
+export interface TemplateSection {
+  id: string;
+  title: string;
+  description: string;
+}
+
+export interface TemplateSummary {
+  name: string;
+  sections: TemplateSection[];
+}
+
+export interface TemplateDto {
+  name: string;
+  sections: TemplateSection[];
+  body: string;
+}
+
+export interface TemplateCheck {
+  valid: boolean;
+  /** True when the file was written (only `saveTemplate`). */
+  saved: boolean;
+  issues: CycleIssue[];
+  /** The placeholders a body may use. */
+  placeholders: string[];
+}
+
+export interface Topic {
+  id: string;
+  text: string;
+  status: "open" | "closed";
+  openedIn: string;
+  closedIn?: string;
+}
+
+export interface CycleDetails {
+  cycle: CycleDto;
+  repoId: string;
+  valid: boolean;
+  issues: CycleIssue[];
+  templates: TemplateSummary[];
+  topics: Topic[];
+  /** The meeting types of `cycle.report.byType`. */
+  meetingTypes: string[];
+  stateAsOf: string | null;
+  offline: boolean;
+}
+
+export interface SaveCycleResult {
+  /** False when the cycle is invalid: nothing was written and `issues` says why. */
+  saved: boolean;
+  issues: CycleIssue[];
+  /** Problems after a successful write (voice profiles that could not be linked). */
+  warnings: string[];
+  details: CycleDetails | null;
+}
+
+/** What a recording starts with. Every field but `cycleId` and `mode` is optional. */
+export interface ReportChoice {
+  cycleId: string;
+  mode: ReportMode;
+  /** For `template` mode; absent uses the cycle's default template. */
+  template?: string | null;
+  /** For `by-type` mode; must be one of the cycle's meeting types. */
+  meetingType?: string | null;
+  outputLanguage?: LanguageSetting | null;
+}
+
+export interface ReportDefaults {
+  cycleId: string;
+  defaultMode: ReportMode;
+  defaultTemplate: string;
+  defaultMeetingType: string | null;
+  outputLanguage: LanguageSetting;
+  templates: TemplateSummary[];
+  meetingTypes: { name: string; template: string }[];
+  /** The last choice, when it was made for this cycle. */
+  last: LastReport | null;
+}
+
+export interface ManagedLlmSettings {
+  /** Path to the GGUF file. */
+  modelPath: string;
+  /** Context size in tokens (2048 or more). */
+  ctx: number;
+}
+
+export interface EndpointSettings {
+  baseUrl: string;
+  model: string;
+}
+
+export interface LlmSettings {
+  /** `managed` or `external`; the cloud is always chosen per meeting. */
+  defaultKind: Exclude<LlmKind, "cloud">;
+  managed: ManagedLlmSettings;
+  external: EndpointSettings;
+  cloud: EndpointSettings;
+  /** Whether a key is stored in the Credential Manager. Keys are never returned. */
+  externalKeySet: boolean;
+  cloudKeySet: boolean;
+}
+
+/** What the cloud confirmation dialog shows. */
+export interface CloudPreview {
+  endpointHost: string;
+  model: string;
+  /** Words of the transcript that would be sent, excluded passages left out. */
+  wordCount: number;
+  screenshotDescriptions: number;
+  includesAudio: false;
+  includesImages: false;
+  /** A readable statement of what will be sent where. */
+  summaryText: string;
+  /** The meeting already has a confirmation for this endpoint. */
+  confirmed: boolean;
+  /** False while the meeting has no transcript yet (the word count is then 0). */
+  transcriptReady: boolean;
+}
+
+export type ItemType = "task" | "decision" | "topic" | "note" | "idea" | "budget";
+export type CertaintyLevel = "stated" | "inferred" | "unknown";
+
+export interface DraftSection {
+  /** Empty for a new section: the application makes an id from the title. */
+  id: string;
+  title: string;
+  description: string;
+}
+
+export interface DraftSource {
+  track: string;
+  speaker: string;
+  tStartMs: number;
+  tEndMs: number;
+  quote: string;
+  verified: boolean;
+  /** Match score of the quote against the transcript, 0 to 1. */
+  match: number;
+}
+
+export interface DraftItem {
+  id: string;
+  type: ItemType;
+  text: string;
+  /** A participant id of the cycle. */
+  assignee: string | null;
+  /** `YYYY-MM-DD`. */
+  due: string | null;
+  certainty: { assignee: CertaintyLevel; due: CertaintyLevel };
+  section: string | null;
+  relatesTo: string | null;
+  /** Null for an item added by hand. */
+  source: DraftSource | null;
+  edited: boolean;
+}
+
+export type DraftWarningCode =
+  "window_skipped" | "quote_unverified" | "assignee_unknown" | "summary_failed";
+
+export interface DraftWarning {
+  code: DraftWarningCode;
+  message: string;
+  tStartMs?: number;
+  tEndMs?: number;
+}
+
+export interface Draft {
+  meetingId: string;
+  cycle: string;
+  date: string;
+  language: "pl" | "en";
+  mode: ReportMode;
+  template: string | null;
+  meetingType: string | null;
+  sections: DraftSection[];
+  summary: string;
+  items: DraftItem[];
+  warnings: DraftWarning[];
+}
+
+/** Everything the draft editor shows. Every draft operation returns a new one. */
+export interface DraftView {
+  draft: Draft;
+  /** The report rendered with the meeting's template, in the language of the draft. */
+  reportMarkdown: string;
+  /** A re-run of `reduce` left a newer draft next to the edited one. */
+  hasNewDraft: boolean;
+  /** The participants of the cycle, to pick assignees from. */
+  participants: { id: string; name: string }[];
+  transcriptPresent: boolean;
+  /** Set when the template could not be used and the built-in layout was rendered instead. */
+  reportWarning: string | null;
+}
+
+/** Absent fields stay as they are; `null` clears `assignee` and `due`. */
+export interface DraftItemPatch {
+  text?: string;
+  assignee?: string | null;
+  due?: string | null;
+}
+
+export interface NewDraftItem {
+  type: ItemType;
+  text: string;
+  assignee?: string | null;
+  due?: string | null;
+  section?: string | null;
+}
+
+/** `markdown`: GitHub (task checkboxes). `chat`: Discord and Notion (plain bullets). */
+export type RenderVariant = "markdown" | "chat";

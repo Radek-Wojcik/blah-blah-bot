@@ -15,11 +15,16 @@ use queue::worker::{self, JobOptions, WorkerConfig, WorkerEvent};
 use queue::{GateDecision, GpuGate, Next, Stage, StepOutcome, Supervisor, STAGES};
 use serde::{Deserialize, Serialize};
 use speakers::Thresholds;
-use store::{StageStatus, Store};
+use store::{LlmKind, StageStatus, Store};
 use tauri::{AppHandle, Emitter};
 
+use crate::cycles::RepoCycleSource;
 use crate::ipc::{IpcError, IpcResult};
+use crate::llm::{self, LlmSettings};
 use crate::secrets;
+use crate::settings::{CycleRepoSetting, RepoKind};
+
+type RepoList = Arc<dyn Fn() -> Vec<CycleRepoSetting> + Send + Sync>;
 
 pub const EVENT_QUEUE: &str = "queue-changed";
 pub const EVENT_MODELS_PROGRESS: &str = "models-progress";
@@ -96,6 +101,8 @@ pub struct ProcessingSettings {
     pub voice_margin: f32,
     /// Sample clips of voices nobody confirmed are deleted after this many days.
     pub clip_max_days: u32,
+    /// Language-model backend of the extraction stages.
+    pub llm: LlmSettings,
     /// Filled when reading; ignored when saving.
     #[serde(skip_deserializing)]
     pub hf_token_set: bool,
@@ -118,6 +125,7 @@ impl Default for ProcessingSettings {
             voice_suggest: voice.thresholds.suggest,
             voice_margin: voice.thresholds.margin,
             clip_max_days: voice.clip_max_days,
+            llm: LlmSettings::default(),
             hf_token_set: false,
         }
     }
@@ -222,6 +230,8 @@ pub struct StageView {
     pub status: StageStatus,
     pub attempts: u32,
     pub error: Option<String>,
+    /// Why a stage that is `done` did nothing (for example "the meeting has no cycle").
+    pub note: Option<String>,
     pub fraction: Option<f64>,
     pub message: Option<String>,
 }
@@ -294,6 +304,9 @@ pub struct Processing {
     settings_path: PathBuf,
     env_dir: PathBuf,
     live: Arc<Mutex<HashMap<String, Live>>>,
+    /// Backend of the job whose stage is about to run, to pick the API key for that stage.
+    current_llm: Arc<Mutex<Option<LlmKind>>>,
+    cycle_repos: RepoList,
     last_event: Mutex<Instant>,
     driver_running: Arc<AtomicBool>,
     models_busy: Arc<AtomicBool>,
@@ -307,19 +320,24 @@ impl Processing {
         data_dir: &Path,
         config_dir: &Path,
         meeting_root: impl Fn() -> PathBuf + Send + Sync + 'static,
+        cycle_repos: impl Fn() -> Vec<CycleRepoSetting> + Send + Sync + 'static,
     ) -> Arc<Self> {
         let settings_path = config_dir.join("processing.json");
         let settings = Arc::new(Mutex::new(ProcessingSettings::load(&settings_path)));
         let env_dir = data_dir.join("worker-venv");
         let live: Arc<Mutex<HashMap<String, Live>>> = Arc::default();
+        let current_llm: Arc<Mutex<Option<LlmKind>>> = Arc::default();
+        let cycle_repos: RepoList = Arc::new(cycle_repos);
 
         let runner_settings = {
             let settings = settings.clone();
             let env_dir = env_dir.clone();
+            let current_llm = current_llm.clone();
             move || {
                 let s = settings.lock().map(|s| s.clone()).unwrap_or_default();
+                let kind = current_llm.lock().ok().and_then(|k| *k);
                 RunnerSettings {
-                    worker: worker_config(&s, &env_dir),
+                    worker: worker_config(&s, &env_dir, llm::key_for(kind, secrets::get)),
                     meeting_root: meeting_root(),
                     retention: s.audio_retention.into(),
                     voice: s.voice_settings(),
@@ -329,6 +347,7 @@ impl Processing {
 
         // The runner reports progress through the service, which exists only afterwards.
         let progress_target: Arc<Mutex<Option<std::sync::Weak<Processing>>>> = Arc::default();
+        let source_repos = cycle_repos.clone();
         let runner = PipelineRunner::new(store.clone(), runner_settings, {
             let target = progress_target.clone();
             let live = live.clone();
@@ -347,7 +366,8 @@ impl Processing {
                     p.emit_queue_throttled();
                 }
             }
-        });
+        })
+        .with_cycle_source(Arc::new(RepoCycleSource::new(move || source_repos())));
 
         let gate = SettingsGate {
             settings: settings.clone(),
@@ -376,6 +396,8 @@ impl Processing {
             settings_path,
             env_dir,
             live,
+            current_llm,
+            cycle_repos,
             last_event: Mutex::new(Instant::now() - EVENT_THROTTLE),
             driver_running: Arc::default(),
             models_busy: Arc::default(),
@@ -403,6 +425,8 @@ impl Processing {
             .map_err(|_| IpcError::new("internal", "settings lock poisoned"))?
             .clone();
         s.hf_token_set = secrets::get(secrets::HF_TOKEN).is_some();
+        s.llm.cloud_key_set = secrets::get(secrets::CLOUD_KEY).is_some();
+        s.llm.external_key_set = secrets::get(secrets::EXTERNAL_KEY).is_some();
         Ok(s)
     }
 
@@ -413,6 +437,7 @@ impl Processing {
                 "the GPU utilization limit must be between 1 and 100",
             ));
         }
+        new.llm.validate()?;
         let thresholds = new.voice_settings().thresholds;
         if !thresholds.is_valid() {
             return Err(IpcError::new(
@@ -460,7 +485,12 @@ impl Processing {
 
     fn worker_config(&self) -> WorkerConfig {
         let s = self.settings.lock().map(|s| s.clone()).unwrap_or_default();
-        worker_config(&s, &self.env_dir)
+        worker_config(&s, &self.env_dir, None)
+    }
+
+    /// The language-model settings, for choosing a backend and the cloud dialog.
+    pub fn llm_settings(&self) -> IpcResult<LlmSettings> {
+        Ok(self.settings.lock().map_err(poisoned)?.llm.clone())
     }
 
     // ----- queue
@@ -495,13 +525,70 @@ impl Processing {
                 "only a finished recording can be processed",
             ));
         }
-        let options = serde_json::to_string(&options).unwrap_or_else(|_| "{}".into());
-        self.supervisor
-            .enqueue(meeting_id, &options)
+        let json = serde_json::to_string(&options).unwrap_or_else(|_| "{}".into());
+        let created = self
+            .supervisor
+            .enqueue(meeting_id, &json)
             .map_err(|e| IpcError::new("internal", e.to_string()))?;
+        if !created {
+            self.apply_llm_to_existing_job(meeting_id, &options)?;
+        }
         self.emit_queue();
         self.kick();
         Ok(())
+    }
+
+    /// A job that exists keeps its options, except for a backend chosen now.
+    fn apply_llm_to_existing_job(&self, meeting_id: &str, options: &JobOptions) -> IpcResult<()> {
+        let store = self.store.lock().map_err(poisoned)?;
+        apply_llm_to_job(&store, meeting_id, options)
+    }
+
+    /// Before the next stage of a meeting: note the backend of its job (for the key) and,
+    /// before the briefing, bring a cloned cycle repository up to date. Runs outside the
+    /// store lock; a failed pull only means the local state is used.
+    fn prepare_step(&self, meeting_id: &str) {
+        let (job, cycle) = {
+            let Ok(store) = self.store.lock() else {
+                return;
+            };
+            (
+                store.get_job(meeting_id).ok().flatten(),
+                store
+                    .get_report_settings(meeting_id)
+                    .ok()
+                    .flatten()
+                    .and_then(|s| s.cycle_id),
+            )
+        };
+        let Some(job) = job else {
+            return;
+        };
+        let kind = JobOptions::from_json(&job.options).llm.map(|l| l.kind);
+        if let Ok(mut current) = self.current_llm.lock() {
+            *current = kind;
+        }
+        let briefing = matches!(
+            queue::next_step(&job),
+            Next::Run {
+                stage: Stage::Extract
+            }
+        );
+        if let (true, Some(cycle)) = (briefing, cycle) {
+            let repos = (self.cycle_repos)();
+            if let Ok(Some(found)) = crate::cycles::locate(&repos, &cycle) {
+                if found.setting.kind == RepoKind::Clone {
+                    match found.repo.pull_rebase() {
+                        Ok(r) => {
+                            tracing::info!(cycle = %cycle, outcome = ?r.outcome, "pulled before the briefing");
+                        }
+                        Err(e) => {
+                            tracing::warn!(cycle = %cycle, error = %e, "pull before the briefing failed");
+                        }
+                    }
+                }
+            }
+        }
     }
 
     pub fn retry(self: &Arc<Self>, meeting_id: &str) -> IpcResult<()> {
@@ -583,6 +670,7 @@ impl Processing {
             }
             let mut progressed = false;
             for id in ids {
+                self.prepare_step(&id);
                 match self.supervisor.step(&id) {
                     Ok(StepOutcome::Ran { .. }) => progressed = true,
                     Ok(StepOutcome::Failed { stage, error }) => {
@@ -647,6 +735,7 @@ impl Processing {
                         status: row.map_or(StageStatus::Pending, |r| r.status),
                         attempts: row.map_or(0, |r| r.attempts),
                         error: row.and_then(|r| r.error.clone()),
+                        note: row.and_then(|r| r.note.clone()),
                         fraction: l.map(|l| l.fraction),
                         message: l.map(|l| l.message.clone()),
                     }
@@ -779,11 +868,60 @@ impl Processing {
     }
 }
 
+/// Gives an existing job the backend chosen now: the job's options keep everything else, and
+/// the stages that were skipped for lack of a backend (or failed) run again. Does nothing
+/// without a chosen backend. `busy` while one of the two stages is running.
+fn apply_llm_to_job(store: &Store, meeting_id: &str, options: &JobOptions) -> IpcResult<()> {
+    let Some(chosen) = options.llm.clone() else {
+        return Ok(());
+    };
+    let Some(job) = store.get_job(meeting_id)? else {
+        return Ok(());
+    };
+    let llm_stages = [Stage::Extract, Stage::Reduce];
+    let row = |st: Stage| job.stages.iter().find(|r| r.stage == st.as_str());
+    if llm_stages
+        .iter()
+        .any(|st| row(*st).is_some_and(|r| r.status == StageStatus::Running))
+    {
+        return Err(IpcError::new(
+            "busy",
+            "the report is being extracted; wait for it to finish",
+        ));
+    }
+    let mut current = JobOptions::from_json(&job.options);
+    current.llm = Some(chosen);
+    store.set_job_options(
+        meeting_id,
+        &serde_json::to_string(&current).unwrap_or_else(|_| "{}".into()),
+        queue::now_ms(),
+    )?;
+    for st in llm_stages {
+        let again = row(st).is_some_and(|r| {
+            r.status == StageStatus::Failed || (r.status == StageStatus::Done && r.note.is_some())
+        });
+        if again {
+            store.set_stage_status(
+                meeting_id,
+                st.as_str(),
+                StageStatus::Pending,
+                None,
+                queue::now_ms(),
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn poisoned<T>(_: std::sync::PoisonError<T>) -> IpcError {
     IpcError::new("internal", "lock poisoned")
 }
 
-fn worker_config(s: &ProcessingSettings, env_dir: &Path) -> WorkerConfig {
+fn worker_config(
+    s: &ProcessingSettings,
+    env_dir: &Path,
+    llm_api_key: Option<worker::Secret>,
+) -> WorkerConfig {
     WorkerConfig {
         uv: non_empty(&s.uv_path).unwrap_or_else(|| PathBuf::from("uv")),
         worker_dir: find_worker_dir(&s.worker_dir),
@@ -793,8 +931,9 @@ fn worker_config(s: &ProcessingSettings, env_dir: &Path) -> WorkerConfig {
         hf_token: secrets::get(secrets::HF_TOKEN),
         // The reference estimate for a 10-hour meeting is below 4 hours; stop after 6.
         step_timeout: Duration::from_secs(6 * 3600),
-        // Read by the extraction settings when a meeting uses an external or cloud model.
-        llm_api_key: None,
+        // Only for the extraction stages of a job with an external or cloud model; the worker
+        // hands it to those processes through their environment and to no other.
+        llm_api_key,
     }
 }
 
@@ -846,5 +985,134 @@ mod tests {
     #[test]
     fn explicit_worker_dir_wins() {
         assert_eq!(find_worker_dir("D:/w"), PathBuf::from("D:/w"));
+    }
+
+    fn job_store() -> Store {
+        let s = Store::open_in_memory().unwrap();
+        s.create_meeting(&store::Meeting {
+            id: "m1".into(),
+            title: "t".into(),
+            started_unix_ms: 1,
+            duration_ms: None,
+            state: store::MeetingState::Stopped,
+            dir: "m1".into(),
+        })
+        .unwrap();
+        let names: Vec<&str> = STAGES.iter().map(|s| s.as_str()).collect();
+        s.create_job(
+            "m1",
+            &names,
+            &serde_json::to_string(&JobOptions::default()).unwrap(),
+            1,
+        )
+        .unwrap();
+        s
+    }
+
+    fn external() -> JobOptions {
+        JobOptions {
+            llm: Some(queue::worker::LlmOptions {
+                kind: LlmKind::External,
+                model_path: None,
+                ctx: None,
+                base_url: Some("http://127.0.0.1:11434/v1".into()),
+                model: Some("gemma".into()),
+                cloud_confirmed: false,
+            }),
+            ..JobOptions::default()
+        }
+    }
+
+    fn stage(s: &Store, st: Stage) -> store::StageRow {
+        s.get_job("m1")
+            .unwrap()
+            .unwrap()
+            .stages
+            .into_iter()
+            .find(|r| r.stage == st.as_str())
+            .unwrap()
+    }
+
+    #[test]
+    fn a_backend_chosen_later_reruns_the_skipped_stages_and_keeps_the_other_options() {
+        let s = job_store();
+        s.mark_stage_skipped("m1", "extract", "no language model backend was chosen", 5)
+            .unwrap();
+        s.mark_stage_skipped("m1", "reduce", "no language model backend was chosen", 5)
+            .unwrap();
+        s.set_stage_status("m1", "asr", StageStatus::Done, None, 5)
+            .unwrap();
+        // A call without a backend changes nothing.
+        apply_llm_to_job(&s, "m1", &JobOptions::default()).unwrap();
+        assert!(stage(&s, Stage::Extract).note.is_some());
+
+        let mut chosen = external();
+        chosen.language = "pl".into();
+        apply_llm_to_job(&s, "m1", &chosen).unwrap();
+        let job = s.get_job("m1").unwrap().unwrap();
+        let stored = JobOptions::from_json(&job.options);
+        assert_eq!(stored.llm.as_ref().unwrap().kind, LlmKind::External);
+        // Only the backend is taken over; the language of the first call stays.
+        assert_eq!(stored.language, "auto");
+        for st in [Stage::Extract, Stage::Reduce] {
+            let r = stage(&s, st);
+            assert_eq!((r.status, r.note), (StageStatus::Pending, None));
+        }
+        assert_eq!(stage(&s, Stage::Asr).status, StageStatus::Done);
+    }
+
+    #[test]
+    fn a_failed_extraction_runs_again_but_a_real_one_is_left_alone_and_a_running_one_blocks() {
+        let s = job_store();
+        s.set_stage_status("m1", "extract", StageStatus::Failed, Some("boom"), 5)
+            .unwrap();
+        s.set_stage_status("m1", "reduce", StageStatus::Done, None, 5)
+            .unwrap();
+        apply_llm_to_job(&s, "m1", &external()).unwrap();
+        assert_eq!(stage(&s, Stage::Extract).status, StageStatus::Pending);
+        // `reduce` really ran (no skip note): not repeated.
+        assert_eq!(stage(&s, Stage::Reduce).status, StageStatus::Done);
+
+        s.set_stage_status("m1", "extract", StageStatus::Running, None, 6)
+            .unwrap();
+        let e = apply_llm_to_job(&s, "m1", &external()).unwrap_err();
+        assert_eq!(e.code, "busy");
+        // A meeting without a job is not an error here.
+        apply_llm_to_job(&s, "nope", &external()).unwrap();
+    }
+
+    #[test]
+    fn the_stage_list_has_the_extraction_stages_and_their_skip_note() {
+        let json = serde_json::to_value(StageView {
+            stage: Stage::Extract,
+            status: StageStatus::Done,
+            attempts: 0,
+            error: None,
+            note: Some("the meeting has no cycle".into()),
+            fraction: None,
+            message: None,
+        })
+        .unwrap();
+        assert_eq!(json["stage"], "extract");
+        assert_eq!(json["note"], "the meeting has no cycle");
+        assert!(STAGES.contains(&Stage::Reduce));
+    }
+
+    #[test]
+    fn llm_settings_travel_with_the_processing_settings_and_old_files_load() {
+        let old: ProcessingSettings =
+            serde_json::from_str(r#"{"processAfterRecording":"now","gpuIdleSeconds":9}"#).unwrap();
+        assert_eq!(old.llm, LlmSettings::default());
+        assert_eq!(old.process_after_recording, ProcessAfter::Now);
+        let new: ProcessingSettings = serde_json::from_str(
+            r#"{"llm":{"defaultKind":"external","external":{"baseUrl":"http://h:1/v1","model":"m"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(new.llm.default_kind, LlmKind::External);
+        assert_eq!(new.llm.external.model, "m");
+        assert_eq!(new.llm.managed.ctx, 16384);
+        let json = serde_json::to_string(&new).unwrap();
+        // No key material is ever part of the settings.
+        assert!(!json.to_lowercase().contains("apikey"));
     }
 }

@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::cycles::ReportChoice;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceKind {
@@ -76,4 +78,12 @@ pub struct StartRecordingRequest {
     #[serde(default)]
     pub title: Option<String>,
     pub source_ids: Vec<String>,
+    /// The cycle and report mode of the recording. Required: without it (and without
+    /// `use_last_report`) the recording does not start (`report_mode_required`).
+    #[serde(default)]
+    pub report: Option<ReportChoice>,
+    /// For the widget and other quick starts: when `report` is absent, use what the last
+    /// recording used (still checked against the cycle).
+    #[serde(default)]
+    pub use_last_report: bool,
 }

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use recorder::recovery::{recover, RecoveredMeeting};
 use recorder::session::{CaptureBackend, Session, SessionError, SessionSnapshot, SourceSpec};
-use store::{Meeting, MeetingState, Screenshot, Segment, Store, Track};
+use store::{Meeting, MeetingState, ReportSettings, Screenshot, Segment, Store, Track};
 
 use crate::ipc::{IpcError, IpcResult};
 use crate::recording_dto::{
@@ -242,7 +242,14 @@ impl Recorder {
         Ok(out)
     }
 
-    pub fn start(&self, root: &Path, req: StartRecordingRequest) -> IpcResult<()> {
+    /// Starts a recording. `report` is the validated cycle and report mode; it is written to
+    /// the meeting right after the meeting is created.
+    pub fn start(
+        &self,
+        root: &Path,
+        req: StartRecordingRequest,
+        report: ReportSettings,
+    ) -> IpcResult<()> {
         let mut guard = self.lock_active()?;
         if guard.is_some() {
             return Err(IpcError::new(
@@ -287,7 +294,8 @@ impl Recorder {
                 duration_ms: None,
                 state: MeetingState::Recording,
                 dir: id.clone(),
-            })
+            })?;
+            s.set_report_settings(&id, &report).map(|_| ())
         })?;
         for spec in specs {
             let label = label_of(&spec.id());
@@ -422,5 +430,30 @@ mod tests {
         assert_eq!(meeting_id(0), "19700101-000000");
         // 2024-02-29 23:59:59 UTC
         assert_eq!(meeting_id(1_709_251_199_000), "20240229-235959");
+    }
+
+    #[test]
+    fn a_started_recording_carries_its_cycle_and_report_settings() {
+        use recorder::session::ToneBackend;
+        let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
+        let recorder = Recorder::new(store.clone(), Arc::new(ToneBackend), true);
+        let root = tempfile::tempdir().unwrap();
+        let report = ReportSettings {
+            cycle_id: Some("NOMAD".into()),
+            report_mode: Some("by-type".into()),
+            report_template: None,
+            meeting_type: Some("budget".into()),
+            output_language: Some("pl".into()),
+        };
+        let req = StartRecordingRequest {
+            title: None,
+            source_ids: vec!["tone:220".into()],
+            report: None,
+            use_last_report: false,
+        };
+        recorder.start(root.path(), req, report.clone()).unwrap();
+        let id = recorder.stop().unwrap();
+        let guard = store.lock().unwrap();
+        assert_eq!(guard.get_report_settings(&id).unwrap(), Some(report));
     }
 }

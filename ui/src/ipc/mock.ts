@@ -12,6 +12,7 @@ import {
   stageViews,
   toneWav,
 } from "./mock-demo";
+import { stage4Stubs } from "./mock-stubs";
 import { validateVoiceSettings } from "../speakers";
 import type {
   ActiveSource,
@@ -535,5 +536,6 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     onQueueChanged: (cb) => subscribe(queueListeners, cb),
     onModelsProgress: (cb) => subscribe(progressListeners, cb),
     onModelsChanged: (cb) => subscribe(modelsListeners, cb),
+    ...stage4Stubs,
   };
 }

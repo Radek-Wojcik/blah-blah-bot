@@ -1,18 +1,36 @@
 import type {
+  AddRepoRequest,
+  CloudPreview,
+  CycleDetails,
+  CycleDto,
+  CycleListItem,
+  CycleRepoView,
+  DraftItemPatch,
+  DraftSection,
+  DraftView,
   MeetingDetails,
   MeetingSummary,
   ModelStatus,
   ModelsProgress,
   ProcessOptions,
   ProcessingSettings,
+  PullResult,
   QueueState,
   Region,
   RecordingState,
+  RenderVariant,
+  ReportDefaults,
+  ReportMode,
+  SaveCycleResult,
   SegmentEdit,
   Settings,
   SourceInfo,
   StartRecordingRequest,
+  TemplateCheck,
+  TemplateDto,
+  TemplateSummary,
   TranscriptData,
+  NewDraftItem,
   ParticipantView,
   VoicesData,
 } from "./types";
@@ -45,7 +63,12 @@ export interface Backend {
   getSettings(): Promise<Settings>;
   saveSettings(settings: Settings): Promise<void>;
 
-  /** Create the processing job of a meeting if missing and start processing. */
+  /**
+   * Create the processing job of a meeting if missing and start processing. With `options.llm`
+   * the backend of this meeting is chosen (and kept); `cloud` rejects with `cloud_not_confirmed`
+   * until `confirmCloud` was called. On an existing job a backend chosen now makes the skipped
+   * or failed extraction stages run again.
+   */
   processMeeting(id: string, options?: ProcessOptions): Promise<void>;
   queueState(): Promise<QueueState>;
   retryJob(id: string): Promise<void>;
@@ -69,8 +92,13 @@ export interface Backend {
   confirmMatches(id: string): Promise<VoicesData>;
   /** A sample clip as a WAV, as a URL usable for an audio element. Revoke it when done. */
   voiceClip(id: string, voiceId: string, idx: number): Promise<string>;
-  listParticipants(): Promise<ParticipantView[]>;
-  createParticipant(name: string): Promise<ParticipantView>;
+  /**
+   * The participants of `cycleId`, else of the cycle of `meetingId`, else the legacy local list
+   * (people named before cycles existed).
+   */
+  listParticipants(cycleId?: string, meetingId?: string): Promise<ParticipantView[]>;
+  /** In a cycle the person is also written to `cycle.yaml`. */
+  createParticipant(name: string, cycleId?: string): Promise<ParticipantView>;
   renameParticipant(participantId: string, name: string): Promise<void>;
   deleteParticipant(participantId: string): Promise<void>;
   /** Forget the voice of a participant but keep the name. */
@@ -86,9 +114,70 @@ export interface Backend {
   modelStatus(): Promise<ModelStatus[]>;
   downloadModels(keys: string[]): Promise<void>;
 
+  /** API keys are write-only: `ProcessingSettings.llm.cloudKeySet` / `externalKeySet` tell they are stored. */
+  setCloudKey(key: string): Promise<void>;
+  clearCloudKey(): Promise<void>;
+  cloudKeyPresent(): Promise<boolean>;
+  setExternalKey(key: string): Promise<void>;
+  clearExternalKey(): Promise<void>;
+  externalKeyPresent(): Promise<boolean>;
+  /** What would be sent to the cloud endpoint for this meeting. Reads only. */
+  cloudPreview(meetingId: string): Promise<CloudPreview>;
+  /** Stores the user's confirmation. Call it only from the dialog's confirm button. */
+  confirmCloud(meetingId: string): Promise<void>;
+
+  /** Cycles of every registered repository, broken ones included (with their issues). */
+  listCycles(): Promise<CycleListItem[]>;
+  listCycleRepos(): Promise<CycleRepoView[]>;
+  getCycle(cycleId: string): Promise<CycleDetails>;
+  /** Without `repoId` the cycle goes to the default local repository (created on first use). */
+  createCycle(id: string, name: string, repoId?: string): Promise<CycleDetails>;
+  /** An invalid cycle is not written: `saved` is false and `issues` says why. */
+  saveCycle(cycle: CycleDto): Promise<SaveCycleResult>;
+  listTemplates(cycleId: string): Promise<TemplateSummary[]>;
+  getTemplate(cycleId: string, name: string): Promise<TemplateDto>;
+  saveTemplate(cycleId: string, template: TemplateDto): Promise<TemplateCheck>;
+  validateTemplate(template: TemplateDto): Promise<TemplateCheck>;
+  /** Cloning runs in the background; the promise resolves when it is done. */
+  addCycleRepo(req: AddRepoRequest): Promise<CycleRepoView>;
+  pullCycleRepo(repoId: string): Promise<PullResult>;
+  /** The cycle's default mode, template, type and language, the allowed choices and the last choice. */
+  reportDefaults(cycleId: string): Promise<ReportDefaults>;
+
+  /** Rejects with `no_draft` until the reduce stage has written the draft. */
+  getDraft(meetingId: string): Promise<DraftView>;
+  updateDraftItem(meetingId: string, itemId: string, patch: DraftItemPatch): Promise<DraftView>;
+  /** `sectionId: null` takes the item out of every section; without `beforeItemId` it goes last. */
+  moveDraftItem(
+    meetingId: string,
+    itemId: string,
+    sectionId: string | null,
+    beforeItemId?: string,
+  ): Promise<DraftView>;
+  deleteDraftItem(meetingId: string, itemId: string): Promise<DraftView>;
+  addDraftItem(meetingId: string, item: NewDraftItem): Promise<DraftView>;
+  /** Rename, add, remove and reorder in one call; a section with an empty id gets one. */
+  setDraftSections(meetingId: string, sections: DraftSection[]): Promise<DraftView>;
+  /** Layout only: no item is touched. Rejects with `report_mode_required` for an unknown template or type. */
+  setReportMode(
+    meetingId: string,
+    mode: ReportMode,
+    template?: string,
+    meetingType?: string,
+  ): Promise<DraftView>;
+  /** Replace the edited draft by the newer one a re-run of reduce left. */
+  acceptNewDraft(meetingId: string): Promise<DraftView>;
+  /** Keep the edited draft and throw the newer one away. */
+  discardNewDraft(meetingId: string): Promise<DraftView>;
+  renderReport(meetingId: string, variant: RenderVariant): Promise<string>;
+
   onRecordingState(cb: (state: RecordingState) => void): Promise<Unsubscribe>;
   onMeetingsChanged(cb: () => void): Promise<Unsubscribe>;
   onQueueChanged(cb: (state: QueueState) => void): Promise<Unsubscribe>;
   onModelsProgress(cb: (progress: ModelsProgress) => void): Promise<Unsubscribe>;
   onModelsChanged(cb: () => void): Promise<Unsubscribe>;
+  /** Payload: the id of the meeting whose draft changed. */
+  onDraftChanged(cb: (meetingId: string) => void): Promise<Unsubscribe>;
+  /** A cycle, template or repository changed. */
+  onCyclesChanged(cb: () => void): Promise<Unsubscribe>;
 }

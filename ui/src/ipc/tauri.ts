@@ -44,8 +44,8 @@ export function createTauriBackend(): Backend {
       const data = bytes instanceof ArrayBuffer ? bytes : new Uint8Array(bytes);
       return URL.createObjectURL(new Blob([data], { type: "audio/wav" }));
     },
-    listParticipants: () => invoke("list_participants"),
-    createParticipant: (name) => invoke("create_participant", { name }),
+    listParticipants: (cycleId, meetingId) => invoke("list_participants", { cycleId, meetingId }),
+    createParticipant: (name, cycleId) => invoke("create_participant", { name, cycleId }),
     renameParticipant: (participantId, name) =>
       invoke("rename_participant", { participantId, name }),
     deleteParticipant: (participantId) => invoke("delete_participant", { participantId }),
@@ -57,6 +57,40 @@ export function createTauriBackend(): Backend {
     clearHfToken: () => invoke("clear_hf_token"),
     modelStatus: () => invoke("model_status"),
     downloadModels: (keys) => invoke("download_models", { keys }),
+    setCloudKey: (key) => invoke("set_cloud_key", { key }),
+    clearCloudKey: () => invoke("clear_cloud_key"),
+    cloudKeyPresent: () => invoke("cloud_key_present"),
+    setExternalKey: (key) => invoke("set_external_key", { key }),
+    clearExternalKey: () => invoke("clear_external_key"),
+    externalKeyPresent: () => invoke("external_key_present"),
+    cloudPreview: (meetingId) => invoke("cloud_preview", { meetingId }),
+    confirmCloud: (meetingId) => invoke("confirm_cloud", { meetingId }),
+    listCycles: () => invoke("list_cycles"),
+    listCycleRepos: () => invoke("list_cycle_repos"),
+    getCycle: (cycleId) => invoke("get_cycle", { cycleId }),
+    createCycle: (id, name, repoId) => invoke("create_cycle", { id, name, repoId }),
+    saveCycle: (cycle) => invoke("save_cycle", { cycle }),
+    listTemplates: (cycleId) => invoke("list_templates", { cycleId }),
+    getTemplate: (cycleId, name) => invoke("get_template", { cycleId, name }),
+    saveTemplate: (cycleId, template) => invoke("save_template", { cycleId, template }),
+    validateTemplate: (template) => invoke("validate_template", { template }),
+    addCycleRepo: (req) => invoke("add_cycle_repo", { req }),
+    pullCycleRepo: (repoId) => invoke("pull_cycle_repo", { repoId }),
+    reportDefaults: (cycleId) => invoke("report_defaults", { cycleId }),
+    getDraft: (meetingId) => invoke("get_draft", { meetingId }),
+    updateDraftItem: (meetingId, itemId, patch) =>
+      invoke("update_draft_item", { meetingId, itemId, patch }),
+    moveDraftItem: (meetingId, itemId, sectionId, beforeItemId) =>
+      invoke("move_draft_item", { meetingId, itemId, sectionId, beforeItemId }),
+    deleteDraftItem: (meetingId, itemId) => invoke("delete_draft_item", { meetingId, itemId }),
+    addDraftItem: (meetingId, item) => invoke("add_draft_item", { meetingId, item }),
+    setDraftSections: (meetingId, sections) =>
+      invoke("set_draft_sections", { meetingId, sections }),
+    setReportMode: (meetingId, mode, template, meetingType) =>
+      invoke("set_report_mode", { meetingId, mode, template, meetingType }),
+    acceptNewDraft: (meetingId) => invoke("accept_new_draft", { meetingId }),
+    discardNewDraft: (meetingId) => invoke("discard_new_draft", { meetingId }),
+    renderReport: (meetingId, variant) => invoke("render_report", { meetingId, variant }),
     getSettings: () => invoke("get_settings"),
     saveSettings: (settings) => invoke("save_settings", { settings }),
     onRecordingState: (cb) => listen("recording-state", (e) => cb(e.payload as never)),
@@ -64,6 +98,8 @@ export function createTauriBackend(): Backend {
     onQueueChanged: (cb) => listen("queue-changed", (e) => cb(e.payload as never)),
     onModelsProgress: (cb) => listen("models-progress", (e) => cb(e.payload as never)),
     onModelsChanged: (cb) => listen("models-changed", () => cb()),
+    onDraftChanged: (cb) => listen("draft-changed", (e) => cb(e.payload as string)),
+    onCyclesChanged: (cb) => listen("cycles-changed", () => cb()),
   };
 }
 

@@ -5,6 +5,10 @@ use crate::ipc::{IpcError, IpcResult};
 
 const SERVICE: &str = "blah-blah-bot";
 pub const HF_TOKEN: &str = "huggingface-token";
+/// API key of the cloud language model endpoint.
+pub const CLOUD_KEY: &str = "llm-cloud-key";
+/// Optional API key of the external (self-hosted) language model server.
+pub const EXTERNAL_KEY: &str = "llm-external-key";
 
 /// Register the credential store. Call once at start; failure only disables secrets.
 pub fn init() {

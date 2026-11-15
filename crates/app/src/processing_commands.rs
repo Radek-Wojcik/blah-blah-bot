@@ -9,6 +9,7 @@ use tauri::ipc::Response;
 use tauri::State;
 
 use crate::ipc::{IpcError, IpcResult};
+use crate::llm::{self, CloudPreview};
 use crate::processing::{ModelStatus, ProcessingSettings, QueueState};
 use crate::secrets;
 use crate::state::AppState;
@@ -18,6 +19,17 @@ use crate::state::AppState;
 pub struct ProcessOptions {
     pub language: Option<String>,
     pub max_speakers: Option<u32>,
+    /// The language-model backend for this meeting; absent means the default of the
+    /// settings.
+    #[serde(default)]
+    pub llm: Option<LlmRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmRequest {
+    /// `managed`, `external` or `cloud`.
+    pub kind: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -67,7 +79,7 @@ pub struct EditPayload {
     pub excluded: bool,
 }
 
-fn meeting_dir(state: &AppState, id: &str) -> IpcResult<PathBuf> {
+pub(crate) fn meeting_dir(state: &AppState, id: &str) -> IpcResult<PathBuf> {
     let details = state
         .with_store(|s| s.get_meeting(id))?
         .ok_or_else(|| IpcError::new("not_found", "meeting not found"))?;
@@ -90,6 +102,7 @@ pub fn process_meeting(
     options: Option<ProcessOptions>,
 ) -> IpcResult<()> {
     let mut job = JobOptions::default();
+    let mut requested = None;
     if let Some(o) = options {
         if let Some(lang) = o.language {
             if !["auto", "pl", "en"].contains(&lang.as_str()) {
@@ -98,7 +111,16 @@ pub fn process_meeting(
             job.language = lang;
         }
         job.max_speakers = o.max_speakers.filter(|n| *n > 0);
+        requested = o.llm.map(|l| llm::parse_kind(&l.kind)).transpose()?;
     }
+    // The backend is recorded for the meeting; the cloud needs its key and the explicit
+    // confirmation given earlier (`cloud_not_confirmed` otherwise).
+    let settings = state.processing().llm_settings()?;
+    job.llm = state.with_store_ipc(|s| {
+        llm::choose_llm(s, &id, &settings, requested, &|name| {
+            secrets::get(name).is_some()
+        })
+    })?;
     state.processing().process(&id, job)
 }
 
@@ -123,8 +145,12 @@ pub fn get_transcript(state: State<'_, AppState>, id: String) -> IpcResult<Trans
     let files = TranscriptFiles::new(&dir);
     let mut view = files.view().map_err(transcript_error)?;
     // Names the user (or an automatic match) gave to voices replace the generic labels.
-    let (voices, participants) =
-        state.with_store(|s| Ok((s.list_meeting_voices(&id)?, s.list_participants()?)))?;
+    let (voices, participants) = state.with_store(|s| {
+        Ok((
+            s.list_meeting_voices(&id)?,
+            queue::voices::participants_for_meeting(s, &id)?,
+        ))
+    })?;
     let names = queue::voices::speaker_names(&voices, &participants);
     queue::voices::apply_names(&mut view, &voices, &names);
     let screenshots = std::fs::read(dir.join("work").join("descriptions.json"))
@@ -228,6 +254,54 @@ pub fn set_hf_token(token: String) -> IpcResult<()> {
 #[tauri::command]
 pub fn clear_hf_token() -> IpcResult<()> {
     secrets::clear(secrets::HF_TOKEN)
+}
+
+#[tauri::command]
+pub fn set_cloud_key(key: String) -> IpcResult<()> {
+    secrets::set(secrets::CLOUD_KEY, &key)
+}
+
+#[tauri::command]
+pub fn clear_cloud_key() -> IpcResult<()> {
+    secrets::clear(secrets::CLOUD_KEY)
+}
+
+/// Whether a cloud key is stored. The key itself is never returned.
+#[tauri::command]
+pub fn cloud_key_present() -> bool {
+    secrets::get(secrets::CLOUD_KEY).is_some()
+}
+
+#[tauri::command]
+pub fn set_external_key(key: String) -> IpcResult<()> {
+    secrets::set(secrets::EXTERNAL_KEY, &key)
+}
+
+#[tauri::command]
+pub fn clear_external_key() -> IpcResult<()> {
+    secrets::clear(secrets::EXTERNAL_KEY)
+}
+
+#[tauri::command]
+pub fn external_key_present() -> bool {
+    secrets::get(secrets::EXTERNAL_KEY).is_some()
+}
+
+/// What would be sent to the cloud endpoint for this meeting, for the confirmation dialog.
+/// Reads only: it confirms nothing.
+#[tauri::command]
+pub fn cloud_preview(state: State<'_, AppState>, meeting_id: String) -> IpcResult<CloudPreview> {
+    let dir = meeting_dir(&state, &meeting_id)?;
+    let settings = state.processing().llm_settings()?;
+    state.with_store_ipc(|s| llm::cloud_preview(s, &settings, &dir, &meeting_id))
+}
+
+/// Records that the user confirmed sending this meeting to the cloud endpoint. Called only
+/// from the dialog's confirm button; processing never confirms by itself.
+#[tauri::command]
+pub fn confirm_cloud(state: State<'_, AppState>, meeting_id: String) -> IpcResult<()> {
+    let settings = state.processing().llm_settings()?;
+    state.with_store_ipc(|s| llm::confirm_cloud(s, &settings, &meeting_id, queue::now_ms()))
 }
 
 /// Async: asking the worker which models are cached starts a process.

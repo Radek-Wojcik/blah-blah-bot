@@ -247,6 +247,15 @@ impl Store {
         Ok(rows)
     }
 
+    /// Replace the options of an existing job (for example the language-model backend chosen
+    /// after the first stages ran). Returns `false` when the meeting has no job.
+    pub fn set_job_options(&self, meeting_id: &str, options: &str, now_ms: i64) -> Result<bool> {
+        Ok(self.conn.execute(
+            "UPDATE jobs SET options = ?2, updated_unix_ms = ?3 WHERE meeting_id = ?1",
+            params![meeting_id, options, now_ms],
+        )? > 0)
+    }
+
     pub fn delete_job(&self, meeting_id: &str) -> Result<bool> {
         Ok(self.conn.execute(
             "DELETE FROM jobs WHERE meeting_id = ?1",
@@ -317,6 +326,17 @@ mod tests {
         s.set_stage_status("m1", "asr", StageStatus::Pending, None, 30)
             .unwrap();
         assert_eq!(s.get_job("m1").unwrap().unwrap().stages[0].note, None);
+    }
+
+    #[test]
+    fn job_options_can_be_replaced() {
+        let s = store_with_meeting();
+        assert!(!s.set_job_options("m1", "{}", 5).unwrap());
+        s.create_job("m1", &["asr"], "{}", 10).unwrap();
+        assert!(s.set_job_options("m1", r#"{"language":"pl"}"#, 20).unwrap());
+        let job = s.get_job("m1").unwrap().unwrap();
+        assert_eq!(job.options, r#"{"language":"pl"}"#);
+        assert_eq!(job.updated_unix_ms, 20);
     }
 
     #[test]

@@ -39,6 +39,23 @@ impl From<store::StoreError> for IpcError {
     }
 }
 
+impl From<cycle_store::CycleError> for IpcError {
+    fn from(e: cycle_store::CycleError) -> Self {
+        use cycle_store::CycleError as E;
+        let code = match &e {
+            E::Invalid { .. } | E::InvalidName(_) => "invalid",
+            E::CycleExists(_) => "duplicate",
+            E::CycleNotFound(_) | E::TemplateNotFound(_) => "not_found",
+            E::GitUnavailable(_) => "git_unavailable",
+            E::Git { .. } => "git_failed",
+            E::Io { .. } => "io",
+            E::Other(_) => "internal",
+        };
+        tracing::warn!(error = %e, code, "cycle repository error");
+        Self::new(code, e.to_string())
+    }
+}
+
 impl From<std::io::Error> for IpcError {
     fn from(e: std::io::Error) -> Self {
         tracing::error!(error = %e, "io error");
