@@ -45,6 +45,25 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX idx_meetings_started ON meetings(started_unix_ms);
     ",
+    // Version 2: processing jobs, one per meeting, with one row per stage.
+    "
+    CREATE TABLE jobs (
+        meeting_id TEXT PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,
+        created_unix_ms INTEGER NOT NULL,
+        updated_unix_ms INTEGER NOT NULL,
+        options TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE TABLE job_stages (
+        meeting_id TEXT NOT NULL REFERENCES jobs(meeting_id) ON DELETE CASCADE,
+        stage TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending','running','done','failed')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        started_unix_ms INTEGER,
+        finished_unix_ms INTEGER,
+        error TEXT,
+        PRIMARY KEY (meeting_id, stage)
+    );
+    ",
 ];
 
 /// Schema version after all migrations have run.

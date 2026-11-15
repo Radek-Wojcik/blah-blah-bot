@@ -1,11 +1,25 @@
 import type { Backend, Unsubscribe } from "./backend";
+import { stagesProgress } from "../processing";
+import {
+  STAGE_MESSAGES,
+  demoImage,
+  demoJobs,
+  demoModels,
+  demoProcessingSettings,
+  demoTranscript,
+  stageViews,
+} from "./mock-demo";
 import type {
   ActiveSource,
+  JobView,
   MeetingDetails,
   MeetingSummary,
+  ModelsProgress,
+  QueueState,
   RecordingState,
   Settings,
   SourceInfo,
+  TranscriptData,
 } from "./types";
 
 const MIN = 60_000;
@@ -44,6 +58,8 @@ export interface MockOptions {
   recording?: boolean;
   /** Simulated milliseconds added per real second while recording. */
   clockRate?: number;
+  /** Milliseconds a processing stage (and a model download) takes. Default 1200. */
+  jobStepMs?: number;
 }
 
 function fail(code: string, message: string): never {
@@ -70,8 +86,87 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
   let timer: ReturnType<typeof setInterval> | null = null;
   const rate = opts.clockRate ?? 1000;
 
+  // ----- processing pipeline -----
+  const stepMs = Math.max(40, opts.jobStepMs ?? 1200);
+  const processing = demoProcessingSettings();
+  const models = demoModels();
+  let jobs: JobView[] = demoJobs();
+  const transcripts = new Map<string, TranscriptData>([["m5", demoTranscript("m5")]]);
+  /** Jobs advanced by the timer, in order. The seeded demo jobs stay frozen. */
+  const driven: string[] = [];
+  let currentJob: string | null = null;
+  let jobTimer: ReturnType<typeof setInterval> | null = null;
+  const queueListeners = new Set<{ cb: (s: QueueState) => void }>();
+  const progressListeners = new Set<{ cb: (p: ModelsProgress) => void }>();
+  const modelsListeners = new Set<{ cb: () => void }>();
+
   const emit = () => stateListeners.forEach((l) => l.cb(structuredClone(state)));
   const emitMeetings = () => meetingListeners.forEach((l) => l.cb());
+  const emitQueue = () => queueListeners.forEach((l) => l.cb({ jobs: structuredClone(jobs) }));
+
+  const withJob = (m: MeetingSummary): MeetingSummary => ({
+    ...m,
+    job: jobs.find((j) => j.meetingId === m.id)?.state ?? null,
+  });
+
+  function patchJob(id: string, fn: (j: JobView) => JobView) {
+    jobs = jobs.map((j) => (j.meetingId === id ? fn(j) : j));
+  }
+
+  function enqueue(id: string) {
+    if (!driven.includes(id)) driven.push(id);
+    if (!jobTimer) jobTimer = setInterval(tick, stepMs / 4);
+  }
+
+  /** Advance the job that is being worked on by one step, or start the next queued one. */
+  function tick() {
+    if (currentJob === null) {
+      const next = driven.shift();
+      if (next === undefined) {
+        if (jobTimer) clearInterval(jobTimer);
+        jobTimer = null;
+        return;
+      }
+      currentJob = next;
+    }
+    const id = currentJob;
+    patchJob(id, (j) => {
+      const stages = j.stages.map((s) => ({ ...s }));
+      let run = stages.find((s) => s.status === "running");
+      if (!run) {
+        run = stages.find((s) => s.status === "pending");
+        if (run) {
+          run.status = "running";
+          run.attempts += 1;
+          run.fraction = 0;
+        }
+      }
+      if (run) {
+        run.fraction = Math.min(1, (run.fraction ?? 0) + 0.25);
+        run.message = STAGE_MESSAGES[run.stage];
+        if (run.fraction >= 1) {
+          run.status = "done";
+          run.fraction = null;
+          run.message = null;
+        }
+      }
+      const finished = stages.every((s) => s.status === "done");
+      return {
+        ...j,
+        stages,
+        state: finished ? "done" : "running",
+        waitingReason: null,
+        progress: stagesProgress(stages),
+      };
+    });
+    const j = jobs.find((x) => x.meetingId === id);
+    if (j?.state === "done") {
+      transcripts.set(id, demoTranscript(id));
+      currentJob = null;
+      emitMeetings();
+    }
+    emitQueue();
+  }
 
   function active(id: string, offsetMs: number): ActiveSource {
     const src = demoSources.find((s) => s.id === id);
@@ -82,7 +177,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
   function begin(sourceIds: string[], elapsed = 0) {
     state = {
       status: "recording",
-      meetingId: "live",
+      meetingId: `m${meetings.length + 1}`,
       elapsedMs: elapsed,
       sources: sourceIds.map((id) => active(id, 0)),
       screenshotCount: 0,
@@ -114,10 +209,11 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
   };
 
   return {
-    listMeetings: async () => [...meetings],
+    listMeetings: async () => meetings.map(withJob),
     getMeeting: async (id): Promise<MeetingDetails> => {
-      const summary = meetings.find((x) => x.id === id);
-      if (!summary) fail("internal", "Meeting not found");
+      const found = meetings.find((x) => x.id === id);
+      if (!found) fail("internal", "Meeting not found");
+      const summary = withJob(found);
       return {
         summary,
         tracks: demoSources.slice(0, summary.trackCount).map((s, i) => ({
@@ -151,7 +247,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       if (timer) clearInterval(timer);
       meetings = [
         meeting(
-          `m${meetings.length + 1}`,
+          state.meetingId ?? `m${meetings.length + 1}`,
           "Untitled meeting",
           DEMO_NOW,
           state.elapsedMs,
@@ -198,9 +294,119 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         emit();
       }
     },
+    processMeeting: async (id) => {
+      const m = meetings.find((x) => x.id === id);
+      if (!m) fail("internal", "Meeting not found");
+      const existing = jobs.find((j) => j.meetingId === id);
+      if (existing && existing.state !== "done")
+        fail("already_queued", "This meeting is already queued or has a failed job");
+      const fresh: JobView = {
+        meetingId: id,
+        title: m.title,
+        state: "queued",
+        progress: 0,
+        waitingReason: null,
+        stages: stageViews(),
+      };
+      jobs = existing ? jobs.map((j) => (j.meetingId === id ? fresh : j)) : [...jobs, fresh];
+      transcripts.delete(id);
+      enqueue(id);
+      emitQueue();
+      emitMeetings();
+    },
+    queueState: async () => ({ jobs: structuredClone(jobs) }),
+    retryJob: async (id) => {
+      const j = jobs.find((x) => x.meetingId === id);
+      if (!j) fail("internal", "Job not found");
+      if (j.state !== "failed") fail("internal", "Only a failed job can be retried");
+      patchJob(id, (x) => ({
+        ...x,
+        state: "queued",
+        stages: x.stages.map((s) =>
+          s.status === "failed" ? { ...s, status: "pending", error: null } : s,
+        ),
+      }));
+      enqueue(id);
+      emitQueue();
+      emitMeetings();
+    },
+    cancelJob: async (id) => {
+      const j = jobs.find((x) => x.meetingId === id);
+      if (!j) fail("internal", "Job not found");
+      if (j.state === "running") fail("job_running", "A running job cannot be cancelled");
+      jobs = jobs.filter((x) => x.meetingId !== id);
+      const at = driven.indexOf(id);
+      if (at >= 0) driven.splice(at, 1);
+      emitQueue();
+      emitMeetings();
+    },
+    getTranscript: async (id) => {
+      const t = transcripts.get(id);
+      if (!t) fail("not_ready", "This meeting has no transcript yet");
+      return structuredClone(t);
+    },
+    editSegment: async (id, segmentId, edit) => {
+      const t = transcripts.get(id);
+      const seg = t?.segments.find((x) => x.id === segmentId);
+      if (!seg) fail("internal", "Segment not found");
+      if (edit.text === null) {
+        if (seg.originalText !== null) seg.text = seg.originalText;
+        seg.originalText = null;
+      } else if (edit.text !== seg.text) {
+        const original = seg.originalText ?? seg.text;
+        seg.text = edit.text;
+        seg.originalText = edit.text === original ? null : original;
+      }
+      seg.excluded = edit.excluded;
+    },
+    meetingImage: async (id, file) => {
+      if (!transcripts.has(id)) fail("not_ready", "This meeting has no screenshots to show");
+      return demoImage(file);
+    },
+    getProcessingSettings: async () => structuredClone(processing),
+    saveProcessingSettings: async (s) => {
+      // The token flag is owned by set/clear, as in the real application.
+      Object.assign(processing, s, { hfTokenSet: processing.hfTokenSet });
+    },
+    setHfToken: async (token) => {
+      if (token.trim() === "") fail("internal", "The token is empty");
+      processing.hfTokenSet = true;
+    },
+    clearHfToken: async () => void (processing.hfTokenSet = false),
+    modelStatus: async () => structuredClone(models),
+    downloadModels: async (keys) => {
+      for (const key of keys) {
+        const model = models.find((m) => m.key === key);
+        if (!model) fail("internal", `Unknown model ${key}`);
+        if (model.gated && !processing.hfTokenSet)
+          fail(
+            "internal",
+            "This model needs a Hugging Face token and accepted model terms. Store a token first.",
+          );
+      }
+      for (const key of keys) {
+        let step = 0;
+        const timer = setInterval(() => {
+          step += 1;
+          const fraction = Math.min(1, step / 5);
+          progressListeners.forEach((l) =>
+            l.cb({ key, fraction, message: `Downloading ${Math.round(fraction * 100)}%` }),
+          );
+          if (fraction >= 1) {
+            clearInterval(timer);
+            const model = models.find((m) => m.key === key);
+            if (model) model.cached = true;
+            modelsListeners.forEach((l) => l.cb());
+          }
+        }, stepMs / 4);
+      }
+    },
     getSettings: async () => ({ ...settings }),
     saveSettings: async (s) => void Object.assign(settings, s),
     onRecordingState: (cb) => subscribe(stateListeners, cb),
     onMeetingsChanged: (cb) => subscribe(meetingListeners, cb),
+    onQueueChanged: (cb) => subscribe(queueListeners, cb),
+    onModelsProgress: (cb) => subscribe(progressListeners, cb),
+    onModelsChanged: (cb) => subscribe(modelsListeners, cb),
   };
 }

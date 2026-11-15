@@ -31,10 +31,14 @@ jobs:
           npm run lint
           npm run format:check
       - name: Ruff
-        working-directory: benchmarks
         run: |
+          cd benchmarks
           uv run ruff check .
           uv run ruff format --check .
+          cd ../worker
+          uv sync --frozen --only-group dev
+          uv run --no-sync ruff check .
+          uv run --no-sync ruff format --check .
 
   test:
     runs-on: windows-latest
@@ -56,6 +60,11 @@ jobs:
       - name: Benchmark unit tests (CPU only, no models)
         working-directory: benchmarks
         run: uv run pytest -q
+      - name: Worker unit and contract tests (CPU only, no models)
+        working-directory: worker
+        run: |
+          uv sync --frozen --only-group dev
+          uv run --no-sync pytest -q
 
   ui:
     runs-on: windows-latest

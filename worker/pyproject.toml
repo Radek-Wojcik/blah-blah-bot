@@ -1,0 +1,51 @@
+[project]
+name = "bbb-worker"
+version = "0.3.0"
+description = "Blah Blah Bot processing worker: ASR, diarization, merge and screenshot description"
+requires-python = ">=3.11,<3.13"
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=1.26",
+    "jsonschema>=4.20",
+    "huggingface_hub>=1.0",
+    "faster-whisper>=1.2.1",
+    "nvidia-cublas-cu12==12.8.4.1",
+    "nvidia-cuda-runtime-cu12>=12.8,<12.9",
+    "nvidia-cudnn-cu12>=9,<10",
+    "pyannote.audio>=4.0.7",
+    "torch>=2.8",
+]
+
+[dependency-groups]
+# Everything the CPU-only tests need. CI installs only this group (no models, no torch).
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+    "numpy>=1.26",
+    "jsonschema>=4.20",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128", marker = "sys_platform == 'win32'" }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bbb_worker"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "src"]
+addopts = "-m 'not models'"
+markers = ["models: needs real models and a GPU (run locally before a release)"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]

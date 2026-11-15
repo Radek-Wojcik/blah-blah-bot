@@ -22,10 +22,30 @@ export function createTauriBackend(): Backend {
       return URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
     },
     overlayFinish: (region) => invoke("overlay_finish", { region }),
+    processMeeting: (id, options) => invoke("process_meeting", { id, options: options ?? null }),
+    queueState: () => invoke("queue_state"),
+    retryJob: (id) => invoke("retry_job", { id }),
+    cancelJob: (id) => invoke("cancel_job", { id }),
+    getTranscript: (id) => invoke("get_transcript", { id }),
+    editSegment: (id, segmentId, edit) => invoke("edit_segment", { id, segmentId, edit }),
+    meetingImage: async (id, file) => {
+      const bytes = await invoke<ArrayBuffer | number[]>("meeting_image", { id, file });
+      const data = bytes instanceof ArrayBuffer ? bytes : new Uint8Array(bytes);
+      return URL.createObjectURL(new Blob([data], { type: "image/png" }));
+    },
+    getProcessingSettings: () => invoke("get_processing_settings"),
+    saveProcessingSettings: (settings) => invoke("save_processing_settings", { settings }),
+    setHfToken: (token) => invoke("set_hf_token", { token }),
+    clearHfToken: () => invoke("clear_hf_token"),
+    modelStatus: () => invoke("model_status"),
+    downloadModels: (keys) => invoke("download_models", { keys }),
     getSettings: () => invoke("get_settings"),
     saveSettings: (settings) => invoke("save_settings", { settings }),
     onRecordingState: (cb) => listen("recording-state", (e) => cb(e.payload as never)),
     onMeetingsChanged: (cb) => listen("meetings-changed", () => cb()),
+    onQueueChanged: (cb) => listen("queue-changed", (e) => cb(e.payload as never)),
+    onModelsProgress: (cb) => listen("models-progress", (e) => cb(e.payload as never)),
+    onModelsChanged: (cb) => listen("models-changed", () => cb()),
   };
 }
 

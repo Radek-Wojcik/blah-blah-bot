@@ -1,0 +1,72 @@
+{
+  "prototype": "stage2-pipeline",
+  "name": "2h",
+  "timestamp": "2026-11-15T10:36:37+00:00",
+  "environment": {
+    "os": "Windows-10-10.0.19045-SP0",
+    "os_build": "10.0.19045",
+    "python": "3.11.9",
+    "machine": "AMD64",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 3080",
+      "memory_total_mib": 12288,
+      "memory_used_mib": 824,
+      "driver": "617.42"
+    }
+  },
+  "status": "ok",
+  "config": {
+    "hours": 2.0,
+    "steps": [
+      "asr",
+      "diarize",
+      "merge",
+      "vision"
+    ]
+  },
+  "steps": [
+    {
+      "step": "asr",
+      "ok": true,
+      "seconds": 234.2,
+      "peak_vram_above_baseline_mib": 1482,
+      "baseline_mib": 971,
+      "vram_after_mib": 849,
+      "stderr_tail": ""
+    },
+    {
+      "step": "diarize",
+      "ok": true,
+      "seconds": 105.5,
+      "peak_vram_above_baseline_mib": 2471,
+      "baseline_mib": 849,
+      "vram_after_mib": 892,
+      "stderr_tail": ""
+    },
+    {
+      "step": "merge",
+      "ok": true,
+      "seconds": 3.8,
+      "peak_vram_above_baseline_mib": 0,
+      "baseline_mib": 892,
+      "vram_after_mib": 865,
+      "stderr_tail": ""
+    },
+    {
+      "step": "vision",
+      "ok": true,
+      "seconds": 22.2,
+      "peak_vram_above_baseline_mib": 7640,
+      "baseline_mib": 855,
+      "vram_after_mib": 824,
+      "stderr_tail": ""
+    }
+  ],
+  "total_seconds": 365.7,
+  "total_minutes_for_2h": 6.1,
+  "threshold_minutes_for_2h": 45,
+  "peak_vram_absolute_mib": 8495,
+  "threshold_vram_mib": 11500,
+  "transcript_segments": 1547,
+  "passed": true
+}

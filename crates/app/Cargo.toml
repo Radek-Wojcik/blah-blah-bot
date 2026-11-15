@@ -21,7 +21,12 @@ tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 store = { path = "../store" }
+queue = { path = "../queue" }
+keyring-core = "1"
 recorder = { path = "../recorder" }
+
+[target.'cfg(windows)'.dependencies]
+windows-native-keyring-store = "1"
 
 [features]
 # Embeds the built UI instead of loading the dev server. Enabled for release builds.

@@ -1,0 +1,285 @@
+import type {
+  JobView,
+  ModelStatus,
+  ProcessingSettings,
+  StageName,
+  StageView,
+  TranscriptData,
+  TranscriptSegment,
+} from "./types";
+import { stagesProgress } from "../processing";
+
+/** Stage names in execution order. */
+export const STAGE_ORDER: StageName[] = ["asr", "diarize", "merge", "audio_cleanup", "vision"];
+
+/** Message shown next to the running stage in the mock. */
+export const STAGE_MESSAGES: Record<StageName, string> = {
+  asr: "Recognizing speech",
+  diarize: "Separating speakers",
+  merge: "Merging tracks",
+  audio_cleanup: "Applying the audio retention rule",
+  vision: "Describing screenshots",
+};
+
+export function stageViews(
+  statuses: Partial<Record<StageName, Partial<StageView>>> = {},
+): StageView[] {
+  return STAGE_ORDER.map((stage) => ({
+    stage,
+    status: "pending",
+    attempts: 0,
+    error: null,
+    fraction: null,
+    message: null,
+    ...statuses[stage],
+  }));
+}
+
+export function job(
+  meetingId: string,
+  title: string,
+  state: JobView["state"],
+  stages: StageView[],
+  waitingReason: string | null = null,
+): JobView {
+  return { meetingId, title, state, progress: stagesProgress(stages), waitingReason, stages };
+}
+
+const done = (): Partial<StageView> => ({ status: "done", attempts: 1 });
+
+/** Fictional queue: one finished, one running, one waiting for the GPU, one failed. */
+export function demoJobs(): JobView[] {
+  return [
+    job(
+      "m4",
+      "Thruster review",
+      "running",
+      stageViews({
+        asr: done(),
+        diarize: {
+          status: "running",
+          attempts: 1,
+          fraction: 0.4,
+          message: "Separating speakers",
+        },
+      }),
+    ),
+    job(
+      "m3",
+      "Budget check-in",
+      "waiting",
+      stageViews(),
+      "GPU is busy (62% utilization, limit 40%)",
+    ),
+    job(
+      "m2",
+      "Ground station planning",
+      "failed",
+      stageViews({
+        asr: done(),
+        diarize: {
+          status: "failed",
+          attempts: 3,
+          error:
+            "Speaker model could not be loaded: access to the model was denied (HTTP 401). Check the Hugging Face token and the accepted model terms.",
+        },
+      }),
+    ),
+    job(
+      "m5",
+      "ORBIT weekly sync",
+      "done",
+      stageViews({
+        asr: done(),
+        diarize: done(),
+        merge: done(),
+        audio_cleanup: done(),
+        vision: done(),
+      }),
+    ),
+  ];
+}
+
+const MIN = 60_000;
+
+function seg(
+  id: number,
+  speaker: string,
+  startMs: number,
+  endMs: number,
+  text: string,
+  extra: Partial<TranscriptSegment> = {},
+): TranscriptSegment {
+  return {
+    id,
+    track: speaker === "user" ? "mic-default" : "app-discord",
+    speaker,
+    startMs,
+    endMs,
+    text,
+    originalText: null,
+    excluded: false,
+    ...extra,
+  };
+}
+
+/** Fictional transcript of the demo meeting: three remote voices and the user. */
+export function demoTranscript(meetingId: string): TranscriptData {
+  return {
+    meetingId,
+    language: "en",
+    speakers: [
+      { id: "user", label: "You", kind: "user", track: "mic-default" },
+      { id: "alex", label: "Alex", kind: "voice", track: "app-discord" },
+      { id: "kasia", label: "Kasia", kind: "voice", track: "app-discord" },
+      { id: "jan", label: "Jan", kind: "voice", track: "app-discord" },
+    ],
+    segments: [
+      seg(1, "user", 0, 5_800, "Okay, let's start with the thruster test results."),
+      seg(
+        2,
+        "alex",
+        6_000,
+        18_500,
+        "The last firing ran for ninety seconds and the chamber pressure stayed flat.",
+      ),
+      seg(
+        3,
+        "kasia",
+        19_000,
+        26_000,
+        "Good. Did the new valve change anything on the thrust curve?",
+      ),
+      seg(
+        4,
+        "alex",
+        27_000,
+        39_500,
+        "Only a small ripple at ignition, nothing we cannot filter out.",
+        { originalText: "Only a small ripple at ignition, nothing we cannot fill the out." },
+      ),
+      seg(5, "jan", 41_000, 52_000, "I will update the ground station schedule for Thursday."),
+      seg(6, "user", 55_000, 62_000, "Please share the budget sheet before the review."),
+      seg(
+        7,
+        "kasia",
+        2 * MIN + 5_000,
+        2 * MIN + 17_000,
+        "The budget is on track, we are two percent under.",
+      ),
+      seg(
+        8,
+        "alex",
+        2 * MIN + 20_000,
+        2 * MIN + 31_000,
+        "That leaves room for a second test stand.",
+      ),
+      seg(
+        9,
+        "jan",
+        2 * MIN + 43_000,
+        2 * MIN + 55_000,
+        "The antenna array arrives next week, the mount is already on site.",
+      ),
+      seg(
+        10,
+        "user",
+        3 * MIN,
+        3 * MIN + 9_000,
+        "Great, then we keep the launch window as planned.",
+      ),
+      seg(
+        11,
+        "kasia",
+        3 * MIN + 16_000,
+        3 * MIN + 24_000,
+        "Sorry, someone is at the door, please ignore this part.",
+        { excluded: true },
+      ),
+      seg(
+        12,
+        "alex",
+        3 * MIN + 30_000,
+        3 * MIN + 41_000,
+        "I will send the summary to everyone tomorrow.",
+      ),
+    ],
+    screenshots: [
+      {
+        file: "img/0001.png",
+        offsetMs: 40_000,
+        description:
+          "Slide titled Thruster test 7 with a line chart of chamber pressure over ninety seconds. The line is flat after a short spike at ignition.",
+      },
+      {
+        file: "img/0002.png",
+        offsetMs: 2 * MIN + 30_000,
+        description:
+          "Spreadsheet with the quarterly budget. The total row shows a two percent underspend; the cell for the second test stand is highlighted.",
+      },
+    ],
+  };
+}
+
+export function demoProcessingSettings(): ProcessingSettings {
+  return {
+    processAfterRecording: "ask",
+    audioRetention: { mode: "keep", days: 30 },
+    gpuIdleSeconds: 30,
+    gpuMaxUtilPercent: 40,
+    uvPath: "uv",
+    workerDir: "C:\\Program Files\\BlahBlahBot\\worker",
+    llamaServerPath: "C:\\Tools\\llama\\llama-server.exe",
+    modelsDir: "Documents\\BlahBlahBot\\models",
+    hfTokenSet: false,
+  };
+}
+
+export function demoModels(): ModelStatus[] {
+  return [
+    {
+      key: "whisper-turbo",
+      label: "Whisper turbo (speech recognition)",
+      cached: true,
+      gated: false,
+      sizeMb: 1600,
+    },
+    {
+      key: "whisper-large-v3",
+      label: "Whisper large v3 (higher accuracy)",
+      cached: false,
+      gated: false,
+      sizeMb: 3100,
+    },
+    {
+      key: "diarization",
+      label: "Speaker separation (pyannote)",
+      cached: false,
+      gated: true,
+      sizeMb: 1200,
+    },
+    {
+      key: "vision",
+      label: "Screenshot descriptions (vision model)",
+      cached: false,
+      gated: false,
+      sizeMb: 4800,
+    },
+  ];
+}
+
+function bar(x: number, h: number, color: string): string {
+  return `<rect x="${x}" y="${220 - h}" width="40" height="${h}" fill="${color}" opacity=".75"/>`;
+}
+
+/** A deterministic stand-in picture for a meeting screenshot (an SVG data URL). */
+export function demoImage(file: string): string {
+  const first = file.includes("0001");
+  const bars = first
+    ? [60, 150, 130, 128, 130, 129, 131, 130, 128, 130]
+        .map((h, i) => bar(30 + i * 52, h, "#00f0ff"))
+        .join("")
+    : [90, 110, 140, 100, 160, 120, 150, 70].map((h, i) => bar(30 + i * 62, h, "#ff2a6d")).join("");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="560" height="315" viewBox="0 0 560 315"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#101a33"/><stop offset="1" stop-color="#3a1030"/></linearGradient></defs><rect width="560" height="315" fill="url(#g)"/><text x="30" y="40" fill="#dfe9ff" font-family="monospace" font-size="20">${first ? "Thruster test 7" : "Quarterly budget"}</text>${bars}<rect x="20" y="224" width="520" height="2" fill="#6f7ea8"/></svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}

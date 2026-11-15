@@ -5,8 +5,11 @@ mod hotkeys;
 mod ipc;
 mod logging;
 mod overlay;
+mod processing;
+mod processing_commands;
 mod recording;
 mod recording_dto;
+mod secrets;
 mod settings;
 mod state;
 
@@ -115,6 +118,7 @@ pub fn run() {
             logging::init(&log_dir);
             tracing::info!(version = env!("CARGO_PKG_VERSION"), "starting");
 
+            secrets::init();
             let state = AppState::open(&handle)?;
             let recovered = state.mark_interrupted()?;
             if !recovered.is_empty() {
@@ -122,6 +126,14 @@ pub fn run() {
             }
             let settings = state.settings()?;
             app.manage(state);
+            // Jobs interrupted by a crash continue; nothing else starts on its own.
+            handle.state::<AppState>().processing().resume_interrupted();
+            if let Ok(root) = handle.state::<AppState>().recordings_root() {
+                handle
+                    .state::<AppState>()
+                    .processing()
+                    .sweep_expired_audio(&root);
+            }
 
             // A taken hotkey must not stop the application from starting.
             if let Err(e) = hotkeys::register(&handle, &settings) {
@@ -158,6 +170,19 @@ pub fn run() {
             commands::take_screenshot,
             commands::get_settings,
             commands::save_settings,
+            processing_commands::process_meeting,
+            processing_commands::queue_state,
+            processing_commands::retry_job,
+            processing_commands::cancel_job,
+            processing_commands::get_transcript,
+            processing_commands::edit_segment,
+            processing_commands::meeting_image,
+            processing_commands::get_processing_settings,
+            processing_commands::save_processing_settings,
+            processing_commands::set_hf_token,
+            processing_commands::clear_hf_token,
+            processing_commands::model_status,
+            processing_commands::download_models,
             overlay::overlay_image,
             overlay::overlay_finish,
         ])

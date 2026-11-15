@@ -8,6 +8,7 @@ use recorder::session::{CaptureBackend, ToneBackend, WasapiBackend};
 use tauri::{AppHandle, Manager};
 
 use crate::ipc::{IpcError, IpcResult};
+use crate::processing::Processing;
 use crate::recording::Recorder;
 use crate::settings::Settings;
 
@@ -23,6 +24,7 @@ pub struct AppState {
     settings_path: PathBuf,
     default_recordings: PathBuf,
     pub recorder: Recorder,
+    processing: Arc<Processing>,
     pub pending_shot: Mutex<Option<PendingShot>>,
 }
 
@@ -58,8 +60,22 @@ impl AppState {
         } else {
             Arc::new(WasapiBackend)
         };
+        let root_app = app.clone();
+        let processing = Processing::new(
+            app.clone(),
+            store.clone(),
+            &data_dir,
+            &config_dir,
+            move || {
+                root_app
+                    .state::<AppState>()
+                    .recordings_root()
+                    .unwrap_or_default()
+            },
+        );
         Ok(Self {
             recorder: Recorder::new(store.clone(), backend, demo),
+            processing,
             store,
             settings: Mutex::new(Settings::load(&settings_path)),
             settings_path,
@@ -75,6 +91,10 @@ impl AppState {
             .lock()
             .map_err(|_| IpcError::new("internal", "store lock poisoned"))?;
         Ok(f(&guard)?)
+    }
+
+    pub fn processing(&self) -> &Arc<Processing> {
+        &self.processing
     }
 
     pub fn mark_interrupted(&self) -> IpcResult<Vec<String>> {

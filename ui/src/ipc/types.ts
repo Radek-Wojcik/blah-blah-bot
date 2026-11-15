@@ -10,6 +10,8 @@ export interface MeetingSummary {
   state: MeetingState;
   trackCount: number;
   screenshotCount: number;
+  /** State of the processing job of this meeting, null when it was never queued. */
+  job?: JobState | null;
 }
 
 export interface TrackInfo {
@@ -78,6 +80,9 @@ export type IpcErrorCode =
   | "source_not_found"
   | "source_already_added"
   | "hotkey_in_use"
+  | "not_ready"
+  | "already_queued"
+  | "job_running"
   | "io"
   | "internal";
 
@@ -97,4 +102,116 @@ export interface Region {
   y: number;
   w: number;
   h: number;
+}
+
+// ---------- Stage 2: processing pipeline ----------
+
+export type StageName = "asr" | "diarize" | "merge" | "audio_cleanup" | "vision";
+export type StageStatus = "pending" | "running" | "done" | "failed";
+export type JobState = "queued" | "waiting" | "running" | "failed" | "done";
+
+export interface StageView {
+  stage: StageName;
+  status: StageStatus;
+  attempts: number;
+  error: string | null;
+  /** Live progress of the running stage, 0 to 1. */
+  fraction: number | null;
+  message: string | null;
+}
+
+export interface JobView {
+  meetingId: string;
+  title: string;
+  state: JobState;
+  /** Overall progress, 0 to 1. */
+  progress: number;
+  /** Human-readable reason while the state is `waiting`. */
+  waitingReason: string | null;
+  /** In execution order. */
+  stages: StageView[];
+}
+
+export interface QueueState {
+  jobs: JobView[];
+}
+
+export type LanguageChoice = "auto" | "pl" | "en";
+
+export interface ProcessOptions {
+  language?: LanguageChoice;
+  maxSpeakers?: number | null;
+}
+
+export type SpeakerKind = "user" | "voice" | "source" | "unknown";
+
+export interface TranscriptSpeaker {
+  id: string;
+  label: string;
+  kind: SpeakerKind;
+  track?: string;
+}
+
+export interface TranscriptSegment {
+  id: number;
+  track: string;
+  speaker: string;
+  startMs: number;
+  endMs: number;
+  text: string;
+  /** Set when the user corrected the text: the text as recognized. */
+  originalText: string | null;
+  excluded: boolean;
+}
+
+export interface ScreenshotDescription {
+  file: string;
+  offsetMs: number;
+  description: string;
+}
+
+export interface TranscriptData {
+  meetingId: string;
+  language: string;
+  speakers: TranscriptSpeaker[];
+  segments: TranscriptSegment[];
+  screenshots: ScreenshotDescription[];
+}
+
+/** `text: null` restores the recognized text. */
+export interface SegmentEdit {
+  text: string | null;
+  excluded: boolean;
+}
+
+export type ProcessAfterRecording = "ask" | "now" | "later";
+export type RetentionMode = "keep" | "delete" | "keepDays";
+
+export interface ProcessingSettings {
+  processAfterRecording: ProcessAfterRecording;
+  audioRetention: { mode: RetentionMode; days: number };
+  gpuIdleSeconds: number;
+  gpuMaxUtilPercent: number;
+  uvPath: string;
+  workerDir: string;
+  llamaServerPath: string;
+  modelsDir: string;
+  /** Whether a Hugging Face token is stored. The token itself is never returned. */
+  hfTokenSet: boolean;
+}
+
+export type ModelKey = "whisper-turbo" | "whisper-large-v3" | "diarization" | "vision";
+
+export interface ModelStatus {
+  key: ModelKey;
+  label: string;
+  cached: boolean;
+  gated: boolean;
+  sizeMb: number | null;
+}
+
+export interface ModelsProgress {
+  key: string;
+  fraction: number;
+  message: string;
 }

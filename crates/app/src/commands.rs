@@ -26,16 +26,27 @@ pub fn emit_meetings_changed(app: &AppHandle) {
 
 #[tauri::command]
 pub fn list_meetings(state: State<'_, AppState>) -> IpcResult<Vec<MeetingSummary>> {
-    state
-        .with_store(|s| s.list_summaries())
-        .map(|v| v.into_iter().map(Into::into).collect())
+    let jobs = state.processing().job_states();
+    state.with_store(|s| s.list_summaries()).map(|v| {
+        v.into_iter()
+            .map(|s| {
+                let mut summary: MeetingSummary = s.into();
+                summary.job = jobs.get(&summary.id).copied();
+                summary
+            })
+            .collect()
+    })
 }
 
 #[tauri::command]
 pub fn get_meeting(state: State<'_, AppState>, id: String) -> IpcResult<MeetingDetails> {
     state
         .with_store(|s| s.get_meeting(&id))?
-        .map(Into::into)
+        .map(MeetingDetails::from)
+        .map(|mut d| {
+            d.summary.job = state.processing().job_states().get(&d.summary.id).copied();
+            d
+        })
         .ok_or_else(|| IpcError::new("internal", "meeting not found"))
 }
 

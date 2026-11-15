@@ -3,6 +3,7 @@ import { useBackend } from "../backend-context";
 import { formatDuration } from "../format";
 import { errorMessage, useRecordingState, useSources } from "../hooks";
 import type { ActiveSource, SourceInfo } from "../ipc/types";
+import { ProcessPrompt } from "./ProcessPrompt";
 
 const EQ_BARS = 12;
 
@@ -106,6 +107,8 @@ export function Widget() {
           {error}
         </p>
       )}
+
+      <ProcessPrompt />
 
       <div className="actions">
         {recording ? (

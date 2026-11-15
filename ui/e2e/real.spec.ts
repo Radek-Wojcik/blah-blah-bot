@@ -158,6 +158,8 @@ test("a killed recording is found again and can be recovered", async () => {
     kill(first);
   }
 
+  // Let Windows release the WebView data folder of the killed process before reopening it.
+  await new Promise((r) => setTimeout(r, 5_000));
   const second = await launch(dir);
   try {
     const main = pageWith(second.browser, "main")!;
@@ -171,5 +173,71 @@ test("a killed recording is found again and can be recovered", async () => {
     await expect(card.locator("dd").first()).not.toHaveText("0:00");
   } finally {
     kill(second);
+  }
+});
+
+// Needs the models and a GPU: set BBB_MINI_DIR to the folder with the reference recordings
+// (it holds `mini-en/track-magda.wav`). The recording itself is made from generated tones;
+// the test then replaces the audio of the track with the scripted speech, as a stand-in for
+// a recorded call, and processes it with the real worker.
+test("record, process with the real models, open the transcript and exclude a passage", async () => {
+  test.skip(!process.env.BBB_MINI_DIR, "BBB_MINI_DIR is not set");
+  test.setTimeout(15 * 60_000);
+  const speech = path.join(process.env.BBB_MINI_DIR!, "mini-en", "track-magda.wav");
+  const dir = freshDir("process");
+  const app = await launch(dir);
+  try {
+    const widget = pageWith(app.browser, "widget")!;
+    const main = pageWith(app.browser, "main")!;
+    await widget.reload();
+    await widget.getByRole("button", { name: "Record" }).click();
+    await expect(widget.getByText("Recording", { exact: true })).toBeVisible();
+    await widget.waitForTimeout(1_500);
+    await widget.getByRole("button", { name: "Stop" }).click();
+    await expect(widget.getByText("Standby")).toBeVisible();
+
+    // Swap the tone for speech in the first segment of the track.
+    const root = path.join(dir, "recordings");
+    const folder = path.join(root, fs.readdirSync(root)[0]);
+    const track = fs
+      .readdirSync(folder, { withFileTypes: true })
+      .find((e) => e.isDirectory() && e.name !== "img")!.name;
+    const segment = path.join(folder, track, fs.readdirSync(path.join(folder, track)).sort()[0]);
+    fs.copyFileSync(speech, segment);
+
+    await main.reload();
+    const card = main.getByRole("article").first();
+    await card.getByRole("button", { name: "Process" }).click();
+
+    await main.getByRole("button", { name: "Queue", exact: true }).click();
+    const stages = main.getByRole("list", { name: /^Stages of / });
+    await expect(stages.getByRole("listitem").first()).toBeVisible({ timeout: 30_000 });
+    // The last stage writes `descriptions.json`; wait for the whole job, not for a stage.
+    const work = path.join(folder, "work");
+    await expect
+      .poll(() => fs.existsSync(path.join(work, "descriptions.json")), {
+        timeout: 12 * 60_000,
+        intervals: [2_000],
+      })
+      .toBe(true);
+
+    // Results on disk.
+    const transcript = JSON.parse(fs.readFileSync(path.join(work, "transcript.json"), "utf8"));
+    expect(transcript.segments.length).toBeGreaterThan(0);
+
+    // Open the transcript and exclude the first passage; the edit survives a reload.
+    await main.reload();
+    await main.getByRole("button", { name: "Meetings", exact: true }).click();
+    await main.getByRole("article").first().getByRole("button", { name: "Transcript" }).click();
+    const exclude = main.getByRole("button", { name: /^Exclude the segment at / }).first();
+    await exclude.click();
+    await expect(main.getByRole("button", { name: /^Include the segment at / })).toHaveCount(1);
+    const edits = JSON.parse(fs.readFileSync(path.join(work, "edits.json"), "utf8"));
+    expect(Object.values(edits.segments)).toEqual([{ excluded: true }]);
+    await main.reload();
+    await main.getByRole("article").first().getByRole("button", { name: "Transcript" }).click();
+    await expect(main.getByRole("button", { name: /^Include the segment at / })).toHaveCount(1);
+  } finally {
+    kill(app);
   }
 });
