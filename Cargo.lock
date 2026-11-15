@@ -3212,6 +3212,7 @@ dependencies = [
  "nvml-wrapper",
  "serde",
  "serde_json",
+ "sha2",
  "speakers",
  "store",
  "tempfile",
