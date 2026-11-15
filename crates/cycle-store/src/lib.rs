@@ -6,6 +6,7 @@
 //!   Markdown files.
 //! * [`repo`]: the working tree, driven through the `git` command line.
 //! * [`issues`]: open issues with an offline cache.
+//! * [`publish`]: the commit of a meeting folder, built off the index and pushed.
 //! * [`context`](mod@context): `work/context.json`.
 //! * [`draft`], [`mod@render`]: the meeting draft types and the template engine.
 
@@ -16,6 +17,7 @@ pub mod error;
 mod fsutil;
 mod git;
 pub mod issues;
+pub mod publish;
 pub mod render;
 pub mod repo;
 pub mod schema;
@@ -35,6 +37,10 @@ pub use draft::{
 pub use error::{CycleError, Result, ValidationIssue};
 pub use git::git_available;
 pub use issues::{fetch_open_issues, IssueCache, IssueList, OpenIssue};
+pub use publish::{
+    publish_meeting, LocalSync, PublishError, PublishErrorKind, PublishFile, PublishRequest,
+    Published,
+};
 pub use render::{
     defuse_discord_mentions, is_discord_id, item_line, item_line_with, neutralise_mentions, render,
     BuiltinSection, RenderOptions, Variant,

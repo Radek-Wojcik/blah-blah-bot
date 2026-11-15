@@ -22,7 +22,7 @@ use crate::time::{format_utc_date, format_utc_minute, now_unix_ms};
 use crate::topics::{self, Topic};
 
 const STATE_FILE: &str = "bbb-cache.json";
-const FETCH_TIMEOUT_CONFIG: [&str; 6] = [
+pub(crate) const FETCH_TIMEOUT_CONFIG: [&str; 6] = [
     "-c",
     "http.lowSpeedLimit=1000",
     "-c",
