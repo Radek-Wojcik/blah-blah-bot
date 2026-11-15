@@ -1,0 +1,22 @@
+[package]
+name = "publishers"
+description = "Publishing targets: HTTP layer with error classification and redaction, plus fake GitHub and Discord servers for tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Hand-written fake GitHub and Discord servers, for the tests of this crate and of the
+# application. Never part of a release build.
+test-support = []
+
+[dependencies]
+serde_json.workspace = true
+store = { path = "../store" }
+thiserror.workspace = true
+ureq = { version = "3.5", default-features = false, features = ["native-tls-no-default"] }
+
+[lints]
+workspace = true
