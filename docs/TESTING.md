@@ -184,3 +184,25 @@ The GPU guard is tested on recorded traces: a real trace of the idle reference m
 Extract and reduce with the real model through `llama-server` are covered by the whole-pipeline test above; the Python worker tests marked `models` cover the Stage 2 steps only.
 
 The fake worker in `crates/queue/tests/stage4_fake_worker.rs` is a small Python script started in place of `python -m bbb_worker`; it needs only a Python 3 interpreter on `PATH`, no models and no GPU. Cloud is tested against a mock server only; no test sends text to a hosted service.
+
+## 14. Stage 5 test commands
+
+| What | Command | Runs |
+|---|---|---|
+| Rules of the targets (`auto`, `on-approval`, `off` and their defaults), the publish plan, the public-repository check, the frozen snapshot and the draft lock, the outbox dispatcher (claim, execute, backoff and `Retry-After`, offline pause, crash recovery, progress of a Discord post), against a local bare Git remote, a fake GitHub and a fake Discord webhook (`publishers`); the outbox state machine, a Discord post held for the issues of its meeting, operations enqueued again after a cancel (`store`); status decisions in the draft (`queue`); planning, publishing, the lock, the `auto` rule, the tasks of a cycle and the check for a public repository through the command layer (`app`) | `cargo test -p publishers -p store -p queue -p app` | CI |
+| The whole loop on a demo-like cycle (approved status changes, report, transcript, screenshots and `topics.yaml` in the remote, issues with assignee, due date and report link, an issue closed on the fake GitHub that is done in the next context, a Discord message with mentions and issue links) | `cargo test -p publishers --test full_loop` | CI |
+| Faults: no network at publishing and recovery through the outbox, a push rejected by a concurrent commit and built again on the new tip, a remote that keeps changing, an answer lost after an issue or a comment was created (no duplicate), a rate limit, a crash while an operation runs, and a scan of the database file, the snapshots, the working tree, the history of both repositories, the log of the dispatcher and the outbox rows for the mock token and webhook | `cargo test -p publishers --test resilience` | CI |
+| Release check against the real services: a test GitHub repository (token and push rights, an issue created once, closed with a comment and read back, a commit pushed to a new branch that is removed again) and a test Discord webhook (the webhook exists, one message is posted) | `BBB_RELEASE_CHECK=yes BBB_RC_REPO=<owner/name> BBB_RC_DISCORD_REF=<cred:...> cargo test -p app release_check -- --ignored --test-threads=1 --nocapture` | Locally before a release |
+
+Every test is written against fakes: the "network" is loopback ports that the tests start, the "remote" is a bare repository in a temporary folder, and "offline" is a closed port or a renamed folder. No normal test talks to a real host.
+
+**The release check.** The tests of `crates/app/src/release_check.rs` are `#[ignore]`d and refuse to run unless `BBB_RELEASE_CHECK=yes` is set. They use a throwaway repository and webhook that exist only for this purpose:
+
+| Variable | Meaning |
+|---|---|
+| `BBB_RELEASE_CHECK` | Must be `yes`; without it every check stops at once. |
+| `BBB_RC_REPO` | The GitHub test repository, `owner/name`. It needs Issues and a token with write access. A public repository is refused unless `BBB_RC_ALLOW_PUBLIC=yes`. |
+| `BBB_RC_GITHUB_API` | Optional API address (GitHub Enterprise Server); the public GitHub when absent. |
+| `BBB_RC_DISCORD_REF` | The `cred:` reference of the test webhook, for example `cred:discord/release-check`. |
+
+The secrets are not variables: the GitHub token (`github-token@<host>`) and the webhook (`target:<reference>`) are the entries that the application stores in the Windows Credential Manager from its publishing settings. Enter them there, on the release machine, never in a chat or a file. The checks leave a closed issue labelled `cycle:RC<time>` in the test repository, because an issue cannot be deleted through the API.

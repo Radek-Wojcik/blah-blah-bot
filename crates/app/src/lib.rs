@@ -17,6 +17,8 @@ mod publish_secrets;
 mod publishing;
 mod recording;
 mod recording_dto;
+#[cfg(test)]
+mod release_check;
 mod secrets;
 mod settings;
 mod speaker_commands;
