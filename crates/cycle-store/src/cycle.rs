@@ -80,6 +80,21 @@ impl Default for Report {
     }
 }
 
+/// What `targets.github.publish` is when the cycle does not set it: the report, the transcript
+/// and the issues wait for the user to press Publish. The one place that decides it; the
+/// parser and the publishing rules both read it.
+pub const DEFAULT_GITHUB_PUBLISH: PublishMode = PublishMode::OnApproval;
+/// What `targets.discord.publish` is when the cycle does not set it.
+pub const DEFAULT_DISCORD_PUBLISH: PublishMode = PublishMode::OnApproval;
+
+fn default_github_publish() -> PublishMode {
+    DEFAULT_GITHUB_PUBLISH
+}
+
+fn default_discord_publish() -> PublishMode {
+    DEFAULT_DISCORD_PUBLISH
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PublishMode {
@@ -94,7 +109,7 @@ pub enum PublishMode {
 pub struct GithubTarget {
     #[serde(default = "default_github_path")]
     pub path: String,
-    #[serde(default)]
+    #[serde(default = "default_github_publish")]
     pub publish: PublishMode,
     /// Create GitHub issues for task items and write back status changes. Left out of the
     /// file while true, so existing files keep their bytes.
@@ -118,7 +133,7 @@ impl Default for GithubTarget {
     fn default() -> Self {
         Self {
             path: default_github_path(),
-            publish: PublishMode::OnApproval,
+            publish: DEFAULT_GITHUB_PUBLISH,
             issues: true,
         }
     }
@@ -129,7 +144,7 @@ impl Default for GithubTarget {
 pub struct DiscordTarget {
     /// A `cred:` reference to the webhook URL in the Credential Manager, never the URL.
     pub webhook: String,
-    #[serde(default)]
+    #[serde(default = "default_discord_publish")]
     pub publish: PublishMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template: Option<String>,

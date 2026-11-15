@@ -28,7 +28,8 @@ pub mod topics;
 pub use context::{build_context, Context, ContextRequest, DEFAULT_MAX_PREVIOUS_ITEMS};
 pub use cycle::{
     Cycle, DiscordRef, DiscordTarget, GithubTarget, GlossaryEntry, Languages, NotionTarget,
-    Participant, PublishMode, Report, Targets, DEFAULT_TEMPLATE_NAME,
+    Participant, PublishMode, Report, Targets, DEFAULT_DISCORD_PUBLISH, DEFAULT_GITHUB_PUBLISH,
+    DEFAULT_TEMPLATE_NAME,
 };
 pub use draft::{
     Certainty, CertaintyLevel, Decision, Draft, Item, ItemType, Language, LanguageSetting,

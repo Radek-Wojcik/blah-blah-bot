@@ -3209,9 +3209,13 @@ name = "publishers"
 version = "0.4.0"
 dependencies = [
  "cycle-store",
+ "publishers",
+ "serde",
  "serde_json",
  "store",
+ "tempfile",
  "thiserror 2.0.21",
+ "tracing",
  "ureq",
 ]
 
