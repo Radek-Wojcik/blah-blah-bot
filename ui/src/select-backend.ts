@@ -16,6 +16,8 @@ export function selectBackend(search: string = window.location.search): Backend 
   const jobms = params.get("jobms");
   return createMockBackend({
     recording: params.get("state") === "recording",
+    // `newdraft=1` starts with a newer draft next to the edited one of the demo meeting.
+    newDraft: params.get("newdraft") === "1",
     ...(rate === null ? {} : { clockRate: Number(rate) }),
     ...(jobms === null ? {} : { jobStepMs: Number(jobms) }),
   });

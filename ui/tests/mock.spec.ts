@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { recordFromGate } from "./helpers";
 
 test.describe("recorder widget on the mock backend", () => {
   test("start, add a source, take a screenshot, remove a source, stop", async ({ page }) => {
@@ -7,7 +8,7 @@ test.describe("recorder widget on the mock backend", () => {
     // The microphone is preselected; add Discord as well.
     await page.getByLabel("Microphone (USB headset)").check();
     await page.getByLabel("Discord").check();
-    await page.getByRole("button", { name: "Record" }).click();
+    await recordFromGate(page);
     await expect(page.getByText("Recording", { exact: true })).toBeVisible();
     const sources = page.getByRole("list", { name: "Recorded sources" });
     await expect(sources.getByRole("listitem")).toHaveCount(2);
@@ -105,12 +106,19 @@ test.describe("processing pipeline on the mock backend", () => {
     const job = page.getByRole("article", { name: "Kickoff" });
     await expect(job).toBeVisible();
     const stages = job.getByRole("list", { name: "Stages of Kickoff" });
-    await expect(stages.getByRole("listitem")).toHaveCount(7);
+    await expect(stages.getByRole("listitem")).toHaveCount(9);
     await expect(stages.getByRole("listitem").filter({ hasText: "Running" })).toHaveCount(1);
     await expect(job.getByRole("progressbar")).toBeVisible();
 
     await expect(job.getByText("Processed", { exact: true })).toBeVisible({ timeout: 20_000 });
     await expect(stages.getByRole("listitem").filter({ hasText: "Done" })).toHaveCount(7);
+    // A meeting without a cycle has nothing to extract: the two stages say so.
+    const skipped = stages
+      .getByRole("listitem")
+      .filter({ hasText: "Skipped: the meeting has no cycle" });
+    await expect(skipped).toHaveCount(2);
+    await expect(stages.getByRole("listitem").filter({ hasText: "Extract items" })).toHaveCount(1);
+    await expect(stages.getByRole("listitem").filter({ hasText: "Build draft" })).toHaveCount(1);
 
     // Back in the list the meeting offers its transcript.
     await page.getByRole("button", { name: "Meetings", exact: true }).click();
@@ -146,14 +154,14 @@ test.describe("processing pipeline on the mock backend", () => {
 
   test("the process prompt after a recording starts or skips processing", async ({ page }) => {
     await page.goto("/?view=widget&backend=mock");
-    await page.getByRole("button", { name: "Record" }).click();
+    await recordFromGate(page);
     await page.getByRole("button", { name: "Stop" }).click();
     const dialog = page.getByRole("dialog", { name: "Process now or later?" });
     await expect(dialog).toBeVisible();
     await dialog.getByRole("button", { name: "Later" }).click();
     await expect(dialog).toHaveCount(0);
 
-    await page.getByRole("button", { name: "Record" }).click();
+    await recordFromGate(page);
     await page.getByRole("button", { name: "Stop" }).click();
     await expect(dialog).toBeVisible();
     await dialog.getByRole("button", { name: "Process now" }).click();

@@ -21,6 +21,8 @@ export const STAGE_ORDER: StageName[] = [
   "clips",
   "audio_cleanup",
   "vision",
+  "extract",
+  "reduce",
 ];
 
 /** Message shown next to the running stage in the mock. */
@@ -112,6 +114,8 @@ export function demoJobs(): JobView[] {
         clips: done(),
         audio_cleanup: done(),
         vision: done(),
+        extract: done(),
+        reduce: done(),
       }),
     ),
   ];
@@ -253,6 +257,14 @@ export function demoProcessingSettings(): ProcessingSettings {
     voiceSuggest: 0.6,
     voiceMargin: 0.1,
     clipMaxDays: 30,
+    llm: {
+      defaultKind: "managed",
+      managed: { modelPath: "D:\\Models\\gemma-4-12b-q4_k_m.gguf", ctx: 16384 },
+      external: { baseUrl: "http://127.0.0.1:11434/v1", model: "gemma4:12b" },
+      cloud: { baseUrl: "https://api.llm-vendor.example/v1", model: "large-model-1" },
+      externalKeySet: false,
+      cloudKeySet: true,
+    },
   };
 }
 
@@ -306,7 +318,9 @@ function clip(idx: number, startMs: number, endMs: number, text: string): ClipVi
  * The voices detected in the demo meeting: one recognized automatically, one suggested, two
  * unknown (one with three clips, one with two).
  */
-export function demoVoices(): VoiceView[] {
+export function demoVoices(
+  personId: (key: string) => string | null = (k) => `p-${k}`,
+): VoiceView[] {
   const base = { track: "app-discord", confirmed: false, mergedInto: null };
   return [
     {
@@ -317,7 +331,7 @@ export function demoVoices(): VoiceView[] {
       decision: "auto",
       score: 0.83,
       suggestedParticipantId: null,
-      assignedParticipantId: "p-alex",
+      assignedParticipantId: personId("alex"),
       clips: [
         clip(
           0,
@@ -335,7 +349,7 @@ export function demoVoices(): VoiceView[] {
       speechMs: 9 * MIN + 30_000,
       decision: "suggested",
       score: 0.61,
-      suggestedParticipantId: "p-kasia",
+      suggestedParticipantId: personId("kasia"),
       assignedParticipantId: null,
       clips: [
         clip(0, 19_000, 26_000, "Good. Did the new valve change anything on the thrust curve?"),

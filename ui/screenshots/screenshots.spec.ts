@@ -87,6 +87,45 @@ test.describe("static screenshots", () => {
     await page.screenshot({ path: path.join(OUT, "speakers-profiles.png") });
   });
 
+  // Stage 4. Run only these with: npx playwright test --project=screenshots -g "cycle settings|source popover|report mode gate"
+  test("cycle settings", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 1100 });
+    await page.goto("/?view=main&backend=mock&rate=0&page=cycle&cycle=NOMAD");
+    await expect(page.getByRole("heading", { name: "Participants" })).toBeVisible();
+    await expect(page.getByLabel("Participant 4 name")).toHaveValue("Piotr Demo");
+    await settle(page);
+    await page.screenshot({ path: path.join(OUT, "cycle-settings.png") });
+  });
+
+  test("draft with the source popover", async ({ page }) => {
+    // Tall enough that the whole draft is in view and nothing scrolls.
+    await page.setViewportSize({ width: 1280, height: 1250 });
+    await page.goto("/?view=main&backend=mock&rate=0&page=draft&meeting=m5");
+    await expect(page.getByLabel("Sections", { exact: true }).getByRole("region")).toHaveCount(4);
+    await page
+      .getByRole("button", { name: "Source of: Update the ground station schedule for Thursday." })
+      .click();
+    await expect(
+      page.getByRole("dialog", {
+        name: "Source of: Update the ground station schedule for Thursday.",
+      }),
+    ).toBeVisible();
+    await settle(page);
+    await page.screenshot({ path: path.join(OUT, "draft-source-popover.png") });
+  });
+
+  test("report mode gate", async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 640 });
+    await page.goto("/?view=widget&backend=mock&rate=0");
+    await page.getByRole("button", { name: "Record" }).click();
+    const gate = page.getByRole("dialog", { name: "Choose the report for this recording" });
+    await gate.getByRole("button", { name: "Change…" }).click();
+    await gate.getByLabel("Report mode").selectOption("by-type");
+    await expect(gate.getByLabel("Meeting type")).toHaveValue("budget");
+    await settle(page);
+    await page.screenshot({ path: path.join(OUT, "report-mode-gate.png") });
+  });
+
   test("screenshot description in the transcript", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto("/?view=main&backend=mock&rate=0&page=transcript&meeting=m5");
@@ -122,6 +161,9 @@ test("record flow GIF", async ({ page }) => {
   await page.getByLabel("Discord").check();
   await shot();
   await page.getByRole("button", { name: "Record" }).click();
+  // The report mode gate comes first, with the last choice ready to confirm.
+  await shot();
+  await page.getByRole("button", { name: "Start recording" }).click();
   await shot();
   await page.waitForTimeout(1_200);
   await shot();

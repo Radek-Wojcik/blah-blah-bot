@@ -32,6 +32,24 @@ function pageWith(browser: Browser, view: string): Page | undefined {
     .find((p) => p.url().includes(`view=${view}`));
 }
 
+/**
+ * Presses Record and confirms the report mode gate. A fresh data folder has no cycle yet, so the
+ * gate offers to create one: the demo cycle is made and recorded with its default mode.
+ */
+async function recordThroughGate(widget: Page) {
+  await widget.getByRole("button", { name: "Record" }).click();
+  const gate = widget.getByRole("dialog", { name: "Choose the report for this recording" });
+  await expect(gate).toBeVisible();
+  await expect(gate.getByText("Loading the cycles…")).toHaveCount(0);
+  const create = gate.getByRole("button", { name: "Create cycle" });
+  if (await create.isVisible()) {
+    await gate.getByLabel("Cycle id").fill("DEMO");
+    await gate.getByLabel("Name", { exact: true }).fill("Demo cycle");
+    await create.click();
+  }
+  await gate.getByRole("button", { name: "Start recording" }).click();
+}
+
 async function launch(dataDir: string): Promise<Running> {
   const port = nextPort++;
   const proc = spawn(EXE, [], {
@@ -84,7 +102,7 @@ test("record three tracks, add a source, take a screenshot, stop", async () => {
 
     // Microphone tone is preselected; add the Discord tone.
     await widget.getByLabel("Discord (demo tone)").check();
-    await widget.getByRole("button", { name: "Record" }).click();
+    await recordThroughGate(widget);
     await expect(widget.getByText("Recording", { exact: true })).toBeVisible();
     const sources = widget.getByRole("list", { name: "Recorded sources" });
     await expect(sources.getByRole("listitem")).toHaveCount(2);
@@ -150,7 +168,7 @@ test("a killed recording is found again and can be recovered", async () => {
   try {
     const widget = pageWith(first.browser, "widget")!;
     await widget.reload();
-    await widget.getByRole("button", { name: "Record" }).click();
+    await recordThroughGate(widget);
     await expect(widget.getByText("Recording", { exact: true })).toBeVisible();
     // Long enough for at least one 60 s segment to be closed and journaled.
     await widget.waitForTimeout(63_000);
@@ -190,7 +208,7 @@ test("record, process with the real models, open the transcript and exclude a pa
     const widget = pageWith(app.browser, "widget")!;
     const main = pageWith(app.browser, "main")!;
     await widget.reload();
-    await widget.getByRole("button", { name: "Record" }).click();
+    await recordThroughGate(widget);
     await expect(widget.getByText("Recording", { exact: true })).toBeVisible();
     await widget.waitForTimeout(1_500);
     await widget.getByRole("button", { name: "Stop" }).click();

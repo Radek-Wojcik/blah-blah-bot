@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { useBackend } from "../backend-context";
 import { errorMessage } from "../hooks";
-import type { ModelStatus, ProcessingSettings as Settings, RetentionMode } from "../ipc/types";
+import type {
+  LlmKind,
+  LlmSettings,
+  ModelStatus,
+  ProcessingSettings as Settings,
+  RetentionMode,
+} from "../ipc/types";
+import { KIND_LABELS, backendDetail, validateLlmSettings } from "../llm";
 import { percent } from "../processing";
 import { validateVoiceSettings } from "../speakers";
 import { VoiceProfiles } from "./VoiceProfiles";
@@ -214,6 +221,40 @@ export function ProcessingSettingsView() {
         </div>
       </div>
 
+      {settings.llm && (
+        <LanguageModelSettings
+          llm={settings.llm}
+          onChange={(llm) => set({ llm })}
+          onSave={() => {
+            setMessage(null);
+            return backend
+              .saveProcessingSettings(settings)
+              .then(() => {
+                load();
+                return "Language model settings saved";
+              })
+              .catch((err) => errorMessage(err));
+          }}
+          onKeysChanged={() =>
+            // Only the "saved" flags are taken over: unsaved edits of the form stay.
+            void backend.getProcessingSettings().then((fresh) =>
+              setSettings((cur) =>
+                cur?.llm && fresh.llm
+                  ? {
+                      ...cur,
+                      llm: {
+                        ...cur.llm,
+                        externalKeySet: fresh.llm.externalKeySet,
+                        cloudKeySet: fresh.llm.cloudKeySet,
+                      },
+                    }
+                  : cur,
+              ),
+            )
+          }
+        />
+      )}
+
       <h3 className="sub-head">Hugging Face token</h3>
       <div className="panel quiet" style={{ maxWidth: 620 }}>
         <div className="panel-body">
@@ -389,5 +430,213 @@ function ModelList() {
         })}
       </ul>
     </>
+  );
+}
+
+type KeyKind = "external" | "cloud";
+
+/**
+ * The language model that makes the draft: the managed local model, an external OpenAI-compatible
+ * server and the cloud endpoint (chosen per meeting, never as the default). Keys are write-only:
+ * only whether one is saved is shown.
+ */
+function LanguageModelSettings(props: {
+  llm: LlmSettings;
+  onChange: (llm: LlmSettings) => void;
+  onSave: () => Promise<string>;
+  onKeysChanged: () => void;
+}) {
+  const { llm, onChange, onKeysChanged } = props;
+  const [message, setMessage] = useState<string | null>(null);
+  const problem = validateLlmSettings(llm);
+  const num = (v: string) => (v === "" ? 0 : Number(v));
+  const kinds: Exclude<LlmKind, "cloud">[] = ["managed", "external"];
+  return (
+    <section aria-labelledby="llm-heading">
+      <h3 id="llm-heading" className="sub-head">
+        Language model
+      </h3>
+      <div className="panel quiet" style={{ maxWidth: 620 }}>
+        <div className="panel-body">
+          <form
+            className="form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              setMessage(null);
+              void props.onSave().then(setMessage);
+            }}
+          >
+            <p className="notice">
+              The language model turns the transcript into the draft report. Only the transcript
+              text and screenshot descriptions are ever sent anywhere, and the cloud only after you
+              confirm it for a meeting. There is no automatic fallback to it.
+            </p>
+            <label>
+              Default model
+              <select
+                aria-label="Default language model"
+                value={llm.defaultKind}
+                onChange={(e) =>
+                  onChange({ ...llm, defaultKind: e.target.value as Exclude<LlmKind, "cloud"> })
+                }
+              >
+                {kinds.map((k) => (
+                  <option key={k} value={k}>
+                    {KIND_LABELS[k]} · {backendDetail(llm, k)}
+                  </option>
+                ))}
+              </select>
+              <small>Used when a meeting is processed without another choice.</small>
+            </label>
+            <fieldset className="llm-group">
+              <legend>Local model (managed)</legend>
+              <label>
+                Model file (GGUF)
+                <input
+                  value={llm.managed.modelPath}
+                  onChange={(e) =>
+                    onChange({ ...llm, managed: { ...llm.managed, modelPath: e.target.value } })
+                  }
+                />
+              </label>
+              <label>
+                Context size (2048 or more)
+                <input
+                  type="number"
+                  min={2048}
+                  step={1024}
+                  value={llm.managed.ctx}
+                  onChange={(e) =>
+                    onChange({ ...llm, managed: { ...llm.managed, ctx: num(e.target.value) } })
+                  }
+                />
+              </label>
+            </fieldset>
+            <fieldset className="llm-group">
+              <legend>External server</legend>
+              <label>
+                Base address
+                <input
+                  value={llm.external.baseUrl}
+                  placeholder="http://127.0.0.1:11434/v1"
+                  onChange={(e) =>
+                    onChange({ ...llm, external: { ...llm.external, baseUrl: e.target.value } })
+                  }
+                />
+              </label>
+              <label>
+                Model name
+                <input
+                  value={llm.external.model}
+                  onChange={(e) =>
+                    onChange({ ...llm, external: { ...llm.external, model: e.target.value } })
+                  }
+                />
+              </label>
+            </fieldset>
+            <fieldset className="llm-group">
+              <legend>Cloud (chosen per meeting)</legend>
+              <label>
+                Base address
+                <input
+                  value={llm.cloud.baseUrl}
+                  placeholder="https://api.example.com/v1"
+                  onChange={(e) =>
+                    onChange({ ...llm, cloud: { ...llm.cloud, baseUrl: e.target.value } })
+                  }
+                />
+              </label>
+              <label>
+                Model name
+                <input
+                  value={llm.cloud.model}
+                  onChange={(e) =>
+                    onChange({ ...llm, cloud: { ...llm.cloud, model: e.target.value } })
+                  }
+                />
+              </label>
+            </fieldset>
+            {problem && (
+              <p className="error" role="alert">
+                {problem}
+              </p>
+            )}
+            <div className="actions">
+              {message && <span role="status">{message}</span>}
+              <button className="btn btn-record" type="submit" disabled={problem !== null}>
+                Save language model settings
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+      <ApiKey kind="external" saved={llm.externalKeySet} onChanged={onKeysChanged} />
+      <ApiKey kind="cloud" saved={llm.cloudKeySet} onChanged={onKeysChanged} />
+    </section>
+  );
+}
+
+/** One write-only API key: a field to store a new one, a button to clear it, and a "saved" flag. */
+function ApiKey(props: { kind: KeyKind; saved: boolean; onChanged: () => void }) {
+  const { kind, saved, onChanged } = props;
+  const backend = useBackend();
+  const [key, setKey] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const label = kind === "cloud" ? "Cloud API key" : "External server key";
+  const run = (p: Promise<void>) => {
+    setError(null);
+    p.then(() => {
+      setKey("");
+      onChanged();
+    }).catch((e) => setError(errorMessage(e)));
+  };
+  return (
+    <div className="panel quiet key-panel" style={{ maxWidth: 620 }}>
+      <div className="panel-body">
+        <form
+          className="form"
+          aria-label={label}
+          onSubmit={(e) => {
+            e.preventDefault();
+            run(kind === "cloud" ? backend.setCloudKey(key) : backend.setExternalKey(key));
+          }}
+        >
+          <p className="token-state">
+            {label}: {saved ? "saved" : "not saved"}
+          </p>
+          <label>
+            {label}
+            <input
+              type="password"
+              autoComplete="off"
+              value={key}
+              placeholder={saved ? "Enter a new key to replace it" : "Key"}
+              onChange={(e) => setKey(e.target.value)}
+            />
+            <small>It is kept in the system credential store and never shown again.</small>
+          </label>
+          {error && (
+            <p className="error" role="alert">
+              {error}
+            </p>
+          )}
+          <div className="actions">
+            <button
+              className="btn btn-ghost"
+              type="button"
+              disabled={!saved}
+              onClick={() =>
+                run(kind === "cloud" ? backend.clearCloudKey() : backend.clearExternalKey())
+              }
+            >
+              Clear {kind} key
+            </button>
+            <button className="btn" type="submit" disabled={key.trim() === ""}>
+              Save {kind} key
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }

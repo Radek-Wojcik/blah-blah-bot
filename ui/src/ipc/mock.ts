@@ -12,24 +12,44 @@ import {
   stageViews,
   toneWav,
 } from "./mock-demo";
-import { stage4Stubs } from "./mock-stubs";
+import { createCycleStore, type RecordingReport } from "./mock-cycles";
+import { createMockDrafts } from "./mock-drafts";
+import { fail } from "./mock-util";
+import { missingForKind, urlHost, validateLlmSettings } from "../llm";
 import { validateVoiceSettings } from "../speakers";
 import type {
   ActiveSource,
+  CloudPreview,
   JobView,
+  LlmKind,
   MeetingDetails,
   MeetingSummary,
   ModelsProgress,
+  ParticipantView,
+  ProcessOptions,
   QueueState,
   RecordingState,
   Settings,
   SourceInfo,
+  StageName,
   TranscriptData,
   VoiceView,
   VoicesData,
 } from "./types";
 
 const MIN = 60_000;
+
+/** What a job does in the language-model stages: run with a backend or skip them with a note. */
+interface LlmPlan {
+  kind: LlmKind | null;
+  skip: string | null;
+}
+const NO_BACKEND: LlmPlan = {
+  kind: null,
+  skip: "no language model backend was chosen for this meeting",
+};
+const LLM_STAGES: StageName[] = ["extract", "reduce"];
+
 /** Fixed reference time so demo data and screenshots are reproducible. */
 export const DEMO_NOW = Date.UTC(2026, 10, 13, 14, 0, 0);
 
@@ -67,10 +87,8 @@ export interface MockOptions {
   clockRate?: number;
   /** Milliseconds a processing stage (and a model download) takes. Default 1200. */
   jobStepMs?: number;
-}
-
-function fail(code: string, message: string): never {
-  throw { code, message };
+  /** Start with a newer draft next to the edited one of the demo meeting (the banner). */
+  newDraft?: boolean;
 }
 
 /** In-memory backend that serves the fictional demo cycle. No audio devices, files or network. */
@@ -80,6 +98,18 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     recordHotkey: "Ctrl+Alt+R",
     screenshotHotkey: "Ctrl+Alt+S",
   };
+  // ----- cycles, report settings and drafts -----
+  const cycles = createCycleStore();
+  /** What each meeting was recorded with; a meeting without an entry has no cycle. */
+  const reports = new Map<string, RecordingReport>([
+    [
+      "m5",
+      { cycleId: "NOMAD", mode: "auto", template: null, meetingType: null, outputLanguage: null },
+    ],
+  ]);
+  const cycleListeners = new Set<{ cb: () => void }>();
+  const emitCycles = () => cycleListeners.forEach((l) => l.cb());
+  const cycleOf = (meetingId: string): string | null => reports.get(meetingId)?.cycleId ?? null;
   let meetings = [...demoMeetings];
   let state: RecordingState = {
     status: "idle",
@@ -99,10 +129,56 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
   const models = demoModels();
   let jobs: JobView[] = demoJobs();
   const transcripts = new Map<string, TranscriptData>([["m5", demoTranscript("m5")]]);
+  const drafts = createMockDrafts(cycles, (id) => transcripts.has(id));
+  drafts.create("m5", reports.get("m5")!);
+  if (opts.newDraft) drafts.leaveNewDraft("m5");
+  /** The backend each job was started with; a job without an entry has none. */
+  const plans = new Map<string, LlmPlan>();
+  /** Meetings the user confirmed sending to the cloud endpoint, with the host confirmed. */
+  const confirmed = new Map<string, string>();
   // ----- speakers and voice profiles -----
-  const voices = new Map<string, VoiceView[]>([["m5", demoVoices()]]);
+  const keyOf = (cycleId: string, id: string) => `${cycleId}:${id}`;
+  const demoVoicesOf = (cycleId: string | null): VoiceView[] =>
+    demoVoices((k) =>
+      cycleId === null
+        ? `p-${k}`
+        : cycles.participants(cycleId).some((p) => p.id === k)
+          ? keyOf(cycleId, k)
+          : null,
+    );
+  const voices = new Map<string, VoiceView[]>([["m5", demoVoicesOf("NOMAD")]]);
+  /** Legacy participants (named before cycles existed). */
   let participants = demoParticipants();
   let nextParticipant = 1;
+  /** Voice profile figures of cycle participants, by `CYCLE:id`. */
+  const stats = new Map<string, { sampleCount: number; speechMs: number }>([
+    [keyOf("NOMAD", "alex"), { sampleCount: 4, speechMs: 18 * MIN + 20_000 }],
+    [keyOf("NOMAD", "jan"), { sampleCount: 2, speechMs: 7 * MIN + 45_000 }],
+    [keyOf("NOMAD", "kasia"), { sampleCount: 3, speechMs: 11 * MIN + 5_000 }],
+  ]);
+  /** The participants of a cycle as the voice screens see them. */
+  const cycleViews = (cycleId: string): ParticipantView[] =>
+    cycles
+      .participants(cycleId)
+      .map((p) => ({
+        id: keyOf(cycleId, p.id),
+        name: p.name,
+        cycleId,
+        cycleParticipantId: p.id,
+        sampleCount: stats.get(keyOf(cycleId, p.id))?.sampleCount ?? 0,
+        speechMs: stats.get(keyOf(cycleId, p.id))?.speechMs ?? 0,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  /** `cycleId`, else the cycle of `meetingId`, else the legacy list. */
+  const participantsFor = (cycleId?: string, meetingId?: string): ParticipantView[] => {
+    const cycle = cycleId ?? (meetingId ? cycleOf(meetingId) : null);
+    return cycle ? cycleViews(cycle) : structuredClone(participants);
+  };
+  /** The cycle and participant id inside a stored participant key, when it is one. */
+  const splitKey = (key: string): { cycleId: string; id: string } | null => {
+    const at = key.indexOf(":");
+    return at > 0 ? { cycleId: key.slice(0, at), id: key.slice(at + 1) } : null;
+  };
 
   const voicesOf = (id: string): VoiceView[] => voices.get(id) ?? [];
   const findVoice = (id: string, voiceId: string): VoiceView => {
@@ -124,13 +200,16 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     return {
       meetingId: id,
       voices: structuredClone(list),
-      participants: structuredClone(participants),
+      participants: participantsFor(undefined, id),
       allConfirmed,
     };
   }
   function assign(id: string, voiceId: string, participantId: string | null): VoicesData {
     const v = findVoice(id, voiceId);
-    if (participantId !== null && !participants.some((p) => p.id === participantId))
+    if (
+      participantId !== null &&
+      !participantsFor(undefined, id).some((p) => p.id === participantId)
+    )
       fail("not_found", "participant not found");
     v.assignedParticipantId = participantId;
     v.confirmed = true;
@@ -179,7 +258,14 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       let run = stages.find((s) => s.status === "running");
       if (!run) {
         run = stages.find((s) => s.status === "pending");
-        if (run) {
+        const skip =
+          run && LLM_STAGES.includes(run.stage) ? (plans.get(id) ?? NO_BACKEND).skip : null;
+        if (run && skip !== null) {
+          // Skipped stages finish at once, with the reason.
+          run.status = "done";
+          run.note = skip;
+          run = undefined;
+        } else if (run) {
           run.status = "running";
           run.attempts += 1;
           run.fraction = 0;
@@ -205,8 +291,14 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     });
     const j = jobs.find((x) => x.meetingId === id);
     if (j?.state === "done") {
-      transcripts.set(id, demoTranscript(id));
-      voices.set(id, demoVoices());
+      if (!transcripts.has(id)) {
+        transcripts.set(id, demoTranscript(id));
+        voices.set(id, demoVoicesOf(cycleOf(id)));
+      }
+      // `reduce` wrote a draft when the backend ran for a meeting with a cycle.
+      const report = reports.get(id);
+      if (report?.cycleId && (plans.get(id) ?? NO_BACKEND).skip === null && !drafts.has(id))
+        drafts.create(id, report);
       currentJob = null;
       emitMeetings();
     }
@@ -253,6 +345,64 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     return Promise.resolve(() => void set.delete(entry));
   };
 
+  const llm = () => processing.llm!;
+
+  /**
+   * The backend a job starts with (`choose_llm` in `llm.rs`): a meeting without a cycle skips the
+   * language-model stages; without an explicit choice an unconfigured default skips them too; an
+   * explicit choice that is not configured is an error; the cloud needs its key and the user's
+   * confirmation for this meeting and endpoint.
+   */
+  function planLlm(id: string, requested: LlmKind | undefined): LlmPlan {
+    if (cycleOf(id) === null) return { kind: null, skip: "the meeting has no cycle" };
+    const settings = llm();
+    const kind = requested ?? settings.defaultKind;
+    const missing = missingForKind(settings, kind);
+    if (missing) {
+      if (requested === undefined) return NO_BACKEND;
+      fail("llm_not_configured", `the ${kind} language model has no ${missing} in the settings`);
+    }
+    if (kind === "cloud") {
+      if (!settings.cloudKeySet)
+        fail("cloud_key_missing", "store the API key of the cloud endpoint in the settings first");
+      if (confirmed.get(id) !== urlHost(settings.cloud.baseUrl))
+        fail("cloud_not_confirmed", "confirm sending this meeting to the cloud endpoint first");
+    }
+    return { kind, skip: null };
+  }
+
+  function cloudHost(): string {
+    const missing = missingForKind(llm(), "cloud");
+    if (missing)
+      fail("llm_not_configured", `the cloud language model has no ${missing} in the settings`);
+    return (
+      urlHost(llm().cloud.baseUrl) ?? fail("llm_not_configured", "the cloud address has no host")
+    );
+  }
+
+  /** A backend chosen for a job that exists: the skipped or failed extraction stages run again. */
+  function applyLlmToJob(id: string, plan: LlmPlan) {
+    const job = jobs.find((j) => j.meetingId === id)!;
+    const running = job.stages.some((s) => LLM_STAGES.includes(s.stage) && s.status === "running");
+    if (running) fail("busy", "the report is being extracted; wait for it to finish");
+    plans.set(id, plan);
+    patchJob(id, (j) => {
+      const stages = j.stages.map((s) =>
+        LLM_STAGES.includes(s.stage) && (s.status === "failed" || (s.status === "done" && s.note))
+          ? { ...s, status: "pending" as const, note: null, error: null }
+          : s,
+      );
+      const again = stages.some((s, i) => s !== j.stages[i]);
+      return {
+        ...j,
+        stages,
+        state: again ? "queued" : j.state,
+        progress: stagesProgress(stages),
+      };
+    });
+    if (jobs.find((j) => j.meetingId === id)?.state === "queued") enqueue(id);
+  }
+
   return {
     listMeetings: async () => meetings.map(withJob),
     getMeeting: async (id): Promise<MeetingDetails> => {
@@ -284,8 +434,17 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     listSources: async () => demoSources.map((s) => ({ ...s })),
     recordingState: async () => structuredClone(state),
     startRecording: async (req) => {
+      // The gate comes first, like in `start_recording`: no cycle and mode, no recording.
+      const report = cycles.resolveChoice(req.report, req.useLastReport ?? false);
       if (state.status === "recording") fail("already_recording", "Already recording");
       begin(req.sourceIds);
+      if (state.meetingId !== null) reports.set(state.meetingId, report);
+      cycles.setLastReport({
+        cycleId: report.cycleId!,
+        mode: report.mode!,
+        template: report.template,
+        meetingType: report.meetingType,
+      });
     },
     stopRecording: async () => {
       if (state.status !== "recording") fail("not_recording", "Not recording");
@@ -339,12 +498,21 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         emit();
       }
     },
-    processMeeting: async (id) => {
+    processMeeting: async (id, options?: ProcessOptions) => {
       const m = meetings.find((x) => x.id === id);
       if (!m) fail("internal", "Meeting not found");
+      const plan = planLlm(id, options?.llm?.kind);
       const existing = jobs.find((j) => j.meetingId === id);
+      if (existing && options?.llm) {
+        // A backend chosen now for a job that exists reruns what was skipped or failed.
+        applyLlmToJob(id, plan);
+        emitQueue();
+        emitMeetings();
+        return;
+      }
       if (existing && existing.state !== "done")
         fail("already_queued", "This meeting is already queued or has a failed job");
+      plans.set(id, plan);
       const fresh: JobView = {
         meetingId: id,
         title: m.title,
@@ -414,6 +582,12 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     assignVoiceNew: async (id, voiceId, name) => {
       const n = cleanName(name);
       findVoice(id, voiceId);
+      const cycleId = cycleOf(id);
+      if (cycleId) {
+        const key = keyOf(cycleId, cycles.addParticipant(cycleId, n));
+        emitCycles();
+        return assign(id, voiceId, key);
+      }
       let p = participants.find((x) => sameName(x.name, n));
       if (!p) {
         p = { id: `p-new-${nextParticipant++}`, name: n, sampleCount: 0, speechMs: 0 };
@@ -451,9 +625,16 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       const seconds = Math.min(4, Math.max(1.5, (c.endMs - c.startMs) / 1000));
       return URL.createObjectURL(toneWav(pitch, seconds));
     },
-    listParticipants: async () => structuredClone(participants),
-    createParticipant: async (name) => {
+    listParticipants: async (cycleId, meetingId) => participantsFor(cycleId, meetingId),
+    createParticipant: async (name, cycleId) => {
       const n = cleanName(name);
+      if (cycleId) {
+        if (cycleViews(cycleId).some((x) => sameName(x.name, n)))
+          fail("duplicate", "a participant with this name already exists");
+        const id = cycles.addParticipant(cycleId, n);
+        emitCycles();
+        return cycleViews(cycleId).find((x) => x.id === keyOf(cycleId, id))!;
+      }
       if (participants.some((x) => sameName(x.name, n)))
         fail("duplicate", "a participant with this name already exists");
       const p = { id: `p-new-${nextParticipant++}`, name: n, sampleCount: 0, speechMs: 0 };
@@ -462,6 +643,12 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     },
     renameParticipant: async (participantId, name) => {
       const n = cleanName(name);
+      const inCycle = splitKey(participantId);
+      if (inCycle) {
+        cycles.renameParticipant(inCycle.cycleId, inCycle.id, n);
+        emitCycles();
+        return;
+      }
       const p = participants.find((x) => x.id === participantId);
       if (!p) fail("not_found", "participant not found");
       if (participants.some((x) => x.id !== participantId && sameName(x.name, n)))
@@ -470,6 +657,12 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       participants.sort((a, b) => a.name.localeCompare(b.name));
     },
     deleteParticipant: async (participantId) => {
+      const inCycle = splitKey(participantId);
+      if (inCycle) {
+        cycles.removeParticipant(inCycle.cycleId, inCycle.id);
+        stats.delete(participantId);
+        emitCycles();
+      }
       participants = participants.filter((p) => p.id !== participantId);
       for (const list of voices.values())
         for (const v of list) {
@@ -478,6 +671,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         }
     },
     resetProfile: async (participantId) => {
+      stats.delete(participantId);
       const p = participants.find((x) => x.id === participantId);
       if (p) {
         p.sampleCount = 0;
@@ -487,14 +681,17 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     deleteVoiceData: async () => {
       // Participants stay; profiles, detected voices and clips go.
       voices.clear();
+      stats.clear();
       participants = participants.map((p) => ({ ...p, sampleCount: 0, speechMs: 0 }));
     },
     getProcessingSettings: async () => structuredClone(processing),
     saveProcessingSettings: async (s) => {
-      const invalid = validateVoiceSettings(s);
+      const invalid = validateVoiceSettings(s) ?? (s.llm ? validateLlmSettings(s.llm) : null);
       if (invalid) fail("invalid", invalid);
-      // The token flag is owned by set/clear, as in the real application.
+      // The token and key flags are owned by set/clear, as in the real application.
+      const flags = { externalKeySet: llm().externalKeySet, cloudKeySet: llm().cloudKeySet };
       Object.assign(processing, s, { hfTokenSet: processing.hfTokenSet });
+      processing.llm = { ...(s.llm ?? llm()), ...flags };
     },
     setHfToken: async (token) => {
       if (token.trim() === "") fail("internal", "The token is empty");
@@ -529,13 +726,109 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         }, stepMs / 4);
       }
     },
-    getSettings: async () => ({ ...settings }),
-    saveSettings: async (s) => void Object.assign(settings, s),
+    getSettings: async () => ({
+      ...settings,
+      cycleRepos: cycles.listRepos().map((r) => ({
+        id: r.id,
+        path: r.path,
+        remote: r.remote,
+        kind: r.kind,
+      })),
+      lastReport: cycles.lastReport(),
+    }),
+    // The repository list and the last report are not saved from the settings screen.
+    saveSettings: async (s) =>
+      void Object.assign(settings, {
+        recordingsDir: s.recordingsDir,
+        recordHotkey: s.recordHotkey,
+        screenshotHotkey: s.screenshotHotkey,
+      }),
     onRecordingState: (cb) => subscribe(stateListeners, cb),
     onMeetingsChanged: (cb) => subscribe(meetingListeners, cb),
     onQueueChanged: (cb) => subscribe(queueListeners, cb),
     onModelsProgress: (cb) => subscribe(progressListeners, cb),
     onModelsChanged: (cb) => subscribe(modelsListeners, cb),
-    ...stage4Stubs,
+
+    // ----- language-model keys and the cloud confirmation -----
+    setCloudKey: async (key) => {
+      if (key.trim() === "") fail("internal", "The key is empty");
+      llm().cloudKeySet = true;
+    },
+    clearCloudKey: async () => void (llm().cloudKeySet = false),
+    cloudKeyPresent: async () => llm().cloudKeySet,
+    setExternalKey: async (key) => {
+      if (key.trim() === "") fail("internal", "The key is empty");
+      llm().externalKeySet = true;
+    },
+    clearExternalKey: async () => void (llm().externalKeySet = false),
+    externalKeyPresent: async () => llm().externalKeySet,
+    cloudPreview: async (meetingId): Promise<CloudPreview> => {
+      if (!meetings.some((x) => x.id === meetingId)) fail("not_found", "meeting not found");
+      const host = cloudHost();
+      const model = llm().cloud.model.trim();
+      const transcript = transcripts.get(meetingId);
+      const transcriptReady = transcript !== undefined;
+      const wordCount = (transcript?.segments ?? [])
+        .filter((x) => !x.excluded)
+        .reduce((n, x) => n + x.text.split(/\s+/).filter(Boolean).length, 0);
+      const screenshotDescriptions = transcript?.screenshots.length ?? 0;
+      const amount = transcriptReady
+        ? `the text of the transcript (${wordCount} words; passages you excluded are left out) and ${screenshotDescriptions} screenshot descriptions`
+        : "the text of the transcript and the screenshot descriptions (the amount is known once the meeting is transcribed)";
+      return {
+        endpointHost: host,
+        model,
+        wordCount,
+        screenshotDescriptions,
+        includesAudio: false,
+        includesImages: false,
+        summaryText: `This will send ${amount} to ${host} (model ${model}), together with the names, glossary, instruction and open topics of the cycle. No audio and no images are sent. Nothing is sent without this confirmation.`,
+        confirmed: confirmed.get(meetingId) === host,
+        transcriptReady,
+      };
+    },
+    confirmCloud: async (meetingId) => {
+      const host = cloudHost();
+      if (!meetings.some((x) => x.id === meetingId)) fail("not_found", "meeting not found");
+      confirmed.set(meetingId, host);
+    },
+
+    // ----- cycles -----
+    listCycles: async () => cycles.listCycles(),
+    listCycleRepos: async () => cycles.listRepos(),
+    getCycle: async (cycleId) => cycles.getCycle(cycleId),
+    createCycle: async (id, name, repoId) => {
+      const details = cycles.createCycle(id, name, repoId);
+      emitCycles();
+      return details;
+    },
+    saveCycle: async (cycle) => {
+      const result = cycles.saveCycle(cycle);
+      if (result.saved) emitCycles();
+      return result;
+    },
+    listTemplates: async (cycleId) => cycles.listTemplates(cycleId),
+    getTemplate: async (cycleId, name) => cycles.getTemplate(cycleId, name),
+    saveTemplate: async (cycleId, template) => {
+      const check = cycles.saveTemplate(cycleId, template);
+      if (check.saved) emitCycles();
+      return check;
+    },
+    validateTemplate: async (template) => cycles.validateTemplate(template),
+    addCycleRepo: async (req) => {
+      const repo = cycles.addRepo(req);
+      emitCycles();
+      return repo;
+    },
+    pullCycleRepo: async (repoId) => {
+      const result = cycles.pullRepo(repoId);
+      emitCycles();
+      return result;
+    },
+    reportDefaults: async (cycleId) => cycles.reportDefaults(cycleId),
+    onCyclesChanged: (cb) => subscribe(cycleListeners, cb),
+
+    // ----- drafts -----
+    ...drafts.methods,
   };
 }

@@ -1,24 +1,46 @@
 import { useEffect, useState } from "react";
 import { useBackend } from "../backend-context";
+import { repoState } from "../cycles";
 import { formatDateTimeUtc, formatDuration } from "../format";
-import { errorMessage, useMeetings, useRecordingState } from "../hooks";
+import { errorMessage, useCycles, useMeetings, useRecordingState } from "../hooks";
 import type { MeetingSummary, Settings } from "../ipc/types";
 import { canProcess, jobStateLabel } from "../processing";
+import { CycleEditor } from "./CycleEditor";
+import { CyclesView } from "./Cycles";
+import { DraftEditor } from "./DraftEditor";
 import { ProcessPrompt } from "./ProcessPrompt";
 import { ProcessingSettingsView } from "./ProcessingSettings";
 import { QueueView } from "./Queue";
 import { SpeakersView } from "./Speakers";
 import { TranscriptView } from "./Transcript";
 
-type Page = "meetings" | "queue" | "settings" | "transcript" | "speakers";
+type Page =
+  "meetings" | "queue" | "settings" | "transcript" | "speakers" | "draft" | "cycles" | "cycle";
 
-/** `?page=queue`, `?page=transcript&meeting=m5` and `?page=speakers&meeting=m5` open a page directly (used by the screenshot script). */
-function initialRoute(): { page: Page; meetingId: string | null } {
+interface Route {
+  page: Page;
+  meetingId: string | null;
+  cycleId?: string | null;
+  /** A time in the meeting the transcript is opened at. */
+  atMs?: number | null;
+}
+
+/**
+ * `?page=queue`, `?page=transcript&meeting=m5&at=19000`, `?page=speakers&meeting=m5`,
+ * `?page=draft&meeting=m5`, `?page=cycles` and `?page=cycle&cycle=NOMAD` open a page directly
+ * (used by the screenshot script and the tests).
+ */
+function initialRoute(): Route {
   const params = new URLSearchParams(window.location.search);
   const meetingId = params.get("meeting");
   const page = params.get("page");
-  if ((page === "transcript" || page === "speakers") && meetingId) return { page, meetingId };
-  if (page === "queue" || page === "settings") return { page, meetingId: null };
+  const at = params.get("at");
+  if ((page === "transcript" || page === "speakers" || page === "draft") && meetingId)
+    return { page, meetingId, atMs: at === null ? null : Number(at) };
+  if (page === "cycle" && params.get("cycle"))
+    return { page, meetingId: null, cycleId: params.get("cycle") };
+  if (page === "queue" || page === "settings" || page === "cycles")
+    return { page, meetingId: null };
   return { page: "meetings", meetingId: null };
 }
 
@@ -26,6 +48,8 @@ export function Main() {
   const [route, setRoute] = useState(initialRoute);
   const page = route.page;
   const setPage = (p: Page) => setRoute({ page: p, meetingId: null });
+  const inMeetings =
+    page === "meetings" || page === "transcript" || page === "speakers" || page === "draft";
   const recording = useRecordingState();
   return (
     <div className="main">
@@ -34,15 +58,14 @@ export function Main() {
           <h1 className="brand glitch" data-text="BlahBlahBot">
             Blah<span>Blah</span>Bot
           </h1>
-          <button
-            className={
-              page === "meetings" || page === "transcript" || page === "speakers"
-                ? "nav nav-on"
-                : "nav"
-            }
-            onClick={() => setPage("meetings")}
-          >
+          <button className={inMeetings ? "nav nav-on" : "nav"} onClick={() => setPage("meetings")}>
             Meetings
+          </button>
+          <button
+            className={page === "cycles" || page === "cycle" ? "nav nav-on" : "nav"}
+            onClick={() => setPage("cycles")}
+          >
+            Cycles
           </button>
           <button
             className={page === "queue" ? "nav nav-on" : "nav"}
@@ -78,12 +101,34 @@ export function Main() {
               recordingMeetingId={recording.meetingId}
               onOpenTranscript={(id) => setRoute({ page: "transcript", meetingId: id })}
               onOpenSpeakers={(id) => setRoute({ page: "speakers", meetingId: id })}
+              onOpenDraft={(id) => setRoute({ page: "draft", meetingId: id })}
             />
           )}
-          {page === "queue" && <QueueView />}
+          {page === "queue" && (
+            <QueueView onOpenDraft={(id) => setRoute({ page: "draft", meetingId: id })} />
+          )}
+          {page === "cycles" && (
+            <CyclesView
+              onOpenCycle={(id) => setRoute({ page: "cycle", meetingId: null, cycleId: id })}
+            />
+          )}
+          {page === "cycle" && route.cycleId && (
+            <CycleEditor cycleId={route.cycleId} onBack={() => setPage("cycles")} />
+          )}
+          {page === "draft" && route.meetingId && (
+            <DraftEditor
+              meetingId={route.meetingId}
+              onBack={() => setPage("meetings")}
+              onOpenTranscript={(atMs) =>
+                setRoute({ page: "transcript", meetingId: route.meetingId, atMs })
+              }
+              onOpenQueue={() => setPage("queue")}
+            />
+          )}
           {page === "transcript" && route.meetingId && (
             <TranscriptView
               meetingId={route.meetingId}
+              highlightMs={route.atMs}
               onBack={() => setPage("meetings")}
               onOpenSpeakers={() => setRoute({ page: "speakers", meetingId: route.meetingId })}
             />
@@ -123,6 +168,7 @@ function MeetingList(props: {
   recordingMeetingId: string | null;
   onOpenTranscript: (id: string) => void;
   onOpenSpeakers: (id: string) => void;
+  onOpenDraft: (id: string) => void;
 }) {
   const backend = useBackend();
   const { meetings, reload } = useMeetings();
@@ -197,6 +243,13 @@ function MeetingList(props: {
                           onClick={() => props.onOpenTranscript(m.id)}
                         >
                           Transcript
+                        </button>
+                        <button
+                          className="btn btn-small"
+                          aria-label={`Open the draft of ${m.title}`}
+                          onClick={() => props.onOpenDraft(m.id)}
+                        >
+                          Draft
                         </button>
                       </>
                     )}
@@ -289,7 +342,38 @@ function SettingsView() {
           </form>
         </div>
       </div>
+      <CycleRepos />
       <ProcessingSettingsView />
     </>
+  );
+}
+
+/** The registered cycle repositories (managed on the Cycles page). */
+function CycleRepos() {
+  const { repos } = useCycles();
+  return (
+    <section aria-labelledby="repos-heading">
+      <h3 id="repos-heading" className="sub-head">
+        Cycle repositories
+      </h3>
+      {repos.length === 0 ? (
+        <p className="empty">No repository yet. Add or create one on the Cycles page.</p>
+      ) : (
+        <ul className="people" aria-label="Cycle repositories">
+          {repos.map((r) => (
+            <li key={r.id} className="person">
+              <span className="person-main">
+                <span>{r.id}</span>
+                <span className="person-meta">{r.remote ?? r.path}</span>
+              </span>
+              <span className="person-meta">
+                {repoState(r)}
+                {r.offline && " · offline"}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }

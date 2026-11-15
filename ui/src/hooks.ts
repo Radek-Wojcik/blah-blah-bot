@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { useBackend } from "./backend-context";
 import { isIpcError } from "./ipc/tauri";
-import type { MeetingSummary, QueueState, RecordingState, SourceInfo } from "./ipc/types";
+import type {
+  CycleListItem,
+  CycleRepoView,
+  MeetingSummary,
+  QueueState,
+  RecordingState,
+  SourceInfo,
+} from "./ipc/types";
 
 const idle: RecordingState = {
   status: "idle",
@@ -97,4 +104,33 @@ export function useSources(refreshKey: unknown): SourceInfo[] {
     };
   }, [backend, refreshKey]);
   return sources;
+}
+
+/** The cycles and repositories: loaded once, then again on every `cycles-changed` event. */
+export function useCycles(): {
+  cycles: CycleListItem[] | null;
+  repos: CycleRepoView[];
+  reload: () => void;
+} {
+  const backend = useBackend();
+  const [cycles, setCycles] = useState<CycleListItem[] | null>(null);
+  const [repos, setRepos] = useState<CycleRepoView[]>([]);
+  const reload = useCallback(() => {
+    void backend.listCycles().then(setCycles);
+    void backend.listCycleRepos().then(setRepos);
+  }, [backend]);
+  useEffect(() => {
+    reload();
+    let off: (() => void) | undefined;
+    let cancelled = false;
+    void backend.onCyclesChanged(reload).then((u) => {
+      if (cancelled) u();
+      else off = u;
+    });
+    return () => {
+      cancelled = true;
+      off?.();
+    };
+  }, [backend, reload]);
+  return { cycles, repos, reload };
 }

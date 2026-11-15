@@ -81,6 +81,7 @@ export function SpeakersView(props: {
   const backend = useBackend();
   const [data, setData] = useState<VoicesData | null>(null);
   const [title, setTitle] = useState("");
+  const [cycleName, setCycleName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Suggestions the user turned down on this screen; those voices are shown as unknown.
   const [rejected, setRejected] = useState<ReadonlySet<string>>(new Set());
@@ -101,6 +102,20 @@ export function SpeakersView(props: {
       cancelled = true;
     };
   }, [backend, meetingId]);
+
+  // The participants are the cycle's: the cycle (when the meeting has one) is named in the header.
+  const cycleId = data?.participants.find((p) => p.cycleId)?.cycleId;
+  useEffect(() => {
+    if (!cycleId) return;
+    let cancelled = false;
+    backend
+      .getCycle(cycleId)
+      .then((d) => !cancelled && setCycleName(`${d.cycle.name} (${cycleId})`))
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [backend, cycleId]);
 
   /** Run a change and show what the backend stored. */
   const act = useCallback(
@@ -140,7 +155,12 @@ export function SpeakersView(props: {
           </button>
         </span>
       </div>
-      {title && <p className="card-when">{title}</p>}
+      {title && (
+        <p className="card-when">
+          {title}
+          {cycleId && cycleName && ` · Cycle: ${cycleName}`}
+        </p>
+      )}
       {error && (
         <p className="error" role="alert">
           {error}

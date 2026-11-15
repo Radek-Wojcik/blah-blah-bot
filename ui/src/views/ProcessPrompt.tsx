@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { useBackend } from "../backend-context";
 import { errorMessage, useRecordingState } from "../hooks";
+import type { LlmKind } from "../ipc/types";
+import { Modal } from "./Modal";
+import {
+  BackendChoice,
+  CloudConfirmDialog,
+  processOptions,
+  useLlmSettings,
+} from "./ProcessDialogs";
 
 /**
  * The "Process now or later?" dialog shown after a recording stops, only while the setting
@@ -12,12 +20,19 @@ import { errorMessage, useRecordingState } from "../hooks";
  * answer "now" closes the other dialog as soon as the job shows up in the queue; an answer
  * "later" in one window leaves the dialog of the other window until it is answered too.
  * Starting the same job twice is harmless because the backend creates a job only once.
+ *
+ * The prompt also asks which language model makes the draft (the local model unless the user
+ * picks another). Choosing the cloud opens a confirmation of what would be sent; there is no
+ * automatic fallback to it.
  */
 export function ProcessPrompt() {
   const backend = useBackend();
   const recording = useRecordingState();
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pick, setPick] = useState<LlmKind | null>(null);
+  const [cloud, setCloud] = useState(false);
+  const llm = useLlmSettings(pending);
   const lastRecorded = useRef<string | null>(null);
 
   // A transition from recording to idle is the stop of that meeting.
@@ -33,6 +48,8 @@ export function ProcessPrompt() {
     void backend.getProcessingSettings().then((s) => {
       if (!cancelled && s.processAfterRecording === "ask") {
         setError(null);
+        setPick(null);
+        setCloud(false);
         setPending(id);
       }
     });
@@ -60,56 +77,59 @@ export function ProcessPrompt() {
     };
   }, [backend, pending]);
 
-  useEffect(() => {
-    if (pending === null) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setPending(null);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [pending]);
-
   if (pending === null) return null;
 
-  const now = () => {
+  const run = (options?: Parameters<typeof backend.processMeeting>[1]) => {
     setError(null);
     backend
-      .processMeeting(pending)
-      .then(() => setPending(null))
-      .catch((e) => setError(errorMessage(e)));
+      .processMeeting(pending, options)
+      .then(() => {
+        setCloud(false);
+        setPending(null);
+      })
+      .catch((e) => {
+        setCloud(false);
+        setError(errorMessage(e));
+      });
+  };
+  const kind = pick ?? llm?.defaultKind ?? "managed";
+  const now = () => {
+    if (kind === "cloud") setCloud(true);
+    else run(llm ? processOptions(llm, kind) : undefined);
   };
 
+  if (cloud) {
+    // A just-recorded meeting has no transcript, so the dialog explains that the confirmation
+    // comes later and offers to process locally up to the transcript.
+    return (
+      <CloudConfirmDialog
+        meetingId={pending}
+        onCancel={() => setCloud(false)}
+        onConfirmed={() => run({ llm: { kind: "cloud" } })}
+        onProcessLocally={() => run()}
+      />
+    );
+  }
+
   return (
-    <div className="modal-backdrop">
-      <div
-        className="panel modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="process-prompt-title"
-      >
-        <div className="panel-body">
-          <h3 id="process-prompt-title" className="modal-title">
-            Process now or later?
-          </h3>
-          <p className="modal-text">
-            The recording is saved. Processing creates the transcript and can use the GPU for a
-            while.
-          </p>
-          {error && (
-            <p className="error" role="alert">
-              {error}
-            </p>
-          )}
-          <div className="actions">
-            <button className="btn btn-ghost" onClick={() => setPending(null)}>
-              Later
-            </button>
-            <button className="btn btn-record" autoFocus onClick={now}>
-              Process now
-            </button>
-          </div>
-        </div>
+    <Modal title="Process now or later?" onClose={() => setPending(null)}>
+      <p className="modal-text">
+        The recording is saved. Processing creates the transcript and can use the GPU for a while.
+      </p>
+      {llm && <BackendChoice settings={llm} value={kind} onChange={setPick} />}
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="actions">
+        <button className="btn btn-ghost" onClick={() => setPending(null)}>
+          Later
+        </button>
+        <button className="btn btn-record" autoFocus onClick={now}>
+          Process now
+        </button>
       </div>
-    </div>
+    </Modal>
   );
 }

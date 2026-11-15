@@ -4,15 +4,17 @@ import { formatDuration } from "../format";
 import { errorMessage } from "../hooks";
 import { isIpcError } from "../ipc/tauri";
 import type { ScreenshotDescription, TranscriptData, TranscriptSegment } from "../ipc/types";
-import { buildTimeline, speakerColors } from "../processing";
+import { buildTimeline, segmentAt, speakerColors } from "../processing";
 
 /** Transcript of one meeting: speakers, segments with screenshots in between, and the editor. */
 export function TranscriptView(props: {
   meetingId: string;
   onBack: () => void;
   onOpenSpeakers: () => void;
+  /** A time in the meeting: the segment there is scrolled into view and highlighted. */
+  highlightMs?: number | null;
 }) {
-  const { meetingId, onBack, onOpenSpeakers } = props;
+  const { meetingId, onBack, onOpenSpeakers, highlightMs } = props;
   const backend = useBackend();
   const [data, setData] = useState<TranscriptData | null>(null);
   const [title, setTitle] = useState<string>("");
@@ -61,6 +63,20 @@ export function TranscriptView(props: {
       setError(errorMessage(e));
     }
   };
+
+  // The segment to show (a jump from the draft), scrolled to once the transcript is there.
+  const target =
+    data && highlightMs !== undefined && highlightMs !== null
+      ? (segmentAt(data.segments, highlightMs)?.id ?? null)
+      : null;
+  const targetRef = useRef<HTMLLIElement | null>(null);
+  const scrolledTo = useRef<number | null>(null);
+  useEffect(() => {
+    // Once per jump: reloading the transcript after an edit must not scroll again.
+    if (target === null || scrolledTo.current === target) return;
+    scrolledTo.current = target;
+    targetRef.current?.scrollIntoView({ block: "center" });
+  }, [target, data]);
 
   const excludedCount = data?.segments.filter((s) => s.excluded).length ?? 0;
 
@@ -125,7 +141,15 @@ export function TranscriptView(props: {
               const seg = item.segment;
               if (hideExcluded && seg.excluded) return null;
               return (
-                <li key={`seg-${seg.id}`} className={seg.excluded ? "seg seg-excluded" : "seg"}>
+                <li
+                  key={`seg-${seg.id}`}
+                  ref={seg.id === target ? targetRef : undefined}
+                  aria-current={seg.id === target ? "true" : undefined}
+                  className={
+                    (seg.excluded ? "seg seg-excluded" : "seg") +
+                    (seg.id === target ? " seg-highlight" : "")
+                  }
+                >
                   <SegmentRow
                     segment={seg}
                     speaker={labels[seg.speaker] ?? seg.speaker}

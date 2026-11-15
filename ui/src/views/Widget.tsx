@@ -4,6 +4,7 @@ import { formatDuration } from "../format";
 import { errorMessage, useRecordingState, useSources } from "../hooks";
 import type { ActiveSource, SourceInfo } from "../ipc/types";
 import { ProcessPrompt } from "./ProcessPrompt";
+import { ReportGate } from "./ReportGate";
 
 const EQ_BARS = 12;
 
@@ -15,6 +16,8 @@ export function Widget() {
   const sources = useSources(recording);
   const [choice, setChoice] = useState<Set<string> | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Every recording starts through the report mode gate; Record only opens it.
+  const [gate, setGate] = useState(false);
 
   // Until the user chooses, the microphone (or the first source) is preselected.
   const picked =
@@ -109,6 +112,14 @@ export function Widget() {
       )}
 
       <ProcessPrompt />
+      {gate && (
+        <ReportGate
+          onCancel={() => setGate(false)}
+          onStart={(extra) =>
+            backend.startRecording({ sourceIds: [...picked], ...extra }).then(() => setGate(false))
+          }
+        />
+      )}
 
       <div className="actions">
         {recording ? (
@@ -125,7 +136,10 @@ export function Widget() {
           <button
             className="btn btn-record"
             disabled={picked.size === 0}
-            onClick={() => run(backend.startRecording({ sourceIds: [...picked] }))}
+            onClick={() => {
+              setError(null);
+              setGate(true);
+            }}
           >
             Record
           </button>

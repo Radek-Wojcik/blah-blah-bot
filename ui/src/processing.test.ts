@@ -12,9 +12,11 @@ import {
   isJobActive,
   jobStateLabel,
   percent,
+  segmentAt,
   speakerColors,
   stageLabel,
   stageProgress,
+  stageSkipText,
   stageStatusLabel,
   stagesProgress,
 } from "./processing";
@@ -31,6 +33,8 @@ describe("labels", () => {
     expect(stageLabel("audio_cleanup")).toBe("Audio cleanup");
     expect(stageLabel("speaker_id")).toBe("Speaker recognition");
     expect(stageLabel("clips")).toBe("Sample clips");
+    expect(stageLabel("extract")).toBe("Extract items");
+    expect(stageLabel("reduce")).toBe("Build draft");
     expect(stageStatusLabel("failed")).toBe("Failed");
     expect(jobStateLabel("running")).toBe("Processing");
   });
@@ -146,5 +150,44 @@ describe("buildTimeline", () => {
   });
   it("handles a transcript without screenshots", () => {
     expect(buildTimeline([seg(1, 0)], [])).toHaveLength(1);
+  });
+});
+
+describe("stageSkipText", () => {
+  it("shows the note of a stage that finished without doing anything", () => {
+    const skipped = { status: "done" as const, note: "the meeting has no cycle" };
+    expect(stageSkipText(skipped)).toBe("Skipped: the meeting has no cycle");
+    expect(stageSkipText({ status: "done", note: null })).toBeNull();
+    expect(stageSkipText({ status: "running", note: "x" })).toBeNull();
+  });
+});
+
+describe("segmentAt", () => {
+  const seg = (id: number, startMs: number, endMs: number): TranscriptSegment => ({
+    id,
+    track: "t",
+    speaker: "s",
+    startMs,
+    endMs,
+    text: `s${id}`,
+    originalText: null,
+    excluded: false,
+  });
+  const segments = [seg(2, 6_000, 18_500), seg(1, 0, 5_800), seg(3, 19_000, 26_000)];
+
+  it("finds the segment that contains the time", () => {
+    expect(segmentAt(segments, 6_000)?.id).toBe(2);
+    expect(segmentAt(segments, 18_500)?.id).toBe(2);
+    expect(segmentAt(segments, 22_000)?.id).toBe(3);
+  });
+
+  it("falls back to the segment before the time, then to the first one", () => {
+    expect(segmentAt(segments, 5_900)?.id).toBe(1);
+    expect(segmentAt(segments, 99_000)?.id).toBe(3);
+    expect(segmentAt([seg(9, 10_000, 12_000)], 1_000)?.id).toBe(9);
+  });
+
+  it("has nothing for no segments", () => {
+    expect(segmentAt([], 0)).toBeNull();
   });
 });

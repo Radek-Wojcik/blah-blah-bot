@@ -17,8 +17,8 @@ const STAGE_LABELS: Record<StageName, string> = {
   clips: "Sample clips",
   audio_cleanup: "Audio cleanup",
   vision: "Screenshot analysis",
-  extract: "Extracting items",
-  reduce: "Draft report",
+  extract: "Extract items",
+  reduce: "Build draft",
 };
 
 const STAGE_STATUS_LABELS: Record<StageStatus, string> = {
@@ -127,4 +127,22 @@ export function buildTimeline(
   }
   for (; s < shots.length; s += 1) items.push({ kind: "screenshot", screenshot: shots[s] });
   return items;
+}
+
+/**
+ * The segment a time in the meeting belongs to: the one that contains it, else the one that
+ * starts closest before it, else the first one after it. Null for no segments.
+ */
+export function segmentAt(segments: TranscriptSegment[], ms: number): TranscriptSegment | null {
+  if (segments.length === 0) return null;
+  const sorted = [...segments].sort((a, b) => a.startMs - b.startMs || a.id - b.id);
+  const inside = sorted.find((s) => s.startMs <= ms && ms <= s.endMs);
+  if (inside) return inside;
+  const before = sorted.filter((s) => s.startMs <= ms);
+  return before.length > 0 ? before[before.length - 1] : sorted[0];
+}
+
+/** The note of a stage that finished without doing anything, as it is shown. */
+export function stageSkipText(stage: Pick<StageView, "status" | "note">): string | null {
+  return stage.status === "done" && stage.note ? `Skipped: ${stage.note}` : null;
 }
