@@ -4,7 +4,10 @@
 //! absolute paths. The schema is versioned with `PRAGMA user_version` and migrated forward
 //! on open.
 
+mod jobs;
 mod migrations;
+
+pub use jobs::{JobRow, StageRow, StageStatus};
 
 use std::path::Path;
 

@@ -2842,6 +2842,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "queue"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "store",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "quick-xml"
 version = "0.42.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
