@@ -46,7 +46,21 @@
         "language": { "enum": ["auto", "pl", "en"], "default": "auto" },
         "asr_model": { "enum": ["turbo", "large-v3"], "default": "turbo" },
         "glossary": { "type": "array", "items": { "type": "string" } },
-        "max_speakers": { "type": ["integer", "null"], "minimum": 1 }
+        "max_speakers": { "type": ["integer", "null"], "minimum": 1 },
+        "llm": {
+          "type": "object",
+          "description": "Backend of the extract and reduce stages. Keys are never stored here: they come from the environment variable BBB_LLM_API_KEY.",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "enum": ["managed", "external", "cloud"] },
+            "model_path": { "type": "string", "description": "managed: path to the GGUF file" },
+            "ctx": { "type": "integer", "minimum": 2048, "default": 16384 },
+            "base_url": { "type": "string", "description": "external and cloud: OpenAI-compatible base URL, for example http://127.0.0.1:11434/v1" },
+            "model": { "type": "string", "description": "external and cloud: model name sent in the request" },
+            "cloud_confirmed": { "type": "boolean", "default": false, "description": "Cloud runs only when true (set after the per-meeting confirmation)" }
+          }
+        }
       }
     }
   }

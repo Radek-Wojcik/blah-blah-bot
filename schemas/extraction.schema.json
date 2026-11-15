@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Radek-Wojcik/blah-blah-bot/schemas/extraction.schema.json",
+  "title": "Extraction response",
+  "description": "What the language model returns for one transcript window (map step).",
+  "type": "object",
+  "required": ["summary", "items"],
+  "additionalProperties": false,
+  "properties": {
+    "summary": { "type": "string", "description": "Two to four sentences about this window" },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "text", "assignee", "due", "certainty", "section", "relates_to", "time", "quote"],
+        "additionalProperties": false,
+        "properties": {
+          "type": { "enum": ["task", "decision", "topic", "note", "idea", "budget"] },
+          "text": { "type": "string", "minLength": 1 },
+          "assignee": { "type": ["string", "null"], "description": "Participant id from the prompt, or null" },
+          "due": { "type": ["string", "null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+          "certainty": {
+            "type": "object",
+            "required": ["assignee", "due"],
+            "additionalProperties": false,
+            "properties": {
+              "assignee": { "enum": ["stated", "inferred", "unknown"] },
+              "due": { "enum": ["stated", "inferred", "unknown"] }
+            }
+          },
+          "section": { "type": ["string", "null"], "description": "Section id from the prompt, or null" },
+          "relates_to": { "type": ["string", "null"], "description": "Id of an open topic or issue from the prompt, or null" },
+          "time": { "type": "string", "pattern": "^\\d{2}:\\d{2}:\\d{2}$", "description": "hh:mm:ss of the line where the item is stated" },
+          "quote": { "type": "string", "minLength": 1, "description": "Copied verbatim from that line" }
+        }
+      }
+    }
+  }
+}
