@@ -6,7 +6,7 @@ Local meeting recorder for Windows that turns calls into GitHub issues and Disco
 ![Platform: Windows](https://img.shields.io/badge/platform-Windows-blue)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
-> **Project status:** Stage 2 (the processing pipeline) is complete. The application records the microphone and chosen applications and turns a recording into a transcript with speakers and described screenshots on your own GPU. Speaker naming and recognition, task extraction and reports come in the next stages. Stage 1 still has one open measurement (microphone buffer flags, see below). There is no installer; build from source.
+> **Project status:** Stage 3 (speakers and voice profiles) is complete. The application records the microphone and chosen applications, turns a recording into a transcript with speakers and described screenshots on your own GPU, and recognizes voices you have named before. Cycles, task extraction and reports come in the next stages. Stage 1 still has one open measurement (microphone buffer flags, see below). There is no installer; build from source.
 
 ## What works today
 
@@ -17,6 +17,9 @@ Local meeting recorder for Windows that turns calls into GitHub issues and Disco
 - **Meeting list and settings.** Local list of recordings with their tracks and screenshots; folders and hotkeys are configurable.
 - **Processing queue.** One job per meeting, split into stages (transcription, speaker separation, merge, audio cleanup, screenshot description). It starts when you say so, waits while another program is using the GPU and shows why, runs one model at a time, and continues from the stage it stopped in after a crash.
 - **Transcript with speakers.** Whisper large-v3-turbo transcribes each track with word timestamps; pyannote separates the voices of application tracks; your microphone is you. Screenshots are described by a local vision model and placed in the transcript by time.
+- **Name speakers once.** Each detected voice comes with a few short clips. Play them, pick a name or add a new participant, merge voices that are the same person, and confirm. Names appear in the transcript.
+- **Known voices are recognized.** In the next meeting a voice that matches a profile is named automatically, a weaker match is only suggested, and an unknown voice stays unknown. Profiles learn only from labels you confirmed.
+- **Voice privacy.** Voice profiles and sample clips are biometric data. They stay in the local database and recordings folder, sample clips are deleted once you have named the voices (or after 30 days), and you can delete one participant's voice or all voice data in the settings.
 - **Review and edit.** Correct any passage or exclude it; excluded text is kept out of everything that leaves the transcript view. Edits survive a re-run.
 - **Audio retention.** Full audio is deleted only after every stage that reads it succeeded, and deleting it after processing is the default. You can choose to keep it, or to keep it for a number of days.
 - **Offline once set up.** Models are downloaded on first use with your Hugging Face token (kept in the Windows Credential Manager); processing itself needs no network.
@@ -32,6 +35,8 @@ Taken from demo mode with fictional data.
 | ![List of meetings with their lengths, tracks and screenshots](docs/img/meeting-list.png) | ![Animated recording flow: pick sources, record, add a source, take a screenshot, stop](docs/img/record-flow.gif) |
 | ![Processing queue with a running, a waiting, a failed and a finished job](docs/img/queue.png) | ![Animated queue: a job moves through its processing stages](docs/img/processing.gif) |
 | ![Transcript with speakers, an edited passage and described screenshots](docs/img/transcript.png) | ![A screenshot with its description between two passages of the transcript](docs/img/screenshot-description.png) |
+| ![Labeling screen with a recognized, a suggested and two unknown voices, each with sample clips](docs/img/speakers-label.png) | ![Animated naming of voices: play a clip, create a participant, accept a suggestion, pick a name](docs/img/naming-voices.gif) |
+| ![Voice profile management: participants, reset, delete and the matching thresholds](docs/img/speakers-profiles.png) | |
 
 ## Requirements and getting started
 
@@ -49,6 +54,19 @@ cargo run -p app --release --features custom-protocol
 ```
 
 Open the settings to download the models and, for screenshot description, to point the application to a `llama-server` executable and its model folder. Recordings are written to `Documents\BlahBlahBot\recordings` unless you change the folder in the settings. Run the tests with `cargo test --workspace`, `npm test` and `npx playwright test --project=mock` in `ui`; the end-to-end suite against the real application is `npx playwright test --project=real` after a debug build.
+
+## Stage 3 measurements
+
+Seven synthetic meetings with 2 to 16 speakers, processed in order with the real models; after each meeting the true names were confirmed, which taught the profiles. Raw data: [benchmarks/results/stage3-speaker-recognition.json](benchmarks/results/stage3-speaker-recognition.json) and [benchmarks/results/p4-similarity-community-1.json](benchmarks/results/p4-similarity-community-1.json).
+
+| Measure | Result | Target |
+|---|---|---|
+| Enrolled speech named correctly and automatically | 100% of 3302 s | 90% or more |
+| New voices named automatically (false accepts) | 0 of 16 | 2% or less |
+| Same voice, cosine similarity | 0.76 to 0.99 (0.68 to 0.99 after band limiting and noise) | n/a |
+| Different voices, cosine similarity | up to 0.64 (up to 0.92 after band limiting and noise) | n/a |
+
+The voices are synthesized and clean; real conference audio is not measured yet, and on band-limited, noisy audio some different voices come close to the same-voice range. Thresholds (0.75 automatic, 0.60 suggestion, 0.10 margin) are settings. See [ADR 0016](docs/decisions/0016-speaker-recognition.md).
 
 ## Stage 2 measurements
 
@@ -125,7 +143,7 @@ Prototype results on the reference machine (RTX 3080 with 12 GB, Windows 10 buil
 
 - Processing needs an NVIDIA GPU; without readings from the driver a job waits.
 - Speaker separation is measured on synthetic meetings only; on 2 to 4 speakers the error rate was above the 15% target in Stage 0 and is to be confirmed on real recordings.
-- Speakers are labelled "Speaker 1", "Speaker 2" and so on; naming and recognition of voices come in Stage 3.
+- Voice recognition is measured on synthetic voices only. The participant list is local and minimal until cycles arrive in Stage 4. A meeting processed after its audio was deleted has no sample clips, so voices are named from the transcript.
 - The Python environment is large (about 7.4 GB) and the first model downloads take a while.
 
 ## Roadmap
@@ -135,7 +153,7 @@ Prototype results on the reference machine (RTX 3080 with 12 GB, Windows 10 buil
 | 0 | Prototypes and decision gate | v0.1.0 | Done, gate passed |
 | 1 | Recorder | v0.2.0 | Done; microphone buffer flags in the 10 hour run are open |
 | 2 | Processing pipeline | v0.3.0 | Done |
-| 3 | Speakers and voice profiles | v0.4.0 | Planned |
+| 3 | Speakers and voice profiles | v0.4.0 | Done |
 | 4 | Cycles and reports | v0.5.0 | Planned |
 | 5 | Publishing | v0.6.0 | Planned |
 | 6 | Convenience | v0.7.0 | Planned |
