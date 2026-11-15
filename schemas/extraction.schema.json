@@ -4,7 +4,7 @@
   "title": "Extraction response",
   "description": "What the language model returns for one transcript window (map step).",
   "type": "object",
-  "required": ["summary", "items"],
+  "required": ["summary", "items", "status_changes"],
   "additionalProperties": false,
   "properties": {
     "summary": { "type": "string", "description": "Two to four sentences about this window" },
@@ -37,7 +37,7 @@
     },
     "status_changes": {
       "type": "array",
-      "description": "Open issues or topics of the prompt that were reported finished in this window. Optional for now so that answers without it stay valid; may be empty.",
+      "description": "Open issues or topics of the prompt that were reported finished in this window. Required in the model answer (an empty array when there are none); the worker still reads windows.json files written before the field existed.",
       "items": {
         "type": "object",
         "required": ["target", "status", "reason", "time", "quote"],

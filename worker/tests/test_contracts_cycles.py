@@ -36,6 +36,7 @@ def mutated(name, mutate):
 
 EXTRACTION_BREAKS = [
     lambda d: d.pop("summary"),
+    lambda d: d.pop("status_changes"),
     lambda d: d["items"][0].pop("quote"),
     lambda d: d["items"][0].update(type="rumor"),
     lambda d: d["items"][0].update(due="next Friday"),
@@ -113,7 +114,7 @@ def test_stage5_fixture_is_accepted(name, file):
 
 def test_stage4_documents_have_none_of_the_new_fields():
     # They are what older versions wrote; they must keep validating without the additions.
-    assert "status_changes" not in fixture("extraction.valid.json")
+    # (The model answer is the exception: `status_changes` is required in it, see below.)
     assert "status_proposals" not in fixture("meeting.valid.json")
     assert all("issue" not in p for p in fixture("cycle-context.valid.json")["previous_items"])
 
@@ -157,10 +158,13 @@ def test_each_stage5_violation_is_rejected(name, file, mutate):
         schema.validate(name, doc)
 
 
-def test_an_empty_status_changes_list_is_valid():
+def test_the_model_answer_must_carry_status_changes_but_it_may_be_empty():
     doc = fixture("extraction.valid.json")
-    doc["status_changes"] = []
+    assert doc["status_changes"] == []
     schema.validate("extraction", doc)
+    del doc["status_changes"]
+    with pytest.raises(jsonschema.ValidationError, match="status_changes"):
+        schema.validate("extraction", doc)
 
 
 def test_a_hand_added_proposal_has_no_source_or_comment():

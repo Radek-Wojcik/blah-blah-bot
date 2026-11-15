@@ -125,6 +125,17 @@ def raw_item(
     }
 
 
+def raw_status(
+    target: str,
+    quote: str,
+    time: str,
+    reason: str = "The speaker says it is finished.",
+    status: str = "done",
+) -> dict[str, Any]:
+    """A `status_changes` entry of an extraction answer."""
+    return {"target": target, "status": status, "reason": reason, "time": time, "quote": quote}
+
+
 def segment(i: int, start_ms: int, end_ms: int, text: str, speaker: str = "user") -> dict[str, Any]:
     return {
         "id": i,
@@ -207,10 +218,14 @@ def make_meeting(
     return manifest_mod.load(path, meeting)
 
 
-def extraction_for(rules: list[dict[str, Any]]) -> Callable[[dict[str, Any], int], Any]:
+def extraction_for(
+    rules: list[dict[str, Any]], status_rules: list[dict[str, Any]] | None = None
+) -> Callable[[dict[str, Any], int], Any]:
     """An extraction answer that reports a rule's item whenever its quote is in the window.
 
-    A rule is `{"quote", "text", "fields": {...}}`; the time is read from the window text.
+    A rule is `{"quote", "text", "fields": {...}}`; the time is read from the window text. A
+    status rule is `{"quote", "target", "reason"?}` and gives a `status_changes` entry the same
+    way; without status rules the list is empty, as the schema requires it to be present.
     """
     import re
 
@@ -224,7 +239,23 @@ def extraction_for(rules: list[dict[str, Any]]) -> Callable[[dict[str, Any], int
                 items.append(
                     raw_item(rule["text"], rule["quote"], found.group(1), **rule.get("fields", {}))
                 )
-        return {"summary": f"Summary of a window with {len(items)} items.", "items": items}
+        changes = []
+        for rule in status_rules or []:
+            found = re.search(rf"\[(\d\d:\d\d:\d\d)\][^\n]*{re.escape(rule['quote'])}", window)
+            if found:
+                changes.append(
+                    raw_status(
+                        rule["target"],
+                        rule["quote"],
+                        found.group(1),
+                        *([rule["reason"]] if "reason" in rule else []),
+                    )
+                )
+        return {
+            "summary": f"Summary of a window with {len(items)} items.",
+            "items": items,
+            "status_changes": changes,
+        }
 
     return handle
 

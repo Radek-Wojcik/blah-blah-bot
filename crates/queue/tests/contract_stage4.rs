@@ -161,11 +161,12 @@ fn the_context_fixtures_match_the_schema() {
 fn the_extraction_schema_accepts_status_changes_and_pins_their_fields() {
     let v = validator(SCHEMA_EXTRACTION);
     assert!(v.is_valid(&json_of(EXTRACTION_STATUS)), "fixture rejected");
-    // Old answers without the field stay valid, and so does an empty list.
+    // The model answer must carry the field, an empty list when nothing was reported.
     assert!(v.is_valid(&json_of(EXTRACTION_VALID)));
+    assert_eq!(json_of(EXTRACTION_VALID)["status_changes"], json!([]));
     let mut doc = json_of(EXTRACTION_VALID);
-    doc["status_changes"] = json!([]);
-    assert!(v.is_valid(&doc));
+    doc.as_object_mut().unwrap().remove("status_changes");
+    assert!(!v.is_valid(&doc), "an answer without status_changes");
     for (key, bad) in [
         ("status", json!("open")),
         ("time", json!("13:32")),

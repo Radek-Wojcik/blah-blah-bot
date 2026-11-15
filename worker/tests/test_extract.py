@@ -68,6 +68,7 @@ def test_position_comes_from_the_transcript_not_from_the_model(tmp_path):
         return {
             "summary": "s",
             "items": [raw_item("Alex prepares the mount", MOUNT, "00:00:21", assignee="alex")],
+            "status_changes": [],
         }
 
     with FakeLlm(handler) as fake:
@@ -83,6 +84,7 @@ def test_unverified_quote_is_kept_and_flagged(tmp_path):
         return {
             "summary": "s",
             "items": [raw_item("Sam buys a laser", "Sam will buy a new laser cutter", "00:00:12")],
+            "status_changes": [],
         }
 
     with FakeLlm(handler) as fake:
@@ -126,7 +128,11 @@ def test_prompt_has_context_and_nothing_excluded(tmp_path):
     assert body["temperature"] == 0
     assert body["chat_template_kwargs"] == {"enable_thinking": False}
     rf = body["response_format"]["json_schema"]
-    assert rf["strict"] is True and rf["schema"]["required"] == ["summary", "items"]
+    assert rf["strict"] is True and rf["schema"]["required"] == [
+        "summary",
+        "items",
+        "status_changes",
+    ]
     assert body["model"] == "fake"
 
 
@@ -193,7 +199,7 @@ def test_allowed_sections_are_listed_and_unknown_ones_dropped(tmp_path):
         b = raw_item(
             "Prototype", "I will finish the prototype by Friday", "00:00:20", section="made-up"
         )
-        return {"summary": "s", "items": [a, b]}
+        return {"summary": "s", "items": [a, b], "status_changes": []}
 
     with FakeLlm(handler) as fake:
         m = make_meeting(tmp_path, small_transcript(), ctx, llm_options(fake.url))

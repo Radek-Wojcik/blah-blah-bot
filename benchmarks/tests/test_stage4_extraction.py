@@ -530,7 +530,11 @@ class FakeModel:
                         "quote": quote,
                     }
                 )
-        return {"summary": f"A window with {len(items)} items.", "items": items}
+        return {
+            "summary": f"A window with {len(items)} items.",
+            "items": items,
+            "status_changes": [],
+        }
 
 
 @pytest.fixture
