@@ -48,6 +48,32 @@ test.describe("static screenshots", () => {
     await settle(page);
     await page.screenshot({ path: path.join(OUT, "meeting-list.png") });
   });
+
+  test("processing queue", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/?view=main&backend=mock&rate=0&page=queue");
+    await expect(page.getByRole("article")).toHaveCount(4);
+    await settle(page);
+    await page.screenshot({ path: path.join(OUT, "queue.png") });
+  });
+
+  test("transcript", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/?view=main&backend=mock&rate=0&page=transcript&meeting=m5");
+    await expect(page.getByRole("img", { name: "Screenshot taken at 0:40" })).toBeVisible();
+    await settle(page);
+    await page.screenshot({ path: path.join(OUT, "transcript.png") });
+  });
+
+  test("screenshot description in the transcript", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/?view=main&backend=mock&rate=0&page=transcript&meeting=m5");
+    const shot = page.getByRole("img", { name: "Screenshot taken at 2:30" });
+    await expect(shot).toBeVisible();
+    await shot.scrollIntoViewIfNeeded();
+    await settle(page);
+    await page.screenshot({ path: path.join(OUT, "screenshot-description.png") });
+  });
 });
 
 test("record flow GIF", async ({ page }) => {

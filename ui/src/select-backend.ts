@@ -12,8 +12,11 @@ export function selectBackend(search: string = window.location.search): Backend 
   if (inTauri && params.get("backend") !== "mock") return createTauriBackend();
   // `rate=0` freezes the simulated clock, which makes screenshots reproducible.
   const rate = params.get("rate");
+  // `jobms=N` sets how long a processing stage takes in the mock (tests use a short time).
+  const jobms = params.get("jobms");
   return createMockBackend({
     recording: params.get("state") === "recording",
     ...(rate === null ? {} : { clockRate: Number(rate) }),
+    ...(jobms === null ? {} : { jobStepMs: Number(jobms) }),
   });
 }

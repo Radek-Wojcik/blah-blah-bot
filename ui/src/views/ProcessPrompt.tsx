@@ -1,0 +1,115 @@
+import { useEffect, useRef, useState } from "react";
+import { useBackend } from "../backend-context";
+import { errorMessage, useRecordingState } from "../hooks";
+
+/**
+ * The "Process now or later?" dialog shown after a recording stops, only while the setting
+ * "after a recording stops" is "ask".
+ *
+ * Placement: the stop can come from the tray widget, a hotkey or (in the future) the main
+ * window, and either window may be the only one that is open, so both windows render this
+ * component and each watches the recording state itself. When both are open, the first
+ * answer "now" closes the other dialog as soon as the job shows up in the queue; an answer
+ * "later" in one window leaves the dialog of the other window until it is answered too.
+ * Starting the same job twice is harmless because the backend creates a job only once.
+ */
+export function ProcessPrompt() {
+  const backend = useBackend();
+  const recording = useRecordingState();
+  const [pending, setPending] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const lastRecorded = useRef<string | null>(null);
+
+  // A transition from recording to idle is the stop of that meeting.
+  useEffect(() => {
+    if (recording.status === "recording") {
+      lastRecorded.current = recording.meetingId;
+      return;
+    }
+    const id = lastRecorded.current;
+    lastRecorded.current = null;
+    if (id === null) return;
+    let cancelled = false;
+    void backend.getProcessingSettings().then((s) => {
+      if (!cancelled && s.processAfterRecording === "ask") {
+        setError(null);
+        setPending(id);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [backend, recording.status, recording.meetingId]);
+
+  // Another window answered "now": the meeting has a job, nothing left to ask.
+  useEffect(() => {
+    if (pending === null) return;
+    let off: (() => void) | undefined;
+    let cancelled = false;
+    void backend
+      .onQueueChanged((q) => {
+        if (q.jobs.some((j) => j.meetingId === pending)) setPending(null);
+      })
+      .then((u) => {
+        if (cancelled) u();
+        else off = u;
+      });
+    return () => {
+      cancelled = true;
+      off?.();
+    };
+  }, [backend, pending]);
+
+  useEffect(() => {
+    if (pending === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPending(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [pending]);
+
+  if (pending === null) return null;
+
+  const now = () => {
+    setError(null);
+    backend
+      .processMeeting(pending)
+      .then(() => setPending(null))
+      .catch((e) => setError(errorMessage(e)));
+  };
+
+  return (
+    <div className="modal-backdrop">
+      <div
+        className="panel modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="process-prompt-title"
+      >
+        <div className="panel-body">
+          <h3 id="process-prompt-title" className="modal-title">
+            Process now or later?
+          </h3>
+          <p className="modal-text">
+            The recording is saved. Processing creates the transcript and can use the GPU for a
+            while.
+          </p>
+          {error && (
+            <p className="error" role="alert">
+              {error}
+            </p>
+          )}
+          <div className="actions">
+            <button className="btn btn-ghost" onClick={() => setPending(null)}>
+              Later
+            </button>
+            <button className="btn btn-record" autoFocus onClick={now}>
+              Process now
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

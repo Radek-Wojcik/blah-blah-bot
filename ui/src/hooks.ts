@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useBackend } from "./backend-context";
 import { isIpcError } from "./ipc/tauri";
-import type { MeetingSummary, RecordingState, SourceInfo } from "./ipc/types";
+import type { MeetingSummary, QueueState, RecordingState, SourceInfo } from "./ipc/types";
 
 const idle: RecordingState = {
   status: "idle",
@@ -47,7 +47,34 @@ export function useMeetings(): { meetings: MeetingSummary[]; reload: () => void 
     reload();
     let off: (() => void) | undefined;
     let cancelled = false;
+    let offQueue: (() => void) | undefined;
     void backend.onMeetingsChanged(reload).then((u) => {
+      if (cancelled) u();
+      else off = u;
+    });
+    // The job chip of a meeting follows the queue.
+    void backend.onQueueChanged(reload).then((u) => {
+      if (cancelled) u();
+      else offQueue = u;
+    });
+    return () => {
+      cancelled = true;
+      off?.();
+      offQueue?.();
+    };
+  }, [backend, reload]);
+  return { meetings, reload };
+}
+
+/** The processing queue: loaded once, then replaced by every `queue-changed` event. */
+export function useQueue(): QueueState | null {
+  const backend = useBackend();
+  const [queue, setQueue] = useState<QueueState | null>(null);
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    let cancelled = false;
+    void backend.queueState().then((q) => !cancelled && setQueue(q));
+    void backend.onQueueChanged(setQueue).then((u) => {
       if (cancelled) u();
       else off = u;
     });
@@ -55,8 +82,8 @@ export function useMeetings(): { meetings: MeetingSummary[]; reload: () => void 
       cancelled = true;
       off?.();
     };
-  }, [backend, reload]);
-  return { meetings, reload };
+  }, [backend]);
+  return queue;
 }
 
 export function useSources(refreshKey: unknown): SourceInfo[] {

@@ -3,11 +3,28 @@ import { useBackend } from "../backend-context";
 import { formatDateTimeUtc, formatDuration } from "../format";
 import { errorMessage, useMeetings, useRecordingState } from "../hooks";
 import type { MeetingSummary, Settings } from "../ipc/types";
+import { canProcess, jobStateLabel } from "../processing";
+import { ProcessPrompt } from "./ProcessPrompt";
+import { ProcessingSettingsView } from "./ProcessingSettings";
+import { QueueView } from "./Queue";
+import { TranscriptView } from "./Transcript";
 
-type Page = "meetings" | "settings";
+type Page = "meetings" | "queue" | "settings" | "transcript";
+
+/** `?page=queue` and `?page=transcript&meeting=m5` open a page directly (used by the screenshot script). */
+function initialRoute(): { page: Page; meetingId: string | null } {
+  const params = new URLSearchParams(window.location.search);
+  const meetingId = params.get("meeting");
+  const page = params.get("page");
+  if (page === "transcript" && meetingId) return { page: "transcript", meetingId };
+  if (page === "queue" || page === "settings") return { page, meetingId: null };
+  return { page: "meetings", meetingId: null };
+}
 
 export function Main() {
-  const [page, setPage] = useState<Page>("meetings");
+  const [route, setRoute] = useState(initialRoute);
+  const page = route.page;
+  const setPage = (p: Page) => setRoute({ page: p, meetingId: null });
   const recording = useRecordingState();
   return (
     <div className="main">
@@ -17,10 +34,16 @@ export function Main() {
             Blah<span>Blah</span>Bot
           </h1>
           <button
-            className={page === "meetings" ? "nav nav-on" : "nav"}
+            className={page === "meetings" || page === "transcript" ? "nav nav-on" : "nav"}
             onClick={() => setPage("meetings")}
           >
             Meetings
+          </button>
+          <button
+            className={page === "queue" ? "nav nav-on" : "nav"}
+            onClick={() => setPage("queue")}
+          >
+            Queue
           </button>
           <button
             className={page === "settings" ? "nav nav-on" : "nav"}
@@ -45,11 +68,27 @@ export function Main() {
       </nav>
       <section className="content">
         <div className="content-inner">
-          {page === "meetings" ? <MeetingList /> : <SettingsView />}
+          {page === "meetings" && (
+            <MeetingList
+              recordingMeetingId={recording.meetingId}
+              onOpenTranscript={(id) => setRoute({ page: "transcript", meetingId: id })}
+            />
+          )}
+          {page === "queue" && <QueueView />}
+          {page === "transcript" && route.meetingId && (
+            <TranscriptView meetingId={route.meetingId} onBack={() => setPage("meetings")} />
+          )}
+          {page === "settings" && <SettingsView />}
         </div>
       </section>
+      <ProcessPrompt />
     </div>
   );
+}
+
+function JobChip({ meeting }: { meeting: MeetingSummary }) {
+  if (!meeting.job) return null;
+  return <span className={`badge badge-job-${meeting.job}`}>{jobStateLabel(meeting.job)}</span>;
 }
 
 function StateBadge({ meeting }: { meeting: MeetingSummary }) {
@@ -63,7 +102,10 @@ function StateBadge({ meeting }: { meeting: MeetingSummary }) {
   return <span className={`badge badge-${meeting.state}`}>{text}</span>;
 }
 
-function MeetingList() {
+function MeetingList(props: {
+  recordingMeetingId: string | null;
+  onOpenTranscript: (id: string) => void;
+}) {
   const backend = useBackend();
   const { meetings, reload } = useMeetings();
   const [error, setError] = useState<string | null>(null);
@@ -97,7 +139,7 @@ function MeetingList() {
               <article className="panel">
                 <div className="panel-body">
                   <h3 className="card-title">
-                    {m.title} <StateBadge meeting={m} />
+                    {m.title} <StateBadge meeting={m} /> <JobChip meeting={m} />
                   </h3>
                   <p className="card-when">{formatDateTimeUtc(m.startedUnixMs)} UTC</p>
                   <dl className="stats">
@@ -123,6 +165,21 @@ function MeetingList() {
                         Recover
                       </button>
                     )}
+                    {m.job === "done" && (
+                      <button
+                        className="btn btn-small"
+                        onClick={() => props.onOpenTranscript(m.id)}
+                      >
+                        Transcript
+                      </button>
+                    )}
+                    <button
+                      className="btn btn-small btn-stop"
+                      disabled={!canProcess(m, props.recordingMeetingId)}
+                      onClick={() => act(backend.processMeeting(m.id))}
+                    >
+                      Process
+                    </button>
                     <button
                       className="btn btn-small btn-ghost"
                       onClick={() => act(backend.deleteMeeting(m.id))}
@@ -205,6 +262,7 @@ function SettingsView() {
           </form>
         </div>
       </div>
+      <ProcessingSettingsView />
     </>
   );
 }
