@@ -36,7 +36,10 @@ pub use draft::{
 };
 pub use error::{CycleError, Result, ValidationIssue};
 pub use git::git_available;
-pub use issues::{fetch_open_issues, IssueCache, IssueList, OpenIssue};
+pub use issues::{
+    apply_fetch, fetch_open_issues, parse_issue_record, IssueCache, IssueLink, IssueList,
+    IssueRecord, ItemMarker, OpenIssue, StatusMarker,
+};
 pub use publish::{
     publish_meeting, LocalSync, PublishError, PublishErrorKind, PublishFile, PublishRequest,
     Published,
