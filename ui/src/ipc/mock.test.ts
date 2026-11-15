@@ -213,7 +213,7 @@ describe("templates", () => {
 
   it("accepts literal braces and every documented placeholder", () => {
     const body =
-      "{title} {date} {participants} {summary} {sections} {tasks} {decisions} {topics} {notes} {ideas} {budgets} {transcript_link} {{literal}}";
+      "{title} {date} {participants} {summary} {sections} {tasks} {decisions} {topics} {notes} {ideas} {budgets} {transcript_link} {report_link} {{literal}}";
     expect(validateTemplateDto(template(body))).toEqual([]);
     expect(tokenize("a {{ b }} c").tokens).toEqual([{ text: "a { b } c" }]);
   });

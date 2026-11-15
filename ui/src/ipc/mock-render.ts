@@ -33,6 +33,7 @@ export const PLACEHOLDERS = [
   "ideas",
   "budgets",
   "transcript_link",
+  "report_link",
 ];
 
 const SIMPLE = new Set(PLACEHOLDERS.filter((p) => !p.includes(":")));
@@ -322,6 +323,8 @@ export function renderReport(
         return ofType("budget");
       case "transcript_link":
         return "transcript.md";
+      case "report_link":
+        return "report.md";
       default:
         return name.startsWith("section:") ? sectionList(name.slice("section:".length)) : "";
     }

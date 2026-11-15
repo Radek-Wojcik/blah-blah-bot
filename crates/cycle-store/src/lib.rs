@@ -35,7 +35,10 @@ pub use draft::{
 pub use error::{CycleError, Result, ValidationIssue};
 pub use git::git_available;
 pub use issues::{fetch_open_issues, IssueCache, IssueList, OpenIssue};
-pub use render::{item_line, neutralise_mentions, render, BuiltinSection, RenderOptions, Variant};
+pub use render::{
+    defuse_discord_mentions, is_discord_id, item_line, item_line_with, neutralise_mentions, render,
+    BuiltinSection, RenderOptions, Variant,
+};
 pub use repo::{
     check_remote_url, CycleEntry, PullOutcome, PullReport, Repo, RepoState, RepoStatus,
 };
@@ -43,6 +46,6 @@ pub use schema::Schema;
 pub use template::{
     create_default_template, list_templates, parse_template, read_template, validate_body,
     validate_template, write_template, Template, TemplateSection, DEFAULT_TEMPLATE_TEXT,
-    PLACEHOLDERS,
+    PLACEHOLDERS, SHORT_TEMPLATE_TEXT,
 };
 pub use topics::{parse_topics, topics_to_yaml, Topic, TopicStatus};

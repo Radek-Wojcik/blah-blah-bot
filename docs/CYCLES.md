@@ -182,6 +182,7 @@ sections:
 | `{section:<id>}` | The list of items of one section, without a heading. An id the meeting does not have gives an empty result. |
 | `{tasks}`, `{decisions}`, `{topics}`, `{notes}`, `{ideas}`, `{budgets}` | The items of that type as a list, without a heading. |
 | `{transcript_link}` | Link target of the transcript, `transcript.md` by default. |
+| `{report_link}` | Link target of the full report, `report.md` by default; the Discord message gets the address of the published report. |
 
 * Writing `{{` or `}}` gives a literal brace.
 * An unknown or malformed placeholder is an error when the template is saved or rendered; it is never dropped silently. When the front matter declares sections, `{section:<id>}` must name one of them.
@@ -202,6 +203,7 @@ Every item is a bullet. Tasks carry their assignee and due date:
 * `(unverified quote)` is appended when the quote of the item was not found in the transcript. Items added by hand have no marker.
 * An assignee is shown by the participant's name.
 * For Discord and Notion the `[ ]` checkbox is left out.
+* In a Discord message an assignee whose participant has `discord.user_id` or `discord.role_id` is written as a mention of that user or role instead of the name. Only those ids from `cycle.yaml` can notify anybody: the message sends an explicit `allowed_mentions` list, never `@everyone`, `@here` or other mention syntax from the transcript. Without `targets.discord.template` the built-in short message is used (title, date, summary, decisions, tasks and a link to the full report). The message is split into several at 2000 characters; screenshots are attached in batches of at most 10 files and 8 MiB (a conservative cap: Discord documents 20 MiB per file and no total).
 
 ### Built-in sections (fixed mode)
 

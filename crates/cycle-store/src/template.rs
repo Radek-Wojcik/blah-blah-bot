@@ -27,6 +27,10 @@ use crate::schema::is_identifier;
 /// The default template (ADR 0017), written to `templates/default.md` of a new cycle.
 pub const DEFAULT_TEMPLATE_TEXT: &str = "# {title}\n\n{date} · {participants}\n\n## Summary\n{summary}\n\n{sections}\n\n---\n[Full transcript](transcript.md)\n";
 
+/// The built-in short template of a chat target (`targets.discord.template` absent): title and
+/// date, the summary, the decisions and the tasks, and a link to the full report.
+pub const SHORT_TEMPLATE_TEXT: &str = "**{title}** · {date}\n\n{summary}\n\n## Decisions\n{decisions}\n\n## Tasks\n{tasks}\n\n[Full report]({report_link})\n";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TemplateSection {
@@ -229,6 +233,7 @@ pub const PLACEHOLDERS: &[&str] = &[
     "ideas",
     "budgets",
     "transcript_link",
+    "report_link",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -246,6 +251,7 @@ pub(crate) enum Placeholder {
     Ideas,
     Budgets,
     TranscriptLink,
+    ReportLink,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -268,6 +274,7 @@ fn parse_placeholder(name: &str) -> Option<Placeholder> {
         "ideas" => Placeholder::Ideas,
         "budgets" => Placeholder::Budgets,
         "transcript_link" => Placeholder::TranscriptLink,
+        "report_link" => Placeholder::ReportLink,
         other => {
             let id = other.strip_prefix("section:")?;
             if !is_section_id(id) {

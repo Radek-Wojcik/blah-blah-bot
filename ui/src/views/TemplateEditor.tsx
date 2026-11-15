@@ -243,6 +243,7 @@ export function TemplateEditor(props: {
                   "ideas",
                   "budgets",
                   "transcript_link",
+                  "report_link",
                 ]
               ).map((p) => (
                 <code key={p}>{`{${p}}`} </code>
