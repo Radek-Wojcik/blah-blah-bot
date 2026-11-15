@@ -181,7 +181,11 @@ Each step is a separate process invocation with file inputs and outputs, so a cr
 
 ### 4.9 `cycle-store` (Rust)
 
-- **Responsibility:** local clone of the cycle repository, `git pull --rebase` before a briefing, parsing cycle files, fetching open issues with the cycle label, building the context passed to the reasoner, offline fallback with a visible "state as of" date.
+- **Responsibility:** the cycle repository: a local clone of a remote or a local-only repository, `git pull --rebase` before the `extract` stage, parsing and validating cycle files, building the context passed to the reasoner, the draft types and the deterministic report renderer, offline fallback with a visible "state as of" date.
+- **Implemented API areas:** repository (`Repo`: open, initialize a local repository, clone, pull with uncommitted edits set aside, status, list cycles with their validation issues, load and save a cycle, topics and templates); `cycle` and `topics` (parse, validate against `schemas/cycle.schema.json` and `schemas/topics.schema.json`, write in a stable key order); `template` (front matter sections, placeholders, validation); `context` (`work/context.json`: cycle, open topics, open issues and the items of previous meetings, newest first, at most 80); `draft` and `render` (meeting draft types and the template engine for the report and the per-target variants); `issues` (open-issue list with a cache and a fetch function).
+- **Cache and state:** the date of the last successful pull and the last error are kept in `.git/bbb-cache.json`; the open-issue list of a cycle in `.git/bbb-issues-<ID>.json`. Both are inside `.git`, so they never appear in the working tree or in a commit.
+- **Offline behaviour:** the working tree is the cache. A failed pull (no network, no upstream, a conflict) leaves the clone as it was, aborts an interrupted rebase and records the reason; the interface shows "state as of <date>". A local-only repository has nothing to pull. Without the `git` CLI cycle repositories cannot be used.
+- **Open issues:** the crate can fetch them from the GitHub REST API (pull requests excluded, up to 500) and falls back to the cached list. The application currently builds the context from the cache only and has no setting for a GitHub token, so fetching is not yet wired in; issues are read only.
 - **Technology:** git CLI invoked as a subprocess; GitHub REST API for issues.
 
 ### 4.10 `publishers` (Rust)
@@ -273,11 +277,15 @@ report:
   default_mode: fixed          # fixed | template | auto | by-type
   default_template: default
   instruction: "Group tasks by person, keep it short."
+  by_type:                     # meeting type -> template name
+    budget: budget-review
 targets:
-  github: { path: meetings, publish: auto }
+  github: { path: meetings, publish: auto }   # publish: auto | on-approval | off
   discord: { webhook: cred:discord/nomad, publish: on-approval, template: short }
   notion: { database: cred:notion/nomad-db, publish: on-approval }
 ```
+
+Only `id` and `name` are required; unknown keys are rejected. The full field reference is in [CYCLES.md](CYCLES.md) and the definition in `schemas/cycle.schema.json`.
 
 ### 6.3 Tasks as issues
 
@@ -289,7 +297,9 @@ targets:
 
 ### 6.4 Extraction schema
 
-The map step returns a list of items validated against a JSON Schema. Abridged shape:
+Two schemas under `schemas/` describe the result.
+
+**`extraction.schema.json`** is what the model returns for one transcript window (map step): a `summary` of the window and a list of `items`. The server constrains the output to it and the worker validates it again. An item:
 
 ```json
 {
@@ -298,20 +308,21 @@ The map step returns a list of items validated against a JSON Schema. Abridged s
   "assignee": "alex",
   "due": "2026-11-20",
   "certainty": { "assignee": "stated", "due": "inferred" },
+  "section": null,
   "relates_to": null,
-  "source": {
-    "track": "app:discord",
-    "t_start_ms": 754000,
-    "t_end_ms": 761500,
-    "quote": "Alex, can you have the mount ready by next Friday?"
-  }
+  "time": "00:12:34",
+  "quote": "Alex, can you have the mount ready by next Friday?"
 }
 ```
 
-- `type`: `task`, `decision`, `topic`, `note`, `idea`, `budget`.
-- `certainty`: `stated`, `inferred` or `unknown` per uncertain field.
-- `relates_to`: an open issue number or topic id when the item continues earlier work.
-- Status proposals are a second list: target (issue or topic), proposed status (`done`, `in_progress`, `postponed`, `closed`), and `source`.
+**`meeting.schema.json`** is the draft (`work/draft.json`, later `meeting.json`): `version`, `meeting_id`, `cycle`, `date`, the resolved output `language` (`pl` or `en`), `mode`, `template`, `meeting_type`, `sections` (`id`, `title`, `description`), `summary`, `items` and `warnings`. An item of the draft has:
+
+- `id`, `type`, `text`, `assignee` (a participant id or `null`), `due` (`YYYY-MM-DD` or `null`), `section` (a section id or `null`), `relates_to` (an open topic or issue id, or `null`) and `edited` (set when the user changed the item);
+- `type`: `task`, `decision`, `topic`, `note`, `idea`, `budget`;
+- `certainty`: `stated`, `inferred` or `unknown`, separately for `assignee` and `due`;
+- `source`, or `null` for an item added by hand: `track`, `speaker`, `t_start_ms`, `t_end_ms`, the `quote`, `verified` (the quote was found in the transcript near the stated time) and `match` (similarity from 0 to 1 to the best matching transcript text). The time range comes from the matched transcript segments, not from the model.
+
+`warnings` carry a `code` (`window_skipped`, `quote_unverified`, `assignee_unknown`, `summary_failed`), a message and an optional time range. Status proposals for issues and topics are not part of the Stage 4 schema; they arrive with publishing (Stage 5).
 
 Schemas are versioned files under `schemas/` and are the contract between the Python worker, the Rust core and the UI.
 
@@ -376,11 +387,11 @@ Diarization accuracy drops sharply with many speakers in one mixed track. Above 
 
 ### 7.5 Long transcripts
 
-1. Split the merged transcript into windows of 15–20 minutes with a one-minute overlap, cut at silence where possible.
-2. **Map:** extract items per window against the schema. Use server-side JSON Schema or grammar constraints when available; otherwise validate and retry.
-3. **Verify:** fuzzy-match every quote against the transcript near its timestamp. Items without a match are flagged for review.
-4. **Reduce:** deduplicate across windows, link items to open issues and topics from the cycle context, produce status proposals.
-5. **Summarize:** hierarchical summary (windows, then hours, then the whole meeting).
+1. Split the merged transcript into windows of 15 minutes with a one-minute overlap, cut at the longest pause near the boundary.
+2. **Map:** extract items per window against the schema with server-side JSON Schema constrained output, validated again by the worker, with at most two retries. An answer cut off by the token limit is not retried: the window is split in two (at most two levels). A window that stays invalid is skipped with a warning.
+3. **Verify:** fuzzy-match every quote against the transcript near its stated time. Items without a match are kept and flagged for review.
+4. **Reduce:** deduplicate across windows, link items to open issues and topics from the cycle context, replace an assignee that is not a participant by `null` with certainty `unknown`.
+5. **Summarize:** hierarchical summary (windows, then the whole meeting). A failed summary falls back to the first sentences of the window summaries and adds a warning.
 6. **Render:** deterministic templates produce `report.md` and the per-target variants.
 
 Steps 1 to 5 are implemented by the `extract` and `reduce` stages (Stage 4); step 6 is done by the application on the draft, with no model. The user can mark transcript passages as excluded before step 1; excluded text is not sent to the model and is omitted from the published transcript.
@@ -396,25 +407,27 @@ One template engine serves all modes:
 | Auto | The model proposes sections for this meeting; the user can change them |
 | By type | A set of templates keyed by meeting type (technical, budget, casual) |
 
-Choosing a mode is required before recording starts; the cycle supplies the default. Format is further adjusted by a Markdown template with placeholders such as `{tasks}` and `{decisions}`, a natural-language instruction stored in the cycle, manual editing of the draft (including moving items between sections), and a separate template per publishing target.
+Choosing a mode is required before recording starts (the report mode gate); the cycle supplies the default, and a recording cannot start without a cycle and a mode. The `by-type` mode asks for the meeting type at the gate; a type without a mapping uses the cycle's default template. The mode can be changed after recording while the draft is not published, because the layout is rendered from the same items; in `fixed` mode items are grouped by type and the sections cannot be edited. Format is further adjusted by a Markdown template with placeholders such as `{tasks}`, `{decisions}` and `{section:<id>}` (see [CYCLES.md](CYCLES.md)), a natural-language instruction stored in the cycle, and manual editing of the draft: text, assignee and due date, adding and deleting items, renaming, adding, removing and reordering sections, and moving items between sections. A separate template per publishing target is declared in `cycle.yaml` and used by the publishers (Stage 5). When the worker produces a new draft while the existing one has user edits, the new one is kept aside (`work/draft.new.json`) and the user accepts or discards it.
 
 ### 7.7 Trust signals
 
 Kept visually quiet so they do not dominate the report:
 
 - every task, decision and topic links to its transcript position and quote;
-- fields the model inferred, and items whose quote could not be verified, carry a small marker in the draft view;
+- fields the model inferred (a trailing `?`; `?` alone for unknown ones), and items whose quote could not be verified (`unverified quote`), carry a small marker in the draft view and in the rendered report;
 - the published report links to the full transcript in the repository.
 
 ## 8. Model backends
 
 | Backend | Use | Configuration |
 |---|---|---|
-| Managed `llama-server` | Default for LLM and vision | Path to GGUF files; started and stopped by the queue |
-| External OpenAI-compatible server (Ollama, LM Studio, Strata, others) | LLM and optionally vision | Base URL, model name, optional key |
-| Cloud (OpenAI-compatible endpoints; other providers through adapters) | LLM only, chosen per meeting | API key in Credential Manager |
+| Managed `llama-server` | Default for LLM and vision | Path to a GGUF file and the context size (default 16384 tokens) in the settings; started and stopped by the worker |
+| External OpenAI-compatible server (Ollama, LM Studio, Strata, others) | LLM (`extract`, `reduce`) | Base URL, model name, optional key in the Credential Manager |
+| Cloud (OpenAI-compatible endpoint) | LLM only, chosen per meeting | Base URL and model in the settings, API key in the Credential Manager |
 
-- There is no automatic fallback to the cloud. Cloud processing is a per-meeting choice confirmed in a dialog that states what will be sent.
+- The default backend in the settings is `managed` or `external`; the cloud cannot be the default. The backend can be changed for one meeting before it is processed.
+- There is no automatic fallback to the cloud. Cloud processing is a per-meeting choice confirmed in a dialog that states the endpoint host, the number of transcript words (passages excluded by the user are left out) and the number of screenshot descriptions that will be sent; no audio and no images are sent. The confirmation is stored with the meeting and bound to the endpoint host. The queue supervisor, the runner and the worker each refuse a cloud run without it.
+- API keys are read from the Credential Manager by the application and passed to the worker through the environment of that process only. The cloud path is tested against a mock server only.
 - Screenshot description always runs locally. Only transcript text and screenshot descriptions are sent to a cloud model.
 - Strata is supported as an external server. Its main model needs more memory than the reference machine has, so it is not a default and is not covered by release benchmarks.
 
@@ -424,7 +437,7 @@ See [ADR 0005](decisions/0005-llm-backend.md).
 
 - **Interface:** English only.
 - **Transcription language** (per cycle): `auto`, `pl` or `en`. The default is `auto` with no glossary in the ASR prompt (Stage 0: forcing the language did not change turbo's result, and the glossary did not improve term recall, so it stays optional). The translation rate on mixed speech was 1.3% at best against a 1% requirement; it is re-measured on real recordings.
-- **Output language** (per cycle, overridable per meeting): `auto`, `pl` or `en`. `auto` writes the report in the dominant language of the meeting.
+- **Output language** (per cycle, overridable per meeting at the report mode gate): `auto`, `pl` or `en`. `auto` resolves to the dominant language of the transcript: stop words and Polish letters decide when one language clearly leads, otherwise the language reported by the ASR step, otherwise English. The resolved language is stored in the draft; built-in headings for `pl` and `en` come from a table in the renderer.
 - The cycle glossary is passed to the ASR prompt and to the extraction prompt.
 
 ## 10. Privacy and security

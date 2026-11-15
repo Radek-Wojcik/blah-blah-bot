@@ -6,7 +6,7 @@ Local meeting recorder for Windows that turns calls into GitHub issues and Disco
 ![Platform: Windows](https://img.shields.io/badge/platform-Windows-blue)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
-> **Project status:** Stage 3 (speakers and voice profiles) is complete. The application records the microphone and chosen applications, turns a recording into a transcript with speakers and described screenshots on your own GPU, and recognizes voices you have named before. Cycles, task extraction and reports come in the next stages. Stage 1 still has one open measurement (microphone buffer flags, see below). There is no installer; build from source.
+> **Project status:** Stage 3 (speakers and voice profiles) is released as v0.4.0. Stage 4 (cycles and reports) is implemented and waiting for its release: the application now also keeps cycles in a Git repository and turns a processed transcript into an editable draft report with tasks, decisions, topics, notes, ideas and budgets, each linked to a quote. Publishing to GitHub and Discord comes in the next stage. Stage 1 still has one open measurement (microphone buffer flags, see below). There is no installer; build from source.
 
 ## What works today
 
@@ -22,6 +22,14 @@ Local meeting recorder for Windows that turns calls into GitHub issues and Disco
 - **Voice privacy.** Voice profiles and sample clips are biometric data. They stay in the local database and recordings folder, sample clips are deleted once you have named the voices (or after 30 days), and you can delete one participant's voice or all voice data in the settings.
 - **Review and edit.** Correct any passage or exclude it; excluded text is kept out of everything that leaves the transcript view. Edits survive a re-run.
 - **Audio retention.** Full audio is deleted only after every stage that reads it succeeded, and deleting it after processing is the default. You can choose to keep it, or to keep it for a number of days.
+- **Cycles.** A cycle is a recurring series of meetings with its own participants, glossary, report templates and defaults. Cycles live in a Git repository (cloned from an address, an existing folder, or a new local repository), so the team can read and change them without the application. The application shows the state of the last pull and keeps working offline.
+- **Participants, glossary and templates.** Edited in the application and validated before saving; a broken cycle is listed with its problems instead of hiding the others. Voice profiles belong to a participant of a cycle.
+- **Report mode gate.** Before a recording starts you choose the cycle, the report mode, a template or meeting type where the mode needs one, and the report language. A recording cannot start without a cycle and a mode.
+- **Four report modes.** `fixed` (built-in sections), `template` (sections from a template of the cycle), `auto` (sections proposed from the extracted items) and `by-type` (a template chosen by meeting type). The mode can be changed after recording while the draft is not published.
+- **Extraction with verified quotes.** After the screenshots are described, a language model extracts items per 15 minute window; every quote is matched against the transcript, and the time range comes from the matched text. Items are merged across windows and linked to the open topics and tasks of the cycle. Inferred values and unverified quotes carry a visible marker.
+- **Draft editor.** Edit the text, assignee and due date of an item, add or delete items, rename, add and reorder sections, and move items between sections. Each item shows its source: the quote, the time and a jump to the transcript. A new draft never overwrites edits you made; you accept or discard it.
+- **Output language.** `auto`, `pl` or `en` per cycle and per meeting; `auto` follows the dominant language of the transcript.
+- **Language model backends.** A managed `llama-server` (default), an external OpenAI-compatible server, or a cloud endpoint chosen for one meeting only. The cloud is never a default and never a fallback: each meeting needs a confirmation that states the endpoint host and how much text will be sent.
 - **Offline once set up.** Models are downloaded on first use with your Hugging Face token (kept in the Windows Credential Manager); processing itself needs no network.
 - **Demo mode.** The interface runs on fictional data without any audio device, which is how the screenshots below are produced.
 
@@ -36,7 +44,8 @@ Taken from demo mode with fictional data.
 | ![Processing queue with a running, a waiting, a failed and a finished job](docs/img/queue.png) | ![Animated queue: a job moves through its processing stages](docs/img/processing.gif) |
 | ![Transcript with speakers, an edited passage and described screenshots](docs/img/transcript.png) | ![A screenshot with its description between two passages of the transcript](docs/img/screenshot-description.png) |
 | ![Labeling screen with a recognized, a suggested and two unknown voices, each with sample clips](docs/img/speakers-label.png) | ![Animated naming of voices: play a clip, create a participant, accept a suggestion, pick a name](docs/img/naming-voices.gif) |
-| ![Voice profile management: participants, reset, delete and the matching thresholds](docs/img/speakers-profiles.png) | |
+| ![Voice profile management: participants, reset, delete and the matching thresholds](docs/img/speakers-profiles.png) | ![Cycle settings: participants, glossary, report defaults and publishing targets](docs/img/cycle-settings.png) |
+| ![Report mode gate before recording: cycle, report mode, template and report language](docs/img/report-mode-gate.png) | ![Draft editor with the source of an item opened: quote, time and a jump to the transcript](docs/img/draft-source-popover.png) |
 
 ## Requirements and getting started
 
@@ -45,6 +54,7 @@ Taken from demo mode with fictional data.
 | OS | Windows 10 version 2004 or newer (verified on build 19045); Windows 11 not tested yet |
 | Build tools | Rust 1.85 or newer, Node.js 22 or newer |
 | GPU | NVIDIA with 12 GB VRAM (reference: RTX 3080); peak use measured at 8.5 GB |
+| Cycle repositories | The `git` command line on the PATH (the application runs it for clone and pull); credentials come from the Git credential manager |
 | Processing tools | [uv](https://docs.astral.sh/uv/) on the PATH; about 7.4 GB for the Python environment (created on first use); models downloaded on first use; a Hugging Face token and accepted terms for the speaker model |
 | Disk | about 115 MB per track per recorded hour |
 
@@ -53,7 +63,49 @@ cd ui && npm ci && npm run build && cd ..
 cargo run -p app --release --features custom-protocol
 ```
 
-Open the settings to download the models and, for screenshot description, to point the application to a `llama-server` executable and its model folder. Recordings are written to `Documents\BlahBlahBot\recordings` unless you change the folder in the settings. Run the tests with `cargo test --workspace`, `npm test` and `npx playwright test --project=mock` in `ui`; the end-to-end suite against the real application is `npx playwright test --project=real` after a debug build.
+Open the settings to download the models and, for screenshot description and for extraction with the managed backend, to point the application to a `llama-server` executable, its model folder and a GGUF model file. Recordings are written to `Documents\BlahBlahBot\recordings` unless you change the folder in the settings. Run the tests with `cargo test --workspace`, `npm test` and `npx playwright test --project=mock` in `ui`; the end-to-end suite against the real application is `npx playwright test --project=real` after a debug build.
+
+## Cycles and report modes
+
+**Create a cycle.** Open the cycles screen, add a repository (clone it from an address, or point to an existing folder) or use the default local repository, enter a cycle id and a name, and create the cycle. The cycle gets `cycle.yaml`, an empty `topics.yaml` and a default template. Then edit its participants, glossary, report defaults and templates; the application validates the files before it writes them. A cycle repository is plain Markdown and YAML, so it can also be edited by hand. Changes made in the application are written to the working tree and are not committed yet (that arrives with publishing).
+
+| Mode | Sections | Chosen |
+|---|---|---|
+| `fixed` | Built-in: summary, decisions, tasks, open topics, notes, ideas, budgets | Cycle default |
+| `template` | The `sections` declared by a template of the cycle; the model assigns each item to one | Cycle default or at the gate |
+| `auto` | Proposed by the model from the extracted items; editable in the draft | At the gate |
+| `by-type` | The template that `report.by_type` maps the meeting type to | Meeting type at the gate |
+
+Templates are Markdown with placeholders. The common ones are `{title}`, `{date}`, `{participants}`, `{summary}`, `{sections}`, `{section:<id>}`, `{tasks}`, `{decisions}` and `{transcript_link}`; an unknown placeholder is an error, never silently dropped. The full list, the front matter and the file layout are in [docs/CYCLES.md](docs/CYCLES.md).
+
+## Configuration reference
+
+**`cycles/<ID>/cycle.yaml`.** Only `id` and `name` are required; unknown keys are rejected.
+
+| Key | Purpose |
+|---|---|
+| `languages.asr`, `languages.output` | `auto`, `pl` or `en` for transcription and for the report |
+| `participants` | `id`, `name`, optional `github` login and `discord` user or role id |
+| `glossary` | `term` with an optional `hint`, passed to the extraction prompt |
+| `report.default_mode`, `report.default_template` | Mode and template offered before recording |
+| `report.instruction` | A sentence given to the extraction, for example "Group tasks by person" |
+| `report.by_type` | Meeting type to template name, for `by-type` mode |
+| `targets.github`, `targets.discord`, `targets.notion` | Publishing targets and rules (`auto`, `on-approval` or `off`); secrets are only `cred:` references to the Windows Credential Manager. Used by the publishers in a later stage |
+
+Every key is described in [docs/CYCLES.md](docs/CYCLES.md); the schema is `schemas/cycle.schema.json`.
+
+**Language model backends (application settings).**
+
+| Setting | Meaning |
+|---|---|
+| Default backend | `managed` or `external`; the cloud cannot be the default |
+| Managed | Path to a GGUF model file and the context size (default 16384 tokens); the worker starts and stops `llama-server` |
+| External | Base URL and model name of an OpenAI-compatible server, and an optional key |
+| Cloud | Base URL and model name of an OpenAI-compatible endpoint and a key; used for one meeting at a time after a confirmation |
+
+Keys are stored in the Windows Credential Manager and are never shown again or written to a file.
+
+**Environment switches** (development and tests): `BBB_DEMO` runs the interface on generated data without audio devices, `BBB_DATA_DIR` keeps all application data in one folder, `BBB_LOG` sets the log filter, `BBB_WORKER_DIR` points to the Python worker folder.
 
 ## Stage 3 measurements
 
@@ -143,8 +195,9 @@ Prototype results on the reference machine (RTX 3080 with 12 GB, Windows 10 buil
 
 - Processing needs an NVIDIA GPU; without readings from the driver a job waits.
 - Speaker separation is measured on synthetic meetings only; on 2 to 4 speakers the error rate was above the 15% target in Stage 0 and is to be confirmed on real recordings.
-- Voice recognition is measured on synthetic voices only. The participant list is local and minimal until cycles arrive in Stage 4. A meeting processed after its audio was deleted has no sample clips, so voices are named from the transcript.
+- Voice recognition is measured on synthetic voices only. Participants of a cycle belong to that cycle; a meeting without a cycle still uses the local list. A meeting processed after its audio was deleted has no sample clips, so voices are named from the transcript.
 - The Python environment is large (about 7.4 GB) and the first model downloads take a while.
+- Stage 4 is implemented but not released. The cloud backend is tested only against a mock server. Open issues of a cycle are read from a cache; fetching them needs a GitHub token that the application cannot configure yet. Edits to cycle files are not committed or pushed until publishing arrives. Extraction quality in Polish depends on the model and has been checked on synthetic transcripts only. The new screens are tested on the mock backend, not yet end to end in the real application.
 
 ## Roadmap
 
@@ -154,7 +207,7 @@ Prototype results on the reference machine (RTX 3080 with 12 GB, Windows 10 buil
 | 1 | Recorder | v0.2.0 | Done; microphone buffer flags in the 10 hour run are open |
 | 2 | Processing pipeline | v0.3.0 | Done |
 | 3 | Speakers and voice profiles | v0.4.0 | Done |
-| 4 | Cycles and reports | v0.5.0 | Planned |
+| 4 | Cycles and reports | not released yet | Implemented, release pending |
 | 5 | Publishing | v0.6.0 | Planned |
 | 6 | Convenience | v0.7.0 | Planned |
 | 7 | Integrations | v0.8.0 | Planned |

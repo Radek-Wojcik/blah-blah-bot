@@ -75,6 +75,20 @@ The same text is a file in the repository (`templates/default.md`), so wording c
 
 Gemma 4 12B Q4_K_M stays the default unless the Stage 4 measurements (`benchmarks/results/stage4-*.json`) show otherwise; see the measurements section. The default is a setting, not code.
 
+## Implementation notes
+
+What was built where it refines or differs from the design above.
+
+- **Truncated answers are split, not retried.** When the model's answer for a window is cut off by the token limit, repeating the same request would give the same result. The worker halves the window by transcript lines (the second half starts one minute early, like consecutive windows) and asks for each half separately, at most two levels deep, then merges the results into one record for the window. A window that is still cut off after the second split, or has too little speech to split, is recorded as skipped with a warning. Other invalid answers keep the bounded retries.
+- **Output budget from the server context.** The answer limit of a window is derived from the context size of the backend minus an estimate of the prompt, capped at 8192 and floored at 1024 tokens. The managed server's context size is a setting (default 16384).
+- **Cloud refusal in three places.** A cloud backend is refused by the queue supervisor (the confirmation stored for the meeting must exist and match the endpoint host; a `cloud_confirmed` value in the stored job options is ignored), by the runner when it builds the worker manifest, and by the worker itself. The flag passed to the worker is taken from the store at run time.
+- **Participant keys.** Participants of a cycle are stored in the local database under the key `<cycle>:<id>`, so the same person listed in two cycles has separate voice profiles.
+- **Cycle files are not committed yet.** Cycle settings, topics and templates edited in the application are written to the working tree only; committing and pushing belongs to Stage 5. Before the `extract` stage of a meeting of a cloned repository the application pulls with `git pull --rebase`; a failure is logged and never stops the job.
+- **`publish` has a third value.** `targets.<name>.publish` accepts `auto`, `on-approval` and `off`; `off` disables publishing to that target.
+- **Fixed mode has no section editing.** In `fixed` mode items are grouped by type and the section editor of the draft is not offered; sections can be edited in `template`, `auto` and `by-type` modes.
+- **Language resolution.** `auto` compares stop words and Polish letters in the transcript text; when neither language clearly leads, the language reported by the ASR step decides, and English when that is unknown.
+- **Open issues.** The application reads the open issues of a cycle from the cache file. The fetch function exists in `cycle-store`, but the application does not yet configure a GitHub token or call it.
+
 ## Consequences
 
 - Report layout changes never re-run a model; section assignment is the only model-dependent layout step.
