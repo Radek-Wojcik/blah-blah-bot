@@ -5,6 +5,7 @@
 pub mod discord;
 pub mod fixtures;
 pub mod github;
+pub mod lab;
 pub mod server;
 
 pub use discord::FakeDiscord;

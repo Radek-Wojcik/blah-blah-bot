@@ -8,18 +8,15 @@
 //! repository, and an issue assignment or a Discord ping has already notified somebody.
 //!
 //! * `auto`: the operations are queued as soon as the draft of a meeting is complete (no newer
-//!   draft waits for a decision). Status changes are never part of it.
+//!   draft waits for a decision). Status changes are never part of it, with any mode: a model's
+//!   guess that a task is done is not enough to close an issue of other people, so only a change
+//!   the user approved is written back, and only by an explicit publication.
 //! * `on-approval`: queued when the user presses Publish for that target.
 //! * `off`: never, not even when the user asks.
 
 use cycle_store::{Cycle, PublishMode};
 
 pub use cycle_store::{DEFAULT_DISCORD_PUBLISH, DEFAULT_GITHUB_PUBLISH};
-/// Status changes (closing or reopening an issue or a topic) are written back only after the
-/// user approved each one, with every mode. This is not a setting: a model's guess that a
-/// task is done is not enough to close an issue of other people.
-pub const STATUS_CHANGES_NEED_APPROVAL: bool = true;
-
 /// A place a meeting can be published to. GitHub covers the commit with the report and the
 /// transcript, the issues and the status changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -92,11 +89,10 @@ impl TargetRules {
     /// Whether `trigger` may publish to `target`: `auto` only for targets set to auto,
     /// an explicit request for everything but `off`.
     pub fn allows(&self, target: PublishTarget, trigger: Trigger) -> bool {
-        match (self.mode(target), trigger) {
-            (Some(PublishMode::Auto), _) => true,
-            (Some(PublishMode::OnApproval), Trigger::Explicit) => true,
-            _ => false,
-        }
+        matches!(
+            (self.mode(target), trigger),
+            (Some(PublishMode::Auto), _) | (Some(PublishMode::OnApproval), Trigger::Explicit)
+        )
     }
 }
 
@@ -181,6 +177,5 @@ targets:
             assert_eq!(PublishTarget::parse(t.as_str()), Some(t));
         }
         assert_eq!(PublishTarget::parse("notion"), None);
-        assert!(STATUS_CHANGES_NEED_APPROVAL);
     }
 }
