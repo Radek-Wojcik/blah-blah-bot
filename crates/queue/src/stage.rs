@@ -15,6 +15,10 @@ pub enum Stage {
     Diarize,
     /// One transcript from all tracks.
     Merge,
+    /// Matches the voice of every detected speaker with the known voice profiles.
+    SpeakerId,
+    /// Cuts short sample clips of every detected voice for naming.
+    Clips,
     /// Removes the full audio once every audio-dependent stage succeeded.
     AudioCleanup,
     /// Describes each screenshot with the transcript around it as context.
@@ -22,17 +26,19 @@ pub enum Stage {
 }
 
 /// Every stage in execution order.
-pub const STAGES: [Stage; 5] = [
+pub const STAGES: [Stage; 7] = [
     Stage::Asr,
     Stage::Diarize,
     Stage::Merge,
+    Stage::SpeakerId,
+    Stage::Clips,
     Stage::AudioCleanup,
     Stage::Vision,
 ];
 
 /// Stages that read the full audio. Audio may be deleted only after all of them are done.
-/// Later stages that read audio (voice embeddings, sample clips) are added here.
-pub const AUDIO_DEPENDENT: [Stage; 2] = [Stage::Asr, Stage::Diarize];
+/// Voice embeddings come from the diarization output, so only the clips are added.
+pub const AUDIO_DEPENDENT: [Stage; 3] = [Stage::Asr, Stage::Diarize, Stage::Clips];
 
 impl Stage {
     pub fn as_str(self) -> &'static str {
@@ -40,6 +46,8 @@ impl Stage {
             Self::Asr => "asr",
             Self::Diarize => "diarize",
             Self::Merge => "merge",
+            Self::SpeakerId => "speaker_id",
+            Self::Clips => "clips",
             Self::AudioCleanup => "audio_cleanup",
             Self::Vision => "vision",
         }
@@ -115,7 +123,7 @@ mod tests {
     use super::*;
     use store::StageRow;
 
-    fn job(statuses: [StageStatus; 5]) -> JobRow {
+    fn job(statuses: [StageStatus; 7]) -> JobRow {
         JobRow {
             meeting_id: "m".into(),
             created_unix_ms: 0,
@@ -140,13 +148,13 @@ mod tests {
 
     #[test]
     fn fresh_job_starts_with_asr() {
-        let j = job([Pending; 5]);
+        let j = job([Pending; 7]);
         assert_eq!(next_step(&j), Next::Run { stage: Stage::Asr });
     }
 
     #[test]
     fn stages_run_in_order() {
-        let j = job([Done, Done, Pending, Pending, Pending]);
+        let j = job([Done, Done, Pending, Pending, Pending, Pending, Pending]);
         assert_eq!(
             next_step(&j),
             Next::Run {
@@ -157,7 +165,7 @@ mod tests {
 
     #[test]
     fn running_stage_is_resumed() {
-        let j = job([Done, Running, Pending, Pending, Pending]);
+        let j = job([Done, Running, Pending, Pending, Pending, Pending, Pending]);
         assert_eq!(
             next_step(&j),
             Next::Run {
@@ -168,7 +176,7 @@ mod tests {
 
     #[test]
     fn failed_stage_blocks_later_ones() {
-        let j = job([Done, Failed, Pending, Pending, Pending]);
+        let j = job([Done, Failed, Pending, Pending, Pending, Pending, Pending]);
         assert_eq!(
             next_step(&j),
             Next::Failed {
@@ -179,26 +187,32 @@ mod tests {
 
     #[test]
     fn all_done_is_finished() {
-        assert_eq!(next_step(&job([Done; 5])), Next::Finished);
+        assert_eq!(next_step(&job([Done; 7])), Next::Finished);
     }
 
     #[test]
     fn audio_is_expendable_only_after_every_audio_stage() {
         assert!(!audio_is_expendable(&job([
-            Done, Pending, Pending, Pending, Pending
+            Done, Pending, Pending, Pending, Pending, Pending, Pending
         ])));
         assert!(!audio_is_expendable(&job([
-            Done, Failed, Pending, Pending, Pending
+            Done, Failed, Pending, Pending, Pending, Pending, Pending
+        ])));
+        // The clips are cut from the audio, so they must be done too.
+        assert!(!audio_is_expendable(&job([
+            Done, Done, Done, Done, Pending, Pending, Pending
         ])));
         assert!(audio_is_expendable(&job([
-            Done, Done, Pending, Pending, Pending
+            Done, Done, Done, Done, Done, Pending, Pending
         ])));
     }
 
     #[test]
     fn progress_counts_done_stages() {
-        let p = progress(&job([Done, Done, Pending, Pending, Pending]));
-        assert!((p - 0.4).abs() < 1e-6);
+        let p = progress(&job([
+            Done, Done, Pending, Pending, Pending, Pending, Pending,
+        ]));
+        assert!((p - 2.0 / 7.0).abs() < 1e-6);
     }
 
     #[test]

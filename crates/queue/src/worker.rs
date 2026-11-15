@@ -345,7 +345,7 @@ pub fn step_name(stage: Stage) -> Option<&'static str> {
         Stage::Diarize => Some("diarize"),
         Stage::Merge => Some("merge"),
         Stage::Vision => Some("vision"),
-        Stage::AudioCleanup => None,
+        Stage::AudioCleanup | Stage::SpeakerId | Stage::Clips => None,
     }
 }
 

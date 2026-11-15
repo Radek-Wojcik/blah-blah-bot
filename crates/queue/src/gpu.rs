@@ -76,7 +76,7 @@ impl GuardPolicy {
             Stage::Asr => self.asr_mib,
             Stage::Diarize => self.diarize_mib,
             Stage::Vision => self.vision_mib,
-            Stage::Merge | Stage::AudioCleanup => 0,
+            Stage::Merge | Stage::SpeakerId | Stage::Clips | Stage::AudioCleanup => 0,
         }
     }
 }

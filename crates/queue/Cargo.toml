@@ -12,6 +12,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 store = { path = "../store" }
+speakers = { path = "../speakers" }
 nvml-wrapper = "0.13"
 tracing.workspace = true
 

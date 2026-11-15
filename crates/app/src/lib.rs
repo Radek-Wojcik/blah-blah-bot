@@ -11,6 +11,7 @@ mod recording;
 mod recording_dto;
 mod secrets;
 mod settings;
+mod speaker_commands;
 mod state;
 
 use std::time::Duration;
@@ -133,6 +134,7 @@ pub fn run() {
                     .state::<AppState>()
                     .processing()
                     .sweep_expired_audio(&root);
+                handle.state::<AppState>().processing().sweep_clips(&root);
             }
 
             // A taken hotkey must not stop the application from starting.
@@ -183,6 +185,18 @@ pub fn run() {
             processing_commands::clear_hf_token,
             processing_commands::model_status,
             processing_commands::download_models,
+            speaker_commands::get_meeting_voices,
+            speaker_commands::assign_voice,
+            speaker_commands::assign_voice_new,
+            speaker_commands::merge_voices,
+            speaker_commands::confirm_matches,
+            speaker_commands::voice_clip,
+            speaker_commands::list_participants,
+            speaker_commands::create_participant,
+            speaker_commands::rename_participant,
+            speaker_commands::delete_participant,
+            speaker_commands::reset_profile,
+            speaker_commands::delete_voice_data,
             overlay::overlay_image,
             overlay::overlay_finish,
         ])

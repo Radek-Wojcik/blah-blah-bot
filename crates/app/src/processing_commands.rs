@@ -121,7 +121,12 @@ pub fn cancel_job(state: State<'_, AppState>, id: String) -> IpcResult<()> {
 pub fn get_transcript(state: State<'_, AppState>, id: String) -> IpcResult<TranscriptData> {
     let dir = meeting_dir(&state, &id)?;
     let files = TranscriptFiles::new(&dir);
-    let view = files.view().map_err(transcript_error)?;
+    let mut view = files.view().map_err(transcript_error)?;
+    // Names the user (or an automatic match) gave to voices replace the generic labels.
+    let (voices, participants) =
+        state.with_store(|s| Ok((s.list_meeting_voices(&id)?, s.list_participants()?)))?;
+    let names = queue::voices::speaker_names(&voices, &participants);
+    queue::voices::apply_names(&mut view, &voices, &names);
     let screenshots = std::fs::read(dir.join("work").join("descriptions.json"))
         .ok()
         .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())

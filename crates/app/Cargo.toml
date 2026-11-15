@@ -22,6 +22,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 store = { path = "../store" }
 queue = { path = "../queue" }
+speakers = { path = "../speakers" }
 keyring-core = "1"
 recorder = { path = "../recorder" }
 

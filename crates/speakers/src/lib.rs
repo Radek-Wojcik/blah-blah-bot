@@ -7,8 +7,8 @@ mod clips;
 mod matching;
 mod profile;
 
-pub use clips::{select_clips, ClipParams, ClipSpan, Turn};
+pub use clips::{select_clips, select_clips_with, ClipParams, ClipSpan, Turn};
 pub use matching::{
     assign_unique, classify, cosine, normalize, Candidate, Decision, ProfileRef, Thresholds,
 };
-pub use profile::{centroid, Sample, SampleSet, MAX_SAMPLES, MIN_SAMPLE_MS};
+pub use profile::{centroid, AddOutcome, Sample, SampleSet, MAX_SAMPLES, MIN_SAMPLE_MS};

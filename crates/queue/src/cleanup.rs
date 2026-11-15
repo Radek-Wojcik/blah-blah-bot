@@ -230,7 +230,7 @@ mod tests {
     fn keep_leaves_the_files_and_delete_is_the_default() {
         let root = tmp("keep");
         let s = setup(&root);
-        finish(&s, &["asr", "diarize"], 10);
+        finish(&s, &["asr", "diarize", "clips"], 10);
         let job = s.get_job("m").unwrap().unwrap();
         assert_eq!(AudioRetention::default(), AudioRetention::Delete);
         assert_eq!(
@@ -244,7 +244,7 @@ mod tests {
     fn delete_removes_audio_but_keeps_screenshots() {
         let root = tmp("delete");
         let s = setup(&root);
-        finish(&s, &["asr", "diarize"], 10);
+        finish(&s, &["asr", "diarize", "clips"], 10);
         let job = s.get_job("m").unwrap().unwrap();
         assert_eq!(
             apply(&s, &job, &root, AudioRetention::Delete, 100).unwrap(),
@@ -263,7 +263,7 @@ mod tests {
     fn keep_days_waits_then_sweeps() {
         let root = tmp("days");
         let s = setup(&root);
-        finish(&s, &["asr", "diarize"], 1_000);
+        finish(&s, &["asr", "diarize", "clips"], 1_000);
         let policy = AudioRetention::KeepDays { days: 2 };
         let day = 86_400_000;
         assert_eq!(sweep_expired(&s, &root, policy, 1_000 + day).unwrap(), 0);

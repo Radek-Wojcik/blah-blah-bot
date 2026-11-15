@@ -10,9 +10,11 @@ use std::time::{Duration, Instant};
 use queue::cleanup::AudioRetention;
 use queue::gpu::{GpuSampler, Guard, GuardPolicy, NvmlSampler, OnUnavailable};
 use queue::runner::{PipelineRunner, RunnerSettings};
+use queue::voices::VoiceSettings;
 use queue::worker::{self, JobOptions, WorkerConfig, WorkerEvent};
 use queue::{GateDecision, GpuGate, Next, Stage, StepOutcome, Supervisor, STAGES};
 use serde::{Deserialize, Serialize};
+use speakers::Thresholds;
 use store::{StageStatus, Store};
 use tauri::{AppHandle, Emitter};
 
@@ -75,7 +77,7 @@ impl From<RetentionSetting> for AudioRetention {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ProcessingSettings {
     pub process_after_recording: ProcessAfter,
@@ -86,6 +88,14 @@ pub struct ProcessingSettings {
     pub worker_dir: String,
     pub llama_server_path: String,
     pub models_dir: String,
+    /// Voice matching: a match at or above this similarity names a voice automatically.
+    pub voice_accept: f32,
+    /// A match at or above this similarity is offered as a suggestion.
+    pub voice_suggest: f32,
+    /// An automatic match must beat the runner-up by this much.
+    pub voice_margin: f32,
+    /// Sample clips of voices nobody confirmed are deleted after this many days.
+    pub clip_max_days: u32,
     /// Filled when reading; ignored when saving.
     #[serde(skip_deserializing)]
     pub hf_token_set: bool,
@@ -94,6 +104,7 @@ pub struct ProcessingSettings {
 impl Default for ProcessingSettings {
     fn default() -> Self {
         let policy = GuardPolicy::default();
+        let voice = VoiceSettings::default();
         Self {
             process_after_recording: ProcessAfter::Ask,
             audio_retention: RetentionSetting::default(),
@@ -103,6 +114,10 @@ impl Default for ProcessingSettings {
             worker_dir: String::new(),
             llama_server_path: String::new(),
             models_dir: String::new(),
+            voice_accept: voice.thresholds.accept,
+            voice_suggest: voice.thresholds.suggest,
+            voice_margin: voice.thresholds.margin,
+            clip_max_days: voice.clip_max_days,
             hf_token_set: false,
         }
     }
@@ -124,6 +139,18 @@ impl ProcessingSettings {
         let tmp = path.with_extension("json.tmp");
         std::fs::write(&tmp, json)?;
         std::fs::rename(&tmp, path)
+    }
+
+    pub fn voice_settings(&self) -> VoiceSettings {
+        VoiceSettings {
+            thresholds: Thresholds {
+                accept: self.voice_accept,
+                suggest: self.voice_suggest,
+                margin: self.voice_margin,
+            },
+            clip_max_days: self.clip_max_days,
+            ..VoiceSettings::default()
+        }
     }
 
     fn guard_policy(&self) -> GuardPolicy {
@@ -295,6 +322,7 @@ impl Processing {
                     worker: worker_config(&s, &env_dir),
                     meeting_root: meeting_root(),
                     retention: s.audio_retention.into(),
+                    voice: s.voice_settings(),
                 }
             }
         };
@@ -385,6 +413,13 @@ impl Processing {
                 "the GPU utilization limit must be between 1 and 100",
             ));
         }
+        let thresholds = new.voice_settings().thresholds;
+        if !thresholds.is_valid() {
+            return Err(IpcError::new(
+                "invalid",
+                "voice thresholds must satisfy 0 <= suggest <= accept <= 1 and margin >= 0",
+            ));
+        }
         new.save(&self.settings_path)?;
         *self
             .settings
@@ -407,6 +442,19 @@ impl Processing {
             Ok(0) => {}
             Ok(files) => tracing::info!(files, "deleted audio past its retention period"),
             Err(e) => tracing::warn!(error = %e, "audio sweep failed"),
+        }
+    }
+
+    /// Delete sample clips of confirmed meetings and of meetings past the clip limit.
+    pub fn sweep_clips(&self, meeting_root: &Path) {
+        let days = self.settings.lock().map(|s| s.clip_max_days).unwrap_or(30);
+        let Ok(store) = self.store.lock() else {
+            return;
+        };
+        match queue::voices::sweep_clips(&store, meeting_root, days, queue::now_ms()) {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(meetings = n, "deleted voice sample clips"),
+            Err(e) => tracing::warn!(error = %e, "clip sweep failed"),
         }
     }
 

@@ -52,6 +52,9 @@ pub fn get_meeting(state: State<'_, AppState>, id: String) -> IpcResult<MeetingD
 
 #[tauri::command]
 pub fn delete_meeting(app: AppHandle, state: State<'_, AppState>, id: String) -> IpcResult<()> {
+    // Sample clips are voice recordings: remove the files together with the meeting.
+    let root = state.recordings_root()?;
+    state.with_store(|s| queue::voices::remove_clip_files(s, &id, &root).map(|_| ()))?;
     state.with_store(|s| s.delete_meeting(&id))?;
     emit_meetings_changed(&app);
     Ok(())

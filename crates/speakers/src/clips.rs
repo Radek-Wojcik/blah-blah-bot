@@ -56,6 +56,17 @@ impl Default for ClipParams {
 /// chosen is used only when there are not enough distant ones. The result is ordered by
 /// speaker and then by time. A speaker with no suitable stretch gets no clips.
 pub fn select_clips(turns: &[Turn], speakers: &[String], params: &ClipParams) -> Vec<ClipSpan> {
+    select_clips_with(turns, speakers, params, |_| true)
+}
+
+/// Like [`select_clips`], but a candidate is used only when `accept` agrees (for example,
+/// when the audio of the stretch turns out to be silent).
+pub fn select_clips_with(
+    turns: &[Turn],
+    speakers: &[String],
+    params: &ClipParams,
+    mut accept: impl FnMut(&ClipSpan) -> bool,
+) -> Vec<ClipSpan> {
     let mut sorted: Vec<&Turn> = turns.iter().filter(|t| t.end_ms > t.start_ms).collect();
     sorted.sort_by_key(|t| (t.start_ms, t.end_ms));
 
@@ -72,19 +83,29 @@ pub fn select_clips(turns: &[Turn], speakers: &[String], params: &ClipParams) ->
         candidates.sort_by(|a, b| (b.1 - b.0).cmp(&(a.1 - a.0)).then(a.0.cmp(&b.0)));
 
         let mut chosen: Vec<(u64, u64)> = Vec::new();
+        let mut rejected: Vec<(u64, u64)> = Vec::new();
         for pass_spaced in [true, false] {
             for &c in &candidates {
                 if chosen.len() >= params.count {
                     break;
                 }
-                if chosen.contains(&c) {
+                if chosen.contains(&c) || rejected.contains(&c) {
                     continue;
                 }
                 let far = chosen
                     .iter()
                     .all(|k| c.0.abs_diff(k.0) >= params.spacing_ms);
                 if !pass_spaced || far {
-                    chosen.push(c);
+                    let span = ClipSpan {
+                        speaker: speaker.clone(),
+                        start_ms: c.0,
+                        end_ms: c.1,
+                    };
+                    if accept(&span) {
+                        chosen.push(c);
+                    } else {
+                        rejected.push(c);
+                    }
                 }
             }
         }

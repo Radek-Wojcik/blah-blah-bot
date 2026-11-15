@@ -167,6 +167,7 @@ fn supervisor(
             },
             meeting_root: root.clone(),
             retention,
+            voice: Default::default(),
         },
         |_, _, _, _| {},
     );

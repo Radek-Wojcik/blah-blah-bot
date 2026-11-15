@@ -8,6 +8,7 @@ use store::Store;
 use crate::cleanup::{self, AudioRetention};
 use crate::stage::Stage;
 use crate::supervisor::{now_ms, RunError, StageRunner};
+use crate::voices::{self, VoiceSettings};
 use crate::worker::{self, JobOptions, WorkerConfig, WorkerEvent};
 
 /// Settings read before every stage, so changes apply to the next stage without a restart.
@@ -15,6 +16,7 @@ pub struct RunnerSettings {
     pub worker: WorkerConfig,
     pub meeting_root: PathBuf,
     pub retention: AudioRetention,
+    pub voice: VoiceSettings,
 }
 
 /// Called with `(meeting id, stage, fraction 0..1, message)` for every progress event.
@@ -87,15 +89,32 @@ impl StageRunner for PipelineRunner {
                     .store
                     .lock()
                     .map_err(|_| RunError::new("store lock poisoned"))?;
-                cleanup::apply(
-                    &store,
-                    &job,
-                    &settings.meeting_root,
-                    settings.retention,
-                    now_ms(),
-                )
-                .map(|_| ())
-                .map_err(|e| RunError::new(e.to_string()))
+                match stage {
+                    Stage::SpeakerId => voices::run_speaker_id(
+                        &store,
+                        meeting_id,
+                        &settings.meeting_root.join(&details.meeting.dir),
+                        &settings.voice,
+                    )
+                    .map(|_| ()),
+                    Stage::Clips => voices::run_clips(
+                        &store,
+                        meeting_id,
+                        &settings.meeting_root,
+                        &settings.voice,
+                        now_ms(),
+                    )
+                    .map(|_| ()),
+                    _ => cleanup::apply(
+                        &store,
+                        &job,
+                        &settings.meeting_root,
+                        settings.retention,
+                        now_ms(),
+                    )
+                    .map(|_| ())
+                    .map_err(|e| RunError::new(e.to_string())),
+                }
             }
         }
     }

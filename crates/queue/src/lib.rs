@@ -11,6 +11,7 @@ pub mod runner;
 pub mod stage;
 mod supervisor;
 pub mod transcript;
+pub mod voices;
 pub mod worker;
 
 pub use stage::{audio_is_expendable, next_step, progress, Next, Stage, AUDIO_DEPENDENT, STAGES};
