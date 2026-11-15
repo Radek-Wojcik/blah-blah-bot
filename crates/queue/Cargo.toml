@@ -15,5 +15,8 @@ store = { path = "../store" }
 nvml-wrapper = "0.13"
 tracing.workspace = true
 
+[dev-dependencies]
+jsonschema = { version = "0.30", default-features = false }
+
 [lints]
 workspace = true

@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use store::{MeetingDetails, Store};
+use store::MeetingDetails;
 
 use crate::stage::Stage;
 use crate::supervisor::RunError;
@@ -306,25 +306,21 @@ trait Tap: Sized {
 }
 impl Tap for Command {}
 
-/// Write the manifest and run one worker step for a meeting.
+/// Write the manifest and run one worker step for a meeting. The caller reads `details`
+/// from the store beforehand and must not hold any store lock while this runs.
 pub fn run_step(
     cfg: &WorkerConfig,
-    store: &Store,
+    details: &MeetingDetails,
     meeting_root: &Path,
-    meeting_id: &str,
     options: &JobOptions,
     step: &str,
     on_event: impl FnMut(&WorkerEvent),
 ) -> Result<(), RunError> {
-    let details = store
-        .get_meeting(meeting_id)
-        .map_err(|e| RunError::new(e.to_string()))?
-        .ok_or_else(|| RunError::new("the meeting no longer exists"))?;
     let meeting_dir = meeting_root.join(&details.meeting.dir);
     let work = meeting_dir.join("work");
     std::fs::create_dir_all(&work).map_err(|e| RunError::new(e.to_string()))?;
     let manifest_path = work.join("manifest.json");
-    let manifest = build_manifest(&details, options);
+    let manifest = build_manifest(details, options);
     std::fs::write(
         &manifest_path,
         serde_json::to_vec_pretty(&manifest).unwrap_or_default(),
