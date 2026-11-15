@@ -171,6 +171,12 @@ impl Store {
         now_ms: i64,
     ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
+        // Jobs created by an older version have no row for stages added since.
+        tx.execute(
+            "INSERT OR IGNORE INTO job_stages (meeting_id, stage, status)
+             SELECT ?1, ?2, 'pending' WHERE EXISTS (SELECT 1 FROM jobs WHERE meeting_id = ?1)",
+            params![meeting_id, stage],
+        )?;
         match status {
             StageStatus::Running => tx.execute(
                 "UPDATE job_stages SET status = 'running', attempts = attempts + 1,

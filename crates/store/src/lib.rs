@@ -6,8 +6,13 @@
 
 mod jobs;
 mod migrations;
+mod voices;
 
 pub use jobs::{JobRow, StageRow, StageStatus};
+pub use voices::{
+    blob_to_embedding, embedding_to_blob, ClipRow, Participant, ParticipantInfo, SampleRow,
+    VoiceDecision, VoiceRow,
+};
 
 use std::path::Path;
 

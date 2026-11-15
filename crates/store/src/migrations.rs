@@ -64,6 +64,49 @@ const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (meeting_id, stage)
     );
     ",
+    // Version 3: participants, voice profiles (biometric, local only), detected voices per
+    // meeting and their sample clips.
+    "
+    CREATE TABLE participants (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+        created_unix_ms INTEGER NOT NULL
+    );
+    CREATE TABLE voice_samples (
+        participant_id TEXT NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
+        source_key TEXT NOT NULL,
+        embedding BLOB NOT NULL,
+        speech_ms INTEGER NOT NULL,
+        created_unix_ms INTEGER NOT NULL,
+        PRIMARY KEY (participant_id, source_key)
+    );
+    CREATE TABLE meeting_voices (
+        meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        voice_id TEXT NOT NULL,
+        track TEXT NOT NULL,
+        label TEXT NOT NULL,
+        embedding BLOB NOT NULL,
+        speech_ms INTEGER NOT NULL,
+        decision TEXT NOT NULL CHECK (decision IN ('unknown','auto','suggested')),
+        score REAL,
+        matched_participant TEXT REFERENCES participants(id) ON DELETE SET NULL,
+        assigned_participant TEXT REFERENCES participants(id) ON DELETE SET NULL,
+        confirmed INTEGER NOT NULL DEFAULT 0,
+        merged_into TEXT,
+        PRIMARY KEY (meeting_id, voice_id)
+    );
+    CREATE TABLE voice_clips (
+        meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        voice_id TEXT NOT NULL,
+        idx INTEGER NOT NULL,
+        file TEXT NOT NULL,
+        start_ms INTEGER NOT NULL,
+        end_ms INTEGER NOT NULL,
+        text TEXT NOT NULL DEFAULT '',
+        created_unix_ms INTEGER NOT NULL,
+        PRIMARY KEY (meeting_id, voice_id, idx)
+    );
+    ",
 ];
 
 /// Schema version after all migrations have run.

@@ -3722,6 +3722,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "speakers"
+version = "0.3.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "sqlite-wasm-rs"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
