@@ -479,6 +479,23 @@ impl Store {
         Ok(())
     }
 
+    /// Makes a queued operation that waits for its backoff due now (the user does not want to
+    /// wait). Anything else is refused.
+    pub fn run_op_now(&self, id: i64, now_ms: i64) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        if fetch(&tx, id)?.state != OpState::Queued {
+            return Err(StoreError::Invalid(format!(
+                "outbox operation {id} is not queued"
+            )));
+        }
+        tx.execute(
+            "UPDATE outbox SET next_attempt_unix_ms = NULL, updated_unix_ms = ?2 WHERE id = ?1",
+            params![id, now_ms],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Retry everything now: failed operations go back to queued with fresh attempts, and
     /// queued ones that wait for their backoff become due. Returns how many rows changed.
     pub fn retry_all_ops(&self, now_ms: i64) -> Result<usize> {
@@ -1148,5 +1165,25 @@ mod tests {
         assert_eq!(revived.payload, r#"{"v":2}"#);
         assert_eq!(revived.attempts, 0);
         assert!(s.claim_next_op(10, &[]).unwrap().is_some());
+    }
+
+    #[test]
+    fn a_waiting_operation_can_be_made_due_now_and_nothing_else() {
+        let s = store();
+        let (op, _) = s.enqueue_op(&commit("m1"), 1).unwrap();
+        s.claim_next_op(5, &[]).unwrap().unwrap();
+        s.fail_op(op.id, transient(), "offline", 5).unwrap();
+        assert!(
+            s.claim_next_op(6, &[]).unwrap().is_none(),
+            "waiting for its backoff"
+        );
+        s.run_op_now(op.id, 6).unwrap();
+        assert_eq!(
+            s.get_op(op.id).unwrap().unwrap().attempts,
+            1,
+            "the failure still counts"
+        );
+        assert!(s.claim_next_op(6, &[]).unwrap().is_some());
+        assert!(s.run_op_now(op.id, 7).is_err(), "running");
     }
 }
