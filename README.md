@@ -2,11 +2,11 @@
 
 Local meeting recorder for Windows that turns calls into GitHub issues and Discord summaries, using on-device speech and language models.
 
-![Status: recorder](https://img.shields.io/badge/status-recorder-lightgrey)
+![Status: processing](https://img.shields.io/badge/status-processing-lightgrey)
 ![Platform: Windows](https://img.shields.io/badge/platform-Windows-blue)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
-> **Project status:** Stage 1 (the recorder) is complete, with one measured exception described below. The application records the microphone and chosen applications and keeps a local meeting list. It does not process recordings yet: transcription, speaker recognition and reports come in the next stages. There is no installer; build from source.
+> **Project status:** Stage 2 (the processing pipeline) is complete. The application records the microphone and chosen applications and turns a recording into a transcript with speakers and described screenshots on your own GPU. Speaker naming and recognition, task extraction and reports come in the next stages. Stage 1 still has one open measurement (microphone buffer flags, see below). There is no installer; build from source.
 
 ## What works today
 
@@ -15,6 +15,11 @@ Local meeting recorder for Windows that turns calls into GitHub issues and Disco
 - **Crash-safe storage.** Audio is written in 60 second segments next to an append-only journal. A killed or crashed recording is found again at the next start and can be recovered; at most the segment being written is lost.
 - **Region screenshots.** A global hotkey freezes the desktop (all monitors), you drag a rectangle, and the crop is saved with its offset in the recording.
 - **Meeting list and settings.** Local list of recordings with their tracks and screenshots; folders and hotkeys are configurable.
+- **Processing queue.** One job per meeting, split into stages (transcription, speaker separation, merge, audio cleanup, screenshot description). It starts when you say so, waits while another program is using the GPU and shows why, runs one model at a time, and continues from the stage it stopped in after a crash.
+- **Transcript with speakers.** Whisper large-v3-turbo transcribes each track with word timestamps; pyannote separates the voices of application tracks; your microphone is you. Screenshots are described by a local vision model and placed in the transcript by time.
+- **Review and edit.** Correct any passage or exclude it; excluded text is kept out of everything that leaves the transcript view. Edits survive a re-run.
+- **Audio retention.** Full audio is deleted only after every stage that reads it succeeded, and keeping it is the default. You can choose to delete it after processing or after a number of days.
+- **Offline once set up.** Models are downloaded on first use with your Hugging Face token (kept in the Windows Credential Manager); processing itself needs no network.
 - **Demo mode.** The interface runs on fictional data without any audio device, which is how the screenshots below are produced.
 
 ## Screenshots
@@ -25,6 +30,8 @@ Taken from demo mode with fictional data.
 |---|---|
 | ![Tray widget while recording, with two sources and level meters](docs/img/tray-widget.png) | ![Source picker before recording](docs/img/source-picker.png) |
 | ![List of meetings with their lengths, tracks and screenshots](docs/img/meeting-list.png) | ![Animated recording flow: pick sources, record, add a source, take a screenshot, stop](docs/img/record-flow.gif) |
+| ![Processing queue with a running, a waiting, a failed and a finished job](docs/img/queue.png) | ![Animated queue: a job moves through its processing stages](docs/img/processing.gif) |
+| ![Transcript with speakers, an edited passage and described screenshots](docs/img/transcript.png) | ![A screenshot with its description between two passages of the transcript](docs/img/screenshot-description.png) |
 
 ## Requirements and getting started
 
@@ -32,6 +39,8 @@ Taken from demo mode with fictional data.
 |---|---|
 | OS | Windows 10 version 2004 or newer (verified on build 19045); Windows 11 not tested yet |
 | Build tools | Rust 1.85 or newer, Node.js 22 or newer |
+| GPU | NVIDIA with 12 GB VRAM (reference: RTX 3080); peak use measured at 8.5 GB |
+| Processing tools | [uv](https://docs.astral.sh/uv/) on the PATH; about 7.4 GB for the Python environment (created on first use); models downloaded on first use; a Hugging Face token and accepted terms for the speaker model |
 | Disk | about 115 MB per track per recorded hour |
 
 ```bash
@@ -39,7 +48,21 @@ cd ui && npm ci && npm run build && cd ..
 cargo run -p app --release --features custom-protocol
 ```
 
-Recordings are written to `Documents\BlahBlahBot\recordings` unless you change the folder in the settings. Run the tests with `cargo test --workspace`, `npm test` and `npx playwright test --project=mock` in `ui`; the end-to-end suite against the real application is `npx playwright test --project=real` after a debug build.
+Open the settings to download the models and, for screenshot description, to point the application to a `llama-server` executable and its model folder. Recordings are written to `Documents\BlahBlahBot\recordings` unless you change the folder in the settings. Run the tests with `cargo test --workspace`, `npm test` and `npx playwright test --project=mock` in `ui`; the end-to-end suite against the real application is `npx playwright test --project=real` after a debug build.
+
+## Stage 2 measurements
+
+A synthetic recording of 2 hours (a repetition of short scripted meetings, one application track, 12 screenshots) processed stage by stage on the reference machine (RTX 3080, Windows 10 build 19045). It measures time and memory, not recognition quality. Raw data: [benchmarks/results/stage2-pipeline-2h.json](benchmarks/results/stage2-pipeline-2h.json).
+
+| Stage | Time | Peak VRAM above baseline |
+|---|---|---|
+| Transcription | 234 s | 1.5 GB |
+| Speaker separation | 106 s | 2.5 GB |
+| Merge | 4 s | none |
+| Screenshot description (12 images) | 22 s | 7.6 GB |
+| **Total** | **6.1 minutes** (target 45 minutes or less) | **8.5 GB absolute** (target 11.5 GB or less) |
+
+VRAM returned to the idle level after every stage. Tests with the real models on the short reference recordings cover the whole job, a worker killed in each stage and resumed, no network, and a job that waits while another process holds the GPU.
 
 ## Stage 1 measurements
 
@@ -98,13 +121,20 @@ Prototype results on the reference machine (RTX 3080 with 12 GB, Windows 10 buil
 | Browser tab capture | idle machine: no lost frames, longest gap 47 ms in 31 minutes; with the machine in use: gaps of 218 to 667 ms | gaps of 100 ms or less (met only when idle) |
 | Python environment from lock file | 70 s and 7.4 GB for speech and diarization groups | unattended |
 
+## Limitations
+
+- Processing needs an NVIDIA GPU; without readings from the driver a job waits.
+- Speaker separation is measured on synthetic meetings only; on 2 to 4 speakers the error rate was above the 15% target in Stage 0 and is to be confirmed on real recordings.
+- Speakers are labelled "Speaker 1", "Speaker 2" and so on; naming and recognition of voices come in Stage 3.
+- The Python environment is large (about 7.4 GB) and the first model downloads take a while.
+
 ## Roadmap
 
 | Stage | Scope | Release | Status |
 |---|---|---|---|
 | 0 | Prototypes and decision gate | v0.1.0 | Done, gate passed |
 | 1 | Recorder | v0.2.0 | Done; microphone buffer flags in the 10 hour run are open |
-| 2 | Processing pipeline | v0.3.0 | Planned |
+| 2 | Processing pipeline | v0.3.0 | Done |
 | 3 | Speakers and voice profiles | v0.4.0 | Planned |
 | 4 | Cycles and reports | v0.5.0 | Planned |
 | 5 | Publishing | v0.6.0 | Planned |
