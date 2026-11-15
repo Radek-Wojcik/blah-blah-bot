@@ -11,6 +11,8 @@ mod logging;
 mod overlay;
 mod processing;
 mod processing_commands;
+mod publish_commands;
+mod publish_secrets;
 mod recording;
 mod recording_dto;
 mod secrets;
@@ -221,6 +223,14 @@ pub fn run() {
             cycle_commands::add_cycle_repo,
             cycle_commands::pull_cycle_repo,
             cycle_commands::report_defaults,
+            publish_commands::publishing_secrets,
+            publish_commands::set_github_token,
+            publish_commands::clear_github_token,
+            publish_commands::test_github_access,
+            publish_commands::set_github_repo,
+            publish_commands::set_target_secret,
+            publish_commands::clear_target_secret,
+            publish_commands::test_discord_webhook,
             draft_commands::get_draft,
             draft_commands::update_draft_item,
             draft_commands::move_draft_item,

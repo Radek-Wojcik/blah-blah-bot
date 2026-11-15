@@ -418,6 +418,9 @@ pub struct RepoDto {
     pub path: String,
     pub remote: Option<String>,
     pub kind: RepoKind,
+    /// `owner/name` set for GitHub, when it is not the remote's.
+    pub github_repo: Option<String>,
+    pub github_api: Option<String>,
     /// The folder exists.
     pub available: bool,
     pub state_as_of: Option<String>,
@@ -493,6 +496,8 @@ pub fn repo_dto(setting: &CycleRepoSetting) -> RepoDto {
         path: setting.path.clone(),
         remote: setting.remote.clone(),
         kind: setting.kind,
+        github_repo: setting.github_repo.clone(),
+        github_api: setting.github_api.clone(),
         available,
         state_as_of,
         offline,
@@ -671,6 +676,8 @@ pub fn resolve_target_repo(
         path: path.to_string_lossy().into_owned(),
         remote: None,
         kind: RepoKind::Local,
+        github_repo: None,
+        github_api: None,
     };
     settings.cycle_repos.push(setting.clone());
     Ok(setting)
@@ -1290,6 +1297,8 @@ pub fn add_local_repo(settings: &mut Settings, path: &str) -> IpcResult<CycleRep
         path: canonical,
         remote: None,
         kind: RepoKind::Local,
+        github_repo: None,
+        github_api: None,
     };
     settings.cycle_repos.push(setting.clone());
     Ok(setting)
@@ -1307,6 +1316,8 @@ pub fn register_clone(
         path: dest.to_string_lossy().into_owned(),
         remote: Some(url.to_string()),
         kind: RepoKind::Clone,
+        github_repo: None,
+        github_api: None,
     };
     settings.cycle_repos.push(setting.clone());
     setting
@@ -2530,6 +2541,8 @@ pub(crate) mod tests {
             path: dest.to_string_lossy().into_owned(),
             remote: Some(origin.root().to_string_lossy().into_owned()),
             kind: RepoKind::Clone,
+            github_repo: None,
+            github_api: None,
         }];
         (origin, settings, clone)
     }
@@ -2699,6 +2712,8 @@ pub(crate) mod tests {
             path: "Z:/does/not/exist".into(),
             remote: None,
             kind: RepoKind::Local,
+            github_repo: None,
+            github_api: None,
         }];
         assert!(list_cycles(&settings).is_empty());
         let r = list_repos(&settings);
