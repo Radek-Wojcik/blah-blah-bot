@@ -1,6 +1,6 @@
 """P4b: distribution of voice-embedding similarity for the same and for different voices.
 
-    uv run --group diar python -m bbb_bench.proto.p4_similarity data/audio/pl-04a data/audio/pl-04b ...
+    uv run --group diar python -m bbb_bench.proto.p4_similarity \n        data/audio/pl-04a data/audio/pl-04b ...
 
 Every meeting is diarized with the speaker count bounded by its script and one embedding
 is kept per speaker. Speakers are identified across meetings by their synthesized voice,
@@ -112,8 +112,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         rows = [
             {
                 "threshold": t,
-                "false_reject_rate": round(sum(c < t for c in same) / len(same), 4) if same else None,
-                "false_accept_rate": round(sum(c >= t for c in diff) / len(diff), 4) if diff else None,
+                "false_reject_rate": (
+                    round(sum(c < t for c in same) / len(same), 4) if same else None
+                ),
+                "false_accept_rate": (
+                    round(sum(c >= t for c in diff) / len(diff), 4) if diff else None
+                ),
             }
             for t in THRESHOLDS
         ]
