@@ -304,7 +304,9 @@ test("draft editing GIF", async ({ page }) => {
   await shot();
   await move.selectOption({ label: target });
   await expect(
-    page.getByRole("list", { name: `Items of ${target}` }).getByRole("button", { name: text, exact: true }),
+    page
+      .getByRole("list", { name: `Items of ${target}` })
+      .getByRole("button", { name: text, exact: true }),
   ).toBeVisible();
   await shot(600);
   await page.getByRole("button", { name: "Rendered report" }).click();
