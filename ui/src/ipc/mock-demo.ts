@@ -224,7 +224,7 @@ export function demoTranscript(meetingId: string): TranscriptData {
 export function demoProcessingSettings(): ProcessingSettings {
   return {
     processAfterRecording: "ask",
-    audioRetention: { mode: "keep", days: 30 },
+    audioRetention: { mode: "delete", days: 30 },
     gpuIdleSeconds: 30,
     gpuMaxUtilPercent: 40,
     uvPath: "uv",

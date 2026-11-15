@@ -221,12 +221,12 @@ fn meeting_is_processed_end_to_end_and_audio_is_removed_afterwards() {
 
 #[test]
 #[ignore = "needs real models and a GPU"]
-fn audio_is_kept_by_default_after_processing() {
+fn audio_is_kept_when_the_retention_is_keep() {
     let fx = fixture("keep", false);
     let sup = supervisor(
         &fx,
         Arc::new(Allow),
-        AudioRetention::default(),
+        AudioRetention::Keep,
         Arc::new(AtomicU64::new(3600)),
     );
     assert_eq!(sup.drive("m1").unwrap(), StepOutcome::Finished);
