@@ -356,6 +356,10 @@ impl Store {
     /// when it is queued, its retry time has come and the operation it waits for is done.
     /// Operations for a target in `skip` stay queued (a host that just refused to connect).
     /// The oldest due operation goes first.
+    ///
+    /// A Discord post also waits while an issue operation of the same meeting is queued or
+    /// running, so that the message can link the issues that were created; an issue that
+    /// failed for good or was cancelled does not hold it back.
     pub fn claim_next_op(&self, now_ms: i64, skip: &[OutboxTarget]) -> Result<Option<OutboxOp>> {
         let tx = self.conn.unchecked_transaction()?;
         let due: Vec<(i64, String)> = {
@@ -365,6 +369,10 @@ impl Store {
                    AND (o.next_attempt_unix_ms IS NULL OR o.next_attempt_unix_ms <= ?1)
                    AND (o.after_id IS NULL
                         OR EXISTS (SELECT 1 FROM outbox a WHERE a.id = o.after_id AND a.state = 'done'))
+                   AND (o.target <> 'discord'
+                        OR NOT EXISTS (SELECT 1 FROM outbox i
+                                       WHERE i.meeting_id = o.meeting_id AND i.target = 'issues'
+                                         AND i.state IN ('queued', 'running')))
                  ORDER BY o.id",
             )?;
             let rows = stmt.query_map(params![now_ms], |r| Ok((r.get(0)?, r.get(1)?)))?;
@@ -385,6 +393,23 @@ impl Store {
             return Ok(Some(op));
         }
         Ok(None)
+    }
+
+    /// Record how far a running operation has come (JSON, never secrets), for example the
+    /// number of Discord messages that are out. It is kept through failures and retries and
+    /// replaced by the outcome when the operation completes.
+    pub fn set_op_progress(&self, id: i64, progress: &str, now_ms: i64) -> Result<()> {
+        let changed = self.conn.execute(
+            "UPDATE outbox SET result = ?2, updated_unix_ms = ?3
+             WHERE id = ?1 AND state = 'running'",
+            params![id, progress, now_ms],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::Invalid(format!(
+                "outbox operation {id} is not running"
+            )));
+        }
+        Ok(())
     }
 
     /// running -> done, with the outcome as JSON.
@@ -1023,5 +1048,76 @@ mod tests {
         let json = serde_json::to_value(&row).unwrap();
         assert_eq!(json["state"], "queued");
         assert_eq!(json["kind"], "set_issue_state");
+    }
+
+    #[test]
+    fn a_discord_post_waits_for_the_issues_of_its_meeting() {
+        let s = store();
+        let issue = new_op(
+            "m1",
+            OutboxTarget::Issues,
+            OutboxKind::CreateIssue,
+            "issue:i1",
+        );
+        let post = new_op(
+            "m1",
+            OutboxTarget::Discord,
+            OutboxKind::PostDiscord,
+            "discord",
+        );
+        let other = new_op(
+            "m2",
+            OutboxTarget::Discord,
+            OutboxKind::PostDiscord,
+            "discord",
+        );
+        let (issue_op, _) = s.enqueue_op(&issue, 1).unwrap();
+        s.enqueue_op(&post, 1).unwrap();
+        s.enqueue_op(&other, 1).unwrap();
+
+        // The issue runs first; the post of the other meeting is not held back.
+        let first = s.claim_next_op(10, &[]).unwrap().unwrap();
+        assert_eq!(first.id, issue_op.id);
+        let second = s.claim_next_op(10, &[]).unwrap().unwrap();
+        assert_eq!(
+            (second.meeting_id.as_str(), second.target),
+            ("m2", OutboxTarget::Discord)
+        );
+        assert!(
+            s.claim_next_op(10, &[]).unwrap().is_none(),
+            "m1 waits for its issue"
+        );
+
+        // A transient failure keeps the post waiting; a permanent one releases it.
+        s.fail_op(first.id, transient(), "later", 10).unwrap();
+        assert!(s.claim_next_op(20, &[]).unwrap().is_none());
+        s.retry_all_ops(20).unwrap();
+        let again = s.claim_next_op(20, &[]).unwrap().unwrap();
+        s.fail_op(again.id, Failure::Permanent, "no", 20).unwrap();
+        let post_op = s.claim_next_op(20, &[]).unwrap().unwrap();
+        assert_eq!(post_op.op_key, "discord");
+        assert_eq!(post_op.meeting_id, "m1");
+    }
+
+    #[test]
+    fn progress_is_kept_through_a_failure_and_replaced_by_the_outcome() {
+        let s = store();
+        let (op, _) = s.enqueue_op(&commit("m1"), 1).unwrap();
+        assert!(
+            s.set_op_progress(op.id, "{}", 2).is_err(),
+            "not running yet"
+        );
+        s.claim_next_op(5, &[]).unwrap().unwrap();
+        s.set_op_progress(op.id, r#"{"sent":2}"#, 6).unwrap();
+        s.fail_op(op.id, transient(), "offline", 7).unwrap();
+        let queued = s.get_op(op.id).unwrap().unwrap();
+        assert_eq!(queued.state, OpState::Queued);
+        assert_eq!(queued.result.as_deref(), Some(r#"{"sent":2}"#));
+        s.claim_next_op(10_000_000, &[]).unwrap().unwrap();
+        s.complete_op(op.id, r#"{"sent":3}"#, 9).unwrap();
+        assert_eq!(
+            s.get_op(op.id).unwrap().unwrap().result.as_deref(),
+            Some(r#"{"sent":3}"#)
+        );
     }
 }
