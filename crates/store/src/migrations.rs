@@ -146,6 +146,49 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     CREATE UNIQUE INDEX idx_participants_name_cycle
         ON participants(cycle_id, name) WHERE cycle_id IS NOT NULL;
     ",
+    // Version 5: publishing. The outbox holds one row per outgoing operation (a commit to
+    // the cycle repository, a GitHub issue, a Discord message) so that a failed or offline
+    // send is retried instead of lost; `op_key` makes enqueueing idempotent per meeting.
+    // `publications` records where a meeting went, and `repo_confirmations` that the user
+    // confirmed publishing to a public repository. Nothing here holds a secret.
+    "
+    CREATE TABLE outbox (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        target TEXT NOT NULL CHECK (target IN ('github','issues','discord')),
+        kind TEXT NOT NULL
+            CHECK (kind IN ('commit_meeting','create_issue','set_issue_state','post_discord')),
+        op_key TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}',
+        state TEXT NOT NULL CHECK (state IN ('queued','running','done','failed','cancelled')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_unix_ms INTEGER,
+        last_error TEXT,
+        result TEXT,
+        after_id INTEGER REFERENCES outbox(id) ON DELETE SET NULL,
+        created_unix_ms INTEGER NOT NULL,
+        updated_unix_ms INTEGER NOT NULL,
+        UNIQUE (meeting_id, op_key)
+    );
+    CREATE INDEX idx_outbox_due ON outbox(state, next_attempt_unix_ms);
+
+    CREATE TABLE publications (
+        meeting_id TEXT PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,
+        cycle_id TEXT NOT NULL,
+        folder TEXT,
+        repo_key TEXT,
+        commit_sha TEXT,
+        report_url TEXT,
+        snapshot_dir TEXT NOT NULL,
+        published_unix_ms INTEGER
+    );
+
+    CREATE TABLE repo_confirmations (
+        repo_key TEXT PRIMARY KEY,
+        visibility TEXT NOT NULL,
+        confirmed_unix_ms INTEGER NOT NULL
+    );
+    ",
 ];
 
 /// Schema version after all migrations have run.
@@ -194,4 +237,114 @@ fn run_pending(conn: &Connection, current: u32) -> Result<()> {
         tx.commit()?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Store;
+
+    /// A database as version 4 of the application left it, with a cycle meeting, a job and
+    /// a participant with a voice sample.
+    fn v4_database() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        for sql in &MIGRATIONS[..4] {
+            conn.execute_batch(sql).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 4).unwrap();
+        conn.execute_batch(
+            "INSERT INTO meetings (id, title, started_unix_ms, state, dir, cycle_id, report_mode)
+               VALUES ('20261113-140501', 'Weekly', 5, 'stopped', 'm1', 'NOMAD', 'auto');
+             INSERT INTO meeting_llm (meeting_id, kind) VALUES ('20261113-140501', 'managed');
+             INSERT INTO jobs (meeting_id, created_unix_ms, updated_unix_ms)
+               VALUES ('20261113-140501', 5, 5);
+             INSERT INTO job_stages (meeting_id, stage, status, attempts, note)
+               VALUES ('20261113-140501', 'reduce', 'done', 1, 'note');
+             INSERT INTO participants (id, name, created_unix_ms, cycle_id)
+               VALUES ('NOMAD:ola', 'Ola', 7, 'NOMAD');
+             INSERT INTO voice_samples (participant_id, source_key, embedding, speech_ms,
+                                        created_unix_ms)
+               VALUES ('NOMAD:ola', 'm:v', x'0000803f', 9000, 9);",
+        )
+        .unwrap();
+        conn
+    }
+
+    fn count(s: &Store, table: &str) -> i64 {
+        s.conn
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn migrating_a_version_4_database_adds_the_publishing_tables_and_keeps_the_data() {
+        let s = Store::init(v4_database()).unwrap();
+        assert_eq!(s.schema_version().unwrap(), 5);
+        assert_eq!(LATEST, 5);
+
+        // Existing data is untouched.
+        let m = s.get_meeting("20261113-140501").unwrap().unwrap().meeting;
+        assert_eq!(m.title, "Weekly");
+        assert_eq!(
+            s.get_job("20261113-140501").unwrap().unwrap().stages[0]
+                .note
+                .as_deref(),
+            Some("note")
+        );
+        assert_eq!(s.participants_for_cycle("NOMAD").unwrap().len(), 1);
+        assert_eq!(s.samples_of("NOMAD:ola").unwrap().len(), 1);
+
+        // The new tables exist, are empty and are usable.
+        for table in ["outbox", "publications", "repo_confirmations"] {
+            assert_eq!(count(&s, table), 0, "{table}");
+        }
+        s.confirm_repo("github.com/o/r", "public", 1).unwrap();
+        assert_eq!(count(&s, "repo_confirmations"), 1);
+        let fk: i64 = s
+            .conn
+            .pragma_query_value(None, "foreign_keys", |r| r.get(0))
+            .unwrap();
+        assert_eq!(fk, 1);
+    }
+
+    #[test]
+    fn a_migrated_database_opens_again_without_changes() {
+        let dir = std::env::temp_dir().join(format!("bbb-store-v5-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("v4.db");
+        let _ = std::fs::remove_file(&path);
+        {
+            let conn = Connection::open(&path).unwrap();
+            for sql in &MIGRATIONS[..4] {
+                conn.execute_batch(sql).unwrap();
+            }
+            conn.pragma_update(None, "user_version", 4).unwrap();
+        }
+        for _ in 0..2 {
+            let s = Store::open(&path).unwrap();
+            assert_eq!(s.schema_version().unwrap(), LATEST);
+            assert_eq!(count(&s, "outbox"), 0);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_outbox_refuses_unknown_targets_and_duplicate_keys() {
+        let s = Store::init(v4_database()).unwrap();
+        let insert = |target: &str, key: &str| {
+            s.conn.execute(
+                "INSERT INTO outbox (meeting_id, target, kind, op_key, state,
+                                     created_unix_ms, updated_unix_ms)
+                 VALUES ('20261113-140501', ?1, 'commit_meeting', ?2, 'queued', 1, 1)",
+                rusqlite::params![target, key],
+            )
+        };
+        assert!(insert("slack", "a").is_err());
+        insert("github", "a").unwrap();
+        assert!(insert("github", "a").is_err());
+        // Deleting the meeting removes everything that belongs to it.
+        s.delete_meeting("20261113-140501").unwrap();
+        assert_eq!(count(&s, "outbox"), 0);
+    }
 }
