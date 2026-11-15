@@ -99,6 +99,11 @@ pub struct LlmChoice {
 pub struct SyncOutcome {
     pub created: Vec<String>,
     pub renamed: Vec<String>,
+    /// Ids whose stored participant was taken over from a participant that is no longer in
+    /// the list but had the same name (the id changed upstream, the person did not).
+    pub rebound: Vec<String>,
+    /// Participants that could not be stored; the rest of the list was synced.
+    pub warnings: Vec<String>,
 }
 
 fn unix_ms() -> i64 {
@@ -209,11 +214,13 @@ impl Store {
     }
 
     /// Record that the user confirmed sending this meeting's text to the cloud endpoint.
-    /// Only a meeting whose choice is `cloud` can be confirmed; returns whether it was.
+    /// Only a meeting whose choice is `cloud` and that records the destination host can be
+    /// confirmed (a confirmation is for one host); returns whether it was.
     pub fn confirm_cloud(&self, meeting_id: &str, now_ms: i64) -> Result<bool> {
         Ok(self.conn.execute(
             "UPDATE meeting_llm SET cloud_confirmed = 1, confirmed_unix_ms = ?2
-             WHERE meeting_id = ?1 AND kind = 'cloud'",
+             WHERE meeting_id = ?1 AND kind = 'cloud'
+               AND endpoint_host IS NOT NULL AND endpoint_host <> ''",
             params![meeting_id, now_ms],
         )? > 0)
     }
@@ -272,8 +279,13 @@ impl Store {
     /// `participants` are `(id, name)` pairs as in `cycle.yaml`. The stored row's key is
     /// [`crate::cycle_participant_key`] of cycle and id (participants of two cycles may
     /// share an id); [`crate::ParticipantInfo::cycle_participant_id`] gives the id back.
-    /// Names must differ within the list, ignoring case; a name already used by another
-    /// participant of the cycle that is not in the list is an error.
+    /// Names must differ within the list, ignoring case.
+    ///
+    /// When the list has an id that is not stored yet, with the name of a stored participant
+    /// whose id is no longer in the list (the id changed upstream, the person did not), that
+    /// participant is rebound to the new id and keeps its voice profile. A sync never fails
+    /// for the whole cycle because of one participant: what cannot be stored is reported in
+    /// [`SyncOutcome::warnings`].
     pub fn sync_cycle_participants<I: AsRef<str>, N: AsRef<str>>(
         &self,
         cycle_id: &str,
@@ -295,10 +307,16 @@ impl Store {
         }
         let now = unix_ms();
         let tx = self.conn.unchecked_transaction()?;
+        // Rebinding changes a primary key that voice rows refer to: check at commit.
+        tx.execute_batch("PRAGMA defer_foreign_keys = ON")?;
         let mut outcome = SyncOutcome::default();
+        let incoming_keys: std::collections::HashSet<String> = participants
+            .iter()
+            .map(|(id, _)| cycle_participant_key(cycle_id, id.as_ref()))
+            .collect();
         // Existing rows first, so a swap of two names cannot trip the unique index: rows
         // that change name get a placeholder, then the final name.
-        let mut pending: Vec<(String, String)> = Vec::new();
+        let mut pending: Vec<(String, String, String)> = Vec::new();
         for (id, name) in participants {
             let (id, name) = (id.as_ref(), name.as_ref());
             let key = cycle_participant_key(cycle_id, id);
@@ -316,36 +334,66 @@ impl Store {
                         "UPDATE participants SET name = ?2 WHERE id = ?1",
                         params![key, format!("\u{1}renaming:{key}")],
                     )?;
-                    pending.push((key.clone(), name.to_string()));
+                    pending.push((key.clone(), name.to_string(), id.to_string()));
                     outcome.renamed.push(id.to_string());
                 }
                 None => {
-                    pending.push((key.clone(), name.to_string()));
+                    pending.push((key.clone(), name.to_string(), id.to_string()));
                     outcome.created.push(id.to_string());
                 }
             }
         }
-        for (key, name) in pending {
+        for (key, name, id) in pending {
             let updated = tx.execute(
                 "UPDATE participants SET name = ?2 WHERE id = ?1 AND cycle_id = ?3",
                 params![key, name, cycle_id],
             )?;
             if updated == 0 {
-                tx.execute(
+                // A stored participant of this cycle with this name whose id is gone from
+                // the list is the same person under a new id.
+                let holder: Option<String> = tx
+                    .query_row(
+                        "SELECT id FROM participants WHERE cycle_id = ?1 AND name = ?2",
+                        params![cycle_id, name],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                if let Some(old) = holder.filter(|old| !incoming_keys.contains(old)) {
+                    tx.execute(
+                        "UPDATE participants SET id = ?2, name = ?3 WHERE id = ?1",
+                        params![old, key, name],
+                    )?;
+                    tx.execute(
+                        "UPDATE voice_samples SET participant_id = ?2 WHERE participant_id = ?1",
+                        params![old, key],
+                    )?;
+                    for column in ["matched_participant", "assigned_participant"] {
+                        tx.execute(
+                            &format!("UPDATE meeting_voices SET {column} = ?2 WHERE {column} = ?1"),
+                            params![old, key],
+                        )?;
+                    }
+                    outcome.created.retain(|c| *c != id);
+                    outcome.rebound.push(id);
+                    continue;
+                }
+                let inserted = tx.execute(
                     "INSERT INTO participants (id, name, created_unix_ms, cycle_id)
                      VALUES (?1, ?2, ?3, ?4)",
                     params![key, name, now, cycle_id],
-                )
-                .map_err(|e| match e {
-                    rusqlite::Error::SqliteFailure(f, _)
+                );
+                match inserted {
+                    Ok(_) => {}
+                    Err(rusqlite::Error::SqliteFailure(f, _))
                         if f.code == rusqlite::ErrorCode::ConstraintViolation =>
                     {
-                        StoreError::Invalid(format!(
-                            "the name {name:?} is already used by another participant of the cycle"
-                        ))
+                        outcome.created.retain(|c| *c != id);
+                        outcome.warnings.push(format!(
+                            "the participant {name:?} could not be stored: the name is already used by another participant of the cycle"
+                        ));
                     }
-                    other => other.into(),
-                })?;
+                    Err(other) => return Err(other.into()),
+                }
             }
         }
         tx.commit()?;
@@ -476,6 +524,19 @@ mod tests {
     }
 
     #[test]
+    fn a_confirmation_needs_the_destination_host() {
+        let s = store();
+        for host in [None, Some("")] {
+            s.set_llm_choice("m1", LlmKind::Cloud, host).unwrap();
+            assert!(!s.confirm_cloud("m1", 1).unwrap(), "{host:?}");
+            assert!(!s.get_llm_choice("m1").unwrap().unwrap().cloud_confirmed);
+        }
+        s.set_llm_choice("m1", LlmKind::Cloud, Some("api.example.com"))
+            .unwrap();
+        assert!(s.confirm_cloud("m1", 1).unwrap());
+    }
+
+    #[test]
     fn a_confirmation_can_be_revoked_and_unknown_meetings_are_refused() {
         let s = store();
         s.set_llm_choice("m1", LlmKind::Cloud, Some("h")).unwrap();
@@ -565,12 +626,73 @@ mod tests {
             .is_err());
         s.sync_cycle_participants("C", &pairs(&[("a", "Ola"), ("c", "Ewa")]))
             .unwrap();
-        // A name held by a participant that is not in the list cannot be taken.
-        let err = s
-            .sync_cycle_participants("C", &pairs(&[("a", "Ola"), ("b", "Ewa")]))
-            .unwrap_err();
-        assert!(matches!(err, StoreError::Invalid(_)), "{err:?}");
         assert_eq!(s.participants_for_cycle("C").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_changed_id_with_the_same_name_rebinds_the_participant_and_keeps_its_voice() {
+        let s = store();
+        s.sync_cycle_participants("C", &pairs(&[("a", "Ola"), ("c", "Ewa")]))
+            .unwrap();
+        let old_key = cycle_participant_key("C", "c");
+        s.put_sample(
+            &old_key,
+            &SampleRow {
+                source_key: "m:v".into(),
+                embedding: vec![1.0],
+                speech_ms: 9_000,
+            },
+            1,
+        )
+        .unwrap();
+        // The id of Ewa changes upstream; the name stays. This used to fail for good.
+        let out = s
+            .sync_cycle_participants("C", &pairs(&[("a", "Ola"), ("ewa", "Ewa")]))
+            .unwrap();
+        assert_eq!(out.rebound, ["ewa"]);
+        assert!(out.created.is_empty() && out.warnings.is_empty(), "{out:?}");
+        let list = s.participants_for_cycle("C").unwrap();
+        assert_eq!(list.len(), 2);
+        let ewa = list.iter().find(|p| p.name == "Ewa").unwrap();
+        assert_eq!(ewa.id, cycle_participant_key("C", "ewa"));
+        assert_eq!(ewa.cycle_participant_id(), Some("ewa"));
+        assert_eq!(ewa.sample_count, 1);
+        assert!(list.iter().all(|p| p.id != old_key));
+        // The same list again changes nothing.
+        assert_eq!(
+            s.sync_cycle_participants("C", &pairs(&[("a", "Ola"), ("ewa", "Ewa")]))
+                .unwrap(),
+            SyncOutcome::default()
+        );
+    }
+
+    #[test]
+    fn rebinding_moves_voice_assignments_of_meetings_too() {
+        let s = store();
+        s.sync_cycle_participants("C", &pairs(&[("old", "Ewa")]))
+            .unwrap();
+        let old_key = cycle_participant_key("C", "old");
+        s.conn
+            .execute(
+                "INSERT INTO meeting_voices (meeting_id, voice_id, track, label, embedding, speech_ms, decision, matched_participant, assigned_participant)
+                 VALUES ('m1', 'v1', 'mic', 'Voice 1', x'00', 1000, 'auto', ?1, ?1)",
+                params![old_key],
+            )
+            .unwrap();
+        s.sync_cycle_participants("C", &pairs(&[("new", "ewa")]))
+            .unwrap();
+        let (matched, assigned): (Option<String>, Option<String>) = s
+            .conn
+            .query_row(
+                "SELECT matched_participant, assigned_participant FROM meeting_voices WHERE voice_id = 'v1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let new_key = cycle_participant_key("C", "new");
+        assert_eq!((matched, assigned), (Some(new_key.clone()), Some(new_key)));
+        // The stored name follows the list.
+        assert_eq!(s.participants_for_cycle("C").unwrap()[0].name, "ewa");
     }
 
     #[test]

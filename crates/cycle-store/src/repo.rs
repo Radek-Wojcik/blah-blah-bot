@@ -5,8 +5,10 @@
 //! working tree; committing and pushing belong to the publishers. Pull state and the open
 //! issues cache live inside the `.git` directory, so they never show up as changes.
 
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -20,12 +22,71 @@ use crate::time::{format_utc_date, format_utc_minute, now_unix_ms};
 use crate::topics::{self, Topic};
 
 const STATE_FILE: &str = "bbb-cache.json";
-const FETCH_TIMEOUT_CONFIG: [&str; 4] = [
+const FETCH_TIMEOUT_CONFIG: [&str; 6] = [
     "-c",
     "http.lowSpeedLimit=1000",
     "-c",
     "http.lowSpeedTime=30",
+    // The `ext::` transport runs arbitrary commands; this application never needs it.
+    "-c",
+    "protocol.ext.allow=never",
 ];
+
+/// One lock per repository (by its folder), shared by every `Repo` value that points at it.
+/// It serialises the application's own writes to the working tree with pulls, so a pull
+/// never runs while a cycle file is being saved and two pulls never overlap.
+fn repo_lock(root: &Path) -> &'static Mutex<()> {
+    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, &'static Mutex<()>>>> = OnceLock::new();
+    let key = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let mut map = LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    // A handful of repositories exist per run; the locks are leaked on purpose.
+    map.entry(key)
+        .or_insert_with(|| Box::leak(Box::new(Mutex::new(()))))
+}
+
+/// Whether a repository address is fit to hand to `git clone` and to store: not empty, not
+/// an option for git, not a remote-helper transport (`ext::`, `fd::`, ...), and without
+/// credentials in it. For `http(s)://` any user info is refused (a token is often put there
+/// as the user name); for other schemes a password is refused (`ssh://git@host/...` is
+/// fine). Credentials belong to the Git credential helper.
+pub fn check_remote_url(url: &str) -> std::result::Result<(), String> {
+    let url = url.trim();
+    if url.is_empty() || url.starts_with('-') {
+        return Err("enter the address of the repository".into());
+    }
+    let lower = url.to_ascii_lowercase();
+    if let Some((scheme, _)) = lower.split_once("::") {
+        if !scheme.contains(['/', '\\', ':']) {
+            return Err("this kind of address (a remote helper) is not allowed".into());
+        }
+    }
+    if let Some((scheme, rest)) = lower.split_once("://") {
+        let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+        if let Some((userinfo, _)) = authority.rsplit_once('@') {
+            let web = scheme == "http" || scheme == "https";
+            if web || userinfo.contains(':') {
+                return Err(
+                    "do not put a user name, password or token into the address; use the Git credential manager"
+                        .into(),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn rebase_in_progress(git_dir: &Path) -> bool {
+    git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists()
+}
+
+/// Whether a file of a cycle contains the lines Git writes around a merge conflict.
+fn has_conflict_markers(text: &str) -> bool {
+    text.lines()
+        .any(|l| l.starts_with("<<<<<<< ") || l.starts_with(">>>>>>> "))
+}
 
 /// What is known about the last attempts to update the clone. Stored in
 /// `<git dir>/bbb-cache.json`.
@@ -62,12 +123,29 @@ pub enum PullOutcome {
     NoRemote,
     /// The pull failed (offline, conflict, no upstream); the clone is untouched and usable.
     Failed(String),
+    /// Nothing was pulled because the working tree has uncommitted changes to tracked files
+    /// (the application writes cycle edits there and never commits them). Nothing was
+    /// touched and "state as of" stays.
+    SkippedDirty,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PullReport {
     pub outcome: PullOutcome,
     pub state: RepoState,
+    /// Problems found in the files after a successful update (a cycle that no longer
+    /// parses, for example). The update itself stays.
+    pub warnings: Vec<String>,
+}
+
+impl PullReport {
+    fn new(outcome: PullOutcome, state: RepoState) -> Self {
+        Self {
+            outcome,
+            state,
+            warnings: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -146,8 +224,8 @@ impl Repo {
     /// empty directory. The clone counts as a successful pull for "state as of".
     pub fn clone(url: &str, dest: impl Into<PathBuf>) -> Result<Repo> {
         let dest = dest.into();
-        if url.trim().is_empty() || url.starts_with('-') {
-            return Err(CycleError::Other(format!("invalid repository URL {url:?}")));
+        if let Err(why) = check_remote_url(url) {
+            return Err(CycleError::Other(format!("invalid repository URL: {why}")));
         }
         if dest.exists() {
             let empty = dest.is_dir()
@@ -262,24 +340,120 @@ impl Repo {
         Ok(self.git_dir()?.join(format!("bbb-issues-{cycle_id}.json")))
     }
 
-    /// `git pull --rebase` with uncommitted edits kept aside and restored. A failure (no
-    /// network, a conflict, no upstream branch) is not an error: the clone stays as it
-    /// was, the failure is recorded in the state and returned as [`PullOutcome::Failed`].
+    /// Takes the repository lock. Hold it for the whole of a write to the working tree or
+    /// of a pull; do not call another method that locks while holding it.
+    pub fn lock(&self) -> MutexGuard<'static, ()> {
+        repo_lock(&self.root)
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Paths with uncommitted changes to tracked files (untracked files are not counted:
+    /// a pull leaves them alone).
+    pub fn tracked_changes(&self) -> Result<Vec<String>> {
+        let text = git::run_ok(
+            Some(&self.root),
+            ["status", "--porcelain=v1", "--untracked-files=no"],
+        )?;
+        Ok(text
+            .lines()
+            .filter(|l| l.len() > 3)
+            .map(|l| l[3..].trim().to_string())
+            .collect())
+    }
+
+    fn unmerged_paths(&self) -> bool {
+        git::run(Some(&self.root), ["diff", "--name-only", "--diff-filter=U"])
+            .map(|o| !o.stdout.trim().is_empty())
+            .unwrap_or(false)
+    }
+
+    fn valid_cycle_ids(&self) -> BTreeSet<String> {
+        self.list_cycles()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(CycleEntry::is_valid)
+            .map(|e| e.dir_name)
+            .collect()
+    }
+
+    /// Files of the cycles that hold Git conflict markers.
+    fn files_with_conflict_markers(&self) -> Vec<String> {
+        let mut found = Vec::new();
+        let Ok(cycles) = fs::read_dir(self.cycles_dir()) else {
+            return found;
+        };
+        for cycle in cycles.flatten() {
+            let dir = cycle.path();
+            let mut files = vec![dir.join("cycle.yaml"), dir.join("topics.yaml")];
+            if let Ok(templates) = fs::read_dir(dir.join("templates")) {
+                files.extend(templates.flatten().map(|t| t.path()));
+            }
+            for file in files {
+                if fs::read_to_string(&file).is_ok_and(|t| has_conflict_markers(&t)) {
+                    if let Ok(rel) = file.strip_prefix(&self.root) {
+                        found.push(rel.to_string_lossy().replace('\\', "/"));
+                    }
+                }
+            }
+        }
+        found.sort();
+        found
+    }
+
+    /// `git pull --rebase` (a fetch, then a rebase onto the upstream branch) that never
+    /// touches uncommitted work. The fetch runs without the repository lock, the rebase under
+    /// it.
+    ///
+    /// - With uncommitted changes to tracked files nothing is pulled
+    ///   ([`PullOutcome::SkippedDirty`]); there is no stash and no autostash.
+    /// - A rebase or merge that was already in progress is never touched.
+    /// - A rebase this pull started and could not finish is aborted; a pull that leaves
+    ///   unmerged paths or conflict markers in the working tree is undone.
+    /// - After an update the cycle files are checked again; what no longer parses is
+    ///   listed in [`PullReport::warnings`].
+    ///
+    /// A failure (no network, a conflict, no upstream branch) is not an error: the clone
+    /// stays as it was, the failure is recorded in the state and returned as
+    /// [`PullOutcome::Failed`].
     pub fn pull_rebase(&self) -> Result<PullReport> {
         self.require_git()?;
         if !self.has_remote()? {
-            return Ok(PullReport {
-                outcome: PullOutcome::NoRemote,
-                state: self.state(),
-            });
+            return Ok(PullReport::new(PullOutcome::NoRemote, self.state()));
         }
-        let before = self.head();
-        let mut args: Vec<String> = FETCH_TIMEOUT_CONFIG
+        let git_dir = self.git_dir()?;
+        let attempt = now_unix_ms();
+
+        // The network part first, without the repository lock: a fetch does not touch the
+        // working tree, and a slow remote must not hold up the application's own saves.
+        let mut fetch: Vec<String> = FETCH_TIMEOUT_CONFIG
             .iter()
             .map(ToString::to_string)
             .collect();
-        // Stashing and rebasing create commits and need an identity; supply a neutral one
-        // only when the user has none configured.
+        fetch.extend(["fetch", "--quiet"].iter().map(ToString::to_string));
+        let fetched = git::run(Some(&self.root), &fetch)?;
+        if !fetched.ok {
+            return self.record_failure(fetched.message(), attempt);
+        }
+
+        // The local part under the lock: nothing else writes the working tree meanwhile.
+        let _guard = self.lock();
+        if rebase_in_progress(&git_dir) || git_dir.join("MERGE_HEAD").exists() {
+            // Somebody else's operation: leave it exactly as it is.
+            return self.record_failure(
+                "a rebase or merge is in progress in this repository; finish it with Git first"
+                    .to_string(),
+                attempt,
+            );
+        }
+        if !self.tracked_changes()?.is_empty() {
+            return Ok(PullReport::new(PullOutcome::SkippedDirty, self.state()));
+        }
+        let before = self.head();
+        let valid_before = self.valid_cycle_ids();
+        let mut args: Vec<String> = Vec::new();
+        // Rebasing creates commits and needs an identity; supply a neutral one only when
+        // the user has none configured.
         if !git::run(Some(&self.root), ["config", "--get", "user.email"])?.ok {
             args.extend(
                 [
@@ -293,31 +467,79 @@ impl Repo {
             );
         }
         args.extend(
-            ["pull", "--rebase", "--autostash", "--quiet"]
+            ["rebase", "--no-autostash", "--quiet", "@{upstream}"]
                 .iter()
                 .map(ToString::to_string),
         );
-        let attempt = now_unix_ms();
         let out = git::run(Some(&self.root), &args)?;
+
+        // Our own pull started any rebase that is in progress now (none was before).
+        let stuck_rebase = rebase_in_progress(&git_dir);
+        let unmerged = self.unmerged_paths();
+        if stuck_rebase || unmerged || !out.ok {
+            if stuck_rebase {
+                let _ = git::run(Some(&self.root), ["rebase", "--abort"]);
+            } else if unmerged {
+                let _ = git::run(Some(&self.root), ["reset", "--merge"]);
+            }
+            let message = if out.ok {
+                "the update left conflicts in the working tree and was undone".to_string()
+            } else {
+                out.message()
+            };
+            return self.record_failure(message, attempt);
+        }
+
+        let marked = self.files_with_conflict_markers();
+        if !marked.is_empty() {
+            // The tree was clean before the pull, so going back loses nothing.
+            if let Some(head) = &before {
+                let _ = git::run(Some(&self.root), ["reset", "--hard", "--quiet", head]);
+            }
+            return self.record_failure(
+                format!(
+                    "the update brought conflict markers into {} and was undone",
+                    marked.join(", ")
+                ),
+                attempt,
+            );
+        }
+
         let mut state = self.state();
         state.last_pull_attempt_unix_ms = Some(attempt);
-        let outcome = if out.ok {
-            state.last_pull_ok_unix_ms = Some(attempt);
-            state.last_pull_error = None;
-            if self.head() == before {
-                PullOutcome::UpToDate
-            } else {
-                PullOutcome::Updated
-            }
-        } else {
-            // A rebase stopped by a conflict must not leave the clone mid-rebase.
-            let _ = git::run(Some(&self.root), ["rebase", "--abort"]);
-            let message = out.message();
-            state.last_pull_error = Some(message.clone());
-            PullOutcome::Failed(message)
-        };
+        state.last_pull_ok_unix_ms = Some(attempt);
+        state.last_pull_error = None;
         self.write_state(&state);
-        Ok(PullReport { outcome, state })
+        let outcome = if self.head() == before {
+            PullOutcome::UpToDate
+        } else {
+            PullOutcome::Updated
+        };
+        let mut report = PullReport::new(outcome, state);
+        if report.outcome == PullOutcome::Updated {
+            for entry in self.list_cycles().unwrap_or_default() {
+                if !entry.is_valid() && valid_before.contains(&entry.dir_name) {
+                    let first = entry
+                        .issues
+                        .first()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "it cannot be read".to_string());
+                    report.warnings.push(format!(
+                        "the cycle {} no longer parses after the update: {first}",
+                        entry.dir_name
+                    ));
+                }
+            }
+        }
+        Ok(report)
+    }
+
+    fn record_failure(&self, message: String, attempt: u64) -> Result<PullReport> {
+        let mut state = self.state();
+        state.last_pull_attempt_unix_ms = Some(attempt);
+        state.last_pull_error = Some(message.clone());
+        self.write_state(&state);
+        Ok(PullReport::new(PullOutcome::Failed(message), state))
     }
 
     /// Branch, head, remote tracking and uncommitted changes, with the pull state.
@@ -425,6 +647,7 @@ impl Repo {
     /// Writes `cycle.yaml` of an existing cycle after validating it against the schema, the
     /// participant rules and the templates that exist.
     pub fn save_cycle(&self, cycle: &Cycle) -> Result<()> {
+        let _guard = self.lock();
         let dir = self.cycle_dir(&cycle.id)?;
         if !dir.is_dir() {
             return Err(CycleError::CycleNotFound(cycle.id.clone()));
@@ -440,6 +663,7 @@ impl Repo {
     /// Creates a cycle: `cycle.yaml`, an empty `topics.yaml` and `templates/default.md`.
     /// Nothing is written when the cycle is invalid or already exists.
     pub fn create_cycle(&self, cycle: &Cycle) -> Result<()> {
+        let _guard = self.lock();
         let dir = self.cycle_dir(&cycle.id)?;
         if dir.join("cycle.yaml").exists() {
             return Err(CycleError::CycleExists(cycle.id.clone()));
@@ -480,6 +704,7 @@ impl Repo {
     }
 
     pub fn save_topics(&self, id: &str, list: &[Topic]) -> Result<()> {
+        let _guard = self.lock();
         let dir = self.cycle_dir(id)?;
         if !dir.is_dir() {
             return Err(CycleError::CycleNotFound(id.to_string()));
@@ -501,6 +726,7 @@ impl Repo {
     }
 
     pub fn write_template(&self, id: &str, template: &Template) -> Result<()> {
+        let _guard = self.lock();
         let dir = self.cycle_dir(id)?;
         if !dir.is_dir() {
             return Err(CycleError::CycleNotFound(id.to_string()));
@@ -766,19 +992,26 @@ mod tests {
         let mut edited = clone.load_cycle("NOMAD").unwrap();
         edited.name = "Edited locally".into();
         clone.save_cycle(&edited).unwrap();
+        // Uncommitted edits are never stashed: the pull is skipped and nothing changes.
+        let state_before = clone.state();
+        let report = clone.pull_rebase().unwrap();
+        assert_eq!(report.outcome, PullOutcome::SkippedDirty);
+        assert_eq!(clone.state(), state_before);
+        assert_eq!(clone.list_cycles().unwrap().len(), 1);
+        assert_eq!(clone.load_cycle("NOMAD").unwrap().name, "Edited locally");
+        let stashes = g(clone.root(), &["stash", "list"]);
+        assert!(stashes.is_empty(), "{stashes}");
+        // Once the edit is committed the pull goes through and keeps it.
+        commit_all(clone.root(), "edit NOMAD");
         let report = clone.pull_rebase().unwrap();
         assert_eq!(report.outcome, PullOutcome::Updated);
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
         assert_eq!(clone.list_cycles().unwrap().len(), 2);
         assert_eq!(clone.load_cycle("NOMAD").unwrap().name, "Edited locally");
         assert_eq!(report.state.last_pull_error, None);
 
         // The cache file is not part of the working tree.
-        let changed = clone.status().unwrap().changed_files;
-        assert_eq!(
-            changed,
-            vec!["cycles/NOMAD/cycle.yaml".to_string()],
-            "{changed:?}"
-        );
+        assert!(clone.status().unwrap().changed_files.is_empty());
         assert!(clone.git_dir().unwrap().join(STATE_FILE).is_file());
         assert!(!clone.root().join(STATE_FILE).exists());
 
@@ -805,6 +1038,190 @@ mod tests {
         assert_eq!(report.outcome, PullOutcome::UpToDate);
         assert_eq!(clone.state().last_pull_error, None);
         assert!(clone.state().last_pull_ok_unix_ms >= ok_before);
+    }
+
+    fn set_name(repo: &Repo, name: &str) {
+        let mut c = repo.load_cycle("NOMAD").unwrap();
+        c.name = name.into();
+        repo.save_cycle(&c).unwrap();
+    }
+
+    fn clone_of(origin: &Repo, tmp: &Path) -> Repo {
+        let clone = Repo::clone(origin.root().to_str().unwrap(), tmp.join("clone")).unwrap();
+        set_identity(clone.root());
+        clone
+    }
+
+    #[test]
+    fn a_dirty_tree_is_never_pulled_into_or_stashed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let origin = new_origin(tmp.path());
+        let clone = clone_of(&origin, tmp.path());
+        // Both sides change the same file; the local change is not committed.
+        set_name(&origin, "Upstream name");
+        commit_all(origin.root(), "rename upstream");
+        set_name(&clone, "Local name");
+        let before =
+            fs::read_to_string(clone.cycle_dir("NOMAD").unwrap().join("cycle.yaml")).unwrap();
+
+        let report = clone.pull_rebase().unwrap();
+        assert_eq!(report.outcome, PullOutcome::SkippedDirty);
+        let after =
+            fs::read_to_string(clone.cycle_dir("NOMAD").unwrap().join("cycle.yaml")).unwrap();
+        assert_eq!(before, after);
+        assert!(!after.contains("<<<<<<<"));
+        assert!(g(clone.root(), &["stash", "list"]).is_empty());
+        assert!(clone.status().unwrap().is_dirty());
+        assert_eq!(clone.load_cycle("NOMAD").unwrap().name, "Local name");
+    }
+
+    #[test]
+    fn a_conflicting_committed_edit_is_aborted_and_leaves_valid_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let origin = new_origin(tmp.path());
+        let clone = clone_of(&origin, tmp.path());
+        set_name(&origin, "Upstream name");
+        commit_all(origin.root(), "rename upstream");
+        set_name(&clone, "Local name");
+        commit_all(clone.root(), "rename locally");
+
+        let report = clone.pull_rebase().unwrap();
+        let PullOutcome::Failed(message) = &report.outcome else {
+            panic!("{:?}", report.outcome)
+        };
+        assert!(!message.is_empty());
+        let git_dir = clone.git_dir().unwrap();
+        assert!(!git_dir.join("rebase-merge").exists());
+        assert!(!git_dir.join("rebase-apply").exists());
+        assert!(!clone.status().unwrap().is_dirty());
+        assert_eq!(clone.load_cycle("NOMAD").unwrap().name, "Local name");
+        assert!(g(clone.root(), &["stash", "list"]).is_empty());
+        assert_eq!(
+            clone.state().last_pull_error.as_deref(),
+            Some(message.as_str())
+        );
+    }
+
+    #[test]
+    fn a_rebase_the_user_started_is_not_aborted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let origin = new_origin(tmp.path());
+        let clone = clone_of(&origin, tmp.path());
+        set_name(&origin, "Upstream name");
+        commit_all(origin.root(), "rename upstream");
+        set_name(&clone, "Local name");
+        commit_all(clone.root(), "rename locally");
+        // The user runs a rebase by hand and stops at the conflict.
+        g(clone.root(), &["fetch", "--quiet"]);
+        let out = git::run(
+            Some(clone.root()),
+            [
+                "-c",
+                "user.name=Test User",
+                "-c",
+                "user.email=test@example.com",
+                "rebase",
+                "origin/main",
+            ],
+        )
+        .unwrap();
+        assert!(!out.ok);
+        let git_dir = clone.git_dir().unwrap();
+        assert!(git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists());
+
+        let report = clone.pull_rebase().unwrap();
+        assert!(matches!(report.outcome, PullOutcome::Failed(_)));
+        assert!(
+            git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists(),
+            "the user's rebase must stay"
+        );
+    }
+
+    #[test]
+    fn conflict_markers_that_arrive_are_undone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let origin = new_origin(tmp.path());
+        let clone = clone_of(&origin, tmp.path());
+        let head = g(clone.root(), &["rev-parse", "HEAD"]);
+        let file = origin.cycle_dir("NOMAD").unwrap().join("cycle.yaml");
+        let text = fs::read_to_string(&file).unwrap();
+        fs::write(
+            &file,
+            format!("<<<<<<< Updated upstream\n{text}=======\n{text}>>>>>>> Stashed changes\n"),
+        )
+        .unwrap();
+        commit_all(origin.root(), "commit markers");
+
+        let report = clone.pull_rebase().unwrap();
+        let PullOutcome::Failed(message) = &report.outcome else {
+            panic!("{:?}", report.outcome)
+        };
+        assert!(message.contains("conflict markers"), "{message}");
+        assert_eq!(g(clone.root(), &["rev-parse", "HEAD"]), head);
+        assert_eq!(clone.load_cycle("NOMAD").unwrap().id, "NOMAD");
+    }
+
+    #[test]
+    fn an_update_that_breaks_a_cycle_is_reported() {
+        let tmp = tempfile::tempdir().unwrap();
+        let origin = new_origin(tmp.path());
+        let clone = clone_of(&origin, tmp.path());
+        let file = origin.cycle_dir("NOMAD").unwrap().join("cycle.yaml");
+        fs::write(&file, "id: [\n").unwrap();
+        commit_all(origin.root(), "break the cycle");
+
+        let report = clone.pull_rebase().unwrap();
+        assert_eq!(report.outcome, PullOutcome::Updated);
+        assert_eq!(report.warnings.len(), 1, "{:?}", report.warnings);
+        assert!(report.warnings[0].contains("NOMAD"));
+    }
+
+    #[test]
+    fn every_handle_of_a_repository_shares_one_lock() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = Repo::init_local(tmp.path().join("one")).unwrap();
+        let b = Repo::open(a.root()).unwrap();
+        let other = Repo::init_local(tmp.path().join("two")).unwrap();
+        assert!(std::ptr::eq(repo_lock(a.root()), repo_lock(b.root())));
+        assert!(!std::ptr::eq(repo_lock(a.root()), repo_lock(other.root())));
+        // Writing while the lock is held elsewhere waits instead of racing.
+        let guard = a.lock();
+        let writer = std::thread::spawn({
+            let b = Repo::open(a.root()).unwrap();
+            move || b.create_cycle(&cycle("NOMAD")).unwrap()
+        });
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        assert!(!a.cycle_dir("NOMAD").unwrap().exists());
+        drop(guard);
+        writer.join().unwrap();
+        assert!(a.cycle_dir("NOMAD").unwrap().join("cycle.yaml").is_file());
+    }
+
+    #[test]
+    fn remote_urls_with_credentials_or_helpers_are_refused() {
+        for bad in [
+            "",
+            "-oProxyCommand=x",
+            "--upload-pack=evil",
+            "ext::sh -c touch% /tmp/x",
+            "EXT::sh -c id",
+            "fd::3",
+            "https://user:pass@example.com/r.git",
+            "https://ghp_token@github.com/org/repo.git",
+            "ssh://user:secret@example.com/r.git",
+        ] {
+            assert!(check_remote_url(bad).is_err(), "{bad}");
+        }
+        for good in [
+            "https://github.com/org/repo.git",
+            "ssh://git@github.com/org/repo.git",
+            "git@github.com:org/repo.git",
+            "C:\\Users\\me\\repo",
+            "/srv/git/repo.git",
+            "https://[::1]:8080/r.git",
+        ] {
+            assert!(check_remote_url(good).is_ok(), "{good}");
+        }
     }
 
     #[test]

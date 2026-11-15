@@ -524,17 +524,18 @@ export function createCycleStore(): CycleStore {
     },
     pullRepo: (repoId) => {
       const repo = repoOf(repoId);
-      if (repo.remote === null) return { repo: { ...repo }, outcome: "noRemote", error: null };
+      if (repo.remote === null)
+        return { repo: { ...repo }, outcome: "noRemote", error: null, warnings: [] };
       if (repo.failing) {
         repo.offline = true;
         repo.lastError = "could not resolve the host; showing the state of the last pull";
-        return { repo: { ...repo }, outcome: "failed", error: repo.lastError };
+        return { repo: { ...repo }, outcome: "failed", error: repo.lastError, warnings: [] };
       }
       const outcome = repo.stateAsOf === MOCK_TODAY ? "upToDate" : "updated";
       repo.stateAsOf = MOCK_TODAY;
       repo.offline = false;
       repo.lastError = null;
-      return { repo: { ...repo }, outcome, error: null };
+      return { repo: { ...repo }, outcome, error: null, warnings: [] };
     },
     reportDefaults: (cycleId) => {
       const e = entryOf(cycleId);

@@ -533,6 +533,12 @@ function LanguageModelSettings(props: {
                   }
                 />
               </label>
+              {llm.externalHostIsRemote && (
+                <p className="error" role="note">
+                  This server is not on this machine or in your network. As the default model it
+                  receives the transcript text of every meeting of a cycle, with no confirmation.
+                </p>
+              )}
             </fieldset>
             <fieldset className="llm-group">
               <legend>Cloud (chosen per meeting)</legend>

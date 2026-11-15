@@ -367,6 +367,12 @@ export interface PullResult {
   repo: CycleRepoView;
   outcome: PullOutcome;
   error: string | null;
+  /**
+   * Problems after an update (a cycle that no longer parses, a participant that could not be
+   * linked to its voice profile). The update itself stays. With uncommitted cycle edits nothing
+   * is pulled and the call fails with the error code `repo_dirty` instead.
+   */
+  warnings: string[];
 }
 
 /** `clone` needs `url`, `local` needs `path` (an existing folder). */
@@ -527,6 +533,11 @@ export interface LlmSettings {
   /** Whether a key is stored in the Credential Manager. Keys are never returned. */
   externalKeySet: boolean;
   cloudKeySet: boolean;
+  /**
+   * Read only: the external server is the default model and is not on this machine or in a
+   * private network, so every meeting of a cycle is sent to it without a confirmation.
+   */
+  externalHostIsRemote: boolean;
 }
 
 /** What the cloud confirmation dialog shows. */
@@ -536,6 +547,11 @@ export interface CloudPreview {
   /** Words of the transcript that would be sent, excluded passages left out. */
   wordCount: number;
   screenshotDescriptions: number;
+  /**
+   * Items (text, assignee, due date) of the cycle's earlier meetings that go along with the
+   * request, whichever model those meetings used. At most 30.
+   */
+  previousItemCount: number;
   includesAudio: false;
   includesImages: false;
   /** A readable statement of what will be sent where. */

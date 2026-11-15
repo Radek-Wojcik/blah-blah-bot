@@ -35,8 +35,10 @@ pub use draft::{
 pub use error::{CycleError, Result, ValidationIssue};
 pub use git::git_available;
 pub use issues::{fetch_open_issues, IssueCache, IssueList, OpenIssue};
-pub use render::{item_line, render, BuiltinSection, RenderOptions, Variant};
-pub use repo::{CycleEntry, PullOutcome, PullReport, Repo, RepoState, RepoStatus};
+pub use render::{item_line, neutralise_mentions, render, BuiltinSection, RenderOptions, Variant};
+pub use repo::{
+    check_remote_url, CycleEntry, PullOutcome, PullReport, Repo, RepoState, RepoStatus,
+};
 pub use schema::Schema;
 pub use template::{
     create_default_template, list_templates, parse_template, read_template, validate_body,

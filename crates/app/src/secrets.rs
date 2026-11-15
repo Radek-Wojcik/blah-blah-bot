@@ -5,10 +5,19 @@ use crate::ipc::{IpcError, IpcResult};
 
 const SERVICE: &str = "blah-blah-bot";
 pub const HF_TOKEN: &str = "huggingface-token";
-/// API key of the cloud language model endpoint.
+/// API key of the cloud language model endpoint (the entry name carries the host, see
+/// [`endpoint_key`]).
 pub const CLOUD_KEY: &str = "llm-cloud-key";
-/// Optional API key of the external (self-hosted) language model server.
+/// Optional API key of the external (self-hosted) language model server (entry name with the
+/// host as well).
 pub const EXTERNAL_KEY: &str = "llm-external-key";
+
+/// Name of the credential entry of an endpoint key: the key's base name and the host it was
+/// saved for. A key is only ever found again for that host, so changing the address in the
+/// settings (or a job that keeps an older address) can never hand the key to another server.
+pub fn endpoint_key(base: &str, host: &str) -> String {
+    format!("{base}@{}", host.trim().to_ascii_lowercase())
+}
 
 /// Register the credential store. Call once at start; failure only disables secrets.
 pub fn init() {

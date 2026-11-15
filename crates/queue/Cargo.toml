@@ -16,6 +16,7 @@ speakers = { path = "../speakers" }
 cycle-store = { path = "../cycle-store" }
 nvml-wrapper = "0.13"
 tracing.workspace = true
+sha2 = "0.10"
 
 [dev-dependencies]
 jsonschema = { version = "0.30", default-features = false }

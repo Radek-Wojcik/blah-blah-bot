@@ -207,10 +207,16 @@ pub fn confirmed_for_run(llm: &LlmOptions, choice: Option<&LlmChoice>) -> bool {
     if c.kind != LlmKind::Cloud || !c.cloud_confirmed {
         return false;
     }
-    match (&c.endpoint_host, llm.base_url.as_deref().and_then(url_host)) {
-        (Some(confirmed), Some(actual)) => confirmed.eq_ignore_ascii_case(&actual),
-        (Some(_), None) => false,
-        (None, _) => true,
+    // A confirmation is for one host: without a recorded host, or without a host in the
+    // job's address, nothing is confirmed.
+    match (
+        c.endpoint_host.as_deref(),
+        llm.base_url.as_deref().and_then(url_host),
+    ) {
+        (Some(confirmed), Some(actual)) => {
+            !confirmed.trim().is_empty() && confirmed.eq_ignore_ascii_case(&actual)
+        }
+        _ => false,
     }
 }
 
@@ -736,6 +742,15 @@ mod tests {
         assert!(!granted(&stored_claim, Some(&other)));
         let ext = choice(LlmKind::External, true, Some("api.example.com"));
         assert!(!granted(&stored_claim, Some(&ext)));
+        // A confirmation that records no host (or an empty one) confirms nothing.
+        for host in [None, Some(""), Some("  ")] {
+            let hostless = choice(LlmKind::Cloud, true, host);
+            assert!(!granted(&stored_claim, Some(&hostless)), "{host:?}");
+        }
+        // Neither does a job whose address has no host.
+        let mut no_host = llm(LlmKind::Cloud, true);
+        no_host.llm.as_mut().unwrap().base_url = Some("https:///v1".into());
+        assert!(!granted(&no_host, Some(&ok)));
         // Only the cloud kind has a confirmation.
         assert!(!granted(&llm(LlmKind::External, true), Some(&ok)));
         // No options, nothing to decide.

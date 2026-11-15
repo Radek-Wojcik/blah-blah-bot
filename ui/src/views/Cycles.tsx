@@ -49,7 +49,8 @@ export function CyclesView(props: { onOpenCycle: (cycleId: string) => void }) {
       .pullCycleRepo(repo.id)
       .then((r) => {
         const detail = r.error ? ` ${r.error}` : "";
-        setPulled((p) => ({ ...p, [repo.id]: `${PULL_TEXT[r.outcome]}${detail}` }));
+        const warnings = r.warnings.map((w) => ` Warning: ${w}`).join("");
+        setPulled((p) => ({ ...p, [repo.id]: `${PULL_TEXT[r.outcome]}${detail}${warnings}` }));
         reload();
       })
       .catch((e) => setError(errorMessage(e)))

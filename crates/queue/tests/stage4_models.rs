@@ -623,7 +623,7 @@ fn check_draft_operations(lab: &Lab, draft: &Draft) {
         ["work", "money"],
         "sections come from the template"
     );
-    assert!(!draft::has_user_edits(draft), "nothing was edited yet");
+    assert!(!draft::has_edited_items(draft), "nothing was edited yet");
 
     let files = DraftFiles::new(&lab.dir());
     let target = &draft.items[0];
@@ -642,7 +642,8 @@ fn check_draft_operations(lab: &Lab, draft: &Draft) {
     assert_eq!(moved.section.as_deref(), Some(other));
     assert!(moved.edited);
     assert_eq!(after.items.len(), draft.items.len());
-    assert!(draft::has_user_edits(&after));
+    assert!(draft::has_edited_items(&after));
+    assert!(files.has_user_edits().unwrap());
 
     // Change the text of another item.
     let second = draft.items[1].id.clone();

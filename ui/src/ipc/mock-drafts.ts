@@ -34,6 +34,8 @@ interface Held {
 export interface MockDrafts {
   methods: DraftMethods;
   has(meetingId: string): boolean;
+  /** Items in the drafts of the cycle's meetings other than `exceptMeetingId`. */
+  itemsOfCycle(cycleId: string, exceptMeetingId: string): number;
   /** The draft `reduce` writes for a meeting recorded with `report`. */
   create(meetingId: string, report: RecordingReport): void;
   /** Leaves a newer draft next to the edited one (a re-run of `reduce`). */
@@ -188,6 +190,10 @@ export function createMockDrafts(
   return {
     methods,
     has: (id) => drafts.has(id),
+    itemsOfCycle: (cycleId, exceptMeetingId) =>
+      [...drafts.entries()]
+        .filter(([id, h]) => id !== exceptMeetingId && h.draft.cycle === cycleId)
+        .reduce((n, [, h]) => n + h.draft.items.length, 0),
     create: (id, report) => {
       const base = demoDraft(id, report.cycleId ?? "NOMAD");
       drafts.set(id, { draft: layout(base, report), newDraft: null });

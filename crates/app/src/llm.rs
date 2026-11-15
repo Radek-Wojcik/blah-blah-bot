@@ -4,7 +4,7 @@
 //! Everything here works on a `&Store` and plain values, so it is tested without Tauri. The
 //! API keys never pass through this module: it only asks whether one is stored.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use queue::transcript::TranscriptFiles;
 use queue::worker::{self, LlmOptions, Secret};
@@ -58,6 +58,11 @@ pub struct LlmSettings {
     pub external_key_set: bool,
     #[serde(skip_deserializing)]
     pub cloud_key_set: bool,
+    /// Filled when reading: the external backend is the default and its server is not on
+    /// this machine or in a private network, so every meeting of a cycle goes to it without
+    /// a confirmation.
+    #[serde(skip_deserializing)]
+    pub external_host_is_remote: bool,
 }
 
 impl Default for LlmSettings {
@@ -69,6 +74,7 @@ impl Default for LlmSettings {
             cloud: EndpointSettings::default(),
             external_key_set: false,
             cloud_key_set: false,
+            external_host_is_remote: false,
         }
     }
 }
@@ -77,28 +83,72 @@ fn invalid(message: impl Into<String>) -> IpcError {
     IpcError::new("invalid", message)
 }
 
-/// An endpoint URL: http or https, with a host and no credentials in it.
-fn check_url(what: &str, url: &str) -> IpcResult<()> {
+/// Whether `host` is this machine: `localhost` (and `*.localhost`), 127.0.0.0/8, `::1`.
+pub fn is_loopback_host(host: &str) -> bool {
+    let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    if host == "localhost" || host.ends_with(".localhost") {
+        return true;
+    }
+    host.parse::<std::net::IpAddr>()
+        .is_ok_and(|ip| ip.is_loopback())
+}
+
+/// Whether `host` is this machine or on a private network: loopback, private and
+/// link-local addresses, and names that cannot be on the public internet (a name without a
+/// dot, `.local`, `.lan`, `.home.arpa`, `.internal`).
+pub fn is_local_host(host: &str) -> bool {
+    if is_loopback_host(host) {
+        return true;
+    }
+    let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return match ip {
+            std::net::IpAddr::V4(v4) => v4.is_private() || v4.is_link_local(),
+            std::net::IpAddr::V6(v6) => {
+                let first = v6.segments()[0];
+                // fc00::/7 unique local, fe80::/10 link-local.
+                (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80
+            }
+        };
+    }
+    !host.contains('.')
+        || [".local", ".lan", ".home.arpa", ".internal"]
+            .iter()
+            .any(|suffix| host.ends_with(suffix))
+}
+
+/// An endpoint URL: http or https, with a host and no credentials in it (a user name counts:
+/// tokens are often put there). With `https_required` plain `http://` is only accepted for
+/// this machine.
+fn check_url(what: &str, url: &str, https_required: bool) -> IpcResult<()> {
     let url = url.trim();
     if url.is_empty() {
         return Ok(());
     }
-    let rest = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-        .ok_or_else(|| {
-            invalid(format!(
-                "{what}: the address must start with http:// or https://"
-            ))
-        })?;
+    let (rest, secure) = match url.strip_prefix("https://") {
+        Some(rest) => (rest, true),
+        None => (
+            url.strip_prefix("http://").ok_or_else(|| {
+                invalid(format!(
+                    "{what}: the address must start with http:// or https://"
+                ))
+            })?,
+            false,
+        ),
+    };
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     if authority.contains('@') {
         return Err(invalid(format!(
             "{what}: do not put a user name or key into the address; keys are stored separately"
         )));
     }
-    if worker::url_host(url).is_none() {
+    let Some(host) = worker::url_host(url) else {
         return Err(invalid(format!("{what}: the address has no host")));
+    };
+    if https_required && !secure && !is_loopback_host(&host) {
+        return Err(invalid(format!(
+            "{what}: the address must start with https:// (plain http:// is only allowed for this machine)"
+        )));
     }
     Ok(())
 }
@@ -116,9 +166,39 @@ impl LlmSettings {
                 "the context size must be between {MIN_CTX} and {MAX_CTX} tokens"
             )));
         }
-        check_url("external server", &self.external.base_url)?;
-        check_url("cloud endpoint", &self.cloud.base_url)?;
+        check_url("external server", &self.external.base_url, false)?;
+        check_url("cloud endpoint", &self.cloud.base_url, true)?;
         Ok(())
+    }
+
+    /// Host of the endpoint of `kind` in these settings.
+    fn host_of(&self, kind: LlmKind) -> Option<String> {
+        let endpoint = match kind {
+            LlmKind::Managed => return None,
+            LlmKind::External => &self.external,
+            LlmKind::Cloud => &self.cloud,
+        };
+        worker::url_host(endpoint.base_url.trim())
+    }
+
+    /// Name of the credential entry that holds the key of `kind` for the endpoint set now;
+    /// `None` for the managed backend or an address without a host.
+    pub fn key_entry(&self, kind: LlmKind) -> Option<String> {
+        let base = match kind {
+            LlmKind::Managed => return None,
+            LlmKind::External => secrets::EXTERNAL_KEY,
+            LlmKind::Cloud => secrets::CLOUD_KEY,
+        };
+        Some(secrets::endpoint_key(base, &self.host_of(kind)?))
+    }
+
+    /// Whether the external backend is the default one and its server is not on this
+    /// machine or in a private network.
+    pub fn external_default_is_remote(&self) -> bool {
+        self.default_kind == LlmKind::External
+            && self
+                .host_of(LlmKind::External)
+                .is_some_and(|h| !is_local_host(&h))
     }
 
     /// The worker options for `kind`, or `llm_not_configured` when a value is missing.
@@ -141,7 +221,7 @@ impl LlmSettings {
             if model.is_empty() {
                 return Err(missing("model name"));
             }
-            check_url(kind.as_str(), url)?;
+            check_url(kind.as_str(), url, kind == LlmKind::Cloud)?;
             Ok((url.to_string(), model.to_string()))
         };
         match kind {
@@ -188,15 +268,17 @@ pub fn parse_kind(s: &str) -> IpcResult<LlmKind> {
     }
 }
 
-/// The key a stage of a job with this backend may see: the external or the cloud key from
-/// the credential store, never anything for the managed backend or for no backend.
-pub fn key_for(kind: Option<LlmKind>, get: impl Fn(&str) -> Option<String>) -> Option<Secret> {
-    let name = match kind? {
+/// The key a stage of a job with this backend may see: the key saved for the host of the
+/// job's own endpoint (external or cloud), never anything for the managed backend, for an
+/// address without a host, or for another host than the one the key was saved for.
+pub fn key_for(llm: &LlmOptions, get: impl Fn(&str) -> Option<String>) -> Option<Secret> {
+    let base = match llm.kind {
         LlmKind::Managed => return None,
         LlmKind::External => secrets::EXTERNAL_KEY,
         LlmKind::Cloud => secrets::CLOUD_KEY,
     };
-    get(name).map(Secret::new)
+    let host = llm.base_url.as_deref().and_then(worker::url_host)?;
+    get(&secrets::endpoint_key(base, &host)).map(Secret::new)
 }
 
 /// Decides the backend of a meeting that is processed, records it in the store and returns
@@ -231,7 +313,10 @@ pub fn choose_llm(
         }
         Err(e) => return Err(e),
     };
-    if kind == LlmKind::Cloud && !key_present(secrets::CLOUD_KEY) {
+    let key_saved = settings
+        .key_entry(LlmKind::Cloud)
+        .is_some_and(|entry| key_present(&entry));
+    if kind == LlmKind::Cloud && !key_saved {
         return Err(IpcError::new(
             "cloud_key_missing",
             "store the API key of the cloud endpoint in the settings first",
@@ -260,6 +345,9 @@ pub struct CloudPreview {
     /// Words of the transcript that would be sent: edited text, excluded passages left out.
     pub word_count: u64,
     pub screenshot_descriptions: u32,
+    /// Items of the cycle's earlier meetings that go along with every request (their text,
+    /// assignee and due date), whatever those meetings' own backend was.
+    pub previous_item_count: u32,
     pub includes_audio: bool,
     pub includes_images: bool,
     pub summary_text: String,
@@ -287,13 +375,81 @@ fn count_descriptions(meeting_dir: &Path) -> u32 {
         .unwrap_or(0) as u32
 }
 
+/// The most items of earlier meetings the prompts of the worker carry.
+pub const MAX_PREVIOUS_ITEMS_SENT: u32 = 30;
+
+fn items_in(file: &Path) -> Option<(Option<String>, usize)> {
+    let value: serde_json::Value = serde_json::from_slice(&std::fs::read(file).ok()?).ok()?;
+    let items = value.get("items")?.as_array()?.len();
+    let id = value
+        .get("meeting_id")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    Some((id, items))
+}
+
+/// How many items of the cycle's earlier meetings go along with a request: the items of the
+/// finished drafts of its other meetings (here and in `repo_previous_dirs`, the folders of
+/// `meetings/<cycle>` of the repositories), at most [`MAX_PREVIOUS_ITEMS_SENT`]. These are
+/// sent whichever backend those meetings used.
+fn count_previous_items(
+    store: &Store,
+    meeting_dir: &Path,
+    meeting_id: &str,
+    repo_previous_dirs: &[PathBuf],
+) -> IpcResult<u32> {
+    let Some(details) = store.get_meeting(meeting_id)? else {
+        return Ok(0);
+    };
+    let Some(cycle_id) = store
+        .get_report_settings(meeting_id)?
+        .and_then(|s| s.cycle_id)
+    else {
+        return Ok(0);
+    };
+    let depth = Path::new(&details.meeting.dir).components().count();
+    let root = meeting_dir.ancestors().nth(depth);
+    let mut seen = std::collections::HashSet::new();
+    seen.insert(meeting_id.to_string());
+    let mut total = 0usize;
+    if let Some(root) = root {
+        for m in store.list_meetings_by_cycle(&cycle_id)? {
+            if m.id == meeting_id {
+                continue;
+            }
+            let file = root.join(&m.dir).join("work").join("draft.json");
+            if let Some((_, n)) = items_in(&file) {
+                if seen.insert(m.id.clone()) {
+                    total += n;
+                }
+            }
+        }
+    }
+    for dir in repo_previous_dirs {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if let Some((id, n)) = items_in(&entry.path().join("meeting.json")) {
+                let unique = id.is_none_or(|id| seen.insert(id));
+                if unique {
+                    total += n;
+                }
+            }
+        }
+    }
+    Ok(total.min(MAX_PREVIOUS_ITEMS_SENT as usize) as u32)
+}
+
 /// What would be sent to the cloud endpoint for this meeting. Reads only; nothing is
-/// recorded and nothing is confirmed.
+/// recorded and nothing is confirmed. `repo_previous_dirs` are the folders with the earlier
+/// meetings of the cycle in its repositories.
 pub fn cloud_preview(
     store: &Store,
     settings: &LlmSettings,
     meeting_dir: &Path,
     meeting_id: &str,
+    repo_previous_dirs: &[PathBuf],
 ) -> IpcResult<CloudPreview> {
     if store.get_meeting(meeting_id)?.is_none() {
         return Err(IpcError::new("not_found", "meeting not found"));
@@ -312,6 +468,8 @@ pub fn cloud_preview(
         Err(_) => (0, false),
     };
     let screenshot_descriptions = count_descriptions(meeting_dir);
+    let previous_item_count =
+        count_previous_items(store, meeting_dir, meeting_id, repo_previous_dirs)?;
     let confirmed = worker::confirmed_for_run(&options, store.get_llm_choice(meeting_id)?.as_ref());
     let amount = if transcript_ready {
         format!(
@@ -323,16 +481,23 @@ pub fn cloud_preview(
          the meeting is transcribed)"
             .to_string()
     };
+    let previous = match previous_item_count {
+        0 => "no items".to_string(),
+        1 => "1 item".to_string(),
+        n => format!("up to {n} items"),
+    };
     let summary_text = format!(
         "This will send {amount} to {host} (model {model}), together with the names, glossary, \
-         instruction and open topics of the cycle. No audio and no images are sent. Nothing is \
-         sent without this confirmation."
+         instruction and open topics of the cycle, and {previous} (text, assignee and due date) \
+         from earlier meetings of the cycle, including meetings you processed only locally. \
+         No audio and no images are sent. Nothing is sent without this confirmation."
     );
     Ok(CloudPreview {
         endpoint_host: host,
         model,
         word_count,
         screenshot_descriptions,
+        previous_item_count,
         includes_audio: false,
         includes_images: false,
         summary_text,
@@ -441,6 +606,106 @@ mod tests {
         let mut s = configured();
         s.external.base_url = "ftp://host".into();
         assert_eq!(s.validate().unwrap_err().code, "invalid");
+    }
+
+    #[test]
+    fn a_key_or_user_name_in_any_address_is_refused() {
+        for url in [
+            "https://ghp_token@api.example.com/v1",
+            "https://user:pass@api.example.com/v1",
+            "https://@api.example.com/v1",
+        ] {
+            let mut s = configured();
+            s.cloud.base_url = url.into();
+            let e = s.validate().unwrap_err();
+            assert_eq!(e.code, "invalid", "{url}");
+            assert!(!e.message.contains("ghp_token") && !e.message.contains("pass"));
+            let mut s = configured();
+            s.external.base_url = url.into();
+            assert_eq!(s.validate().unwrap_err().code, "invalid", "{url}");
+            assert_eq!(
+                s.options_for(LlmKind::External).unwrap_err().code,
+                "invalid",
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_cloud_needs_https_unless_it_is_this_machine() {
+        let mut s = configured();
+        s.cloud.base_url = "http://api.example.com/v1".into();
+        let e = s.validate().unwrap_err();
+        assert_eq!(e.code, "invalid");
+        assert!(e.message.contains("https://"));
+        // The options of a cloud meeting refuse it as well, whatever the settings file says.
+        assert_eq!(s.options_for(LlmKind::Cloud).unwrap_err().code, "invalid");
+        for ok in [
+            "http://localhost:8080/v1",
+            "http://127.0.0.1:8080/v1",
+            "http://[::1]:8080/v1",
+            "https://api.example.com/v1",
+        ] {
+            s.cloud.base_url = ok.into();
+            assert!(s.validate().is_ok(), "{ok}");
+        }
+        // The external server may use plain http on the network.
+        s.external.base_url = "http://192.168.1.20:8000/v1".into();
+        assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn local_and_remote_hosts_are_told_apart() {
+        for local in [
+            "localhost",
+            "app.localhost",
+            "127.0.0.1",
+            "::1",
+            "10.1.2.3",
+            "172.16.0.5",
+            "172.31.255.1",
+            "192.168.0.10",
+            "169.254.1.1",
+            "fd12:3456::1",
+            "fe80::1",
+            "gpu-box",
+            "nas.local",
+            "box.lan",
+        ] {
+            assert!(is_local_host(local), "{local}");
+        }
+        for remote in [
+            "api.openai.com",
+            "8.8.8.8",
+            "172.32.0.1",
+            "172.15.0.1",
+            "2001:db8::1",
+            "example.com",
+        ] {
+            assert!(!is_local_host(remote), "{remote}");
+        }
+        assert!(is_loopback_host("127.0.0.2") && !is_loopback_host("192.168.0.1"));
+    }
+
+    #[test]
+    fn a_remote_external_default_is_flagged_for_the_settings_screen() {
+        let mut s = configured();
+        assert!(!s.external_default_is_remote(), "managed default");
+        s.default_kind = LlmKind::External;
+        assert!(!s.external_default_is_remote(), "loopback server");
+        s.external.base_url = "http://192.168.1.20:8000/v1".into();
+        assert!(!s.external_default_is_remote(), "private network");
+        s.external.base_url = "https://api.openai.com/v1".into();
+        assert!(s.external_default_is_remote());
+        s.default_kind = LlmKind::Managed;
+        assert!(!s.external_default_is_remote());
+        // The flag is filled when reading and never read back from a file.
+        let back: LlmSettings = serde_json::from_str(r#"{"externalHostIsRemote":true}"#).unwrap();
+        assert!(!back.external_host_is_remote);
+        assert!(serde_json::to_value(&back)
+            .unwrap()
+            .get("externalHostIsRemote")
+            .is_some());
     }
 
     #[test]
@@ -589,7 +854,7 @@ mod tests {
         .unwrap();
         let s = store_with(Some("NOMAD"));
         let cfg = configured();
-        let p = cloud_preview(&s, &cfg, dir.path(), "m1").unwrap();
+        let p = cloud_preview(&s, &cfg, dir.path(), "m1", &[]).unwrap();
         assert_eq!(p.endpoint_host, "api.example.com");
         assert_eq!(p.model, "big-model");
         assert!(p.word_count > 0);
@@ -604,34 +869,178 @@ mod tests {
         // Excluding a passage lowers the count.
         let edits = serde_json::json!({"segments": {"0": {"excluded": true}}});
         std::fs::write(work.join("edits.json"), edits.to_string()).unwrap();
-        let after = cloud_preview(&s, &cfg, dir.path(), "m1").unwrap();
+        let after = cloud_preview(&s, &cfg, dir.path(), "m1", &[]).unwrap();
         assert!(after.word_count < p.word_count);
 
         confirm_cloud(&s, &cfg, "m1", 7).unwrap();
-        assert!(cloud_preview(&s, &cfg, dir.path(), "m1").unwrap().confirmed);
+        assert!(
+            cloud_preview(&s, &cfg, dir.path(), "m1", &[])
+                .unwrap()
+                .confirmed
+        );
+    }
+
+    fn earlier_draft(root: &Path, folder: &str, meeting_id: &str, items: usize) {
+        let dir = root.join(folder).join("work");
+        std::fs::create_dir_all(&dir).unwrap();
+        let items: Vec<_> = (0..items)
+            .map(|i| serde_json::json!({"id": format!("i{i}"), "text": "x"}))
+            .collect();
+        std::fs::write(
+            dir.join("draft.json"),
+            serde_json::json!({"meeting_id": meeting_id, "items": items}).to_string(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn the_preview_counts_the_items_of_earlier_meetings_that_go_along() {
+        let root = tempfile::tempdir().unwrap();
+        let s = store_with(Some("NOMAD"));
+        let cfg = configured();
+        let this = root.path().join("m1");
+        std::fs::create_dir_all(&this).unwrap();
+        let none = cloud_preview(&s, &cfg, &this, "m1", &[]).unwrap();
+        assert_eq!(none.previous_item_count, 0);
+        assert!(
+            none.summary_text.contains("no items"),
+            "{}",
+            none.summary_text
+        );
+
+        // Two earlier meetings of the cycle (one processed locally only) and one of another.
+        for (id, n, cycle) in [("m2", 4, "NOMAD"), ("m3", 5, "NOMAD"), ("m4", 9, "OTHER")] {
+            s.create_meeting(&Meeting {
+                id: id.into(),
+                title: id.into(),
+                started_unix_ms: 1,
+                duration_ms: None,
+                state: MeetingState::Stopped,
+                dir: id.into(),
+            })
+            .unwrap();
+            s.set_report_settings(
+                id,
+                &ReportSettings {
+                    cycle_id: Some(cycle.into()),
+                    ..ReportSettings::default()
+                },
+            )
+            .unwrap();
+            earlier_draft(root.path(), id, id, n);
+        }
+        let p = cloud_preview(&s, &cfg, &this, "m1", &[]).unwrap();
+        assert_eq!(p.previous_item_count, 9);
+        assert!(
+            p.summary_text.contains("up to 9 items"),
+            "{}",
+            p.summary_text
+        );
+        assert!(p.summary_text.contains("earlier meetings"));
+        assert!(p.summary_text.contains("processed only locally"));
+
+        // A copy of m2 in the repository is not counted twice; another meeting is.
+        let repo = root.path().join("repo-meetings");
+        for (folder, id, n) in [("2026-11-01", "m2", 4), ("2026-11-08", "m9", 40)] {
+            let dir = repo.join(folder);
+            std::fs::create_dir_all(&dir).unwrap();
+            let items: Vec<_> = (0..n).map(|i| serde_json::json!({"id": i})).collect();
+            std::fs::write(
+                dir.join("meeting.json"),
+                serde_json::json!({"meeting_id": id, "items": items}).to_string(),
+            )
+            .unwrap();
+        }
+        let p = cloud_preview(&s, &cfg, &this, "m1", std::slice::from_ref(&repo)).unwrap();
+        // 9 local + 40 from the repository, but the prompts carry at most 30.
+        assert_eq!(p.previous_item_count, MAX_PREVIOUS_ITEMS_SENT);
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(json["previousItemCount"], 30);
     }
 
     #[test]
     fn the_preview_without_a_transcript_says_so() {
         let dir = tempfile::tempdir().unwrap();
         let s = store_with(Some("NOMAD"));
-        let p = cloud_preview(&s, &configured(), dir.path(), "m1").unwrap();
+        let p = cloud_preview(&s, &configured(), dir.path(), "m1", &[]).unwrap();
         assert!(!p.transcript_ready);
         assert_eq!(p.word_count, 0);
     }
 
+    fn options(kind: LlmKind, url: Option<&str>) -> LlmOptions {
+        LlmOptions {
+            kind,
+            model_path: None,
+            ctx: None,
+            base_url: url.map(str::to_string),
+            model: Some("m".into()),
+            cloud_confirmed: false,
+        }
+    }
+
     #[test]
-    fn only_remote_backends_get_a_key_and_only_their_own() {
+    fn only_remote_backends_get_a_key_and_only_the_one_saved_for_their_host() {
         let get = |name: &str| Some(format!("secret-of-{name}"));
-        assert!(key_for(None, get).is_none());
-        assert!(key_for(Some(LlmKind::Managed), get).is_none());
-        let ext = key_for(Some(LlmKind::External), get).unwrap();
-        let cloud = key_for(Some(LlmKind::Cloud), get).unwrap();
-        assert_eq!(ext.expose(), format!("secret-of-{}", secrets::EXTERNAL_KEY));
-        assert_eq!(cloud.expose(), format!("secret-of-{}", secrets::CLOUD_KEY));
-        // An absent key stays absent.
-        assert!(key_for(Some(LlmKind::Cloud), |_| None).is_none());
+        let managed = options(LlmKind::Managed, None);
+        assert!(key_for(&managed, get).is_none());
+        let ext = key_for(
+            &options(LlmKind::External, Some("http://127.0.0.1:11434/v1")),
+            get,
+        )
+        .unwrap();
+        let cloud = key_for(
+            &options(LlmKind::Cloud, Some("https://API.example.com:8443/v1")),
+            get,
+        )
+        .unwrap();
+        assert_eq!(
+            ext.expose(),
+            format!("secret-of-{}@127.0.0.1", secrets::EXTERNAL_KEY)
+        );
+        assert_eq!(
+            cloud.expose(),
+            format!("secret-of-{}@api.example.com", secrets::CLOUD_KEY)
+        );
+        // An absent key stays absent, and so does one for an address without a host.
+        assert!(key_for(
+            &options(LlmKind::Cloud, Some("https://a.example/v1")),
+            |_| None
+        )
+        .is_none());
+        assert!(key_for(&options(LlmKind::Cloud, None), get).is_none());
+        assert!(key_for(&options(LlmKind::Cloud, Some("https:///v1")), get).is_none());
         // Debug output never shows it.
         assert!(!format!("{cloud:?}").contains("secret-of"));
+    }
+
+    #[test]
+    fn a_key_saved_for_one_host_is_never_found_for_another() {
+        // The user saved a key for provider A, then pointed the settings at provider B.
+        let vault =
+            |name: &str| (name == "llm-cloud-key@a.example.com").then(|| "key-a".to_string());
+        let job_a = options(LlmKind::Cloud, Some("https://a.example.com/v1"));
+        let job_b = options(LlmKind::Cloud, Some("https://b.example.net/v1"));
+        assert_eq!(key_for(&job_a, vault).unwrap().expose(), "key-a");
+        assert!(key_for(&job_b, vault).is_none(), "B must not get A's key");
+        // The settings look for the key of the endpoint they hold now.
+        let mut s = configured();
+        s.cloud.base_url = "https://a.example.com/v1".into();
+        assert_eq!(
+            s.key_entry(LlmKind::Cloud).as_deref(),
+            Some("llm-cloud-key@a.example.com")
+        );
+        s.cloud.base_url = "https://b.example.net/v1".into();
+        let entry = s.key_entry(LlmKind::Cloud).unwrap();
+        assert!(vault(&entry).is_none());
+        assert_eq!(s.key_entry(LlmKind::Managed), None);
+        // Choosing the cloud asks for the key of the current host.
+        let st = store_with(Some("NOMAD"));
+        let e =
+            choose_llm(&st, "m1", &s, Some(LlmKind::Cloud), &|n| vault(n).is_some()).unwrap_err();
+        assert_eq!(e.code, "cloud_key_missing");
+        s.cloud.base_url = "https://a.example.com/v1".into();
+        let e =
+            choose_llm(&st, "m1", &s, Some(LlmKind::Cloud), &|n| vault(n).is_some()).unwrap_err();
+        assert_eq!(e.code, "cloud_not_confirmed", "the key is there now");
     }
 }

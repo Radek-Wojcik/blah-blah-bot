@@ -137,6 +137,39 @@ pub fn prepare_context(
     env: &ContextEnv<'_>,
     meeting_id: &str,
 ) -> Result<ContextOutcome, RunError> {
+    let Some(cycle_id) = cycle_id_of(store, meeting_id)? else {
+        return Ok(ContextOutcome::NoCycle);
+    };
+    let data = load_cycle(source, &cycle_id)?;
+    prepare_context_with(store, &data, env, meeting_id)
+}
+
+/// The cycle a meeting belongs to, if any. A quick read, so the caller can fetch the cycle
+/// (which touches the disk and Git) without holding the store.
+pub fn cycle_id_of(store: &Store, meeting_id: &str) -> Result<Option<String>, RunError> {
+    Ok(store
+        .get_report_settings(meeting_id)
+        .map_err(err)?
+        .and_then(|s| s.cycle_id))
+}
+
+/// Loads a cycle from `source`; a cycle that is not available is an error with a clear text.
+pub fn load_cycle(source: &dyn CycleSource, cycle_id: &str) -> Result<CycleData, RunError> {
+    source.load(cycle_id)?.ok_or_else(|| {
+        RunError::new(format!(
+            "the cycle {cycle_id} is not available: its repository is not registered"
+        ))
+    })
+}
+
+/// [`prepare_context`] with the cycle already loaded (see [`load_cycle`]), so the work that
+/// needs the store does not wait for the repository.
+pub fn prepare_context_with(
+    store: &Store,
+    data: &CycleData,
+    env: &ContextEnv<'_>,
+    meeting_id: &str,
+) -> Result<ContextOutcome, RunError> {
     let details = store
         .get_meeting(meeting_id)
         .map_err(err)?
@@ -148,11 +181,6 @@ pub fn prepare_context(
     let Some(cycle_id) = settings.cycle_id.as_deref() else {
         return Ok(ContextOutcome::NoCycle);
     };
-    let data = source.load(cycle_id)?.ok_or_else(|| {
-        RunError::new(format!(
-            "the cycle {cycle_id} is not available: its repository is not registered"
-        ))
-    })?;
 
     let mode = settings
         .report_mode

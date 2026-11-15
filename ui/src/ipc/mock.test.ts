@@ -541,6 +541,28 @@ describe("cloud confirmation", () => {
     expect((await b.cloudPreview("m5")).confirmed).toBe(false);
   });
 
+  it("counts the items of earlier meetings of the cycle that go along", async () => {
+    const b = backend();
+    const p = await b.cloudPreview("m5");
+    // The only draft of the cycle is the meeting's own: nothing from earlier meetings.
+    expect(p.previousItemCount).toBe(0);
+    expect(p.summaryText).toContain("no items");
+    expect(p.summaryText).toContain("earlier meetings of the cycle");
+    expect(p.summaryText).toContain("processed only locally");
+    // A second meeting of the same cycle whose draft exists: m5's items now count for it.
+    await b.startRecording({
+      sourceIds: ["mic:default"],
+      report: { cycleId: "NOMAD", mode: "fixed" },
+    });
+    await b.stopRecording();
+    const id = (await b.listMeetings())[0].id;
+    await b.processMeeting(id, {});
+    const next = await b.cloudPreview(id);
+    expect(next.previousItemCount).toBeGreaterThan(0);
+    expect(next.previousItemCount).toBeLessThanOrEqual(30);
+    expect(next.summaryText).toContain(`${next.previousItemCount} item`);
+  });
+
   it("says the transcript is not ready for a meeting that has none", async () => {
     const p = await backend().cloudPreview("m1");
     expect(p).toMatchObject({ transcriptReady: false, wordCount: 0, screenshotDescriptions: 0 });
@@ -610,6 +632,31 @@ describe("language model settings and keys", () => {
     expect(s.llm).toMatchObject({ externalKeySet: true, cloudKeySet: false });
     expect(JSON.stringify(s)).not.toMatch(/secret-value/);
     expect(await codeOf(b.setCloudKey("  "))).toBeDefined();
+  });
+
+  it("warns when the external default server is not on this machine or network", async () => {
+    const b = backend();
+    const s = await b.getProcessingSettings();
+    expect(s.llm?.externalHostIsRemote).toBe(false);
+    const save = (patch: Partial<NonNullable<typeof s.llm>>) =>
+      b.saveProcessingSettings({ ...s, llm: { ...s.llm!, ...patch } });
+    await save({ defaultKind: "external" });
+    expect((await b.getProcessingSettings()).llm?.externalHostIsRemote).toBe(false);
+    await save({
+      defaultKind: "external",
+      external: { baseUrl: "https://api.public-vendor.example/v1", model: "m" },
+    });
+    expect((await b.getProcessingSettings()).llm?.externalHostIsRemote).toBe(true);
+    // Not the default any more: no warning.
+    await save({
+      defaultKind: "managed",
+      external: { baseUrl: "https://api.public-vendor.example/v1", model: "m" },
+    });
+    expect((await b.getProcessingSettings()).llm?.externalHostIsRemote).toBe(false);
+    // Plain http is not accepted for the cloud, except for this machine.
+    expect(
+      await codeOf(save({ cloud: { baseUrl: "http://api.public-vendor.example/v1", model: "m" } })),
+    ).toBe("invalid");
   });
 
   it("keeps the key flags when the settings are saved and validates the rest", async () => {

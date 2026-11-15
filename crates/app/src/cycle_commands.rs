@@ -51,11 +51,9 @@ pub fn create_cycle(
     let target =
         state.update_settings(|s| cycles::resolve_target_repo(s, repo_id.as_deref(), &data_dir))?;
     let repos = state.cycle_repos();
-    let details = state.with_store_ipc(|store| {
-        let details = cycles::create_cycle(&repos, &target, id.trim(), &name)?;
-        cycles::sync_cycle(&repos, store, id.trim())?;
-        Ok(details)
-    })?;
+    // The files are written (and Git asked about them) without the database locked.
+    let details = cycles::create_cycle(&repos, &target, id.trim(), &name)?;
+    cycles::sync_cycle(&repos, state.inner(), id.trim())?;
     changed(&app);
     Ok(details)
 }
@@ -68,7 +66,9 @@ pub fn save_cycle(
     cycle: CycleDto,
 ) -> IpcResult<SaveCycleResult> {
     let repos = state.cycle_repos();
-    let result = state.with_store_ipc(|store| cycles::save_cycle(&repos, store, cycle))?;
+    // Writing `cycle.yaml` may wait for a pull of the repository: the database is locked
+    // only for the participant sync inside.
+    let result = cycles::save_cycle(&repos, state.inner(), cycle)?;
     if result.saved {
         changed(&app);
     }
@@ -153,16 +153,16 @@ pub async fn add_cycle_repo(
         }
     };
     // Cycles that came with the repository get their participants right away.
-    state.with_store_ipc(|store| {
-        cycles::sync_repo(&setting, store);
-        Ok(())
-    })?;
+    for note in cycles::sync_repo(&setting, state.inner()) {
+        tracing::warn!("{note}");
+    }
     changed(&app);
     Ok(cycles::repo_dto(&setting))
 }
 
 /// `git pull --rebase` of one repository. A failure (offline, conflict) is reported in the
-/// result and the working tree stays as it was.
+/// result and the working tree stays as it was. With uncommitted cycle edits nothing is
+/// pulled and the error code is `repo_dirty`.
 #[tauri::command]
 pub async fn pull_cycle_repo(
     app: AppHandle,
@@ -175,13 +175,12 @@ pub async fn pull_cycle_repo(
         .find(|r| r.id == repo_id)
         .ok_or_else(|| IpcError::new("not_found", "this cycle repository is not registered"))?;
     let task = setting.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || cycles::pull_repo(&task))
+    let mut result = tauri::async_runtime::spawn_blocking(move || cycles::pull_repo(&task))
         .await
         .map_err(join_error)??;
-    state.with_store_ipc(|store| {
-        cycles::sync_repo(&setting, store);
-        Ok(())
-    })?;
+    result
+        .warnings
+        .extend(cycles::sync_repo(&setting, state.inner()));
     changed(&app);
     Ok(result)
 }

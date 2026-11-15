@@ -1,10 +1,13 @@
 //! The draft report of a meeting as the application edits it.
 //!
-//! The worker writes `work/draft.json` (`schemas/meeting.schema.json`). The user then
-//! changes items and sections in the editor; every change is saved into the same file with
-//! `edited: true` on the touched items, which is also how the next run of `reduce` knows it
-//! must not overwrite the file (it writes `work/draft.new.json` instead, see
-//! [`DraftFiles::accept_new_draft`]).
+//! The worker writes `work/draft.json` (`schemas/meeting.schema.json`) and, next to it,
+//! `work/draft.base.sha256`: the lowercase hex SHA-256 of the exact bytes it wrote. The user
+//! then changes items and sections in the editor; every change is saved into the same file
+//! (touched items get `edited: true`). A draft has user edits when an item is marked edited
+//! or when the bytes of `draft.json` no longer match the recorded hash (a deleted item or a
+//! renamed section marks nothing, but changes the bytes). The next run of `reduce` then does
+//! not overwrite the file: it writes `work/draft.new.json` instead, see
+//! [`DraftFiles::accept_new_draft`].
 //!
 //! The operations are plain functions on a [`cycle_store::Draft`]: they validate, change
 //! the draft in memory and fail without changing anything. [`DraftFiles`] loads and saves
@@ -12,6 +15,9 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use sha2::{Digest, Sha256};
 
 use cycle_store::schema::{self, is_identifier};
 use cycle_store::time::is_iso_date;
@@ -25,6 +31,8 @@ use serde_json::Value;
 pub const DRAFT_FILE: &str = "draft.json";
 /// Name of the draft a re-run of `reduce` writes when the draft has user edits.
 pub const NEW_DRAFT_FILE: &str = "draft.new.json";
+/// Hash of the bytes of the draft as `reduce` wrote it (lowercase hex SHA-256).
+pub const BASE_HASH_FILE: &str = "draft.base.sha256";
 
 #[derive(Debug, thiserror::Error)]
 pub enum DraftError {
@@ -71,6 +79,10 @@ impl DraftFiles {
         self.work.join(NEW_DRAFT_FILE)
     }
 
+    fn base_path(&self) -> PathBuf {
+        self.work.join(BASE_HASH_FILE)
+    }
+
     /// Whether a draft exists.
     pub fn exists(&self) -> bool {
         self.path().is_file()
@@ -100,6 +112,33 @@ impl DraftFiles {
         write_draft(&self.path(), draft)
     }
 
+    /// Whether the user changed anything in the draft: an item is marked `edited`, or the
+    /// bytes of `draft.json` differ from the hash `reduce` recorded in `draft.base.sha256`.
+    /// Without that file only the marks count. `false` when there is no draft.
+    pub fn has_user_edits(&self) -> Result<bool, DraftError> {
+        let bytes = match fs::read(self.path()) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(e.into()),
+        };
+        let text = String::from_utf8_lossy(&bytes);
+        let draft = Draft::from_json_str(&text).map_err(schema_error)?;
+        if has_edited_items(&draft) {
+            return Ok(true);
+        }
+        Ok(match self.recorded_hash() {
+            Some(recorded) => recorded != sha256_hex(&bytes),
+            None => false,
+        })
+    }
+
+    /// The hash `reduce` (or an accepted new draft) recorded, when there is one.
+    fn recorded_hash(&self) -> Option<String> {
+        let text = fs::read_to_string(self.base_path()).ok()?;
+        let hash = text.trim().to_ascii_lowercase();
+        (hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit())).then_some(hash)
+    }
+
     /// Loads the draft, applies `change` and saves the result. Nothing is written when
     /// `change` fails.
     pub fn edit<T>(
@@ -115,13 +154,21 @@ impl DraftFiles {
     /// Replaces `draft.json` by `draft.new.json` (the user chose the new extraction over
     /// their edited draft). The new draft is validated first and the old one is replaced
     /// atomically; `draft.new.json` is gone afterwards.
+    ///
+    /// The new draft counts as untouched afterwards: `draft.base.sha256` gets its hash. The
+    /// hash is written first, so a crash in between leaves the old draft protected (it does
+    /// not match the new hash).
     pub fn accept_new_draft(&self) -> Result<Draft, DraftError> {
         let draft = self.load_new()?;
+        let bytes = fs::read(self.new_path())?;
+        write_bytes(&self.base_path(), sha256_hex(&bytes).as_bytes())?;
         fs::rename(self.new_path(), self.path())?;
         Ok(draft)
     }
 
-    /// Throws `draft.new.json` away and keeps the edited draft.
+    /// Throws `draft.new.json` away and keeps the edited draft. The recorded hash stays, so
+    /// the kept draft is still known to differ from what `reduce` wrote and a later re-run
+    /// does not overwrite it.
     pub fn discard_new_draft(&self) -> Result<bool, DraftError> {
         match fs::remove_file(self.new_path()) {
             Ok(()) => Ok(true),
@@ -146,17 +193,44 @@ fn write_draft(path: &Path, draft: &Draft) -> Result<(), DraftError> {
         return Err(schema_error(issues));
     }
     let bytes = serde_json::to_vec_pretty(&value).map_err(std::io::Error::other)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, bytes)?;
-    fs::rename(&tmp, path)?;
+    write_bytes(path, &bytes)?;
     Ok(())
 }
 
-/// Whether the user changed anything in the draft. `reduce` does not overwrite such a draft.
-pub fn has_user_edits(draft: &Draft) -> bool {
+/// Writes `bytes` through a temporary file with a name of its own (the process, a counter),
+/// so two writers never share one, and renames it over `path`.
+fn write_bytes(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let tmp = path.with_file_name(format!(
+        "{name}.{}.{}.tmp",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    let result = fs::write(&tmp, bytes).and_then(|()| fs::rename(&tmp, path));
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
+}
+
+/// Lowercase hex SHA-256 of `bytes`.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Whether an item of the draft is marked as edited. This is only one of the signs of user
+/// edits; see [`DraftFiles::has_user_edits`] for the whole check.
+pub fn has_edited_items(draft: &Draft) -> bool {
     draft.items.iter().any(|i| i.edited)
 }
 
@@ -841,8 +915,162 @@ mod tests {
         );
         assert!(back.items[0].edited);
         assert_eq!(back.items.len(), 3);
-        assert!(has_user_edits(&back));
-        assert!(!dir.path().join("work/draft.json.tmp").exists());
+        assert!(has_edited_items(&back));
+        let leftovers: Vec<_> = fs::read_dir(dir.path().join("work"))
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+
+    /// The bytes `reduce` writes: no item is marked as edited.
+    fn pristine_bytes() -> Vec<u8> {
+        let mut d = draft();
+        for item in &mut d.items {
+            item.edited = false;
+        }
+        serde_json::to_vec_pretty(&d.to_value()).unwrap()
+    }
+
+    /// A draft as `reduce` leaves it: the file and the hash of its bytes.
+    fn reduced(dir: &Path) -> DraftFiles {
+        let bytes = pristine_bytes();
+        fs::write(dir.join("work/draft.json"), &bytes).unwrap();
+        fs::write(
+            dir.join("work").join(BASE_HASH_FILE),
+            format!("{}\n", sha256_hex(&bytes)),
+        )
+        .unwrap();
+        DraftFiles::new(dir)
+    }
+
+    #[test]
+    fn an_untouched_draft_has_no_user_edits() {
+        let dir = tmp();
+        let files = DraftFiles::new(dir.path());
+        // No draft at all: nothing to protect.
+        assert!(!files.has_user_edits().unwrap());
+        let files = reduced(dir.path());
+        assert!(!files.has_user_edits().unwrap());
+        // Without a recorded hash only the marks on items count.
+        fs::remove_file(dir.path().join("work").join(BASE_HASH_FILE)).unwrap();
+        assert!(!files.has_user_edits().unwrap());
+    }
+
+    #[test]
+    fn deleting_an_item_or_renaming_a_section_counts_as_an_edit_without_any_mark() {
+        for operation in 0..3 {
+            let dir = tmp();
+            let files = reduced(dir.path());
+            files
+                .edit(|d| match operation {
+                    0 => delete_item(d, "i001").map(|_| ()),
+                    1 => set_sections(d, vec![section("renamed", "Renamed")]).map(|_| ()),
+                    _ => {
+                        set_mode_and_template(d, ReportMode::Fixed, None, None);
+                        Ok(())
+                    }
+                })
+                .unwrap();
+            let draft = files.load().unwrap();
+            if operation != 1 {
+                assert!(
+                    !has_edited_items(&draft),
+                    "operation {operation} marks nothing"
+                );
+            }
+            assert!(files.has_user_edits().unwrap(), "operation {operation}");
+            // The same bytes under a hash that does not exist: marks decide.
+            fs::remove_file(dir.path().join("work").join(BASE_HASH_FILE)).unwrap();
+            assert_eq!(files.has_user_edits().unwrap(), has_edited_items(&draft));
+        }
+    }
+
+    #[test]
+    fn accepting_a_new_draft_makes_it_pristine_and_discarding_keeps_the_edits_protected() {
+        let dir = tmp();
+        let files = reduced(dir.path());
+        files.edit(|d| delete_item(d, "i001").map(|_| ())).unwrap();
+        assert!(files.has_user_edits().unwrap());
+
+        let mut fresh = draft();
+        fresh.summary = "Fresh.".into();
+        for item in &mut fresh.items {
+            item.edited = false;
+        }
+        let fresh_bytes = serde_json::to_vec_pretty(&fresh.to_value()).unwrap();
+        let new_path = dir.path().join("work").join(NEW_DRAFT_FILE);
+        fs::write(&new_path, &fresh_bytes).unwrap();
+        assert!(files.discard_new_draft().unwrap());
+        assert!(
+            files.has_user_edits().unwrap(),
+            "discarding keeps the protection"
+        );
+
+        fs::write(&new_path, &fresh_bytes).unwrap();
+        files.accept_new_draft().unwrap();
+        let recorded = fs::read_to_string(dir.path().join("work").join(BASE_HASH_FILE)).unwrap();
+        assert_eq!(recorded.trim(), sha256_hex(&fresh_bytes));
+        assert!(!files.has_user_edits().unwrap());
+        // The next user operation changes the bytes and so counts again.
+        files
+            .edit(|d| {
+                set_mode_and_template(d, ReportMode::Fixed, None, None);
+                Ok(())
+            })
+            .unwrap();
+        assert!(files.has_user_edits().unwrap());
+    }
+
+    #[test]
+    fn the_hash_is_lowercase_hex_of_the_exact_bytes() {
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        // An upper-case or damaged record is read as it is meant, or ignored.
+        let dir = tmp();
+        let files = reduced(dir.path());
+        let upper = sha256_hex(&pristine_bytes()).to_uppercase();
+        fs::write(dir.path().join("work").join(BASE_HASH_FILE), upper).unwrap();
+        assert!(!files.has_user_edits().unwrap());
+        fs::write(dir.path().join("work").join(BASE_HASH_FILE), "not a hash").unwrap();
+        assert!(!files.has_user_edits().unwrap());
+    }
+
+    #[test]
+    fn concurrent_saves_use_their_own_temporary_files() {
+        let dir = tmp();
+        fs::write(dir.path().join("work/draft.json"), FIXTURE).unwrap();
+        let path = dir.path().join("work/draft.json");
+        let threads: Vec<_> = (0..8)
+            .map(|n| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    for i in 0..20 {
+                        let mut d = draft();
+                        d.summary = format!("writer {n} round {i}");
+                        write_draft(&path, &d).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        // Whatever won, the file is a whole, valid draft and no temporary file is left.
+        assert!(DraftFiles::new(dir.path())
+            .load()
+            .unwrap()
+            .summary
+            .starts_with("writer"));
+        let tmps = fs::read_dir(dir.path().join("work"))
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .count();
+        assert_eq!(tmps, 0);
     }
 
     #[test]

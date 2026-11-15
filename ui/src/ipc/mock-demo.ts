@@ -264,6 +264,7 @@ export function demoProcessingSettings(): ProcessingSettings {
       cloud: { baseUrl: "https://api.llm-vendor.example/v1", model: "large-model-1" },
       externalKeySet: false,
       cloudKeySet: true,
+      externalHostIsRemote: false,
     },
   };
 }

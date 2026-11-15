@@ -7,6 +7,7 @@ use recorder::screenshot::Frame;
 use recorder::session::{CaptureBackend, ToneBackend, WasapiBackend};
 use tauri::{AppHandle, Manager};
 
+use crate::cycles::ParticipantSync;
 use crate::ipc::{IpcError, IpcResult};
 use crate::processing::Processing;
 use crate::recording::Recorder;
@@ -27,6 +28,18 @@ pub struct AppState {
     pub recorder: Recorder,
     processing: Arc<Processing>,
     pub pending_shot: Mutex<Option<PendingShot>>,
+}
+
+/// Keeps the stored participants of a cycle in step with `cycle.yaml`, locking the database
+/// for that call alone.
+impl ParticipantSync for AppState {
+    fn sync_participants(
+        &self,
+        cycle_id: &str,
+        participants: &[(String, String)],
+    ) -> IpcResult<store::SyncOutcome> {
+        self.with_store(|s| s.sync_cycle_participants(cycle_id, participants))
+    }
 }
 
 impl AppState {

@@ -4,6 +4,8 @@ import {
   backendDetail,
   baseName,
   isConfigured,
+  isLocalHost,
+  isLoopbackHost,
   missingForKind,
   skipText,
   urlHost,
@@ -17,6 +19,7 @@ const settings = (patch: Partial<LlmSettings> = {}): LlmSettings => ({
   cloud: { baseUrl: "https://api.llm-vendor.example/v1", model: "large-model-1" },
   externalKeySet: false,
   cloudKeySet: false,
+  externalHostIsRemote: false,
   ...patch,
 });
 
@@ -53,6 +56,49 @@ describe("validateLlmSettings", () => {
     expect(validateLlmSettings(ext("https:///v1"))).toMatch(/no host/);
     const cloud = settings({ cloud: { baseUrl: "ws://x", model: "m" } });
     expect(validateLlmSettings(cloud)).toMatch(/^Cloud endpoint/);
+  });
+});
+
+describe("the cloud address", () => {
+  const cloud = (baseUrl: string) => settings({ cloud: { baseUrl, model: "m" } });
+
+  it("needs https unless it is this machine", () => {
+    expect(validateLlmSettings(cloud("http://api.llm-vendor.example/v1"))).toMatch(/https:\/\//);
+    expect(validateLlmSettings(cloud("http://localhost:8080/v1"))).toBeNull();
+    expect(validateLlmSettings(cloud("http://127.0.0.1:8080/v1"))).toBeNull();
+    expect(validateLlmSettings(cloud("https://api.llm-vendor.example/v1"))).toBeNull();
+    // The external server may use plain http on the network.
+    const ext = settings({ external: { baseUrl: "http://192.168.1.20:8000/v1", model: "m" } });
+    expect(validateLlmSettings(ext)).toBeNull();
+  });
+
+  it("refuses a token used as the user name", () => {
+    expect(validateLlmSettings(cloud("https://sk-123@api.llm-vendor.example/v1"))).toMatch(
+      /do not put a user name/,
+    );
+  });
+});
+
+describe("local and remote hosts", () => {
+  it("tells this machine and private networks from the internet", () => {
+    for (const h of [
+      "localhost",
+      "127.0.0.1",
+      "10.0.0.5",
+      "172.16.1.1",
+      "172.31.0.1",
+      "192.168.1.20",
+      "169.254.3.4",
+      "fd12::1",
+      "fe80::1",
+      "gpu-box",
+      "nas.local",
+    ])
+      expect(isLocalHost(h), h).toBe(true);
+    for (const h of ["api.openai.com", "8.8.8.8", "172.32.0.1", "2001:db8::1"])
+      expect(isLocalHost(h), h).toBe(false);
+    expect(isLoopbackHost("127.0.0.2")).toBe(true);
+    expect(isLoopbackHost("192.168.1.20")).toBe(false);
   });
 });
 

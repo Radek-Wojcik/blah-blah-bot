@@ -107,7 +107,7 @@ pub fn start_recording(
         }
     }
     if let Some(cycle) = &report.cycle_id {
-        if let Err(e) = state.with_store_ipc(|s| cycles::sync_cycle(&repos, s, cycle)) {
+        if let Err(e) = cycles::sync_cycle(&repos, state.inner(), cycle) {
             tracing::warn!(error = %e, "could not sync the cycle participants");
         }
     }

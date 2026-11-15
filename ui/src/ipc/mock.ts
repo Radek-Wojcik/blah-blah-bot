@@ -15,7 +15,7 @@ import {
 import { createCycleStore, type RecordingReport } from "./mock-cycles";
 import { createMockDrafts } from "./mock-drafts";
 import { fail } from "./mock-util";
-import { missingForKind, urlHost, validateLlmSettings } from "../llm";
+import { isLocalHost, missingForKind, urlHost, validateLlmSettings } from "../llm";
 import { validateVoiceSettings } from "../speakers";
 import type {
   ActiveSource,
@@ -684,7 +684,15 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       stats.clear();
       participants = participants.map((p) => ({ ...p, sampleCount: 0, speechMs: 0 }));
     },
-    getProcessingSettings: async () => structuredClone(processing),
+    getProcessingSettings: async () => {
+      const s = structuredClone(processing);
+      if (s.llm) {
+        const host = urlHost(s.llm.external.baseUrl);
+        s.llm.externalHostIsRemote =
+          s.llm.defaultKind === "external" && host !== null && !isLocalHost(host);
+      }
+      return s;
+    },
     saveProcessingSettings: async (s) => {
       const invalid = validateVoiceSettings(s) ?? (s.llm ? validateLlmSettings(s.llm) : null);
       if (invalid) fail("invalid", invalid);
@@ -772,6 +780,17 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         .filter((x) => !x.excluded)
         .reduce((n, x) => n + x.text.split(/\s+/).filter(Boolean).length, 0);
       const screenshotDescriptions = transcript?.screenshots.length ?? 0;
+      const cycleId = cycleOf(meetingId);
+      const previousItemCount = Math.min(
+        30,
+        cycleId === null ? 0 : drafts.itemsOfCycle(cycleId, meetingId),
+      );
+      const previous =
+        previousItemCount === 0
+          ? "no items"
+          : previousItemCount === 1
+            ? "1 item"
+            : `up to ${previousItemCount} items`;
       const amount = transcriptReady
         ? `the text of the transcript (${wordCount} words; passages you excluded are left out) and ${screenshotDescriptions} screenshot descriptions`
         : "the text of the transcript and the screenshot descriptions (the amount is known once the meeting is transcribed)";
@@ -780,9 +799,10 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         model,
         wordCount,
         screenshotDescriptions,
+        previousItemCount,
         includesAudio: false,
         includesImages: false,
-        summaryText: `This will send ${amount} to ${host} (model ${model}), together with the names, glossary, instruction and open topics of the cycle. No audio and no images are sent. Nothing is sent without this confirmation.`,
+        summaryText: `This will send ${amount} to ${host} (model ${model}), together with the names, glossary, instruction and open topics of the cycle, and ${previous} (text, assignee and due date) from earlier meetings of the cycle, including meetings you processed only locally. No audio and no images are sent. Nothing is sent without this confirmation.`,
         confirmed: confirmed.get(meetingId) === host,
         transcriptReady,
       };

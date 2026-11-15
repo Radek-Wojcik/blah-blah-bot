@@ -222,6 +222,29 @@ pub struct NewItemDto {
 
 // ----- errors ------------------------------------------------------------------------------
 
+/// `busy` while the `extract` or `reduce` stage of the meeting is running: `reduce` reads the
+/// draft and writes it, and an edit in between would be lost or would overwrite it.
+pub fn ensure_draft_idle(store: &Store, meeting_id: &str) -> IpcResult<()> {
+    let Some(job) = store.get_job(meeting_id)? else {
+        return Ok(());
+    };
+    let running = job.stages.iter().any(|s| {
+        s.status == store::StageStatus::Running && (s.stage == "extract" || s.stage == "reduce")
+    });
+    if running {
+        return Err(IpcError::new(
+            "busy",
+            "the report is being extracted; wait for it to finish before editing the draft",
+        ));
+    }
+    Ok(())
+}
+
+/// [`ensure_draft_idle`] for the command layer.
+fn idle(state: &AppState, meeting_id: &str) -> IpcResult<()> {
+    state.with_store_ipc(|s| ensure_draft_idle(s, meeting_id))
+}
+
 /// Draft errors with stable codes: `no_draft` until the reduce stage has written one.
 pub fn draft_error(e: DraftError) -> IpcError {
     match e {
@@ -581,6 +604,7 @@ pub fn update_draft_item(
     patch: ItemPatchDto,
 ) -> IpcResult<DraftView> {
     let dir = meeting_dir(&state, &meeting_id)?;
+    idle(&state, &meeting_id)?;
     let view = update_item_checked(&state.cycle_repos(), &dir, &item_id, patch);
     after(&app, &meeting_id, view)
 }
@@ -595,6 +619,7 @@ pub fn move_draft_item(
     before_item_id: Option<String>,
 ) -> IpcResult<DraftView> {
     let dir = meeting_dir(&state, &meeting_id)?;
+    idle(&state, &meeting_id)?;
     let view = move_item(
         &state.cycle_repos(),
         &dir,
@@ -613,6 +638,7 @@ pub fn delete_draft_item(
     item_id: String,
 ) -> IpcResult<DraftView> {
     let dir = meeting_dir(&state, &meeting_id)?;
+    idle(&state, &meeting_id)?;
     let view = delete_item(&state.cycle_repos(), &dir, &item_id);
     after(&app, &meeting_id, view)
 }
@@ -625,6 +651,7 @@ pub fn add_draft_item(
     item: NewItemDto,
 ) -> IpcResult<DraftView> {
     let dir = meeting_dir(&state, &meeting_id)?;
+    idle(&state, &meeting_id)?;
     let view = add_item(&state.cycle_repos(), &dir, item);
     after(&app, &meeting_id, view)
 }
@@ -637,6 +664,7 @@ pub fn set_draft_sections(
     sections: Vec<SectionDto>,
 ) -> IpcResult<DraftView> {
     let dir = meeting_dir(&state, &meeting_id)?;
+    idle(&state, &meeting_id)?;
     let view = set_sections(&state.cycle_repos(), &dir, sections);
     after(&app, &meeting_id, view)
 }
@@ -651,6 +679,7 @@ pub fn set_report_mode(
     meeting_type: Option<String>,
 ) -> IpcResult<DraftView> {
     let dir = meeting_dir(&state, &meeting_id)?;
+    idle(&state, &meeting_id)?;
     let repos = state.cycle_repos();
     let view = state.with_store_ipc(|s| {
         change_report_mode(&repos, s, &meeting_id, &dir, &mode, template, meeting_type)
@@ -665,6 +694,7 @@ pub fn accept_new_draft(
     meeting_id: String,
 ) -> IpcResult<DraftView> {
     let dir = meeting_dir(&state, &meeting_id)?;
+    idle(&state, &meeting_id)?;
     let view = accept_new(&state.cycle_repos(), &dir);
     after(&app, &meeting_id, view)
 }
@@ -676,6 +706,7 @@ pub fn discard_new_draft(
     meeting_id: String,
 ) -> IpcResult<DraftView> {
     let dir = meeting_dir(&state, &meeting_id)?;
+    idle(&state, &meeting_id)?;
     let view = discard_new(&state.cycle_repos(), &dir);
     after(&app, &meeting_id, view)
 }
@@ -1213,9 +1244,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(queue::draft::has_user_edits(
-            &DraftFiles::new(&dir).load().unwrap()
-        ));
+        assert!(DraftFiles::new(&dir).has_user_edits().unwrap());
         fs::write(dir.join("work").join("draft.new.json"), FIXTURE).unwrap();
 
         let v = discard_new(lab.repos(), &dir).unwrap();
@@ -1248,6 +1277,35 @@ mod tests {
             render_variant(lab.repos(), &dir, "html").unwrap_err().code,
             "invalid"
         );
+    }
+
+    #[test]
+    fn the_draft_cannot_be_edited_while_extract_or_reduce_runs() {
+        let (lab, _dir) = lab_with_draft();
+        let names: Vec<&str> = queue::STAGES.iter().map(|s| s.as_str()).collect();
+        // No job: nothing runs.
+        ensure_draft_idle(&lab.store, "m1").unwrap();
+        lab.meeting("m1", Some("TEAM"));
+        ensure_draft_idle(&lab.store, "m1").unwrap();
+        lab.store.create_job("m1", &names, "{}", 1).unwrap();
+        ensure_draft_idle(&lab.store, "m1").unwrap();
+
+        for running in ["extract", "reduce"] {
+            lab.store
+                .set_stage_status("m1", running, store::StageStatus::Running, None, 2)
+                .unwrap();
+            let e = ensure_draft_idle(&lab.store, "m1").unwrap_err();
+            assert_eq!(e.code, "busy", "{running}");
+            lab.store
+                .set_stage_status("m1", running, store::StageStatus::Done, None, 3)
+                .unwrap();
+            ensure_draft_idle(&lab.store, "m1").unwrap();
+        }
+        // Other stages running (the speaker stage, for instance) do not block the editor.
+        lab.store
+            .set_stage_status("m1", "speaker_id", store::StageStatus::Running, None, 4)
+            .unwrap();
+        ensure_draft_idle(&lab.store, "m1").unwrap();
     }
 
     #[test]

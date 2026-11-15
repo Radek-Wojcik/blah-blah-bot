@@ -117,6 +117,23 @@ impl BuiltinSection {
     }
 }
 
+/// Puts a zero-width space after the `@` of `@everyone` and `@here` (any case), so a report
+/// posted to a chat service cannot notify everybody. Other text is returned unchanged.
+pub fn neutralise_mentions(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('@') {
+        out.push_str(&rest[..=at]);
+        rest = &rest[at + 1..];
+        let head: String = rest.chars().take(8).collect::<String>().to_lowercase();
+        if head.starts_with("everyone") || head.starts_with("here") {
+            out.push('\u{200b}');
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// One item as a Markdown bullet line.
 pub fn item_line(item: &Item, participants: &[Participant], variant: Variant) -> String {
     let text = item.text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -138,7 +155,7 @@ pub fn item_line(item: &Item, participants: &[Participant], variant: Variant) ->
         line.push(' ');
         line.push_str(UNVERIFIED_MARKER);
     }
-    line
+    neutralise_mentions(&line)
 }
 
 fn assignee_label(item: &Item, participants: &[Participant]) -> String {
@@ -310,7 +327,9 @@ pub fn render(
             Token::Placeholder(p) => out.push_str(&renderer.expand(p)),
         }
     }
-    Ok(tidy(&out))
+    // Item text, the summary and section titles come from a model that the transcript can
+    // steer: the report must not be able to notify everybody where it is posted.
+    Ok(neutralise_mentions(&tidy(&out)))
 }
 
 fn heading_level(line: &str) -> Option<usize> {
@@ -530,6 +549,34 @@ mod tests {
         .unwrap();
         let expected = "# Weekly sync\n\n2026-11-13 · Alex Example, Sam Sample\n\n## Summary\nWe agreed on the mount.\n\n## Decisions\n\n- Use aluminium\n\n## Tasks\n\n- [ ] Design the mount (@Alex Example, due 2026-11-20)\n\n## Open topics\n\n- Battery supplier\n\n## Notes\n\n- Wheels are 20 cm\n\n## Ideas\n\n- Add a camera\n\n## Budgets\n\n- 300 PLN for sensors\n\n---\n[Full transcript](transcript.md)\n";
         assert_eq!(md, expected);
+    }
+
+    #[test]
+    fn mass_mentions_are_neutralised_everywhere_in_the_report() {
+        let mut d = fixed_draft(Language::En);
+        d.summary = "Ping @everyone and @HERE now; mail me@here.example".into();
+        d.items.push(item(
+            "n2",
+            ItemType::Note,
+            "Tell @everyone, not @hereafter-person",
+        ));
+        let md = render(&d, &people(), "{summary}\n\n{sections}", &opts()).unwrap();
+        for bad in ["@everyone", "@here", "@HERE", "@Everyone"] {
+            assert!(!md.contains(bad), "{bad} in {md}");
+        }
+        assert!(md.contains("@\u{200b}everyone"));
+        assert!(md.contains("@\u{200b}HERE"));
+        // Other mentions and the text around them are untouched.
+        assert_eq!(neutralise_mentions("@alex and @team"), "@alex and @team");
+        let line = item_line(
+            &item("x", ItemType::Note, "cc @everyone"),
+            &people(),
+            Variant::Chat,
+        );
+        assert_eq!(line, "- cc @\u{200b}everyone");
+        // A stranger id used as the assignee cannot notify everybody either.
+        let t = task("t", "Do it", Some("everyone"), None, Stated, Unknown);
+        assert!(!item_line(&t, &people(), Variant::Chat).contains("@everyone"));
     }
 
     #[test]

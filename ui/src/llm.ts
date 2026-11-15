@@ -19,14 +19,54 @@ export function urlHost(url: string): string | null {
   return host === "" ? null : host;
 }
 
-function checkUrl(what: string, url: string): string | null {
+/** This machine: `localhost`, 127.0.0.0/8, `::1` (the rule of `is_loopback_host` in the backend). */
+export function isLoopbackHost(host: string): boolean {
+  const h = host
+    .trim()
+    .replace(/\.$/, "")
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "");
+  return h === "localhost" || h.endsWith(".localhost") || h === "::1" || /^127(\.\d+){3}$/.test(h);
+}
+
+/**
+ * This machine or a private network (`is_local_host` in the backend): loopback, private and
+ * link-local addresses and names that cannot be on the public internet.
+ */
+export function isLocalHost(host: string): boolean {
+  if (isLoopbackHost(host)) return true;
+  const h = host
+    .trim()
+    .replace(/\.$/, "")
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "");
+  const v4 = /^(\d+)\.(\d+)\.\d+\.\d+$/.exec(h);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    return (
+      a === 10 ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 169 && b === 254)
+    );
+  }
+  if (h.includes(":")) return /^(f[cd][0-9a-f]{2}|fe[89ab][0-9a-f]):/.test(h);
+  return (
+    !h.includes(".") || [".local", ".lan", ".home.arpa", ".internal"].some((s) => h.endsWith(s))
+  );
+}
+
+function checkUrl(what: string, url: string, httpsRequired = false): string | null {
   const u = url.trim();
   if (u === "") return null;
-  const m = /^https?:\/\/([^/?#]*)/i.exec(u);
+  const m = /^(https?):\/\/([^/?#]*)/i.exec(u);
   if (!m) return `${what}: the address must start with http:// or https://`;
-  if (m[1].includes("@"))
+  if (m[2].includes("@"))
     return `${what}: do not put a user name or key into the address; keys are stored separately`;
-  if (urlHost(u) === null) return `${what}: the address has no host`;
+  const host = urlHost(u);
+  if (host === null) return `${what}: the address has no host`;
+  if (httpsRequired && m[1].toLowerCase() !== "https" && !isLoopbackHost(host))
+    return `${what}: the address must start with https:// (plain http:// is only allowed for this machine)`;
   return null;
 }
 
@@ -35,7 +75,8 @@ export function validateLlmSettings(s: LlmSettings): string | null {
   if (!Number.isInteger(s.managed.ctx) || s.managed.ctx < MIN_CTX || s.managed.ctx > MAX_CTX)
     return `The context size must be between ${MIN_CTX} and ${MAX_CTX} tokens.`;
   return (
-    checkUrl("External server", s.external.baseUrl) ?? checkUrl("Cloud endpoint", s.cloud.baseUrl)
+    checkUrl("External server", s.external.baseUrl) ??
+    checkUrl("Cloud endpoint", s.cloud.baseUrl, true)
   );
 }
 

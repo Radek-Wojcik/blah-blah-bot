@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use queue::transcript::{SegmentEdit, TranscriptError, TranscriptFiles};
 use queue::worker::JobOptions;
 use serde::{Deserialize, Serialize};
+use store::LlmKind;
 use tauri::ipc::Response;
 use tauri::State;
 
@@ -256,35 +257,58 @@ pub fn clear_hf_token() -> IpcResult<()> {
     secrets::clear(secrets::HF_TOKEN)
 }
 
-#[tauri::command]
-pub fn set_cloud_key(key: String) -> IpcResult<()> {
-    secrets::set(secrets::CLOUD_KEY, &key)
+/// The credential entry of the key of `kind` for the address in the settings. A key belongs
+/// to one host: it is saved under a name with the host and is only found again for that
+/// host. `llm_not_configured` while the address is not set (save the settings first).
+fn key_entry(state: &AppState, kind: LlmKind) -> IpcResult<String> {
+    state
+        .processing()
+        .llm_settings()?
+        .key_entry(kind)
+        .ok_or_else(|| {
+            IpcError::new(
+                "llm_not_configured",
+                "save the address of the server in the settings first: a key is stored for that server only",
+            )
+        })
 }
 
 #[tauri::command]
-pub fn clear_cloud_key() -> IpcResult<()> {
-    secrets::clear(secrets::CLOUD_KEY)
-}
-
-/// Whether a cloud key is stored. The key itself is never returned.
-#[tauri::command]
-pub fn cloud_key_present() -> bool {
-    secrets::get(secrets::CLOUD_KEY).is_some()
+pub fn set_cloud_key(state: State<'_, AppState>, key: String) -> IpcResult<()> {
+    secrets::set(&key_entry(&state, LlmKind::Cloud)?, &key)
 }
 
 #[tauri::command]
-pub fn set_external_key(key: String) -> IpcResult<()> {
-    secrets::set(secrets::EXTERNAL_KEY, &key)
+pub fn clear_cloud_key(state: State<'_, AppState>) -> IpcResult<()> {
+    match key_entry(&state, LlmKind::Cloud) {
+        Ok(entry) => secrets::clear(&entry),
+        Err(_) => Ok(()),
+    }
+}
+
+/// Whether a cloud key is stored for the current cloud address. The key itself is never
+/// returned.
+#[tauri::command]
+pub fn cloud_key_present(state: State<'_, AppState>) -> bool {
+    key_entry(&state, LlmKind::Cloud).is_ok_and(|e| secrets::get(&e).is_some())
 }
 
 #[tauri::command]
-pub fn clear_external_key() -> IpcResult<()> {
-    secrets::clear(secrets::EXTERNAL_KEY)
+pub fn set_external_key(state: State<'_, AppState>, key: String) -> IpcResult<()> {
+    secrets::set(&key_entry(&state, LlmKind::External)?, &key)
 }
 
 #[tauri::command]
-pub fn external_key_present() -> bool {
-    secrets::get(secrets::EXTERNAL_KEY).is_some()
+pub fn clear_external_key(state: State<'_, AppState>) -> IpcResult<()> {
+    match key_entry(&state, LlmKind::External) {
+        Ok(entry) => secrets::clear(&entry),
+        Err(_) => Ok(()),
+    }
+}
+
+#[tauri::command]
+pub fn external_key_present(state: State<'_, AppState>) -> bool {
+    key_entry(&state, LlmKind::External).is_ok_and(|e| secrets::get(&e).is_some())
 }
 
 /// What would be sent to the cloud endpoint for this meeting, for the confirmation dialog.
@@ -293,7 +317,13 @@ pub fn external_key_present() -> bool {
 pub fn cloud_preview(state: State<'_, AppState>, meeting_id: String) -> IpcResult<CloudPreview> {
     let dir = meeting_dir(&state, &meeting_id)?;
     let settings = state.processing().llm_settings()?;
-    state.with_store_ipc(|s| llm::cloud_preview(s, &settings, &dir, &meeting_id))
+    let cycle = state
+        .with_store(|s| s.get_report_settings(&meeting_id))?
+        .and_then(|r| r.cycle_id);
+    let previous = cycle
+        .map(|c| crate::cycles::previous_meeting_dirs(&state.cycle_repos(), &c))
+        .unwrap_or_default();
+    state.with_store_ipc(|s| llm::cloud_preview(s, &settings, &dir, &meeting_id, &previous))
 }
 
 /// Records that the user confirmed sending this meeting to the cloud endpoint. Called only

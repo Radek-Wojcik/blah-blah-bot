@@ -53,7 +53,12 @@ with open(meeting / "calls.jsonl", "a", encoding="utf-8") as f:
 print(json.dumps({"event": "progress", "step": step, "fraction": 0.5, "message": "working"}), flush=True)
 if step == "extract":
     (work / "extract").mkdir(parents=True, exist_ok=True)
-    (work / "extract" / "windows.json").write_text(json.dumps({"version": 1, "windows": []}), encoding="utf-8")
+    windows = []
+    if (meeting / "all-windows-skipped").exists():
+        windows = [{"index": i, "skipped": True, "items": []} for i in range(2)]
+    elif (meeting / "one-window-skipped").exists():
+        windows = [{"index": 0, "skipped": True, "items": []}, {"index": 1, "skipped": False, "items": []}]
+    (work / "extract" / "windows.json").write_text(json.dumps({"version": 1, "windows": windows}), encoding="utf-8")
 elif step == "reduce":
     shutil.copy(fixture, work / "draft.json")
 print(json.dumps({"event": "done", "step": step}), flush=True)
@@ -174,6 +179,33 @@ fn lab(
     gate: Arc<dyn GpuGate>,
     key: Option<&str>,
 ) -> Lab {
+    lab_inner(options, cycle, gate, key, None)
+}
+
+/// A lab for an external backend whose key comes from `resolver`; the settings hold a key
+/// that must not be used when the resolver is there.
+fn lab_with_resolver(
+    options: &JobOptions,
+    resolver: impl Fn(&LlmOptions) -> Option<Secret> + Send + Sync + 'static,
+) -> Lab {
+    lab_inner(
+        options,
+        Some("TEAM"),
+        Arc::new(Allow),
+        Some("key-from-the-settings"),
+        Some(Box::new(resolver)),
+    )
+}
+
+type Resolver = Box<dyn Fn(&LlmOptions) -> Option<Secret> + Send + Sync>;
+
+fn lab_inner(
+    options: &JobOptions,
+    cycle: Option<&str>,
+    gate: Arc<dyn GpuGate>,
+    key: Option<&str>,
+    resolver: Option<Resolver>,
+) -> Lab {
     let root = tempfile::tempdir().unwrap();
     fs::write(root.path().join("fake_worker.py"), FAKE_WORKER).unwrap();
     fs::write(root.path().join("draft.fixture.json"), DRAFT).unwrap();
@@ -204,35 +236,37 @@ fn lab(
 
     let meeting_root = root.path().to_path_buf();
     let key = key.map(Secret::new);
-    let runner = Arc::new(
-        PipelineRunner::new(
-            store.clone(),
-            move || RunnerSettings {
-                worker: WorkerConfig {
-                    uv: PathBuf::from("uv-is-not-used"),
-                    worker_dir: PathBuf::from("worker"),
-                    env_dir: PathBuf::from("env"),
-                    models_dir: None,
-                    llama_server: None,
-                    hf_token: None,
-                    step_timeout: Duration::from_secs(60),
-                    llm_api_key: key.clone(),
-                },
-                meeting_root: meeting_root.clone(),
-                retention: AudioRetention::Keep,
-                voice: VoiceSettings::default(),
+    let mut runner = PipelineRunner::new(
+        store.clone(),
+        move || RunnerSettings {
+            worker: WorkerConfig {
+                uv: PathBuf::from("uv-is-not-used"),
+                worker_dir: PathBuf::from("worker"),
+                env_dir: PathBuf::from("env"),
+                models_dir: None,
+                llama_server: None,
+                hf_token: None,
+                step_timeout: Duration::from_secs(60),
+                llm_api_key: key.clone(),
             },
-            |_, _, _, _| {},
-        )
-        .with_launcher(Launcher {
-            program: python().into(),
-            args: vec![
-                root.path().join("fake_worker.py").into(),
-                root.path().join("draft.fixture.json").into(),
-            ],
-        })
-        .with_cycle_source(cycle_source()),
-    );
+            meeting_root: meeting_root.clone(),
+            retention: AudioRetention::Keep,
+            voice: VoiceSettings::default(),
+        },
+        |_, _, _, _| {},
+    )
+    .with_launcher(Launcher {
+        program: python().into(),
+        args: vec![
+            root.path().join("fake_worker.py").into(),
+            root.path().join("draft.fixture.json").into(),
+        ],
+    })
+    .with_cycle_source(cycle_source());
+    if let Some(resolver) = resolver {
+        runner = runner.with_key_resolver(resolver);
+    }
+    let runner = Arc::new(runner);
 
     struct Delegate(Arc<PipelineRunner>);
     impl StageRunner for Delegate {
@@ -459,4 +493,59 @@ fn a_cycle_that_is_not_registered_fails_extract_and_the_worker_is_not_started() 
         other => panic!("{other:?}"),
     }
     assert!(lab.calls().is_empty());
+}
+
+#[test]
+fn an_extract_in_which_every_window_was_skipped_fails_the_stage() {
+    let lab = lab(&llm(LlmKind::Managed), Some("TEAM"), Arc::new(Allow), None);
+    fs::write(lab.dir().join("all-windows-skipped"), "").unwrap();
+    match lab.sup.drive("m1").unwrap() {
+        StepOutcome::Failed { stage, error } => {
+            assert_eq!(stage, Stage::Extract);
+            assert!(error.contains("no usable answer"), "{error}");
+            assert!(error.contains("retry"), "{error}");
+        }
+        other => panic!("{other:?}"),
+    }
+    let row = lab.stage(Stage::Extract);
+    assert_eq!(row.status, StageStatus::Failed);
+    // `reduce` did not run on the empty result.
+    assert_eq!(steps(&lab.calls()), ["extract"]);
+    assert_eq!(lab.stage(Stage::Reduce).status, StageStatus::Pending);
+
+    // After the user retries and the model answers, the job finishes.
+    fs::remove_file(lab.dir().join("all-windows-skipped")).unwrap();
+    lab.sup.retry("m1").unwrap();
+    assert_eq!(lab.sup.drive("m1").unwrap(), StepOutcome::Finished);
+}
+
+#[test]
+fn a_partly_skipped_extract_still_finishes() {
+    let lab = lab(&llm(LlmKind::Managed), Some("TEAM"), Arc::new(Allow), None);
+    fs::write(lab.dir().join("one-window-skipped"), "").unwrap();
+    assert_eq!(lab.sup.drive("m1").unwrap(), StepOutcome::Finished);
+    assert_eq!(lab.stage(Stage::Extract).status, StageStatus::Done);
+}
+
+#[test]
+fn the_key_is_chosen_from_the_options_of_the_job_that_runs() {
+    // The resolver sees the endpoint of the job and gives the key saved for that host only.
+    let lab = lab_with_resolver(&llm(LlmKind::External), |l: &LlmOptions| {
+        match l.base_url.as_deref() {
+            Some("https://api.example.com/v1") => Some(Secret::new("key-for-example")),
+            _ => Some(Secret::new("key-for-another-host")),
+        }
+    });
+    assert_eq!(lab.sup.drive("m1").unwrap(), StepOutcome::Finished);
+    let calls = lab.calls();
+    assert!(
+        calls.iter().all(|c| c["key"] == "key-for-example"),
+        "{calls:?}"
+    );
+
+    // A resolver that has no key for this endpoint sends none, even though the settings
+    // hold a key.
+    let lab = lab_with_resolver(&llm(LlmKind::External), |_: &LlmOptions| None);
+    assert_eq!(lab.sup.drive("m1").unwrap(), StepOutcome::Finished);
+    assert!(lab.calls().iter().all(|c| c["key"] == Value::Null));
 }

@@ -18,11 +18,11 @@ use speakers::Thresholds;
 use store::{LlmKind, StageStatus, Store};
 use tauri::{AppHandle, Emitter};
 
-use crate::cycles::RepoCycleSource;
+use crate::cycles::{PullLedger, RepoCycleSource};
 use crate::ipc::{IpcError, IpcResult};
 use crate::llm::{self, LlmSettings};
 use crate::secrets;
-use crate::settings::{CycleRepoSetting, RepoKind};
+use crate::settings::CycleRepoSetting;
 
 type RepoList = Arc<dyn Fn() -> Vec<CycleRepoSetting> + Send + Sync>;
 
@@ -304,8 +304,8 @@ pub struct Processing {
     settings_path: PathBuf,
     env_dir: PathBuf,
     live: Arc<Mutex<HashMap<String, Live>>>,
-    /// Backend of the job whose stage is about to run, to pick the API key for that stage.
-    current_llm: Arc<Mutex<Option<LlmKind>>>,
+    /// Which attempt of which job already pulled its cycle repository.
+    pulls: PullLedger,
     cycle_repos: RepoList,
     last_event: Mutex<Instant>,
     driver_running: Arc<AtomicBool>,
@@ -326,18 +326,16 @@ impl Processing {
         let settings = Arc::new(Mutex::new(ProcessingSettings::load(&settings_path)));
         let env_dir = data_dir.join("worker-venv");
         let live: Arc<Mutex<HashMap<String, Live>>> = Arc::default();
-        let current_llm: Arc<Mutex<Option<LlmKind>>> = Arc::default();
         let cycle_repos: RepoList = Arc::new(cycle_repos);
 
         let runner_settings = {
             let settings = settings.clone();
             let env_dir = env_dir.clone();
-            let current_llm = current_llm.clone();
             move || {
                 let s = settings.lock().map(|s| s.clone()).unwrap_or_default();
-                let kind = current_llm.lock().ok().and_then(|k| *k);
                 RunnerSettings {
-                    worker: worker_config(&s, &env_dir, llm::key_for(kind, secrets::get)),
+                    // The key is chosen by the runner from the options the stage runs with.
+                    worker: worker_config(&s, &env_dir, None),
                     meeting_root: meeting_root(),
                     retention: s.audio_retention.into(),
                     voice: s.voice_settings(),
@@ -367,7 +365,8 @@ impl Processing {
                 }
             }
         })
-        .with_cycle_source(Arc::new(RepoCycleSource::new(move || source_repos())));
+        .with_cycle_source(Arc::new(RepoCycleSource::new(move || source_repos())))
+        .with_key_resolver(|options| llm::key_for(options, secrets::get));
 
         let gate = SettingsGate {
             settings: settings.clone(),
@@ -396,7 +395,7 @@ impl Processing {
             settings_path,
             env_dir,
             live,
-            current_llm,
+            pulls: PullLedger::default(),
             cycle_repos,
             last_event: Mutex::new(Instant::now() - EVENT_THROTTLE),
             driver_running: Arc::default(),
@@ -425,8 +424,17 @@ impl Processing {
             .map_err(|_| IpcError::new("internal", "settings lock poisoned"))?
             .clone();
         s.hf_token_set = secrets::get(secrets::HF_TOKEN).is_some();
-        s.llm.cloud_key_set = secrets::get(secrets::CLOUD_KEY).is_some();
-        s.llm.external_key_set = secrets::get(secrets::EXTERNAL_KEY).is_some();
+        // A key is stored for one host: the flags tell whether there is one for the
+        // address in the settings now.
+        let key_set = |kind| {
+            s.llm
+                .key_entry(kind)
+                .is_some_and(|entry| secrets::get(&entry).is_some())
+        };
+        let (cloud_set, external_set) = (key_set(LlmKind::Cloud), key_set(LlmKind::External));
+        s.llm.cloud_key_set = cloud_set;
+        s.llm.external_key_set = external_set;
+        s.llm.external_host_is_remote = s.llm.external_default_is_remote();
         Ok(s)
     }
 
@@ -544,9 +552,10 @@ impl Processing {
         apply_llm_to_job(&store, meeting_id, options)
     }
 
-    /// Before the next stage of a meeting: note the backend of its job (for the key) and,
-    /// before the briefing, bring a cloned cycle repository up to date. Runs outside the
-    /// store lock; a failed pull only means the local state is used.
+    /// Before the briefing (`extract`) of a meeting, bring a cloned cycle repository up to
+    /// date: once per job and attempt of the stage, however often the queue looks at the job
+    /// while it waits for the GPU. Runs outside the store lock; a failed pull, a conflict or
+    /// uncommitted cycle edits only mean the local state is used.
     fn prepare_step(&self, meeting_id: &str) {
         let (job, cycle) = {
             let Ok(store) = self.store.lock() else {
@@ -564,10 +573,6 @@ impl Processing {
         let Some(job) = job else {
             return;
         };
-        let kind = JobOptions::from_json(&job.options).llm.map(|l| l.kind);
-        if let Ok(mut current) = self.current_llm.lock() {
-            *current = kind;
-        }
         let briefing = matches!(
             queue::next_step(&job),
             Next::Run {
@@ -575,19 +580,18 @@ impl Processing {
             }
         );
         if let (true, Some(cycle)) = (briefing, cycle) {
-            let repos = (self.cycle_repos)();
-            if let Ok(Some(found)) = crate::cycles::locate(&repos, &cycle) {
-                if found.setting.kind == RepoKind::Clone {
-                    match found.repo.pull_rebase() {
-                        Ok(r) => {
-                            tracing::info!(cycle = %cycle, outcome = ?r.outcome, "pulled before the briefing");
-                        }
-                        Err(e) => {
-                            tracing::warn!(cycle = %cycle, error = %e, "pull before the briefing failed");
-                        }
-                    }
-                }
-            }
+            let attempt = job
+                .stages
+                .iter()
+                .find(|s| s.stage == Stage::Extract.as_str())
+                .map_or(0, |s| s.attempts);
+            crate::cycles::pull_for_briefing(
+                &self.pulls,
+                &(self.cycle_repos)(),
+                meeting_id,
+                attempt,
+                &cycle,
+            );
         }
     }
 

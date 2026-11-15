@@ -18,7 +18,7 @@ use cycle_store::{
 use queue::context::{CycleData, CycleSource};
 use queue::RunError;
 use serde::{Deserialize, Serialize};
-use store::{ParticipantInfo, ReportSettings, Store};
+use store::{ParticipantInfo, ReportSettings, Store, SyncOutcome};
 
 use crate::ipc::{IpcError, IpcResult};
 use crate::settings::{CycleRepoSetting, LastReport, RepoKind, Settings};
@@ -423,6 +423,9 @@ pub struct PullResult {
     /// `updated`, `upToDate`, `noRemote` or `failed`.
     pub outcome: &'static str,
     pub error: Option<String>,
+    /// Problems after an update: a cycle that no longer parses, a participant that could
+    /// not be linked to its voice profile. The update itself stays.
+    pub warnings: Vec<String>,
 }
 
 /// Everything the cycle editor shows.
@@ -733,11 +736,44 @@ fn participant_pairs(cycle: &Cycle) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Where the participants of a cycle are kept in step with `cycle.yaml`. The database
+/// implements it directly; the application state locks the database for each call only, so
+/// the repository work around it never holds the lock.
+pub trait ParticipantSync {
+    fn sync_participants(
+        &self,
+        cycle_id: &str,
+        participants: &[(String, String)],
+    ) -> IpcResult<SyncOutcome>;
+}
+
+impl ParticipantSync for Store {
+    fn sync_participants(
+        &self,
+        cycle_id: &str,
+        participants: &[(String, String)],
+    ) -> IpcResult<SyncOutcome> {
+        Ok(self.sync_cycle_participants(cycle_id, participants)?)
+    }
+}
+
+/// What a sync tells the user: participants that could not be stored, and ones that were
+/// matched to a changed id by name.
+fn sync_notes(outcome: &SyncOutcome) -> Vec<String> {
+    let mut notes = outcome.warnings.clone();
+    for id in &outcome.rebound {
+        notes.push(format!(
+            "the participant {id} has a new id in cycle.yaml: the voice profile of the person with the same name was kept"
+        ));
+    }
+    notes
+}
+
 /// Validates and writes `cycle.yaml`, then brings the stored participants in line with it.
 /// An invalid cycle is not written: the issues are returned instead.
-pub fn save_cycle(
+pub fn save_cycle<S: ParticipantSync + ?Sized>(
     repos: &[CycleRepoSetting],
-    store: &Store,
+    store: &S,
     dto: CycleDto,
 ) -> IpcResult<SaveCycleResult> {
     let located = locate_or_err(repos, &dto.id)?;
@@ -766,10 +802,12 @@ pub fn save_cycle(
         });
     }
     let mut warnings = Vec::new();
-    if let Err(e) = store.sync_cycle_participants(&cycle.id, &participant_pairs(&cycle)) {
-        warnings.push(format!(
-            "the participants could not be linked to voice profiles: {e}"
-        ));
+    match store.sync_participants(&cycle.id, &participant_pairs(&cycle)) {
+        Ok(outcome) => warnings.extend(sync_notes(&outcome)),
+        Err(e) => warnings.push(format!(
+            "the participants could not be linked to voice profiles: {}",
+            e.message
+        )),
     }
     let refreshed = locate_or_err(repos, &cycle.id)?;
     Ok(SaveCycleResult {
@@ -782,27 +820,62 @@ pub fn save_cycle(
 
 /// Brings the stored participants of a cycle in line with its `cycle.yaml`. A cycle that is
 /// not available or not valid is left alone.
-pub fn sync_cycle(repos: &[CycleRepoSetting], store: &Store, cycle_id: &str) -> IpcResult<()> {
+pub fn sync_cycle<S: ParticipantSync + ?Sized>(
+    repos: &[CycleRepoSetting],
+    store: &S,
+    cycle_id: &str,
+) -> IpcResult<()> {
     let Some(located) = locate(repos, cycle_id)? else {
         return Ok(());
     };
     let cycle = load_valid(&located)?;
-    store.sync_cycle_participants(cycle_id, &participant_pairs(&cycle))?;
+    for note in sync_notes(&store.sync_participants(cycle_id, &participant_pairs(&cycle))?) {
+        tracing::warn!(cycle = cycle_id, "{note}");
+    }
     Ok(())
 }
 
-/// [`sync_cycle`] for every valid cycle of one repository (after a pull).
-pub fn sync_repo(setting: &CycleRepoSetting, store: &Store) {
+/// [`sync_cycle`] for every valid cycle of one repository (after a pull). One cycle that
+/// cannot be synced never stops the others; what went wrong is returned as notes.
+pub fn sync_repo<S: ParticipantSync + ?Sized>(
+    setting: &CycleRepoSetting,
+    store: &S,
+) -> Vec<String> {
+    let mut notes = Vec::new();
     let Ok(repo) = Repo::open(&setting.path) else {
-        return;
+        return notes;
     };
     for entry in repo.list_cycles().unwrap_or_default() {
         if let (true, Some(cycle)) = (entry.is_valid(), &entry.cycle) {
-            if let Err(e) = store.sync_cycle_participants(&cycle.id, &participant_pairs(cycle)) {
-                tracing::warn!(cycle = %cycle.id, error = %e, "participant sync failed");
+            match store.sync_participants(&cycle.id, &participant_pairs(cycle)) {
+                Ok(outcome) => {
+                    notes.extend(sync_notes(&outcome).into_iter().map(|n| {
+                        tracing::warn!(cycle = %cycle.id, "{n}");
+                        format!("{}: {n}", cycle.id)
+                    }));
+                }
+                Err(e) => {
+                    tracing::warn!(cycle = %cycle.id, error = %e.message, "participant sync failed");
+                    notes.push(format!(
+                        "{}: the participants could not be linked to voice profiles: {}",
+                        cycle.id, e.message
+                    ));
+                }
             }
         }
     }
+    notes
+}
+
+/// The `meetings/<cycle>` folders of the registered repositories that exist: where earlier
+/// meetings of a cycle are kept besides the application's own drafts.
+pub fn previous_meeting_dirs(repos: &[CycleRepoSetting], cycle_id: &str) -> Vec<PathBuf> {
+    repos
+        .iter()
+        .filter_map(|setting| Repo::open(&setting.path).ok())
+        .filter_map(|repo| repo.meetings_dir(cycle_id).ok())
+        .filter(|dir| dir.is_dir())
+        .collect()
 }
 
 // ----- templates ---------------------------------------------------------------------------
@@ -1061,14 +1134,7 @@ pub fn load_cycle_data(
         return Ok(None);
     };
     if pull_first && located.setting.kind == RepoKind::Clone {
-        match located.repo.pull_rebase() {
-            Ok(report) => {
-                if let cycle_store::PullOutcome::Failed(why) = report.outcome {
-                    tracing::warn!(cycle = cycle_id, %why, "pull failed, using the local state");
-                }
-            }
-            Err(e) => tracing::warn!(cycle = cycle_id, error = %e, "pull failed"),
-        }
+        log_pull(cycle_id, located.repo.pull_rebase());
     }
     // The pull may have changed the files: read them afresh.
     let repo = &located.repo;
@@ -1126,28 +1192,13 @@ impl CycleSource for RepoCycleSource {
 
 // ----- adding repositories -----------------------------------------------------------------
 
-/// A remote address that is fit to store: not empty, not an option for `git`, and without a
-/// password in it (credentials belong to the Git credential helper, not to the settings).
+/// A remote address that is fit to store: not empty, not an option for `git`, not a
+/// remote-helper transport such as `ext::`, and without credentials in it (a user name of an
+/// `https://` address counts: tokens are put there). Credentials belong to the Git
+/// credential helper, not to the settings.
 pub fn validate_remote(url: &str) -> IpcResult<String> {
     let url = url.trim();
-    if url.is_empty() || url.starts_with('-') {
-        return Err(IpcError::new(
-            "invalid",
-            "enter the address of the repository",
-        ));
-    }
-    if let Some((_, rest)) = url.split_once("://") {
-        let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-        if authority
-            .rsplit_once('@')
-            .is_some_and(|(userinfo, _)| userinfo.contains(':'))
-        {
-            return Err(IpcError::new(
-                "invalid",
-                "do not put a password or token into the address; use the Git credential manager",
-            ));
-        }
-    }
+    cycle_store::check_remote_url(url).map_err(|why| IpcError::new("invalid", why))?;
     Ok(url.to_string())
 }
 
@@ -1266,8 +1317,80 @@ pub fn plan_clone(settings: &Settings, data_dir: &Path, url: &str) -> (String, P
     }
 }
 
+/// Logs what a pull before the briefing did; it never stops the briefing.
+fn log_pull(cycle_id: &str, result: cycle_store::Result<cycle_store::PullReport>) {
+    match result {
+        Ok(report) => match report.outcome {
+            cycle_store::PullOutcome::Failed(why) => {
+                tracing::warn!(cycle = cycle_id, %why, "pull failed, using the local state");
+            }
+            cycle_store::PullOutcome::SkippedDirty => {
+                tracing::info!(
+                    cycle = cycle_id,
+                    "cycle edits are not committed: not pulling, using the local state"
+                );
+            }
+            other => {
+                tracing::info!(cycle = cycle_id, outcome = ?other, "pulled before the briefing");
+                for w in &report.warnings {
+                    tracing::warn!(cycle = cycle_id, "{w}");
+                }
+            }
+        },
+        Err(e) => tracing::warn!(cycle = cycle_id, error = %e, "pull failed"),
+    }
+}
+
+/// Remembers for which attempt of which job a repository was already updated, so the
+/// briefing of a job pulls once however often the queue looks at it (it looks every few
+/// seconds while the job waits for the GPU).
+#[derive(Debug, Default)]
+pub struct PullLedger {
+    done: std::sync::Mutex<std::collections::HashMap<String, u32>>,
+}
+
+impl PullLedger {
+    /// `true` the first time for this meeting and `attempt`; `false` afterwards. A retried
+    /// stage has a new attempt number and pulls again.
+    pub fn first_time(&self, meeting_id: &str, attempt: u32) -> bool {
+        let Ok(mut done) = self.done.lock() else {
+            return false;
+        };
+        match done.get(meeting_id) {
+            Some(seen) if *seen == attempt => false,
+            _ => {
+                done.insert(meeting_id.to_string(), attempt);
+                true
+            }
+        }
+    }
+}
+
+/// Brings the clone that holds `cycle_id` up to date before the briefing, once per
+/// `(meeting, attempt)`. Only clones are pulled; a failure, a conflict or uncommitted cycle
+/// edits only mean the local state is used. Takes no store lock.
+pub fn pull_for_briefing(
+    ledger: &PullLedger,
+    repos: &[CycleRepoSetting],
+    meeting_id: &str,
+    attempt: u32,
+    cycle_id: &str,
+) {
+    if !ledger.first_time(meeting_id, attempt) {
+        return;
+    }
+    if let Ok(Some(found)) = locate(repos, cycle_id) {
+        if found.setting.kind == RepoKind::Clone {
+            log_pull(cycle_id, found.repo.pull_rebase());
+        }
+    }
+}
+
 /// Pulls a repository (a failure is a result, not an error). The caller refreshes the
-/// stored participants with [`sync_repo`] afterwards.
+/// stored participants with [`sync_repo`] afterwards and adds its notes to the result.
+///
+/// Uncommitted cycle edits are never stashed: with such edits the pull is refused with
+/// `repo_dirty` (commit or discard them first).
 pub fn pull_repo(setting: &CycleRepoSetting) -> IpcResult<PullResult> {
     let repo = Repo::open(&setting.path)
         .map_err(|_| IpcError::new("not_found", "the folder of this repository is missing"))?;
@@ -1277,11 +1400,18 @@ pub fn pull_repo(setting: &CycleRepoSetting) -> IpcResult<PullResult> {
         cycle_store::PullOutcome::UpToDate => ("upToDate", None),
         cycle_store::PullOutcome::NoRemote => ("noRemote", None),
         cycle_store::PullOutcome::Failed(why) => ("failed", Some(why)),
+        cycle_store::PullOutcome::SkippedDirty => {
+            return Err(IpcError::new(
+                "repo_dirty",
+                "the cycle edits in this repository are not committed yet, so it was not updated; commit or discard them (for example in your Git client) and pull again",
+            ));
+        }
     };
     Ok(PullResult {
         repo: repo_dto(setting),
         outcome,
         error,
+        warnings: report.warnings,
     })
 }
 
@@ -2243,8 +2373,19 @@ pub(crate) mod tests {
     fn remote_addresses_with_passwords_or_option_look_alikes_are_refused() {
         assert!(validate_remote("https://github.com/org/repo.git").is_ok());
         assert!(validate_remote("git@github.com:org/repo.git").is_ok());
-        assert!(validate_remote("https://user@host/org/repo.git").is_ok());
+        assert!(validate_remote("ssh://git@github.com/org/repo.git").is_ok());
         assert_eq!(validate_remote("").unwrap_err().code, "invalid");
+        // A token is usually put in as the user name.
+        for bad in [
+            "https://user@host/org/repo.git",
+            "https://ghp_abc123@github.com/org/repo.git",
+            "ext::sh -c touch% /tmp/pwned",
+            "fd::17/foo",
+        ] {
+            let e = validate_remote(bad).unwrap_err();
+            assert_eq!(e.code, "invalid", "{bad}");
+            assert!(!e.message.contains("ghp_abc123"));
+        }
         assert_eq!(
             validate_remote("--upload-pack=x").unwrap_err().code,
             "invalid"
@@ -2340,6 +2481,206 @@ pub(crate) mod tests {
         // The id is taken, so another clone of the same URL gets another one.
         let (id2, _) = plan_clone(&settings, lab.dir.path(), &origin);
         assert_ne!(id, id2);
+    }
+
+    /// Runs git with a fixed identity, for fixtures that commit.
+    fn git(dir: &Path, args: &[&str]) {
+        let mut full = vec![
+            "-C",
+            dir.to_str().unwrap(),
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgsign=false",
+        ];
+        full.extend_from_slice(args);
+        let out = std::process::Command::new("git")
+            .args(&full)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// An origin repository with a committed cycle NOMAD, a clone of it and the settings
+    /// that register the clone.
+    fn origin_and_clone(root: &Path) -> (Repo, Vec<CycleRepoSetting>, Repo) {
+        let origin = Repo::init_local(root.join("origin")).unwrap();
+        origin.create_cycle(&Cycle::new("NOMAD", "Nomad")).unwrap();
+        git(origin.root(), &["add", "-A"]);
+        git(origin.root(), &["commit", "--quiet", "-m", "start"]);
+        let dest = root.join("clone");
+        let clone = Repo::clone(origin.root().to_str().unwrap(), &dest).unwrap();
+        let settings = vec![CycleRepoSetting {
+            id: "team".into(),
+            path: dest.to_string_lossy().into_owned(),
+            remote: Some(origin.root().to_string_lossy().into_owned()),
+            kind: RepoKind::Clone,
+        }];
+        (origin, settings, clone)
+    }
+
+    fn upstream_adds(origin: &Repo, id: &str) {
+        origin.create_cycle(&Cycle::new(id, id)).unwrap();
+        git(origin.root(), &["add", "-A"]);
+        git(origin.root(), &["commit", "--quiet", "-m", id]);
+    }
+
+    fn has_cycle(clone: &Repo, id: &str) -> bool {
+        clone.cycle_dir(id).unwrap().join("cycle.yaml").is_file()
+    }
+
+    #[test]
+    fn the_ledger_lets_each_attempt_of_each_job_through_once() {
+        let ledger = PullLedger::default();
+        assert!(ledger.first_time("m1", 0));
+        assert!(!ledger.first_time("m1", 0));
+        assert!(!ledger.first_time("m1", 0));
+        assert!(ledger.first_time("m2", 0), "another job has its own turn");
+        assert!(ledger.first_time("m1", 1), "a retried stage pulls again");
+        assert!(!ledger.first_time("m1", 1));
+    }
+
+    #[test]
+    fn the_briefing_pulls_once_per_attempt_not_every_time_the_queue_looks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (origin, repos, clone) = origin_and_clone(tmp.path());
+        let ledger = PullLedger::default();
+
+        upstream_adds(&origin, "ROVER");
+        pull_for_briefing(&ledger, &repos, "m1", 0, "NOMAD");
+        assert!(has_cycle(&clone, "ROVER"), "the first look pulls");
+
+        // The queue looks again every few seconds while the GPU is busy: no more pulls.
+        upstream_adds(&origin, "THIRD");
+        for _ in 0..5 {
+            pull_for_briefing(&ledger, &repos, "m1", 0, "NOMAD");
+        }
+        assert!(!has_cycle(&clone, "THIRD"));
+
+        // The stage ran and was retried: a new attempt pulls.
+        pull_for_briefing(&ledger, &repos, "m1", 1, "NOMAD");
+        assert!(has_cycle(&clone, "THIRD"));
+    }
+
+    #[test]
+    fn the_briefing_leaves_a_repository_with_uncommitted_cycle_edits_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (origin, repos, clone) = origin_and_clone(tmp.path());
+        // The user renamed the cycle in the app (never committed); a teammate renamed it too.
+        let mut mine = clone.load_cycle("NOMAD").unwrap();
+        mine.name = "My name".into();
+        clone.save_cycle(&mine).unwrap();
+        let mut theirs = origin.load_cycle("NOMAD").unwrap();
+        theirs.name = "Their name".into();
+        origin.save_cycle(&theirs).unwrap();
+        git(origin.root(), &["add", "-A"]);
+        git(origin.root(), &["commit", "--quiet", "-m", "rename"]);
+
+        pull_for_briefing(&PullLedger::default(), &repos, "m1", 0, "NOMAD");
+
+        let text =
+            std::fs::read_to_string(clone.cycle_dir("NOMAD").unwrap().join("cycle.yaml")).unwrap();
+        assert!(
+            !text.contains("<<<<<<<") && !text.contains(">>>>>>>"),
+            "{text}"
+        );
+        assert_eq!(clone.load_cycle("NOMAD").unwrap().name, "My name");
+        let stash = std::process::Command::new("git")
+            .args(["-C", clone.root().to_str().unwrap(), "stash", "list"])
+            .output()
+            .unwrap();
+        assert!(stash.stdout.is_empty(), "nothing was stashed");
+        // The cycle still loads for the briefing.
+        assert!(load_cycle_data(&repos, "NOMAD", false).unwrap().is_some());
+    }
+
+    #[test]
+    fn a_manual_pull_with_uncommitted_edits_says_repo_dirty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (origin, repos, clone) = origin_and_clone(tmp.path());
+        upstream_adds(&origin, "ROVER");
+
+        let mut mine = clone.load_cycle("NOMAD").unwrap();
+        mine.name = "Edited in the app".into();
+        clone.save_cycle(&mine).unwrap();
+        let e = pull_repo(&repos[0]).unwrap_err();
+        assert_eq!(e.code, "repo_dirty");
+        assert!(e.message.contains("not committed"), "{}", e.message);
+        assert!(!has_cycle(&clone, "ROVER"));
+        assert_eq!(clone.load_cycle("NOMAD").unwrap().name, "Edited in the app");
+
+        // Committed, it pulls and keeps the edit.
+        git(clone.root(), &["add", "-A"]);
+        git(clone.root(), &["commit", "--quiet", "-m", "edit"]);
+        let r = pull_repo(&repos[0]).unwrap();
+        assert_eq!(r.outcome, "updated");
+        assert!(r.warnings.is_empty());
+        assert!(has_cycle(&clone, "ROVER"));
+        assert_eq!(clone.load_cycle("NOMAD").unwrap().name, "Edited in the app");
+    }
+
+    #[test]
+    fn a_pull_that_breaks_a_cycle_warns_and_the_warning_reaches_the_result() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (origin, repos, clone) = origin_and_clone(tmp.path());
+        std::fs::write(
+            origin.cycle_dir("NOMAD").unwrap().join("cycle.yaml"),
+            "id: [\n",
+        )
+        .unwrap();
+        git(origin.root(), &["add", "-A"]);
+        git(origin.root(), &["commit", "--quiet", "-m", "break"]);
+        let r = pull_repo(&repos[0]).unwrap();
+        assert_eq!(r.outcome, "updated");
+        assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
+        assert!(r.warnings[0].contains("NOMAD"));
+        assert!(clone.load_cycle("NOMAD").is_err());
+        let json = serde_json::to_value(&r).unwrap();
+        assert!(json["warnings"].is_array());
+    }
+
+    #[test]
+    fn a_participant_whose_id_changed_upstream_does_not_stop_the_cycle_from_saving() {
+        let lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        let mut dto = get_cycle(lab.repos(), "NOMAD").unwrap().cycle;
+        dto.participants = vec![person("alex", "Alex"), person("sam", "Sam")];
+        assert!(save_cycle(lab.repos(), &lab.store, dto).unwrap().saved);
+        let old = store::cycle_participant_key("NOMAD", "alex");
+        lab.store
+            .put_sample(
+                &old,
+                &store::SampleRow {
+                    source_key: "m:v".into(),
+                    embedding: vec![1.0],
+                    speech_ms: 9_000,
+                },
+                1,
+            )
+            .unwrap();
+
+        // The id changes (an upstream edit); the person and the name stay.
+        let mut dto = get_cycle(lab.repos(), "NOMAD").unwrap().cycle;
+        dto.participants[0].id = "alexander".into();
+        let r = save_cycle(lab.repos(), &lab.store, dto).unwrap();
+        assert!(r.saved, "{:?}", r.issues);
+        assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
+        assert!(r.warnings[0].contains("alexander"), "{:?}", r.warnings);
+        let rows = lab.store.participants_for_cycle("NOMAD").unwrap();
+        let alex = rows.iter().find(|p| p.name == "Alex").unwrap();
+        assert_eq!(alex.id, store::cycle_participant_key("NOMAD", "alexander"));
+        assert_eq!(alex.sample_count, 1, "the voice profile came along");
+        assert!(rows.iter().all(|p| p.id != old));
+
+        // Later syncs (a pull, a recording) work and say nothing more.
+        assert!(sync_repo(&lab.settings.cycle_repos[0], &lab.store).is_empty());
+        sync_cycle(lab.repos(), &lab.store, "NOMAD").unwrap();
     }
 
     #[test]
