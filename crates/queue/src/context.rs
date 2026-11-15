@@ -34,7 +34,8 @@ use std::path::{Path, PathBuf};
 
 use cycle_store::time::format_utc_date;
 use cycle_store::{
-    build_context, ContextRequest, Cycle, LanguageSetting, OpenIssue, ReportMode, Template, Topic,
+    build_context, ContextRequest, Cycle, IssueLink, LanguageSetting, OpenIssue, ReportMode,
+    Template, Topic,
 };
 use store::Store;
 
@@ -61,6 +62,8 @@ pub struct CycleData {
     pub issues: Vec<OpenIssue>,
     /// Numbers of issues known to be closed.
     pub closed_issue_ids: Vec<String>,
+    /// The issues created from items of earlier meetings (open and closed).
+    pub issue_links: Vec<IssueLink>,
     /// Directories that hold one `<folder>/meeting.json` per earlier meeting, for example
     /// `meetings/<ID>` of the repository. The application's local drafts are added
     /// separately.
@@ -207,6 +210,7 @@ pub fn prepare_context_with(
     req.topics = &data.topics;
     req.issues = &data.issues;
     req.closed_issue_ids = &data.closed_issue_ids;
+    req.issue_links = &data.issue_links;
     req.mode = mode;
     req.meeting_type = settings.meeting_type.as_deref();
     req.template = settings.report_template.as_deref();
@@ -381,6 +385,7 @@ mod tests {
             topics: vec![],
             issues: vec![],
             closed_issue_ids: vec![],
+            issue_links: vec![],
             previous_dirs: previous,
         }
     }

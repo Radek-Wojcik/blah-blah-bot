@@ -1165,10 +1165,13 @@ pub fn load_cycle_data(
         }
     }
     let topics = repo.load_topics(cycle_id).map_err(|e| err(&e))?;
-    let issues = repo
+    // The cache of the last fetch of the cycle's issues: open ones, closed numbers and the
+    // issues made from meeting items.
+    let cache = repo
         .issue_cache_path(cycle_id)
-        .map(|p| IssueCache::load(&p).issues)
+        .map(|p| IssueCache::load(&p))
         .unwrap_or_default();
+    let closed_issue_ids = cache.closed.iter().map(u64::to_string).collect();
     let mut previous_dirs = Vec::new();
     if let Ok(dir) = repo.meetings_dir(cycle_id) {
         if dir.is_dir() {
@@ -1179,8 +1182,9 @@ pub fn load_cycle_data(
         cycle,
         templates,
         topics,
-        issues,
-        closed_issue_ids: Vec::new(),
+        issues: cache.issues,
+        closed_issue_ids,
+        issue_links: cache.links,
         previous_dirs,
     }))
 }
@@ -2317,6 +2321,7 @@ pub(crate) mod tests {
                 assignee: None,
                 url: None,
             }],
+            ..IssueCache::default()
         }
         .save(&repo.issue_cache_path("NOMAD").unwrap())
         .unwrap();
@@ -2347,6 +2352,45 @@ pub(crate) mod tests {
         let source = RepoCycleSource::new(move || repos.clone());
         assert!(source.load("NOMAD").unwrap().is_some());
         assert!(source.load("GHOST").unwrap().is_none());
+    }
+
+    #[test]
+    fn closed_issues_and_item_links_of_the_cache_reach_the_context_data() {
+        let lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        let repo = lab.repo();
+        // A cache written before closed issues were known loads with nothing closed.
+        std::fs::write(
+            repo.issue_cache_path("NOMAD").unwrap(),
+            r#"{"repo":"o/r","label":"cycle:NOMAD","fetched_unix_ms":1,"issues":[{"number":12,"title":"t"}]}"#,
+        )
+        .unwrap();
+        let data = load_cycle_data(lab.repos(), "NOMAD", false)
+            .unwrap()
+            .unwrap();
+        assert!(data.closed_issue_ids.is_empty() && data.issue_links.is_empty());
+
+        let link = cycle_store::IssueLink {
+            number: 41,
+            meeting: "20261113-140501".into(),
+            item: "i1".into(),
+            open: false,
+        };
+        IssueCache {
+            repo: "o/r".into(),
+            label: "cycle:NOMAD".into(),
+            fetched_unix_ms: Some(2),
+            closed: vec![40, 41],
+            links: vec![link.clone()],
+            ..IssueCache::default()
+        }
+        .save(&repo.issue_cache_path("NOMAD").unwrap())
+        .unwrap();
+        let data = load_cycle_data(lab.repos(), "NOMAD", false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(data.closed_issue_ids, ["40", "41"]);
+        assert_eq!(data.issue_links, vec![link]);
     }
 
     #[test]

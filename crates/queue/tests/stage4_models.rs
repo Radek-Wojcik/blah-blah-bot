@@ -246,6 +246,7 @@ fn cycle_source(script: &Script) -> Arc<dyn CycleSource> {
             topics: vec![],
             issues: vec![],
             closed_issue_ids: vec![],
+            issue_links: vec![],
             previous_dirs: vec![],
         }))
     })

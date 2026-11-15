@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use crate::cycle::Cycle;
 use crate::draft::{Draft, ItemType, LanguageSetting, ReportMode};
 use crate::error::{CycleError, Result, ValidationIssue};
-use crate::issues::OpenIssue;
+use crate::issues::{IssueLink, OpenIssue};
 use crate::schema::{self, Schema};
 use crate::template::Template;
 use crate::time::is_iso_date;
@@ -31,6 +31,10 @@ pub struct ContextRequest<'a> {
     /// Numbers of issues known to be closed (`12` or `#12`); items relating to them are
     /// dropped from the previous items.
     pub closed_issue_ids: &'a [String],
+    /// The issues created from items of earlier meetings. An item whose issue is closed is
+    /// done and dropped from the previous items; one whose issue is open carries it as
+    /// `issue`.
+    pub issue_links: &'a [IssueLink],
     /// `YYYY-MM-DD`.
     pub meeting_date: &'a str,
     /// Overrides the cycle's default mode.
@@ -57,6 +61,7 @@ impl<'a> ContextRequest<'a> {
             topics: &[],
             issues: &[],
             closed_issue_ids: &[],
+            issue_links: &[],
             meeting_date,
             mode: None,
             meeting_type: None,
@@ -297,16 +302,29 @@ fn collect_previous_items(
     let mut out = Vec::new();
     for earlier in read_earlier(req, warnings) {
         for item in earlier.draft.items.iter().filter(|i| !closed.is_closed(i)) {
+            let link = req
+                .issue_links
+                .iter()
+                .find(|l| l.meeting == earlier.draft.meeting_id && l.item == item.id);
+            // The issue of the item was closed (by a person or by an approved status
+            // change): the item is done.
+            if link.is_some_and(|l| !l.open) {
+                continue;
+            }
             if out.len() >= req.max_previous_items {
                 return out;
             }
-            out.push(json!({
+            let mut value = json!({
                 "meeting": earlier.draft.date,
                 "type": item.item_type,
                 "text": item.text,
                 "assignee": item.assignee,
                 "due": item.due,
-            }));
+            });
+            if let Some(l) = link {
+                value["issue"] = json!(format!("#{}", l.number));
+            }
+            out.push(value);
         }
     }
     out
@@ -657,6 +675,59 @@ mod tests {
             .map(|p| p.1)
             .collect();
         assert_eq!(texts, vec!["still open", "battery supplier"]);
+    }
+
+    #[test]
+    fn items_with_a_closed_issue_are_done_and_those_with_an_open_issue_carry_it() {
+        let dir = tempfile::tempdir().unwrap();
+        write_meeting(
+            dir.path(),
+            "2026-11-13",
+            "20261113-140501",
+            "2026-11-13",
+            vec![
+                item("i1", ItemType::Task, "order the battery"),
+                item("i2", ItemType::Task, "send the invoice"),
+                item("i3", ItemType::Task, "no issue for this one"),
+            ],
+        );
+        // An issue of another meeting with the same item id must not match.
+        let links = vec![
+            IssueLink {
+                number: 41,
+                meeting: "20261113-140501".into(),
+                item: "i1".into(),
+                open: true,
+            },
+            IssueLink {
+                number: 42,
+                meeting: "20261113-140501".into(),
+                item: "i2".into(),
+                open: false,
+            },
+            IssueLink {
+                number: 43,
+                meeting: "20260101-000000".into(),
+                item: "i3".into(),
+                open: false,
+            },
+        ];
+        let c = cycle();
+        let dirs = vec![dir.path().to_path_buf()];
+        let mut req = ContextRequest::new(&c, "2026-11-20");
+        req.previous_dirs = &dirs;
+        req.issue_links = &links;
+        let ctx = build_context(&req).unwrap();
+        let items = ctx.value["previous_items"].as_array().unwrap();
+        let texts: Vec<_> = items.iter().map(|i| i["text"].as_str().unwrap()).collect();
+        assert_eq!(texts, ["order the battery", "no issue for this one"]);
+        assert_eq!(items[0]["issue"], "#41");
+        assert!(items[1].get("issue").is_none());
+
+        // Without links nothing changes: all three are still open business.
+        req.issue_links = &[];
+        let ctx = build_context(&req).unwrap();
+        assert_eq!(ctx.value["previous_items"].as_array().unwrap().len(), 3);
     }
 
     #[test]
