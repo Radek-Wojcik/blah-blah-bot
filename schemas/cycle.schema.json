@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Radek-Wojcik/blah-blah-bot/schemas/cycle.schema.json",
+  "title": "Cycle",
+  "description": "cycles/<ID>/cycle.yaml in the cycle repository, converted from YAML to JSON before validation.",
+  "type": "object",
+  "required": ["id", "name"],
+  "additionalProperties": false,
+  "$defs": {
+    "identifier": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
+    "language": { "enum": ["auto", "pl", "en"] },
+    "publish": { "enum": ["auto", "on-approval", "off"] },
+    "credential": {
+      "type": "string",
+      "description": "Reference to a secret in the Windows Credential Manager, never the secret itself",
+      "pattern": "^cred:[A-Za-z0-9][A-Za-z0-9_./-]*$"
+    },
+    "snowflake": { "type": "string", "pattern": "^[0-9]{1,25}$" }
+  },
+  "properties": {
+    "id": { "$ref": "#/$defs/identifier" },
+    "name": { "type": "string", "minLength": 1 },
+    "languages": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "asr": { "$ref": "#/$defs/language" },
+        "output": { "$ref": "#/$defs/language" }
+      }
+    },
+    "participants": {
+      "type": "array",
+      "description": "Participant ids must be unique within the cycle (checked after schema validation)",
+      "items": {
+        "type": "object",
+        "required": ["id", "name"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "$ref": "#/$defs/identifier" },
+          "name": { "type": "string", "minLength": 1 },
+          "github": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9-]*$" },
+          "discord": {
+            "type": "object",
+            "description": "Exactly one of user_id and role_id; quote the number so YAML keeps it a string",
+            "additionalProperties": false,
+            "properties": {
+              "user_id": { "$ref": "#/$defs/snowflake" },
+              "role_id": { "$ref": "#/$defs/snowflake" }
+            },
+            "oneOf": [{ "required": ["user_id"] }, { "required": ["role_id"] }]
+          }
+        }
+      }
+    },
+    "glossary": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["term"],
+        "additionalProperties": false,
+        "properties": {
+          "term": { "type": "string", "minLength": 1 },
+          "hint": { "type": "string" }
+        }
+      }
+    },
+    "report": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "default_mode": { "enum": ["fixed", "template", "auto", "by-type"] },
+        "default_template": { "$ref": "#/$defs/identifier" },
+        "instruction": { "type": "string" },
+        "by_type": {
+          "type": "object",
+          "description": "Meeting type to template name",
+          "propertyNames": { "$ref": "#/$defs/identifier" },
+          "additionalProperties": { "$ref": "#/$defs/identifier" }
+        }
+      }
+    },
+    "targets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "github": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "path": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$" },
+            "publish": { "$ref": "#/$defs/publish" }
+          }
+        },
+        "discord": {
+          "type": "object",
+          "required": ["webhook"],
+          "additionalProperties": false,
+          "properties": {
+            "webhook": { "$ref": "#/$defs/credential" },
+            "publish": { "$ref": "#/$defs/publish" },
+            "template": { "$ref": "#/$defs/identifier" }
+          }
+        },
+        "notion": {
+          "type": "object",
+          "required": ["database"],
+          "additionalProperties": false,
+          "properties": {
+            "database": { "type": "string", "minLength": 1 },
+            "publish": { "$ref": "#/$defs/publish" }
+          }
+        }
+      }
+    }
+  }
+}

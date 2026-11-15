@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Radek-Wojcik/blah-blah-bot/schemas/topics.schema.json",
+  "title": "Topics",
+  "description": "cycles/<ID>/topics.yaml in the cycle repository, converted from YAML to JSON before validation. Topic ids must be unique (checked after schema validation).",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["id", "text", "status", "opened_in"],
+    "additionalProperties": false,
+    "properties": {
+      "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
+      "text": { "type": "string", "minLength": 1 },
+      "status": { "enum": ["open", "closed"] },
+      "opened_in": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}(-\\d+)?$", "description": "Meeting folder name: the date, with -2, -3 for later meetings of the same day" },
+      "closed_in": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}(-\\d+)?$" }
+    }
+  }
+}
