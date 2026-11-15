@@ -1,3 +1,5 @@
 # False positives: the public key of the prototype browser extension and a token alphabet constant.
 c1913c5cf1535b027364e57b231fe669d06cebf1:benchmarks/p7-chrome/extension/manifest.json:generic-api-key:7
 c1913c5cf1535b027364e57b231fe669d06cebf1:benchmarks/src/bbb_bench/proto/p7_protocol.py:generic-api-key:31
+# False positive: a model identifier ("whisper-large-v3") in the UI mock data.
+9cadf9992411b2938aed54328b213a3020fc356b:ui/src/ipc/mock-demo.ts:generic-api-key:248
