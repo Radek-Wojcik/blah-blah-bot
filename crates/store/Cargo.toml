@@ -1,0 +1,16 @@
+[package]
+name = "store"
+description = "Local SQLite state: meetings, tracks and segments"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+rusqlite = { version = "0.42", features = ["bundled"] }
+
+[lints]
+workspace = true

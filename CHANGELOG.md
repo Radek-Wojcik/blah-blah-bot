@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-15
+
+### Added
+
+- Tray application (Tauri 2) with a recorder widget and a main window: Record and Stop, source picker for the microphone and applications, adding and removing sources while recording, and a local meeting list.
+- Recorder crate: session clock, segmented 16 kHz mono PCM tracks, append-only session journal, drift correction, and recovery of a meeting from its journal after a crash.
+- Region screenshot overlay with a global hotkey; screenshots are saved with their offset on the session clock.
+- Local SQLite store with migrations for meetings, tracks, segments and screenshots.
+- Settings for the recordings folder and hotkeys, with validation of hotkeys that are already taken.
+- Responsive interface in a cyberpunk style with reduced-motion support.
+- Demo mode with a fictional cycle, a reproducible screenshot script and a record-flow GIF.
+- Tests: unit and integration tests with generated tones (including a killed process), Playwright flows on a mock backend, and end-to-end tests that drive the real application through its WebView.
+- Soak example that measures CPU, memory and lost buffers with the real audio backend.
+- ADR 0014 on recorder control, IPC conventions and region screenshots.
+- Stage 1 measurements: a 10 hour recording used 0.017% of total CPU and 10.1 MB of memory, with continuous tracks (ADR 0002).
+
+### Known issues
+
+- In the 10 hour recording the microphone track carried 194 data discontinuity flags from the audio engine (about one every 3 minutes) although no audio was found missing; the zero-drop target is not met for the microphone and the cause is not established. The application tracks had none.
+- Windows 11, real Teams and Discord calls, and multi-monitor setups with different display scaling are not tested yet.
+
 ## [0.1.0] - 2026-11-14
 
 ### Added

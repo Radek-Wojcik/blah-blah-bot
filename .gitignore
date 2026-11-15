@@ -25,3 +25,8 @@ Thumbs.db
 .DS_Store
 .idea/
 .vscode/
+
+# Tauri generated
+crates/app/gen/
+test-results/
+playwright-report/

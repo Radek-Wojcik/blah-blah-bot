@@ -1,0 +1,43 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Blah Blah Bot",
+  "version": "0.2.0",
+  "identifier": "com.github.radek-wojcik.blah-blah-bot",
+  "build": {
+    "frontendDist": "../../ui/dist",
+    "devUrl": "http://localhost:1420"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Blah Blah Bot",
+        "url": "index.html?view=main",
+        "width": 1000,
+        "height": 700,
+        "minWidth": 720,
+        "minHeight": 480,
+        "visible": false
+      },
+      {
+        "label": "widget",
+        "title": "Recorder",
+        "url": "index.html?view=widget",
+        "width": 340,
+        "height": 420,
+        "decorations": false,
+        "resizable": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "shadow": true
+      }
+    ],
+    "security": { "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: http://asset.localhost" }
+  },
+  "bundle": {
+    "active": false,
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"]
+  }
+}

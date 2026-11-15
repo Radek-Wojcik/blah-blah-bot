@@ -60,3 +60,23 @@ Notes and limits:
 ## Gate decision (Stage 0)
 
 Accepted as recommended. Windows 11 and the real Teams and Discord checks stay open as Stage 1 acceptance tests; PCM is the format for the first release.
+
+## Measurements (Stage 1, application recorder)
+
+A 10 hour soak with the real WASAPI backend (`crates/recorder/examples/soak.rs`) on Windows 10 build 19045, 32 logical processors, recording the default USB microphone and two test player processes that render tones through a virtual cable while the machine was in normal use. Raw result: `benchmarks/results/stage1-soak-10h.json`.
+
+| Criterion | Target | Measured | Result |
+|---|---|---|---|
+| CPU while recording three tracks | 3% of total CPU or less | 0.017% average (peak of the 30 s averages 0.018%) | Met |
+| Memory | 200 MB or less | 10.1 MB peak working set | Met |
+| Dropped buffers in 10 hours | 0 | Both application tracks: 0. Microphone: 194 engine-flagged data discontinuities (one about every 3 minutes, reported frame count 0) | **Not met on the microphone** |
+| Continuity | no gaps | All three tracks: 601 segments, no missing or short segments, no offset mismatches; stored length within 0.1 s of the session length; no stretch of silence found around a flagged event in the one that was inspected | Met |
+| Track alignment | 50 ms or less | Tracks start 2.6 ms (applications) and 16.2 ms (microphone) after the clock start; a source added mid-recording starts within 50 ms of the moment it was added (generated tones) | Met on tones; not measured against an external reference on real devices |
+| Audio lost when the process is killed | 60 s or less per track | At most one segment (the one being written): generated tones, whole process killed after 3.4 s with 1 s segments; real application killed after 63 s with 60 s segments kept the closed segment | Met |
+
+Notes and limits:
+
+- The microphone flags look periodic (the interval averages 186 s). They are reported by the audio engine for this USB device; the recorded audio is continuous and the stored length is exact, so they did not show up as missing audio. The cause was not established (device driver, endpoint or system load are all possible), and no second microphone was tried. The run is reported as not meeting the zero-drop target for the microphone.
+- The earlier 75 second trial run on the same device showed the first flag after 38 s, which fits the same pattern.
+- A track that is removed and added again becomes a new track (`name-2`) so earlier segments are never overwritten.
+- Windows 11, real Teams and Discord calls, and multi-monitor setups with different display scaling were not tested.
