@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 from functools import cache
@@ -20,8 +21,18 @@ def schemas_dir() -> Path:
 
 
 @cache
+def _load(name: str) -> dict[str, Any]:
+    return json.loads((schemas_dir() / f"{name}.schema.json").read_text(encoding="utf-8"))
+
+
+def load(name: str) -> dict[str, Any]:
+    """A copy of the schema document, for sending to a model as a response format."""
+    return copy.deepcopy(_load(name))
+
+
+@cache
 def _validator(name: str) -> jsonschema.Draft202012Validator:
-    schema = json.loads((schemas_dir() / f"{name}.schema.json").read_text(encoding="utf-8"))
+    schema = _load(name)
     jsonschema.Draft202012Validator.check_schema(schema)
     return jsonschema.Draft202012Validator(schema)
 

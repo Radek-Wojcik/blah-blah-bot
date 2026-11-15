@@ -1,0 +1,169 @@
+"""Prompts of the extract and reduce stages.
+
+The model returns data only (JSON constrained by a schema), never Markdown.
+"""
+
+from __future__ import annotations
+
+from datetime import date, timedelta
+from typing import Any
+
+from .lang import NAMES
+
+CALENDAR_DAYS = 28
+MAX_PREVIOUS_ITEMS = 30
+PREVIOUS_TEXT_CHARS = 120
+SUMMARY_GROUP = 8
+SUMMARY_MAX_DIRECT = 12
+SECTION_BATCH = 120
+ITEM_TEXT_CHARS = 100
+
+EXTRACT_SYSTEM = """\
+You extract structured items from one window of a meeting transcript. Return JSON only.
+
+Item types:
+- task: someone commits to do something. Needs a clear action.
+- decision: the group agrees on something.
+- topic: a subject that is left open and should be discussed or followed up later.
+- note: a fact or piece of information worth keeping.
+- idea: a suggestion that was raised but not decided.
+- budget: an amount of money for something.
+
+Rules:
+- Include an item only if it was actually agreed or committed to in this window. Skip \
+proposals that were rejected or dropped, hypotheticals and small talk. If a task is handed \
+over, the assignee is the person who finally accepts it.
+- `assignee` is the id of a participant from the participant list, or null when the owner is \
+not clear. Never invent an id. Lines are written with participant names; map them to ids.
+- `due` is an ISO date (YYYY-MM-DD) or null. Resolve relative dates ("next Friday", "by the \
+end of the week", "jutro") against the meeting date with the calendar below.
+- `certainty.assignee` and `certainty.due`: "stated" only if it was said literally in the \
+line, "inferred" if you deduced it from context, "unknown" when the value is null.
+- `section` is one of the allowed section ids, or null when there are none or none fits.
+- `relates_to` is the id of an open topic or issue from the lists when the item continues \
+it, otherwise null.
+- `time` is the hh:mm:ss stamp of the line where the item is stated. `quote` is copied \
+verbatim from that line, without changes.
+- Lines marked (screenshot) describe what was shown on screen; use them for context and \
+names, and do not treat them as something a person said.
+- Write `text` and `summary` in {language}. State each item briefly in the form of the \
+speech (verb and object for tasks).
+- `summary` is two to four sentences about this window.
+- If the window contains no items, return an empty list and still write the summary.
+"""
+
+SUMMARY_SYSTEM = """\
+You write the summary of a meeting from the summaries of its parts. Return JSON only. Write \
+{sentences} in {language}, without lists and without information that is not in the parts."""
+
+SECTIONS_SYSTEM = """\
+You organise the items of a meeting report into sections. Return JSON only. Propose 3 to 7 \
+sections that group the items by theme, with short titles in {language}. A section id is \
+lowercase letters, digits, hyphens or underscores and starts with a letter. Assign every item \
+to exactly one section by its item id."""
+
+ASSIGN_SYSTEM = """\
+You assign items of a meeting report to the given sections. Return JSON only. Assign every \
+item to exactly one section by its item id."""
+
+
+def language_name(code: str) -> str:
+    return NAMES.get(code, "English")
+
+
+def calendar_text(meeting_date: str, days: int = CALENDAR_DAYS) -> str:
+    start = date.fromisoformat(meeting_date)
+    parts = []
+    for i in range(1, days + 1):
+        d = start + timedelta(days=i)
+        parts.append(f"{d.strftime('%A')} {d.isoformat()}")
+    return ", ".join(parts)
+
+
+def extract_system(language: str) -> str:
+    return EXTRACT_SYSTEM.format(language=language_name(language))
+
+
+def _clip(text: str, limit: int) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _previous(items: list[dict[str, Any]]) -> list[str]:
+    out = []
+    for it in items[:MAX_PREVIOUS_ITEMS]:
+        extra = [f"assignee: {it['assignee']}"] if it.get("assignee") else []
+        if it.get("due"):
+            extra.append(f"due: {it['due']}")
+        tail = f" ({', '.join(extra)})" if extra else ""
+        out.append(
+            f"- [{it['meeting']}] {it['type']}: {_clip(it['text'], PREVIOUS_TEXT_CHARS)}{tail}"
+        )
+    return out
+
+
+def _block(title: str, lines: list[str], empty: str = "none") -> str:
+    return f"{title}\n" + ("\n".join(lines) if lines else empty)
+
+
+def extract_user(context: dict[str, Any], window_text: str) -> str:
+    """The user part: everything the model needs to know, then the window itself."""
+    d = date.fromisoformat(context["meeting_date"])
+    participants = [f"- {p['id']}: {p['name']}" for p in context["participants"]]
+    glossary = [
+        f"- {g['term']}" + (f": {g['hint']}" if g.get("hint") else "") for g in context["glossary"]
+    ]
+    topics = [
+        f"- {t['id']}: {_clip(t['text'], PREVIOUS_TEXT_CHARS)}" for t in context["open_topics"]
+    ]
+    issues = [
+        f"- {i['id']}: {_clip(i['title'], PREVIOUS_TEXT_CHARS)}" for i in context["open_issues"]
+    ]
+    sections = [f"- {s['id']}: {s['title']} ({s['description']})" for s in context["sections"]]
+    parts = [
+        f"Meeting date: {context['meeting_date']} ({d.strftime('%A')}).",
+        f"Calendar of the next {CALENDAR_DAYS} days: {calendar_text(context['meeting_date'])}.",
+        _block("Participants (id: name):", participants),
+        _block("Glossary (spell these terms as written):", glossary),
+    ]
+    if context["instruction"].strip():
+        parts.append("Instruction from the cycle:\n" + context["instruction"].strip())
+    parts += [
+        _block("Open topics (ids for relates_to):", topics),
+        _block("Open issues (ids for relates_to):", issues),
+        _block("Items of previous meetings (newest first):", _previous(context["previous_items"])),
+        _block("Allowed sections (ids for section):", sections, "none: use null"),
+        "Transcript window:\n" + window_text,
+    ]
+    return "\n\n".join(parts)
+
+
+def summary_system(language: str, final: bool) -> str:
+    sentences = "3 to 6 sentences" if final else "2 to 4 sentences"
+    return SUMMARY_SYSTEM.format(sentences=sentences, language=language_name(language))
+
+
+def summary_user(summaries: list[str]) -> str:
+    return "Summaries of the parts, in time order:\n" + "\n".join(
+        f"{i}. {s}" for i, s in enumerate(summaries, 1)
+    )
+
+
+def sections_system(language: str) -> str:
+    return SECTIONS_SYSTEM.format(language=language_name(language))
+
+
+def item_lines(items: list[dict[str, Any]]) -> str:
+    return "\n".join(
+        f"{it['id']} [{it['type']}] {_clip(it['text'], ITEM_TEXT_CHARS)}" for it in items
+    )
+
+
+def sections_user(items: list[dict[str, Any]], instruction: str) -> str:
+    head = f"Instruction from the cycle:\n{instruction.strip()}\n\n" if instruction.strip() else ""
+    return head + "Items:\n" + item_lines(items)
+
+
+def assign_user(items: list[dict[str, Any]], sections: list[dict[str, Any]]) -> str:
+    listing = "\n".join(f"- {s['id']}: {s['title']} ({s['description']})" for s in sections)
+    return f"Sections:\n{listing}\n\nItems:\n{item_lines(items)}"

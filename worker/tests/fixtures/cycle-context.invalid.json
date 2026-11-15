@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "cycle": "TEAM",
+  "name": "Team meetings",
+  "meeting_date": "16.11.2026",
+  "participants": [
+    {
+      "id": "alex"
+    },
+    {
+      "id": "sam",
+      "name": "Sam"
+    }
+  ],
+  "glossary": [
+    {
+      "term": "Zephyr",
+      "hint": "the code name of the monitor mount"
+    },
+    {
+      "term": "BOM"
+    }
+  ],
+  "instruction": "Prefer short task titles.",
+  "output_language": "de",
+  "mode": "template",
+  "template": "technical",
+  "meeting_type": "technical",
+  "sections": [
+    {
+      "id": "Hardware Parts",
+      "title": "Hardware",
+      "description": "Mounts and parts"
+    }
+  ],
+  "open_topics": [
+    {
+      "id": "t1",
+      "text": "Supplier choice"
+    }
+  ],
+  "open_issues": [
+    {
+      "id": "#12",
+      "title": "Mount prototype",
+      "assignee": "alex"
+    },
+    {
+      "id": "#13",
+      "title": "Order profiles",
+      "assignee": null
+    }
+  ],
+  "previous_items": [
+    {
+      "meeting": "2026-11-09",
+      "type": "rumor",
+      "text": "Order aluminium profiles",
+      "assignee": "sam",
+      "due": "2026-11-13"
+    }
+  ]
+}

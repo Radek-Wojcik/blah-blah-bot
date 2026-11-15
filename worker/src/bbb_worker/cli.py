@@ -1,6 +1,6 @@
 """Command line entry point: `python -m bbb_worker <step> ...`.
 
-asr | diarize | merge | vision   --manifest FILE --meeting-dir DIR
+asr | diarize | merge | vision | extract | reduce   --manifest FILE --meeting-dir DIR
 models --ensure KEY[,KEY...]     (needs network; reads HF_TOKEN from the environment)
 models --status                  (prints which models are cached, as JSON)
 """
@@ -16,7 +16,7 @@ from pathlib import Path
 
 from . import models, protocol
 
-STEPS = ("asr", "diarize", "merge", "vision")
+STEPS = ("asr", "diarize", "merge", "vision", "extract", "reduce")
 
 
 def _run_step(step: str, manifest_path: Path, meeting_dir: Path) -> None:

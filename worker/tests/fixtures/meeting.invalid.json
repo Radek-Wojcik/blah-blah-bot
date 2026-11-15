@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "meeting_id": "20261116-100000",
+  "cycle": "TEAM",
+  "date": "2026-11-16",
+  "language": "de",
+  "mode": "auto",
+  "template": null,
+  "meeting_type": null,
+  "sections": [
+    {
+      "id": "hardware",
+      "title": "Hardware",
+      "description": "Mounts and parts"
+    }
+  ],
+  "summary": "The team discussed the monitor mount.",
+  "items": [
+    {
+      "id": "i001",
+      "type": "task",
+      "text": "Prepare the monitor mount design",
+      "assignee": "alex",
+      "due": "2026-11-20",
+      "certainty": {
+        "assignee": "stated",
+        "due": "inferred"
+      },
+      "section": "hardware",
+      "relates_to": "#12",
+      "source": {
+        "track": "discord",
+        "speaker": "discord:SPEAKER_00",
+        "t_start_ms": 754000,
+        "t_end_ms": 761500,
+        "quote": "Alex, can you have the mount ready by next Friday?",
+        "match": 1.0
+      },
+      "edited": false
+    },
+    {
+      "id": "i002",
+      "type": "idea",
+      "text": "Add a second arm",
+      "assignee": null,
+      "due": null,
+      "certainty": {
+        "assignee": "unknown",
+        "due": "unknown"
+      },
+      "section": null,
+      "relates_to": null,
+      "source": null
+    }
+  ],
+  "warnings": [
+    {
+      "code": "other",
+      "message": "The quote was not found in the transcript",
+      "t_start_ms": 754000,
+      "t_end_ms": 761500
+    },
+    {
+      "code": "summary_failed",
+      "message": "The summary was not written by the model",
+      "t_start_ms": null,
+      "t_end_ms": null
+    }
+  ]
+}
