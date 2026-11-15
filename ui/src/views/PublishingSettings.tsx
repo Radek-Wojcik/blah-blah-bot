@@ -74,7 +74,10 @@ function SecretForm(props: {
           value={value}
           placeholder={set ? "Enter a new value to replace it" : props.placeholder}
           aria-describedby={helpId}
-          onChange={(e) => setValue(e.target.value)}
+          onChange={(e) => {
+            setValue(e.target.value);
+            setMessage(null);
+          }}
         />
         <small id={helpId}>{props.help}</small>
       </label>

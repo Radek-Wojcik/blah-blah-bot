@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { useBackend } from "../backend-context";
 import { errorMessage, useCycleFacts, useOutbox } from "../hooks";
 import { isIpcError } from "../ipc/tauri";
@@ -34,6 +35,7 @@ import {
   planLines,
   publicRepoBlock,
   repoWarning,
+  targetsSent,
   topicDifference,
   topicLine,
   topicsSummary,
@@ -156,8 +158,16 @@ export function PublishPanel(props: {
   const offline = offlineText(outbox);
   const pending = pendingStatusNote(plan);
   const waiting = ops.some((o) => canRetry(o));
+  // Publishing again is idempotent, but there is nothing to do when everything chosen was sent.
+  const sent = targetsSent(ops);
+  const allSent = targets.length > 0 && targets.every((t) => sent.has(t));
   const canPublish =
-    plan !== null && targets.length > 0 && !busy && !hasNewDraft && blockers.length === 0;
+    plan !== null &&
+    targets.length > 0 &&
+    !allSent &&
+    !busy &&
+    !hasNewDraft &&
+    blockers.length === 0;
 
   return (
     <section className="panel quiet publish-panel" aria-label="Publishing">
@@ -209,11 +219,16 @@ export function PublishPanel(props: {
 
         {plan && (
           <>
-            <h4 className="sub-head tight">What will happen</h4>
+            <h4 className="sub-head tight">
+              {allSent ? "What was published" : "What will happen"}
+            </h4>
             {lines.length === 0 ? (
               <p className="empty">Nothing: there is nothing to publish with these rules.</p>
             ) : (
-              <ul className="plan-lines" aria-label="What will happen">
+              <ul
+                className="plan-lines"
+                aria-label={allSent ? "What was published" : "What will happen"}
+              >
                 {lines.map((l, i) => (
                   <li key={i}>{l}</li>
                 ))}
@@ -485,7 +500,8 @@ function PublicRepoDialog(props: {
 }) {
   const [understood, setUnderstood] = useState(false);
   const name = props.repo ?? "this repository";
-  return (
+  // In the body, not in the panel: a panel clips what is inside it to its chamfered outline.
+  return createPortal(
     <Modal title="Publish to a public repository?" onClose={props.onCancel} wide>
       <p className="modal-text modal-strong">{repoWarning(props.visibility, props.repo)}</p>
       <p className="modal-text">
@@ -517,6 +533,7 @@ function PublicRepoDialog(props: {
           Publish to a public repository
         </button>
       </div>
-    </Modal>
+    </Modal>,
+    document.body,
   );
 }

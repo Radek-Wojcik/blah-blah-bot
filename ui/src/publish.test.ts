@@ -37,6 +37,7 @@ import {
   publicRepoBlock,
   repoWarning,
   targetKind,
+  targetsSent,
   taskCounts,
   taskOfTarget,
   tasksAsOf,
@@ -284,6 +285,25 @@ describe("outbox", () => {
     expect(offlineText({ ops: [], offline: ["github", "discord"], nowUnixMs: 0 })).toMatch(
       /GitHub and Discord did not answer/,
     );
+  });
+
+  it("knows which targets were sent completely", () => {
+    const ops = [
+      op(1, { state: "done" }),
+      op(2, { target: "issues", kind: "create_issue", state: "done" }),
+      op(3, { target: "issues", kind: "create_issue", state: "queued" }),
+      op(4, { target: "discord", kind: "post_discord", state: "done" }),
+    ];
+    expect([...targetsSent(ops)]).toEqual(["discord"]);
+    expect([...targetsSent(ops.map((o) => ({ ...o, state: "done" as const })))].sort()).toEqual([
+      "discord",
+      "github",
+    ]);
+    // A cancelled operation does not count against a target.
+    expect([...targetsSent([op(1, { state: "done" }), op(2, { state: "cancelled" })])]).toEqual([
+      "github",
+    ]);
+    expect(targetsSent([]).size).toBe(0);
   });
 
   it("finds the finished commit", () => {

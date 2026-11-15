@@ -461,6 +461,17 @@ export function topicsSummary(result: OpResult | null | undefined): string | nul
   return parts.length === 0 ? null : parts.join(", ");
 }
 
+/** The targets whose operations were all sent: GitHub when its commit is done, Discord when its post is. */
+export function targetsSent(ops: OutboxOp[]): Set<PublishTargetName> {
+  const out = new Set<PublishTargetName>();
+  const live = (o: OutboxOp) => o.state !== "cancelled";
+  const github = ops.filter((o) => live(o) && o.target !== "discord");
+  if (github.length > 0 && github.every((o) => o.state === "done")) out.add("github");
+  const discord = ops.filter((o) => live(o) && o.target === "discord");
+  if (discord.length > 0 && discord.every((o) => o.state === "done")) out.add("discord");
+  return out;
+}
+
 /** The commit operation of a meeting that is done, if any. */
 export function committedOp(ops: OutboxOp[]): OutboxOp | null {
   return ops.find((o) => o.kind === "commit_meeting" && o.state === "done") ?? null;

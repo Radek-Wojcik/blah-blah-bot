@@ -81,6 +81,10 @@ test.describe("publishing on the mock backend", () => {
     expect(posts).toHaveLength(1);
     expect(posts[0].content).toContain("Issues: #13, #14, #15, #16");
 
+    // Everything chosen was sent: there is nothing left to publish.
+    await expect(panel(page).getByRole("button", { name: "Publish", exact: true })).toBeDisabled();
+    await expect(panel(page).getByRole("list", { name: "What was published" })).toBeVisible();
+
     // The draft is read-only now.
     await expect(page.getByText("This draft is locked.")).toBeVisible();
     await expect(page.getByRole("button", { name: /^Delete:/ })).toHaveCount(0);

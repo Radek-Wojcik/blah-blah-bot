@@ -2283,6 +2283,11 @@ textarea {
   gap: var(--gap);
   margin-bottom: var(--gap);
 }
+/* The browser's own "show password" button would echo a secret; there is none for these fields. */
+.secret-form input::-ms-reveal,
+.secret-form input::-ms-clear {
+  display: none;
+}
 .secret-result {
   margin: 0;
   color: var(--green);
