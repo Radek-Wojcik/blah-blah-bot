@@ -24,8 +24,10 @@ use crate::error::{CycleError, Result, ValidationIssue};
 use crate::fsutil::write_atomic;
 use crate::schema::is_identifier;
 
-/// The default template (ADR 0017), written to `templates/default.md` of a new cycle.
-pub const DEFAULT_TEMPLATE_TEXT: &str = "# {title}\n\n{date} · {participants}\n\n## Summary\n{summary}\n\n{sections}\n\n---\n[Full transcript](transcript.md)\n";
+/// The default template (ADR 0017), written to `templates/default.md` of a new cycle. The
+/// summary heading comes from `{summary_section}`, so it is localised and absent when the
+/// summary is empty. Cycles created earlier keep the file they have.
+pub const DEFAULT_TEMPLATE_TEXT: &str = "# {title}\n\n{date} · {participants}\n\n{summary_section}\n\n{sections}\n\n---\n[Full transcript](transcript.md)\n";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -220,6 +222,7 @@ pub const PLACEHOLDERS: &[&str] = &[
     "date",
     "participants",
     "summary",
+    "summary_section",
     "sections",
     "section:<id>",
     "tasks",
@@ -237,6 +240,7 @@ pub(crate) enum Placeholder {
     Date,
     Participants,
     Summary,
+    SummarySection,
     Sections,
     Section(String),
     Tasks,
@@ -260,6 +264,7 @@ fn parse_placeholder(name: &str) -> Option<Placeholder> {
         "date" => Placeholder::Date,
         "participants" => Placeholder::Participants,
         "summary" => Placeholder::Summary,
+        "summary_section" => Placeholder::SummarySection,
         "sections" => Placeholder::Sections,
         "tasks" => Placeholder::Tasks,
         "decisions" => Placeholder::Decisions,
@@ -430,10 +435,25 @@ mod tests {
     fn default_template_matches_the_decision_and_validates() {
         let t = Template::builtin_default();
         assert!(validate_template(&t).is_empty());
-        assert!(t
-            .body
-            .starts_with("# {title}\n\n{date} · {participants}\n\n## Summary\n{summary}"));
+        assert!(t.body.starts_with(
+            "# {title}\n\n{date} · {participants}\n\n{summary_section}\n\n{sections}"
+        ));
         assert!(t.body.ends_with("---\n[Full transcript](transcript.md)\n"));
+    }
+
+    #[test]
+    fn summary_placeholders_validate_and_an_existing_default_file_is_kept() {
+        let t = parse_template("x", "{summary}\n\n{summary_section}\n").unwrap();
+        assert!(validate_template(&t).is_empty());
+        // A cycle created before `{summary_section}` keeps its own default.md.
+        let dir = tempfile::tempdir().unwrap();
+        let old = "# {title}\n\n## Summary\n{summary}\n\n{sections}\n";
+        fs::write(dir.path().join("default.md"), old).unwrap();
+        assert!(!create_default_template(dir.path()).unwrap());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("default.md")).unwrap(),
+            old
+        );
     }
 
     #[test]

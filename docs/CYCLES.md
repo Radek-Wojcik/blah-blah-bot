@@ -133,8 +133,7 @@ A template is Markdown with `{placeholders}` and an optional YAML front matter t
 
 {date} · {participants}
 
-## Summary
-{summary}
+{summary_section}
 
 {sections}
 
@@ -176,7 +175,8 @@ sections:
 | `{title}` | Meeting title. |
 | `{date}` | Meeting date, `YYYY-MM-DD`. |
 | `{participants}` | Names of the cycle's participants, comma separated. |
-| `{summary}` | The meeting summary. |
+| `{summary}` | The meeting summary as bare text. |
+| `{summary_section}` | The summary under a localised heading, `## Summary` or `## Podsumowanie` (by the language of the draft); nothing at all, heading included, when the summary is empty. |
 | `{sections}` | Every non-empty section as a `## Title` heading followed by its list of items. |
 | `{section:<id>}` | The list of items of one section, without a heading. An id the meeting does not have gives an empty result. |
 | `{tasks}`, `{decisions}`, `{topics}`, `{notes}`, `{ideas}`, `{budgets}` | The items of that type as a list, without a heading. |
@@ -184,7 +184,8 @@ sections:
 
 * Writing `{{` or `}}` gives a literal brace.
 * An unknown or malformed placeholder is an error when the template is saved or rendered; it is never dropped silently. When the front matter declares sections, `{section:<id>}` must name one of them.
-* After substitution, headings of level 2 and deeper with nothing under them are removed, and runs of blank lines become one, so empty sections never appear.
+* After substitution, headings of level 2 and deeper with nothing under them are removed, so empty sections never appear. The report then has exactly one blank line between blocks (every heading has one before and after it), no trailing spaces and a single final newline.
+* Cycles created before `{summary_section}` existed keep their own `default.md` (with `## Summary` and `{summary}`); it is not migrated. A report from such a template has an English summary heading in Polish too; replace those two lines with `{summary_section}` to localise it.
 
 ### Item lines
 
@@ -201,6 +202,7 @@ Every item is a bullet. Tasks carry their assignee and due date:
 * `(unverified quote)` is appended when the quote of the item was not found in the transcript. Items added by hand have no marker.
 * An assignee is shown by the participant's name.
 * For Discord and Notion the `[ ]` checkbox is left out.
+* The words `due` and `unverified quote` are the same in every report language, so item lines stay machine-friendly; only the built-in headings are localised.
 
 ### Built-in sections (fixed mode)
 
@@ -208,7 +210,7 @@ Items are grouped by type, in this order, with headings in the report language; 
 
 | Type | English | Polish |
 |---|---|---|
-| Summary (the `{summary}` text) | Summary | Podsumowanie |
+| Summary (`{summary_section}`) | Summary | Podsumowanie |
 | `decision` | Decisions | Decyzje |
 | `task` | Tasks | Zadania |
 | `topic` | Open topics | Otwarte tematy |

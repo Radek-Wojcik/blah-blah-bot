@@ -2,10 +2,16 @@ import { describe, expect, it } from "vitest";
 import type { Backend } from "./backend";
 import { demoCycle, validateCycle } from "./mock-cycles";
 import { addItem, demoDraft, moveItem, setSections, updateItem } from "./mock-draft";
-import { itemLine, renderReport, tokenize, validateTemplateDto } from "./mock-render";
+import {
+  DEFAULT_TEMPLATE_TEXT,
+  itemLine,
+  renderReport,
+  tokenize,
+  validateTemplateDto,
+} from "./mock-render";
 import { createMockBackend } from "./mock";
 import { demoTranscript } from "./mock-demo";
-import type { CycleDto, DraftView, TemplateDto } from "./types";
+import type { CycleDto, DraftItem, DraftView, TemplateDto } from "./types";
 
 /** The code of the error a promise rejects with. */
 async function codeOf(p: Promise<unknown>): Promise<string | undefined> {
@@ -213,7 +219,7 @@ describe("templates", () => {
 
   it("accepts literal braces and every documented placeholder", () => {
     const body =
-      "{title} {date} {participants} {summary} {sections} {tasks} {decisions} {topics} {notes} {ideas} {budgets} {transcript_link} {{literal}}";
+      "{title} {date} {participants} {summary} {summary_section} {sections} {tasks} {decisions} {topics} {notes} {ideas} {budgets} {transcript_link} {{literal}}";
     expect(validateTemplateDto(template(body))).toEqual([]);
     expect(tokenize("a {{ b }} c").tokens).toEqual([{ text: "a { b } c" }]);
   });
@@ -282,7 +288,7 @@ describe("report rendering", () => {
   it("renders the sections of the draft under the default template", async () => {
     const view = await backend().getDraft("m5");
     expect(view.reportMarkdown).toMatch(
-      /^# Meeting NOMAD 2026-11-13\n\n2026-11-13 · Alex Demo, Jan Demo, Kasia Demo, Piotr Demo\n\n## Summary\n/,
+      /^# Meeting NOMAD 2026-11-13\n\n2026-11-13 · Alex Demo, Jan Demo, Kasia Demo, Piotr Demo\n\n## Summary\n\n/,
     );
     expect(view.reportMarkdown).toContain("## Thruster tests\n\n- The last thruster firing");
     expect(view.reportMarkdown).toContain("## Budget and procurement");
@@ -299,6 +305,91 @@ describe("report rendering", () => {
     expect(text.indexOf("## Decyzje")).toBeLessThan(text.indexOf("## Zadania"));
     expect(text).toContain("## Budżety");
     expect(text).not.toContain("## Thruster tests");
+  });
+
+  // The same draft and templates as the Rust tests of `crates/cycle-store/src/render.rs`
+  // (`fixed_draft`), so the expected texts below are the ones the real renderer gives.
+  const parityDraft = (language: "pl" | "en") => {
+    const d = demoDraft("m5");
+    const item = (id: string, type: DraftItem["type"], text: string): DraftItem => ({
+      id,
+      type,
+      text,
+      assignee: null,
+      due: null,
+      certainty: { assignee: "unknown", due: "unknown" },
+      section: null,
+      relatesTo: null,
+      source: null,
+      edited: false,
+    });
+    d.mode = "fixed";
+    d.sections = [];
+    d.language = language;
+    d.date = "2026-11-13";
+    d.summary = "We agreed on the mount.";
+    d.items = [
+      item("n1", "note", "Wheels are 20 cm"),
+      {
+        ...item("t1", "task", "Design the mount"),
+        assignee: "alex",
+        due: "2026-11-20",
+        certainty: { assignee: "stated", due: "stated" },
+      },
+      item("d1", "decision", "Use aluminium"),
+      item("i1", "idea", "Add a camera"),
+      item("b1", "budget", "300 PLN for sensors"),
+      item("o1", "topic", "Battery supplier"),
+    ];
+    return d;
+  };
+  const parityPeople = [
+    { id: "alex", name: "Alex Example" },
+    { id: "sam", name: "Sam Sample" },
+  ];
+  const parityBody = DEFAULT_TEMPLATE_TEXT.replace("# {title}\n\n", "");
+
+  it("gives the text of the Rust renderer for the default template, in English", () => {
+    expect(renderReport(parityDraft("en"), parityPeople, parityBody, "en", "markdown")).toBe(
+      "2026-11-13 · Alex Example, Sam Sample\n\n## Summary\n\nWe agreed on the mount.\n\n## Decisions\n\n- Use aluminium\n\n## Tasks\n\n- [ ] Design the mount (@Alex Example, due 2026-11-20)\n\n## Open topics\n\n- Battery supplier\n\n## Notes\n\n- Wheels are 20 cm\n\n## Ideas\n\n- Add a camera\n\n## Budgets\n\n- 300 PLN for sensors\n\n---\n[Full transcript](transcript.md)\n",
+    );
+  });
+
+  it("gives the text of the Rust renderer for the default template, in Polish", () => {
+    const text = renderReport(parityDraft("pl"), parityPeople, parityBody, "pl", "markdown");
+    expect(text).toBe(
+      "2026-11-13 · Alex Example, Sam Sample\n\n## Podsumowanie\n\nWe agreed on the mount.\n\n## Decyzje\n\n- Use aluminium\n\n## Zadania\n\n- [ ] Design the mount (@Alex Example, due 2026-11-20)\n\n## Otwarte tematy\n\n- Battery supplier\n\n## Notatki\n\n- Wheels are 20 cm\n\n## Pomysły\n\n- Add a camera\n\n## Budżety\n\n- 300 PLN for sensors\n\n---\n[Full transcript](transcript.md)\n",
+    );
+    expect(text).not.toMatch(/## (Summary|Decisions|Tasks|Open topics|Notes|Ideas|Budgets)/);
+  });
+
+  it("leaves no summary heading for an empty summary and keeps {summary} bare", () => {
+    const d = parityDraft("pl");
+    expect(renderReport(d, parityPeople, "{summary_section}", "pl", "markdown")).toBe(
+      "## Podsumowanie\n\nWe agreed on the mount.\n",
+    );
+    d.summary = "  \n ";
+    expect(renderReport(d, parityPeople, "{summary_section}", "pl", "markdown")).toBe("");
+    expect(
+      renderReport(d, parityPeople, "# T\n\n{summary_section}\n\n{tasks}\n", "pl", "markdown"),
+    ).toBe("# T\n\n- [ ] Design the mount (@Alex Example, due 2026-11-20)\n");
+    d.summary = "Ustalono uchwyt.";
+    expect(
+      renderReport(d, parityPeople, "# T\n\n## Streszczenie\n{summary}\n", "pl", "markdown"),
+    ).toBe("# T\n\n## Streszczenie\n\nUstalono uchwyt.\n");
+  });
+
+  it("separates blocks by exactly one blank line and neutralises mass mentions", () => {
+    const d = parityDraft("en");
+    d.summary = "First.  \n\n\n\nSecond.   @everyone";
+    const body = "\n\n# T   \n\n\n\n{summary_section}\n\n\n\n{tasks}\n\n\n---\n[x](y)   \n\n\n";
+    const text = renderReport(d, parityPeople, body, "en", "markdown");
+    expect(text).toBe(
+      "# T\n\n## Summary\n\nFirst.\n\nSecond.   @\u200beveryone\n\n- [ ] Design the mount (@Alex Example, due 2026-11-20)\n\n---\n[x](y)\n",
+    );
+    expect(renderReport(d, parityPeople, "# A\n## B\ntext\n", "en", "markdown")).toBe(
+      "# A\n\n## B\n\ntext\n",
+    );
   });
 
   it("drops headings with nothing under them and refuses an unknown placeholder", () => {

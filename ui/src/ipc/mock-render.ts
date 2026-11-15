@@ -16,7 +16,7 @@ import type {
 
 /** The default template (ADR 0017), the text of `templates/default.md` of a new cycle. */
 export const DEFAULT_TEMPLATE_TEXT =
-  "# {title}\n\n{date} · {participants}\n\n## Summary\n{summary}\n\n{sections}\n\n---\n[Full transcript](transcript.md)\n";
+  "# {title}\n\n{date} · {participants}\n\n{summary_section}\n\n{sections}\n\n---\n[Full transcript](transcript.md)\n";
 
 /** The placeholders a template body may use. */
 export const PLACEHOLDERS = [
@@ -24,6 +24,7 @@ export const PLACEHOLDERS = [
   "date",
   "participants",
   "summary",
+  "summary_section",
   "sections",
   "section:<id>",
   "tasks",
@@ -175,6 +176,11 @@ interface Person {
   name: string;
 }
 
+/** Puts a zero-width space after the `@` of `@everyone` and `@here` (any case). */
+export function neutraliseMentions(text: string): string {
+  return text.replace(/@(?=everyone|here)/gi, "@\u200b");
+}
+
 /** One item as a Markdown bullet line (`docs/CYCLES.md`, "Item lines"). */
 export function itemLine(item: DraftItem, people: Person[], variant: RenderVariant): string {
   const text = item.text.split(/\s+/).filter(Boolean).join(" ");
@@ -210,7 +216,10 @@ function headingLevel(line: string): number | null {
   return hashes >= 1 && hashes <= 6 && line[hashes] === " " ? hashes : null;
 }
 
-/** Removes empty headings (level 2 and deeper), trailing spaces and extra blank lines. */
+/**
+ * Removes empty headings (level 2 and deeper), trailing spaces and extra blank lines, and puts
+ * one blank line around every heading.
+ */
 function tidy(text: string): string {
   const lines = text.split("\n").map((l) => l.trimEnd());
   if (lines[lines.length - 1] === "") lines.pop();
@@ -240,16 +249,24 @@ function tidy(text: string): string {
     keep[i] = hasContent;
   });
   let out = "";
-  let blankRun = 0;
+  // True at the start of the output and right after a blank line.
+  let atBlockStart = true;
+  let prevHeading = false;
   lines.forEach((line, i) => {
     if (!keep[i]) return;
     if (line === "") {
-      blankRun += 1;
-      if (blankRun > 1 || out === "") return;
-    } else {
-      blankRun = 0;
+      if (!atBlockStart) {
+        out += "\n";
+        atBlockStart = true;
+      }
+      return;
     }
+    const heading = levelAt(i) !== null;
+    // A heading is always set apart from the text before and after it.
+    if (!atBlockStart && (heading || prevHeading)) out += "\n";
     out += `${line}\n`;
+    atBlockStart = false;
+    prevHeading = heading;
   });
   while (out.endsWith("\n\n")) out = out.slice(0, -1);
   return out;
@@ -306,6 +323,12 @@ export function renderReport(
         return people.map((p) => p.name).join(", ");
       case "summary":
         return draft.summary.trim();
+      case "summary_section": {
+        const summary = draft.summary.trim();
+        return summary === ""
+          ? ""
+          : `## ${lang === "pl" ? "Podsumowanie" : "Summary"}\n\n${summary}`;
+      }
       case "sections":
         return sectionsBlock();
       case "tasks":
@@ -328,5 +351,7 @@ export function renderReport(
   };
   let out = "";
   for (const t of tokens) out += "text" in t ? t.text : expand(t.placeholder);
-  return tidy(out);
+  // Item text, the summary and section titles come from a model: the report must not be able to
+  // notify everybody where it is posted.
+  return neutraliseMentions(tidy(out));
 }

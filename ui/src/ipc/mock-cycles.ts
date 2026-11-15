@@ -206,7 +206,7 @@ const BUDGET_REVIEW: TemplateDto = {
     { id: "forecast", title: "Forecast and risks", description: "What may change the budget" },
     { id: "decisions", title: "Decisions", description: "Purchases and approvals" },
   ],
-  body: "# {title}\n\n{date} · {participants}\n\n## Summary\n{summary}\n\n{sections}\n\n---\n[Full transcript]({transcript_link})\n",
+  body: "# {title}\n\n{date} · {participants}\n\n{summary_section}\n\n{sections}\n\n---\n[Full transcript]({transcript_link})\n",
 };
 
 const DEFAULT_TEMPLATE: TemplateDto = {

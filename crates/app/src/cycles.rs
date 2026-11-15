@@ -1885,6 +1885,7 @@ pub(crate) mod tests {
         let check = validate_template(&t);
         assert!(check.valid && !check.saved);
         assert!(check.placeholders.iter().any(|p| p == "summary"));
+        assert!(check.placeholders.iter().any(|p| p == "summary_section"));
         let saved = save_template(lab.repos(), "NOMAD", &t).unwrap();
         assert!(saved.valid && saved.saved);
         assert_eq!(get_template(lab.repos(), "NOMAD", "weekly").unwrap(), t);

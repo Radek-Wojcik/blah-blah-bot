@@ -60,8 +60,7 @@ Built-in sections, in this order, empty ones omitted from the output: Summary, D
 
 {date} · {participants}
 
-## Summary
-{summary}
+{summary_section}
 
 {sections}
 
@@ -69,7 +68,7 @@ Built-in sections, in this order, empty ones omitted from the output: Summary, D
 [Full transcript](transcript.md)
 ```
 
-The same text is a file in the repository (`templates/default.md`), so wording can change without code. The choice is recorded here once confirmed.
+`{summary_section}` renders the summary under a localised heading (`## Summary` or `## Podsumowanie`) and renders to nothing when the summary is empty, so a Polish report has no English heading and an empty summary leaves no empty heading; `{summary}` stays available as the bare text for custom templates. Item lines keep `due` in every language. Existing cycles keep the `default.md` they have; files are not migrated. The same text is a file in the repository (`templates/default.md`), so wording can change without code. The choice is recorded here once confirmed.
 
 ## Proposed: default model after the measurements (awaiting confirmation)
 
