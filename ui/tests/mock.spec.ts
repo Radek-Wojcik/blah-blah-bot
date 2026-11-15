@@ -505,8 +505,8 @@ test.describe("voice profiles on the mock backend", () => {
   test("voice settings are saved and invalid thresholds are refused", async ({ page }) => {
     await page.goto(SETTINGS);
     const section = page.getByRole("region", { name: "Processing" });
-    await expect(section.getByLabel(/name automatically from score/)).toHaveValue("0.7");
-    await expect(section.getByLabel(/suggest a name from score/)).toHaveValue("0.5");
+    await expect(section.getByLabel(/name automatically from score/)).toHaveValue("0.75");
+    await expect(section.getByLabel(/suggest a name from score/)).toHaveValue("0.6");
     await expect(section.getByLabel(/margin over the second best match/)).toHaveValue("0.1");
     await expect(section.getByLabel(/Keep sample clips for/)).toHaveValue("30");
 

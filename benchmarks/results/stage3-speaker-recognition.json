@@ -1,0 +1,448 @@
+{
+  "enrolled_speech_s": 3302.182,
+  "enrolled_suggested_correct_s": 0.0,
+  "enrolled_unknown_s": 0.0,
+  "enrolled_wrong_auto_s": 0.0,
+  "false_accept_rate": 0.0,
+  "meetings": [
+    "pl-04a",
+    "pl-04b",
+    "pl-03",
+    "pl-08",
+    "en-03",
+    "mixed-04",
+    "pl-16"
+  ],
+  "new_voices": 16,
+  "new_voices_named_automatically": 0,
+  "new_voices_suggested": 1,
+  "prototype": "stage3-speaker-recognition",
+  "speaker_accuracy_auto": 1.0,
+  "thresholds": {
+    "accept": 0.75,
+    "margin": 0.10000000149011612,
+    "suggest": 0.6000000238418579
+  },
+  "voices": [
+    {
+      "decision": "unknown",
+      "enrolled": false,
+      "meeting": "pl-04a",
+      "outcome": "new voice stays unknown",
+      "predicted": null,
+      "score": null,
+      "speech_s": 181.6,
+      "voice": "f09"
+    },
+    {
+      "decision": "unknown",
+      "enrolled": false,
+      "meeting": "pl-04a",
+      "outcome": "new voice stays unknown",
+      "predicted": null,
+      "score": null,
+      "speech_s": 173.2,
+      "voice": "m03"
+    },
+    {
+      "decision": "unknown",
+      "enrolled": false,
+      "meeting": "pl-04a",
+      "outcome": "new voice stays unknown",
+      "predicted": null,
+      "score": null,
+      "speech_s": 171.2,
+      "voice": "m05"
+    },
+    {
+      "decision": "unknown",
+      "enrolled": false,
+      "meeting": "pl-04a",
+      "outcome": "new voice stays unknown",
+      "predicted": null,
+      "score": null,
+      "speech_s": 132.8,
+      "voice": "f05"
+    },
+    {
+      "decision": "auto",
+      "enrolled": true,
+      "meeting": "pl-04b",
+      "outcome": "auto, correct",
+      "predicted": "m03",
+      "score": 0.991,
+      "speech_s": 169.4,
+      "voice": "m03"
+    },
+    {
+      "decision": "auto",
+      "enrolled": true,
+      "meeting": "pl-04b",
+      "outcome": "auto, correct",
+      "predicted": "f05",
+      "score": 0.986,
+      "speech_s": 157.8,
+      "voice": "f05"
+    },
+    {
+      "decision": "unknown",
+      "enrolled": false,
+      "meeting": "pl-04b",
+      "outcome": "new voice stays unknown",
+      "predicted": null,
+      "score": null,
+      "speech_s": 153.4,
+      "voice": "f02"
+    },
+    {
+      "decision": "auto",
+      "enrolled": true,
+      "meeting": "pl-04b",
+      "outcome": "auto, correct",
+      "predicted": "m05",
+      "score": 0.992,
+      "speech_s": 141.6,
+      "voice": "m05"
+    },
+    {
+      "decision": "auto",
+      "enrolled": true,
+      "meeting": "pl-03",
+      "outcome": "auto, correct",
+      "predicted": "f02",
+      "score": 0.992,
+      "speech_s": 338.3,
+      "voice": "f02"
+    },
+    {
+      "decision": "unknown",
+      "enrolled": false,
+      "meeting": "pl-03",
+      "outcome": "new voice stays unknown",
+      "predicted": null,
+      "score": null,
+      "speech_s": 326.2,
+      "voice": "m09"
+    },
+    {
+      "decision": "suggested",
+      "enrolled": false,
+      "meeting": "pl-03",
+      "outcome": "new voice suggested",
+      "predicted": "f09",
+      "score": 0.621,
+      "speech_s": 309.1,
+      "voice": "f08"
+    },
+    {
+      "decision": "auto",
+      "enrolled": true,
+      "meeting": "pl-08",
+      "outcome": "auto, correct",
+      "predicted": "m03",
+      "score": 0.987,
+      "speech_s": 156.4,
+      "voice": "m03"
+    },
+    {
+      "decision": "auto",
+      "enrolled": true,
+      "meeting": "pl-08",
+      "outcome": "auto, correct",
+      "predicted": "f08",
+      "score": 0.983,
+      "speech_s": 134.9,
+      "voice": "f08"
+    },
+    {
+      "decision": "unknown",
+      "enrolled": false,
+      "meeting": "pl-08",
+      "outcome": "new voice stays unknown",
+      "predicted": null,
+      "score": null,
+      "speech_s": 125.4,
+      "voice": "m08"
+    },
+    {
+      "decision": "auto",
+      "enrolled": true,
+      "meeting": "pl-08",
+      "outcome": "auto, correct",
+      "predicted": "f02",
+      "score": 0.997,
+      "speech_s": 124.5,
+      "voice": "f02"
+    },
+    {
+      "decision": "auto",
+      "enrolled": true,
+      "meeting": "pl-08",
+      "outcome": "auto, correct",
+      "predicted": "f05",
+      "score": 0.991,
+      "speech_s": 116.2,
+      "voice": "f05"
+    },
+    {
+      "decision": "unknown",
+      "enrolled": false,
+      "meeting": "pl-08",
+      "outcome": "new voice stays unknown",
+      "predicted": null,
+      "score": null,
+      "speech_s": 103.5,
+      "voice": "m10"
+    },
+    {
+      "decision": "auto",
+      "enrolled": true,
+      "meeting": "pl-08",
+      "outcome": "auto, correct",
+      "predicted": "m09",
+      "score": 0.99,
+      "speech_s": 101.0,
+      "voice": "m09"
+    },
+    {
+      "decision": "unknown",
+      "enrolled": false,
+      "meeting": "pl-08",
+      "outcome": "new voice stays unknown",
+      "predicted": null,
+      "score": null,
+      "speech_s": 99.7,
+      "voice": "f03"
+    },
+    {
+      "decision": "auto",
+      "enrolled": true,
+      "meeting": "en-03",
+      "outcome": "auto, correct",
+      "predicted": "f02",
+      "score": 0.838,
+      "speech_s": 247.1,
+      "voice": "f02"
+    },
+    {
+      "decision": "auto",
+      "enrolled": true,
+      "meeting": "en-03",
+      "outcome": "auto, correct",
+      "predicted": "m09",
+      "score": 0.776,
+      "speech_s": 240.5,
+      "voice": "m09"
+    },
+    {
+      "decision": "unknown",
+      "enrolled": false,
+      "meeting": "en-03",
+      "outcome": "new voice stays unknown",
+      "predicted": null,
+      "score": null,
+      "speech_s": 157.7,
+      "voice": "m02"
+    },
+    {
+      "decision": "auto",
+      "enrolled": true,
+      "meeting": "mixed-04",
+      "outcome": "auto, correct",
+      "predicted": "m03",
+      "score": 0.984,
+      "speech_s": 260.4,
+      "voice": "m03"
+    },
+    {
+      "decision": "unknown",
+      "enrolled": false,
+      "meeting": "mixed-04",
+      "outcome": "new voice stays unknown",
+      "predicted": null,
+      "score": null,
+      "speech_s": 250.1,
+      "voice": "f04"
+    },
+    {
+      "decision": "auto",
+      "enrolled": true,
+      "meeting": "mixed-04",
+      "outcome": "auto, correct",
+      "predicted": "m10",
+      "score": 0.987,
+      "speech_s": 245.0,
+      "voice": "m10"
+    },
+    {
+      "decision": "auto",
+      "enrolled": true,
+      "meeting": "mixed-04",
+      "outcome": "auto, correct",
+      "predicted": "m02",
+      "score": 0.791,
+      "speech_s": 163.5,
+      "voice": "m02"
+    },
+    {
+      "decision": "auto",
+      "enrolled": true,
+      "meeting": "pl-16",
+      "outcome": "auto, correct",
+      "predicted": "f05",
+      "score": 0.989,
+      "speech_s": 76.8,
+      "voice": "f05"
+    },
+    {
+      "decision": "auto",
+      "enrolled": true,
+      "meeting": "pl-16",
+      "outcome": "auto, correct",
+      "predicted": "m03",
+      "score": 0.991,
+      "speech_s": 75.5,
+      "voice": "m03"
+    },
+    {
+      "decision": "unknown",
+      "enrolled": false,
+      "meeting": "pl-16",
+      "outcome": "new voice stays unknown",
+      "predicted": null,
+      "score": null,
+      "speech_s": 67.5,
+      "voice": "f01"
+    },
+    {
+      "decision": "auto",
+      "enrolled": true,
+      "meeting": "pl-16",
+      "outcome": "auto, correct",
+      "predicted": "f04",
+      "score": 0.986,
+      "speech_s": 64.3,
+      "voice": "f04"
+    },
+    {
+      "decision": "auto",
+      "enrolled": true,
+      "meeting": "pl-16",
+      "outcome": "auto, correct",
+      "predicted": "f08",
+      "score": 0.987,
+      "speech_s": 64.1,
+      "voice": "f08"
+    },
+    {
+      "decision": "auto",
+      "enrolled": true,
+      "meeting": "pl-16",
+      "outcome": "auto, correct",
+      "predicted": "f09",
+      "score": 0.976,
+      "speech_s": 62.0,
+      "voice": "f09"
+    },
+    {
+      "decision": "unknown",
+      "enrolled": false,
+      "meeting": "pl-16",
+      "outcome": "new voice stays unknown",
+      "predicted": null,
+      "score": null,
+      "speech_s": 61.9,
+      "voice": "m01"
+    },
+    {
+      "decision": "unknown",
+      "enrolled": false,
+      "meeting": "pl-16",
+      "outcome": "new voice stays unknown",
+      "predicted": null,
+      "score": null,
+      "speech_s": 59.7,
+      "voice": "f07"
+    },
+    {
+      "decision": "auto",
+      "enrolled": true,
+      "meeting": "pl-16",
+      "outcome": "auto, correct",
+      "predicted": "f02",
+      "score": 0.973,
+      "speech_s": 57.1,
+      "voice": "f02"
+    },
+    {
+      "decision": "auto",
+      "enrolled": true,
+      "meeting": "pl-16",
+      "outcome": "auto, correct",
+      "predicted": "m05",
+      "score": 0.989,
+      "speech_s": 55.8,
+      "voice": "m05"
+    },
+    {
+      "decision": "unknown",
+      "enrolled": false,
+      "meeting": "pl-16",
+      "outcome": "new voice stays unknown",
+      "predicted": null,
+      "score": null,
+      "speech_s": 55.2,
+      "voice": "m07"
+    },
+    {
+      "decision": "auto",
+      "enrolled": true,
+      "meeting": "pl-16",
+      "outcome": "auto, correct",
+      "predicted": "f03",
+      "score": 0.985,
+      "speech_s": 54.6,
+      "voice": "f03"
+    },
+    {
+      "decision": "auto",
+      "enrolled": true,
+      "meeting": "pl-16",
+      "outcome": "auto, correct",
+      "predicted": "m09",
+      "score": 0.959,
+      "speech_s": 54.2,
+      "voice": "m09"
+    },
+    {
+      "decision": "auto",
+      "enrolled": true,
+      "meeting": "pl-16",
+      "outcome": "auto, correct",
+      "predicted": "m08",
+      "score": 0.983,
+      "speech_s": 49.8,
+      "voice": "m08"
+    },
+    {
+      "decision": "auto",
+      "enrolled": true,
+      "meeting": "pl-16",
+      "outcome": "auto, correct",
+      "predicted": "m10",
+      "score": 0.984,
+      "speech_s": 49.4,
+      "voice": "m10"
+    },
+    {
+      "decision": "auto",
+      "enrolled": true,
+      "meeting": "pl-16",
+      "outcome": "auto, correct",
+      "predicted": "m02",
+      "score": 0.929,
+      "speech_s": 42.1,
+      "voice": "m02"
+    }
+  ]
+}

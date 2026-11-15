@@ -49,8 +49,8 @@ pub struct Thresholds {
 impl Default for Thresholds {
     fn default() -> Self {
         Self {
-            accept: 0.70,
-            suggest: 0.50,
+            accept: 0.75,
+            suggest: 0.60,
             margin: 0.10,
         }
     }
@@ -220,11 +220,11 @@ mod tests {
     fn weak_match_is_a_suggestion_and_a_distant_voice_stays_unknown() {
         let t = Thresholds::default();
         let profiles = [p("a", &[1.0, 0.0])];
-        // cosine of 60 degrees = 0.5 -> suggestion
-        let weak = classify(&[0.5, 0.866], &profiles, &t);
+        // cosine 0.65 -> suggestion
+        let weak = classify(&[0.65, 0.76], &profiles, &t);
         assert!(matches!(weak, Decision::Suggest { .. }), "{weak:?}");
-        // 80 degrees = 0.17 -> unknown
-        let far = classify(&[0.17, 0.985], &profiles, &t);
+        // cosine 0.5 is below the suggestion limit -> unknown
+        let far = classify(&[0.5, 0.866], &profiles, &t);
         assert_eq!(far, Decision::Unknown);
     }
 

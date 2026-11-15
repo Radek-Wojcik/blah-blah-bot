@@ -169,7 +169,11 @@ fn read_rttm(path: &Path) -> Vec<(f64, f64, String)> {
             let p: Vec<&str> = l.split_whitespace().collect();
             (p.len() >= 8 && p[0] == "SPEAKER").then(|| {
                 let start: f64 = p[3].parse().unwrap();
-                (start, start + p[4].parse::<f64>().unwrap(), p[7].to_string())
+                (
+                    start,
+                    start + p[4].parse::<f64>().unwrap(),
+                    p[7].to_string(),
+                )
             })
         })
         .collect()
@@ -251,7 +255,9 @@ fn a_voice_named_in_one_meeting_is_recognized_in_the_next_and_a_new_voice_stays_
         let store = lab.store.lock().unwrap();
         let voices_a = store.list_meeting_voices("a").unwrap();
         assert_eq!(voices_a.len(), 4);
-        assert!(voices_a.iter().all(|v| v.decision == VoiceDecision::Unknown));
+        assert!(voices_a
+            .iter()
+            .all(|v| v.decision == VoiceDecision::Unknown));
         let clips = store.list_clips("a").unwrap();
         for v in &voices_a {
             assert!(
@@ -277,17 +283,25 @@ fn a_voice_named_in_one_meeting_is_recognized_in_the_next_and_a_new_voice_stays_
     let truth_b = truth_of_voices(&lab, "b", &b);
     let store = lab.store.lock().unwrap();
     let voices_b = store.list_meeting_voices("b").unwrap();
-    let enrolled: Vec<String> = truth_a
-        .values()
-        .map(|s| synthesized_voice(&a, s))
-        .collect();
+    let enrolled: Vec<String> = truth_a.values().map(|s| synthesized_voice(&a, s)).collect();
     for v in &voices_b {
         let person = synthesized_voice(&b, &truth_b[&v.voice_id]);
         if enrolled.contains(&person) {
-            assert_eq!(v.decision, VoiceDecision::Auto, "{person} not recognized: {v:?}");
-            assert_eq!(v.assigned_participant.as_deref(), Some(format!("p-{person}").as_str()));
+            assert_eq!(
+                v.decision,
+                VoiceDecision::Auto,
+                "{person} not recognized: {v:?}"
+            );
+            assert_eq!(
+                v.assigned_participant.as_deref(),
+                Some(format!("p-{person}").as_str())
+            );
         } else {
-            assert_ne!(v.decision, VoiceDecision::Auto, "unknown {person} was named: {v:?}");
+            assert_ne!(
+                v.decision,
+                VoiceDecision::Auto,
+                "unknown {person} was named: {v:?}"
+            );
             assert_eq!(v.assigned_participant, None);
         }
     }
@@ -299,7 +313,9 @@ fn a_voice_named_in_one_meeting_is_recognized_in_the_next_and_a_new_voice_stays_
 #[ignore = "needs real models and a GPU; takes several minutes"]
 fn recognition_accuracy_and_false_accept_rate_over_a_series_of_meetings() {
     let audio = audio_dir();
-    let order = ["pl-04a", "pl-04b", "pl-03", "pl-08", "en-03", "mixed-04", "pl-16"];
+    let order = [
+        "pl-04a", "pl-04b", "pl-03", "pl-08", "en-03", "mixed-04", "pl-16",
+    ];
     let lab = lab("series");
     let mut known: Vec<String> = Vec::new();
     // Speech seconds by outcome.
@@ -314,7 +330,11 @@ fn recognition_accuracy_and_false_accept_rate_over_a_series_of_meetings() {
             continue;
         }
         add_meeting(&lab, name, &source, speaker_count(&source));
-        assert_eq!(lab.sup.drive(name).unwrap(), StepOutcome::Finished, "{name}");
+        assert_eq!(
+            lab.sup.drive(name).unwrap(),
+            StepOutcome::Finished,
+            "{name}"
+        );
         let truth = truth_of_voices(&lab, name, &source);
         let voices_now = lab.store.lock().unwrap().list_meeting_voices(name).unwrap();
         let mut learned: BTreeMap<String, String> = BTreeMap::new();
@@ -412,6 +432,12 @@ fn recognition_accuracy_and_false_accept_rate_over_a_series_of_meetings() {
         });
         std::fs::write(out, serde_json::to_string_pretty(&doc).unwrap()).unwrap();
     }
-    assert!(accuracy >= 0.90, "speaker accuracy {accuracy:.3} is below the 90% target");
-    assert!(far <= 0.02, "false accept rate {far:.3} is above the 2% target");
+    assert!(
+        accuracy >= 0.90,
+        "speaker accuracy {accuracy:.3} is below the 90% target"
+    );
+    assert!(
+        far <= 0.02,
+        "false accept rate {far:.3} is above the 2% target"
+    );
 }
