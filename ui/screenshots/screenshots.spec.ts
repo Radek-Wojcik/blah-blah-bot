@@ -65,6 +65,28 @@ test.describe("static screenshots", () => {
     await page.screenshot({ path: path.join(OUT, "transcript.png") });
   });
 
+  test("speakers: labeling screen", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 1000 });
+    await page.goto("/?view=main&backend=mock&rate=0&page=speakers&meeting=m5");
+    await expect(page.getByRole("article")).toHaveCount(4);
+    await expect(page.getByText("Recognized automatically · 83%")).toBeVisible();
+    await expect(page.getByText("Suggested: Kasia Demo? 61%")).toBeVisible();
+    await settle(page);
+    await page.screenshot({ path: path.join(OUT, "speakers-label.png") });
+  });
+
+  test("speakers: participants and voice profiles", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/?view=main&backend=mock&rate=0&page=settings");
+    const people = page.getByRole("list", { name: "Participants" });
+    await expect(people.getByRole("listitem")).toHaveCount(3);
+    await page
+      .getByRole("heading", { name: "Voice profiles" })
+      .evaluate((el) => el.scrollIntoView({ block: "start" }));
+    await settle(page);
+    await page.screenshot({ path: path.join(OUT, "speakers-profiles.png") });
+  });
+
   test("screenshot description in the transcript", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto("/?view=main&backend=mock&rate=0&page=transcript&meeting=m5");

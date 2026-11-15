@@ -90,7 +90,7 @@ test.describe("screenshot overlay on the mock backend", () => {
   });
 });
 
-// A short stage time keeps the simulated pipeline fast: five stages take about two seconds.
+// A short stage time keeps the simulated pipeline fast: seven stages take about three seconds.
 const FAST = "/?view=main&backend=mock&jobms=400";
 
 test.describe("processing pipeline on the mock backend", () => {
@@ -105,12 +105,12 @@ test.describe("processing pipeline on the mock backend", () => {
     const job = page.getByRole("article", { name: "Kickoff" });
     await expect(job).toBeVisible();
     const stages = job.getByRole("list", { name: "Stages of Kickoff" });
-    await expect(stages.getByRole("listitem")).toHaveCount(5);
+    await expect(stages.getByRole("listitem")).toHaveCount(7);
     await expect(stages.getByRole("listitem").filter({ hasText: "Running" })).toHaveCount(1);
     await expect(job.getByRole("progressbar")).toBeVisible();
 
     await expect(job.getByText("Processed", { exact: true })).toBeVisible({ timeout: 20_000 });
-    await expect(stages.getByRole("listitem").filter({ hasText: "Done" })).toHaveCount(5);
+    await expect(stages.getByRole("listitem").filter({ hasText: "Done" })).toHaveCount(7);
 
     // Back in the list the meeting offers its transcript.
     await page.getByRole("button", { name: "Meetings", exact: true }).click();
@@ -273,5 +273,251 @@ test.describe("processing settings on the mock backend", () => {
       page.getByRole("progressbar", { name: /Download of Whisper large v3/ }),
     ).toBeVisible();
     await expect(models.getByText("Cached")).toHaveCount(2, { timeout: 10_000 });
+  });
+});
+
+test.describe("speakers on the mock backend", () => {
+  const SPEAKERS = "/?view=main&backend=mock&page=speakers&meeting=m5";
+  const voice = (page: import("@playwright/test").Page, label: string) =>
+    page.getByRole("article", { name: label });
+
+  test("the labeling screen is reachable from the list and the transcript", async ({ page }) => {
+    await page.goto("/?view=main&backend=mock");
+    const card = page.getByRole("article").filter({ hasText: "ORBIT weekly sync" });
+    await card.getByRole("button", { name: "Name speakers" }).click();
+    await expect(page.getByRole("heading", { name: "Speakers" })).toBeVisible();
+    await expect(page.getByText(/never leave this computer/)).toBeVisible();
+
+    await page.getByRole("button", { name: "Transcript", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Transcript" })).toBeVisible();
+    await page.getByRole("button", { name: "Name speakers" }).click();
+    await expect(page.getByRole("heading", { name: "Speakers" })).toBeVisible();
+    await page.getByRole("button", { name: "Back to meetings" }).click();
+    await expect(page.getByRole("heading", { name: "Meetings" })).toBeVisible();
+
+    // A meeting without a finished job offers no labeling.
+    const kickoff = page.getByRole("article").filter({ hasText: "Kickoff" });
+    await expect(kickoff.getByRole("button", { name: "Name speakers" })).toHaveCount(0);
+  });
+
+  test("shows the recognized, suggested and unknown voices with their scores", async ({ page }) => {
+    await page.goto(SPEAKERS);
+    await expect(page.getByRole("article")).toHaveCount(4);
+    await expect(page.getByRole("status")).toHaveText("0 of 4 voices named");
+
+    const auto = voice(page, "SPEAKER_00");
+    await expect(auto.getByText("Recognized automatically · 83%")).toBeVisible();
+    await expect(auto.locator(".voice-name")).toHaveText("Alex Demo");
+    const autoClips = auto.getByRole("list", { name: /Sample clips/ });
+    await expect(autoClips.getByRole("listitem")).toHaveCount(2);
+
+    const suggested = voice(page, "SPEAKER_01");
+    await expect(suggested.getByText("Suggested: Kasia Demo? 61%")).toBeVisible();
+    await expect(suggested.getByRole("button", { name: /^Accept/ })).toBeVisible();
+    await expect(suggested.getByRole("button", { name: /^Reject/ })).toBeVisible();
+
+    await expect(voice(page, "SPEAKER_02").getByText("Unknown", { exact: true })).toBeVisible();
+    const three = voice(page, "SPEAKER_02").getByRole("list", { name: /Sample clips/ });
+    await expect(three.getByRole("listitem")).toHaveCount(3);
+    const two = voice(page, "SPEAKER_03").getByRole("list", { name: /Sample clips/ });
+    await expect(two.getByRole("listitem")).toHaveCount(2);
+    await expect(three.getByText("Thursday works for the dry run as well.")).toBeVisible();
+  });
+
+  test("a clip plays and stops, and only one clip plays at a time", async ({ page }) => {
+    await page.goto(SPEAKERS);
+    await page.getByRole("button", { name: "Play clip 1 of SPEAKER_02" }).click();
+    await expect(page.getByRole("button", { name: "Stop clip 1 of SPEAKER_02" })).toBeVisible();
+
+    // Starting another clip stops the first one.
+    await page.getByRole("button", { name: "Play clip 2 of SPEAKER_02" }).click();
+    await expect(page.getByRole("button", { name: "Stop clip 2 of SPEAKER_02" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Stop clip/ })).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Play clip 1 of SPEAKER_02" })).toBeVisible();
+
+    // Stopping returns the button to Play.
+    await page.getByRole("button", { name: "Stop clip 2 of SPEAKER_02" }).click();
+    await expect(page.getByRole("button", { name: /^Stop clip/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Play clip 2 of SPEAKER_02" })).toBeVisible();
+  });
+
+  test("an unknown voice is named after a new participant", async ({ page }) => {
+    await page.goto(SPEAKERS);
+    const card = voice(page, "SPEAKER_02");
+    await card.getByLabel("Name for SPEAKER_02").selectOption({ label: "New participant…" });
+    const create = card.getByRole("button", { name: "Create and name" });
+    await expect(create).toBeDisabled();
+    await card.getByLabel(/Name of the new participant/).fill("Mira Demo");
+    await create.click();
+
+    await expect(card.getByText("Named by you")).toBeVisible();
+    await expect(card.getByText("Mira Demo", { exact: true }).first()).toBeVisible();
+    await expect(page.getByRole("status")).toHaveText("1 of 4 voices named");
+    // The new participant is offered for the other voices, too.
+    const other = voice(page, "SPEAKER_03").getByLabel("Name for SPEAKER_03");
+    await expect(other.locator("option", { hasText: "Mira Demo" })).toHaveCount(1);
+  });
+
+  test("a voice can be named after an existing participant or skipped", async ({ page }) => {
+    await page.goto(SPEAKERS);
+    const jan = voice(page, "SPEAKER_02").getByLabel("Name for SPEAKER_02");
+    await jan.selectOption({ label: "Jan Demo" });
+    await expect(voice(page, "SPEAKER_02").getByText("Named by you")).toBeVisible();
+    const skip = voice(page, "SPEAKER_03").getByLabel("Name for SPEAKER_03");
+    await skip.selectOption({ label: "Not a person / skip" });
+    await expect(voice(page, "SPEAKER_03").getByText("Not a person (skipped)")).toBeVisible();
+    await expect(page.getByRole("status")).toHaveText("2 of 4 voices named");
+  });
+
+  test("a suggestion is accepted, another one is rejected", async ({ page }) => {
+    await page.goto(SPEAKERS);
+    const suggested = voice(page, "SPEAKER_01");
+    await suggested.getByRole("button", { name: /^Accept/ }).click();
+    await expect(suggested.getByText("Named by you")).toBeVisible();
+    await expect(suggested.getByText("Kasia Demo", { exact: true }).first()).toBeVisible();
+    await expect(suggested.getByRole("button", { name: /^Accept/ })).toHaveCount(0);
+    await expect(page.getByRole("status")).toHaveText("1 of 4 voices named");
+
+    // Rejecting leaves the voice unnamed and open for another name.
+    await page.goto(SPEAKERS);
+    const again = voice(page, "SPEAKER_01");
+    await again.getByRole("button", { name: /^Reject/ }).click();
+    await expect(again.getByText("Unknown", { exact: true })).toBeVisible();
+    await expect(again.getByText(/Suggested/)).toHaveCount(0);
+    await expect(page.getByRole("status")).toHaveText("0 of 4 voices named");
+  });
+
+  test("two voices are merged and the merge is undone", async ({ page }) => {
+    await page.goto(SPEAKERS);
+    const card = voice(page, "SPEAKER_03");
+    await card.getByLabel("Same person as, for SPEAKER_03").selectOption({ label: "SPEAKER_02" });
+    await expect(page.getByRole("article")).toHaveCount(3);
+    const nested = voice(page, "SPEAKER_02").getByRole("list", {
+      name: "Voices merged into SPEAKER_02",
+    });
+    await expect(nested.getByText("SPEAKER_03")).toBeVisible();
+    // The merged voice is not counted on its own.
+    await expect(page.getByRole("status")).toHaveText("0 of 3 voices named");
+
+    await nested.getByRole("button", { name: "Undo the merge of SPEAKER_03" }).click();
+    await expect(page.getByRole("article")).toHaveCount(4);
+    await expect(page.getByRole("list", { name: /Voices merged into/ })).toHaveCount(0);
+  });
+
+  test("all automatic matches are confirmed at once", async ({ page }) => {
+    await page.goto(SPEAKERS);
+    const confirm = page.getByRole("button", { name: "Confirm all automatic matches" });
+    await expect(confirm).toBeVisible();
+    await confirm.click();
+    await expect(confirm).toHaveCount(0);
+    await expect(voice(page, "SPEAKER_00").getByText("Named by you")).toBeVisible();
+    await expect(page.getByRole("status")).toHaveText("1 of 4 voices named");
+    // The suggestion is not confirmed by this.
+    await expect(voice(page, "SPEAKER_01").getByText(/^Suggested:/)).toBeVisible();
+  });
+
+  test("when every voice is decided the clips are gone and the transcript is offered", async ({
+    page,
+  }) => {
+    await page.goto(SPEAKERS);
+    await page.getByRole("button", { name: "Confirm all automatic matches" }).click();
+    await voice(page, "SPEAKER_01")
+      .getByRole("button", { name: /^Accept/ })
+      .click();
+    await voice(page, "SPEAKER_02")
+      .getByLabel("Name for SPEAKER_02")
+      .selectOption({ label: "Jan Demo" });
+    await voice(page, "SPEAKER_03")
+      .getByLabel("Name for SPEAKER_03")
+      .selectOption({ label: "Not a person / skip" });
+    await expect(page.getByRole("status")).toHaveText("4 of 4 voices named");
+    await expect(page.getByText(/All voices are decided/)).toBeVisible();
+    await expect(page.getByText(/No sample clips are available for this voice/)).toHaveCount(4);
+    await voice(page, "SPEAKER_00").getByRole("button", { name: "Open the transcript" }).click();
+    await expect(page.getByRole("heading", { name: "Transcript" })).toBeVisible();
+  });
+});
+
+test.describe("voice profiles on the mock backend", () => {
+  const SETTINGS = "/?view=main&backend=mock&page=settings";
+
+  test("a participant is renamed", async ({ page }) => {
+    await page.goto(SETTINGS);
+    const people = page.getByRole("list", { name: "Participants" });
+    await expect(people.getByRole("listitem")).toHaveCount(3);
+    await expect(people.getByText("4 samples · 18:20 of speech")).toBeVisible();
+    await page.getByRole("button", { name: "Rename Jan Demo" }).click();
+    await page.getByLabel("New name for Jan Demo").fill("Jan Example");
+    await people.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(people.getByText("Jan Example")).toBeVisible();
+    await expect(people.getByText("Jan Demo")).toHaveCount(0);
+  });
+
+  test("renaming to an existing name shows the error", async ({ page }) => {
+    await page.goto(SETTINGS);
+    const people = page.getByRole("list", { name: "Participants" });
+    await page.getByRole("button", { name: "Rename Jan Demo" }).click();
+    await page.getByLabel("New name for Jan Demo").fill("alex demo");
+    await people.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("alert").filter({ hasText: "already exists" })).toBeVisible();
+  });
+
+  test("resetting a voice and deleting a participant ask first", async ({ page }) => {
+    await page.goto(SETTINGS);
+    const people = page.getByRole("list", { name: "Participants" });
+    await page.getByRole("button", { name: "Reset the voice of Alex Demo" }).click();
+    const dialog = page.getByRole("dialog", { name: "Reset this voice?" });
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(people.getByText("4 samples")).toBeVisible();
+
+    await page.getByRole("button", { name: "Reset the voice of Alex Demo" }).click();
+    await dialog.getByRole("button", { name: "Reset voice" }).click();
+    await expect(people.getByText("No voice learned yet")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Reset the voice of Alex Demo" })).toBeDisabled();
+
+    await page.getByRole("button", { name: "Delete Kasia Demo" }).click();
+    const del = page.getByRole("dialog", { name: "Delete this participant?" });
+    await del.getByRole("button", { name: "Delete participant" }).click();
+    await expect(people.getByRole("listitem")).toHaveCount(2);
+    await expect(people.getByText("Kasia Demo")).toHaveCount(0);
+  });
+
+  test("all voice data is deleted after a confirmation", async ({ page }) => {
+    await page.goto(SETTINGS);
+    const people = page.getByRole("list", { name: "Participants" });
+    await page.getByRole("button", { name: "Delete all voice data" }).click();
+    const dialog = page.getByRole("dialog", { name: "Delete all voice data?" });
+    await expect(dialog.getByText(/all voice profiles, all stored voice embeddings/)).toBeVisible();
+    await expect(dialog.getByText(/all sample clips/)).toBeVisible();
+
+    // Cancelling changes nothing.
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(people.getByText("4 samples")).toBeVisible();
+
+    await page.getByRole("button", { name: "Delete all voice data" }).click();
+    await dialog.getByRole("button", { name: "Delete all voice data" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(people.getByText("No voice learned yet")).toHaveCount(3);
+    await expect(people.getByText(/samples?/)).toHaveCount(0);
+  });
+
+  test("voice settings are saved and invalid thresholds are refused", async ({ page }) => {
+    await page.goto(SETTINGS);
+    const section = page.getByRole("region", { name: "Processing" });
+    await expect(section.getByLabel(/name automatically from score/)).toHaveValue("0.7");
+    await expect(section.getByLabel(/suggest a name from score/)).toHaveValue("0.5");
+    await expect(section.getByLabel(/margin over the second best match/)).toHaveValue("0.1");
+    await expect(section.getByLabel(/Keep sample clips for/)).toHaveValue("30");
+
+    await section.getByLabel(/suggest a name from score/).fill("0.9");
+    await expect(section.getByRole("alert").filter({ hasText: "cannot be higher" })).toBeVisible();
+    await expect(section.getByRole("button", { name: "Save processing settings" })).toBeDisabled();
+
+    await section.getByLabel(/suggest a name from score/).fill("0.55");
+    await section.getByLabel(/name automatically from score/).fill("0.75");
+    await section.getByLabel(/Keep sample clips for/).fill("14");
+    await section.getByRole("button", { name: "Save processing settings" }).click();
+    await expect(section.getByRole("status")).toHaveText("Processing settings saved");
   });
 });

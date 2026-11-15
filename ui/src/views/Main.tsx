@@ -7,16 +7,17 @@ import { canProcess, jobStateLabel } from "../processing";
 import { ProcessPrompt } from "./ProcessPrompt";
 import { ProcessingSettingsView } from "./ProcessingSettings";
 import { QueueView } from "./Queue";
+import { SpeakersView } from "./Speakers";
 import { TranscriptView } from "./Transcript";
 
-type Page = "meetings" | "queue" | "settings" | "transcript";
+type Page = "meetings" | "queue" | "settings" | "transcript" | "speakers";
 
-/** `?page=queue` and `?page=transcript&meeting=m5` open a page directly (used by the screenshot script). */
+/** `?page=queue`, `?page=transcript&meeting=m5` and `?page=speakers&meeting=m5` open a page directly (used by the screenshot script). */
 function initialRoute(): { page: Page; meetingId: string | null } {
   const params = new URLSearchParams(window.location.search);
   const meetingId = params.get("meeting");
   const page = params.get("page");
-  if (page === "transcript" && meetingId) return { page: "transcript", meetingId };
+  if ((page === "transcript" || page === "speakers") && meetingId) return { page, meetingId };
   if (page === "queue" || page === "settings") return { page, meetingId: null };
   return { page: "meetings", meetingId: null };
 }
@@ -34,7 +35,11 @@ export function Main() {
             Blah<span>Blah</span>Bot
           </h1>
           <button
-            className={page === "meetings" || page === "transcript" ? "nav nav-on" : "nav"}
+            className={
+              page === "meetings" || page === "transcript" || page === "speakers"
+                ? "nav nav-on"
+                : "nav"
+            }
             onClick={() => setPage("meetings")}
           >
             Meetings
@@ -72,11 +77,23 @@ export function Main() {
             <MeetingList
               recordingMeetingId={recording.meetingId}
               onOpenTranscript={(id) => setRoute({ page: "transcript", meetingId: id })}
+              onOpenSpeakers={(id) => setRoute({ page: "speakers", meetingId: id })}
             />
           )}
           {page === "queue" && <QueueView />}
           {page === "transcript" && route.meetingId && (
-            <TranscriptView meetingId={route.meetingId} onBack={() => setPage("meetings")} />
+            <TranscriptView
+              meetingId={route.meetingId}
+              onBack={() => setPage("meetings")}
+              onOpenSpeakers={() => setRoute({ page: "speakers", meetingId: route.meetingId })}
+            />
+          )}
+          {page === "speakers" && route.meetingId && (
+            <SpeakersView
+              meetingId={route.meetingId}
+              onBack={() => setPage("meetings")}
+              onOpenTranscript={() => setRoute({ page: "transcript", meetingId: route.meetingId })}
+            />
           )}
           {page === "settings" && <SettingsView />}
         </div>
@@ -105,6 +122,7 @@ function StateBadge({ meeting }: { meeting: MeetingSummary }) {
 function MeetingList(props: {
   recordingMeetingId: string | null;
   onOpenTranscript: (id: string) => void;
+  onOpenSpeakers: (id: string) => void;
 }) {
   const backend = useBackend();
   const { meetings, reload } = useMeetings();
@@ -166,12 +184,21 @@ function MeetingList(props: {
                       </button>
                     )}
                     {m.job === "done" && (
-                      <button
-                        className="btn btn-small"
-                        onClick={() => props.onOpenTranscript(m.id)}
-                      >
-                        Transcript
-                      </button>
+                      <>
+                        <button
+                          className="btn btn-small"
+                          aria-label={`Name speakers of ${m.title}`}
+                          onClick={() => props.onOpenSpeakers(m.id)}
+                        >
+                          Name speakers
+                        </button>
+                        <button
+                          className="btn btn-small"
+                          onClick={() => props.onOpenTranscript(m.id)}
+                        >
+                          Transcript
+                        </button>
+                      </>
                     )}
                     <button
                       className="btn btn-small btn-stop"

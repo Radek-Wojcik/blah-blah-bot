@@ -13,6 +13,8 @@ const STAGE_LABELS: Record<StageName, string> = {
   asr: "Transcription",
   diarize: "Speaker separation",
   merge: "Merge",
+  speaker_id: "Speaker recognition",
+  clips: "Sample clips",
   audio_cleanup: "Audio cleanup",
   vision: "Screenshot analysis",
 };

@@ -3,6 +3,8 @@ import { useBackend } from "../backend-context";
 import { errorMessage } from "../hooks";
 import type { ModelStatus, ProcessingSettings as Settings, RetentionMode } from "../ipc/types";
 import { percent } from "../processing";
+import { validateVoiceSettings } from "../speakers";
+import { VoiceProfiles } from "./VoiceProfiles";
 
 /** Settings of the processing pipeline: after-recording choice, retention, GPU guard, paths, token, models. */
 export function ProcessingSettingsView() {
@@ -20,6 +22,7 @@ export function ProcessingSettingsView() {
   if (!settings) return null;
   const set = (patch: Partial<Settings>) => setSettings({ ...settings, ...patch });
   const num = (v: string) => (v === "" ? 0 : Number(v));
+  const voiceError = validateVoiceSettings(settings);
 
   return (
     <section className="processing" aria-labelledby="processing-heading">
@@ -118,6 +121,60 @@ export function ProcessingSettingsView() {
               <small>Processing waits while another program keeps the GPU busier than this.</small>
             </label>
             <label>
+              Voice recognition: name automatically from score
+              <input
+                type="number"
+                min={0}
+                max={1}
+                step={0.01}
+                value={settings.voiceAccept}
+                onChange={(e) => set({ voiceAccept: num(e.target.value) })}
+              />
+              <small>
+                A voice that matches a profile at least this well is named automatically. You still
+                confirm it.
+              </small>
+            </label>
+            <label>
+              Voice recognition: suggest a name from score
+              <input
+                type="number"
+                min={0}
+                max={1}
+                step={0.01}
+                value={settings.voiceSuggest}
+                onChange={(e) => set({ voiceSuggest: num(e.target.value) })}
+              />
+              <small>
+                A weaker match is only offered as a suggestion. Cannot be higher than the automatic
+                score.
+              </small>
+            </label>
+            <label>
+              Voice recognition: margin over the second best match
+              <input
+                type="number"
+                min={0}
+                step={0.01}
+                value={settings.voiceMargin}
+                onChange={(e) => set({ voiceMargin: num(e.target.value) })}
+              />
+              <small>
+                When two people match almost equally, the voice is not named automatically.
+              </small>
+            </label>
+            <label>
+              Keep sample clips for (days)
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={settings.clipMaxDays}
+                onChange={(e) => set({ clipMaxDays: num(e.target.value) })}
+              />
+              <small>Clips of voices you have not named are deleted after this time.</small>
+            </label>
+            <label>
               uv executable
               <input value={settings.uvPath} onChange={(e) => set({ uvPath: e.target.value })} />
             </label>
@@ -142,9 +199,14 @@ export function ProcessingSettingsView() {
                 onChange={(e) => set({ modelsDir: e.target.value })}
               />
             </label>
+            {voiceError && (
+              <p className="error" role="alert">
+                {voiceError}
+              </p>
+            )}
             <div className="actions">
               {message && <span role="status">{message}</span>}
-              <button className="btn btn-record" type="submit">
+              <button className="btn btn-record" type="submit" disabled={voiceError !== null}>
                 Save processing settings
               </button>
             </div>
@@ -213,6 +275,8 @@ export function ProcessingSettingsView() {
           </form>
         </div>
       </div>
+
+      <VoiceProfiles />
 
       <ModelList />
     </section>

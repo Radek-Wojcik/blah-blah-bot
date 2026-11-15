@@ -33,6 +33,24 @@ export function createTauriBackend(): Backend {
       const data = bytes instanceof ArrayBuffer ? bytes : new Uint8Array(bytes);
       return URL.createObjectURL(new Blob([data], { type: "image/png" }));
     },
+    getMeetingVoices: (id) => invoke("get_meeting_voices", { id }),
+    assignVoice: (id, voiceId, participantId) =>
+      invoke("assign_voice", { id, voiceId, participantId }),
+    assignVoiceNew: (id, voiceId, name) => invoke("assign_voice_new", { id, voiceId, name }),
+    mergeVoices: (id, voiceId, into) => invoke("merge_voices", { id, voiceId, into }),
+    confirmMatches: (id) => invoke("confirm_matches", { id }),
+    voiceClip: async (id, voiceId, idx) => {
+      const bytes = await invoke<ArrayBuffer | number[]>("voice_clip", { id, voiceId, idx });
+      const data = bytes instanceof ArrayBuffer ? bytes : new Uint8Array(bytes);
+      return URL.createObjectURL(new Blob([data], { type: "audio/wav" }));
+    },
+    listParticipants: () => invoke("list_participants"),
+    createParticipant: (name) => invoke("create_participant", { name }),
+    renameParticipant: (participantId, name) =>
+      invoke("rename_participant", { participantId, name }),
+    deleteParticipant: (participantId) => invoke("delete_participant", { participantId }),
+    resetProfile: (participantId) => invoke("reset_profile", { participantId }),
+    deleteVoiceData: () => invoke("delete_voice_data"),
     getProcessingSettings: () => invoke("get_processing_settings"),
     saveProcessingSettings: (settings) => invoke("save_processing_settings", { settings }),
     setHfToken: (token) => invoke("set_hf_token", { token }),

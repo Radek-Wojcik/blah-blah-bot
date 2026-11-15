@@ -5,10 +5,14 @@ import {
   demoImage,
   demoJobs,
   demoModels,
+  demoParticipants,
   demoProcessingSettings,
   demoTranscript,
+  demoVoices,
   stageViews,
+  toneWav,
 } from "./mock-demo";
+import { validateVoiceSettings } from "../speakers";
 import type {
   ActiveSource,
   JobView,
@@ -20,6 +24,8 @@ import type {
   Settings,
   SourceInfo,
   TranscriptData,
+  VoiceView,
+  VoicesData,
 } from "./types";
 
 const MIN = 60_000;
@@ -92,6 +98,43 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
   const models = demoModels();
   let jobs: JobView[] = demoJobs();
   const transcripts = new Map<string, TranscriptData>([["m5", demoTranscript("m5")]]);
+  // ----- speakers and voice profiles -----
+  const voices = new Map<string, VoiceView[]>([["m5", demoVoices()]]);
+  let participants = demoParticipants();
+  let nextParticipant = 1;
+
+  const voicesOf = (id: string): VoiceView[] => voices.get(id) ?? [];
+  const findVoice = (id: string, voiceId: string): VoiceView => {
+    const v = voicesOf(id).find((x) => x.voiceId === voiceId);
+    if (!v) fail("not_found", "voice not found");
+    return v;
+  };
+  const cleanName = (name: string): string => {
+    const n = name.trim();
+    if (n === "" || [...n].length > 80) fail("invalid", "enter a name of 1 to 80 characters");
+    return n;
+  };
+  const sameName = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  /** Like the backend: a meeting whose voices are all decided loses its sample clips. */
+  function voicesData(id: string): VoicesData {
+    const list = voicesOf(id);
+    const allConfirmed = list.length > 0 && list.every((v) => v.confirmed || v.mergedInto);
+    if (allConfirmed) list.forEach((v) => (v.clips = []));
+    return {
+      meetingId: id,
+      voices: structuredClone(list),
+      participants: structuredClone(participants),
+      allConfirmed,
+    };
+  }
+  function assign(id: string, voiceId: string, participantId: string | null): VoicesData {
+    const v = findVoice(id, voiceId);
+    if (participantId !== null && !participants.some((p) => p.id === participantId))
+      fail("not_found", "participant not found");
+    v.assignedParticipantId = participantId;
+    v.confirmed = true;
+    return voicesData(id);
+  }
   /** Jobs advanced by the timer, in order. The seeded demo jobs stay frozen. */
   const driven: string[] = [];
   let currentJob: string | null = null;
@@ -162,6 +205,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     const j = jobs.find((x) => x.meetingId === id);
     if (j?.state === "done") {
       transcripts.set(id, demoTranscript(id));
+      voices.set(id, demoVoices());
       currentJob = null;
       emitMeetings();
     }
@@ -310,6 +354,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       };
       jobs = existing ? jobs.map((j) => (j.meetingId === id ? fresh : j)) : [...jobs, fresh];
       transcripts.delete(id);
+      voices.delete(id);
       enqueue(id);
       emitQueue();
       emitMeetings();
@@ -363,8 +408,90 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       if (!transcripts.has(id)) fail("not_ready", "This meeting has no screenshots to show");
       return demoImage(file);
     },
+    getMeetingVoices: async (id) => voicesData(id),
+    assignVoice: async (id, voiceId, participantId) => assign(id, voiceId, participantId),
+    assignVoiceNew: async (id, voiceId, name) => {
+      const n = cleanName(name);
+      findVoice(id, voiceId);
+      let p = participants.find((x) => sameName(x.name, n));
+      if (!p) {
+        p = { id: `p-new-${nextParticipant++}`, name: n, sampleCount: 0, speechMs: 0 };
+        participants = [...participants, p].sort((a, b) => a.name.localeCompare(b.name));
+      }
+      return assign(id, voiceId, p.id);
+    },
+    mergeVoices: async (id, voiceId, into) => {
+      const v = findVoice(id, voiceId);
+      if (into !== null) {
+        const list = voicesOf(id);
+        const bad = () =>
+          fail("invalid", "these voices cannot be merged (unknown voice, itself, or a loop)");
+        if (into === voiceId || !list.some((x) => x.voiceId === into)) bad();
+        // Walking up from the target must not reach this voice.
+        let current: string | null | undefined = into;
+        for (let i = 0; i <= list.length && current; i += 1) {
+          if (current === voiceId) bad();
+          current = list.find((x) => x.voiceId === current)?.mergedInto;
+        }
+      }
+      v.mergedInto = into;
+      return voicesData(id);
+    },
+    confirmMatches: async (id) => {
+      for (const v of voicesOf(id))
+        if (v.decision === "auto" && !v.confirmed && v.assignedParticipantId) v.confirmed = true;
+      return voicesData(id);
+    },
+    voiceClip: async (id, voiceId, idx) => {
+      const v = findVoice(id, voiceId);
+      const c = v.clips.find((x) => x.idx === idx);
+      if (!c) fail("not_found", "clip not found");
+      const pitch = 220 + 110 * voicesOf(id).indexOf(v);
+      const seconds = Math.min(4, Math.max(1.5, (c.endMs - c.startMs) / 1000));
+      return URL.createObjectURL(toneWav(pitch, seconds));
+    },
+    listParticipants: async () => structuredClone(participants),
+    createParticipant: async (name) => {
+      const n = cleanName(name);
+      if (participants.some((x) => sameName(x.name, n)))
+        fail("duplicate", "a participant with this name already exists");
+      const p = { id: `p-new-${nextParticipant++}`, name: n, sampleCount: 0, speechMs: 0 };
+      participants = [...participants, p].sort((a, b) => a.name.localeCompare(b.name));
+      return structuredClone(p);
+    },
+    renameParticipant: async (participantId, name) => {
+      const n = cleanName(name);
+      const p = participants.find((x) => x.id === participantId);
+      if (!p) fail("not_found", "participant not found");
+      if (participants.some((x) => x.id !== participantId && sameName(x.name, n)))
+        fail("duplicate", "a participant with this name already exists");
+      p.name = n;
+      participants.sort((a, b) => a.name.localeCompare(b.name));
+    },
+    deleteParticipant: async (participantId) => {
+      participants = participants.filter((p) => p.id !== participantId);
+      for (const list of voices.values())
+        for (const v of list) {
+          if (v.assignedParticipantId === participantId) v.assignedParticipantId = null;
+          if (v.suggestedParticipantId === participantId) v.suggestedParticipantId = null;
+        }
+    },
+    resetProfile: async (participantId) => {
+      const p = participants.find((x) => x.id === participantId);
+      if (p) {
+        p.sampleCount = 0;
+        p.speechMs = 0;
+      }
+    },
+    deleteVoiceData: async () => {
+      // Participants stay; profiles, detected voices and clips go.
+      voices.clear();
+      participants = participants.map((p) => ({ ...p, sampleCount: 0, speechMs: 0 }));
+    },
     getProcessingSettings: async () => structuredClone(processing),
     saveProcessingSettings: async (s) => {
+      const invalid = validateVoiceSettings(s);
+      if (invalid) fail("invalid", invalid);
       // The token flag is owned by set/clear, as in the real application.
       Object.assign(processing, s, { hfTokenSet: processing.hfTokenSet });
     },

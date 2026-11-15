@@ -1,0 +1,413 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useBackend } from "../backend-context";
+import { formatDuration } from "../format";
+import { errorMessage } from "../hooks";
+import type { ParticipantView, VoiceView, VoicesData } from "../ipc/types";
+import {
+  type VoiceGroup,
+  groupVoices,
+  hasUnconfirmedAuto,
+  namingProgress,
+  participantName,
+  voiceState,
+} from "../speakers";
+
+const NEW = "__new";
+const SKIP = "__skip";
+
+/**
+ * Plays one sample clip at a time. Starting another clip, leaving the screen or the end of the
+ * clip stops the current one. `playing` is `voiceId:idx` of the clip that is loading or playing.
+ */
+function useClipPlayer(meetingId: string, onError: (message: string) => void) {
+  const backend = useBackend();
+  const [playing, setPlaying] = useState<string | null>(null);
+  const current = useRef<{ audio: HTMLAudioElement; url: string } | null>(null);
+  // Every start and stop bumps the token, so a slow download of an older clip is dropped.
+  const token = useRef(0);
+
+  const stop = useCallback(() => {
+    token.current += 1;
+    const c = current.current;
+    current.current = null;
+    if (c) {
+      c.audio.pause();
+      if (c.url.startsWith("blob:")) URL.revokeObjectURL(c.url);
+    }
+    setPlaying(null);
+  }, []);
+
+  const toggle = useCallback(
+    async (voiceId: string, idx: number) => {
+      const key = `${voiceId}:${idx}`;
+      const same = playing === key;
+      stop();
+      if (same) return;
+      const mine = token.current;
+      setPlaying(key);
+      try {
+        const url = await backend.voiceClip(meetingId, voiceId, idx);
+        if (token.current !== mine) {
+          if (url.startsWith("blob:")) URL.revokeObjectURL(url);
+          return;
+        }
+        const audio = new Audio(url);
+        current.current = { audio, url };
+        audio.onended = () => {
+          if (token.current === mine) stop();
+        };
+        await audio.play();
+      } catch (e) {
+        if (token.current === mine) {
+          stop();
+          onError(`The clip could not be played: ${errorMessage(e)}`);
+        }
+      }
+    },
+    [backend, meetingId, onError, playing, stop],
+  );
+
+  useEffect(() => stop, [stop]);
+  return { playing, toggle, stop };
+}
+
+/** The labeling screen: name the voices detected in a meeting, with sample clips to listen to. */
+export function SpeakersView(props: {
+  meetingId: string;
+  onBack: () => void;
+  onOpenTranscript: () => void;
+}) {
+  const { meetingId, onBack, onOpenTranscript } = props;
+  const backend = useBackend();
+  const [data, setData] = useState<VoicesData | null>(null);
+  const [title, setTitle] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  // Suggestions the user turned down on this screen; those voices are shown as unknown.
+  const [rejected, setRejected] = useState<ReadonlySet<string>>(new Set());
+  const player = useClipPlayer(meetingId, setError);
+  const stopPlayer = player.stop;
+
+  useEffect(() => {
+    let cancelled = false;
+    backend
+      .getMeetingVoices(meetingId)
+      .then((d) => !cancelled && setData(d))
+      .catch((e) => !cancelled && setError(errorMessage(e)));
+    backend
+      .getMeeting(meetingId)
+      .then((m) => !cancelled && setTitle(m.summary.title))
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [backend, meetingId]);
+
+  /** Run a change and show what the backend stored. */
+  const act = useCallback(
+    async (change: Promise<VoicesData>): Promise<boolean> => {
+      setError(null);
+      try {
+        const d = await change;
+        setData(d);
+        // The backend drops the clips of a finished meeting; a playing clip must not outlive them.
+        if (d.allConfirmed) stopPlayer();
+        return true;
+      } catch (e) {
+        setError(errorMessage(e));
+        return false;
+      }
+    },
+    [stopPlayer],
+  );
+
+  const groups = useMemo(() => groupVoices(data?.voices ?? []), [data]);
+  const progress = namingProgress(data?.voices ?? []);
+
+  return (
+    <>
+      <div className="page-head">
+        <h2>
+          <span className="glitch" data-text="Speakers">
+            Speakers
+          </span>
+        </h2>
+        <span className="head-actions">
+          <button className="btn btn-small" onClick={onOpenTranscript}>
+            Transcript
+          </button>
+          <button className="btn btn-small btn-ghost" onClick={onBack}>
+            Back to meetings
+          </button>
+        </span>
+      </div>
+      {title && <p className="card-when">{title}</p>}
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+      <p className="notice">
+        Names of recognized voices are applied to the transcript automatically, but the voice
+        profiles only learn from a match after you confirm it. Voices, profiles and sample clips
+        never leave this computer.
+      </p>
+      {data && data.voices.length === 0 && (
+        <p className="empty">
+          No voices were found for this meeting. Process the meeting first, or its voice data was
+          deleted.
+        </p>
+      )}
+      {data && data.voices.length > 0 && (
+        <>
+          <div className="voice-bar">
+            <span className="chip" role="status">
+              {progress.text}
+            </span>
+            {hasUnconfirmedAuto(data.voices) && (
+              <button
+                className="btn btn-small btn-record"
+                onClick={() => void act(backend.confirmMatches(meetingId))}
+              >
+                Confirm all automatic matches
+              </button>
+            )}
+            {data.allConfirmed && (
+              <span className="voice-done">
+                All voices are decided. The sample clips were deleted.
+              </span>
+            )}
+          </div>
+          <ul className="voices" aria-label="Detected voices">
+            {groups.map((g) => (
+              <li key={g.voice.voiceId}>
+                <VoiceCard
+                  group={g}
+                  participants={data.participants}
+                  candidates={groups.map((x) => x.voice).filter((v) => v !== g.voice)}
+                  rejected={rejected.has(g.voice.voiceId)}
+                  playing={player.playing}
+                  onPlay={(idx) => void player.toggle(g.voice.voiceId, idx)}
+                  onOpenTranscript={onOpenTranscript}
+                  onReject={() => setRejected((r) => new Set(r).add(g.voice.voiceId))}
+                  onAssign={(participantId) =>
+                    act(backend.assignVoice(meetingId, g.voice.voiceId, participantId))
+                  }
+                  onAssignNew={(name) =>
+                    act(backend.assignVoiceNew(meetingId, g.voice.voiceId, name))
+                  }
+                  onMerge={(voiceId, into) => act(backend.mergeVoices(meetingId, voiceId, into))}
+                />
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </>
+  );
+}
+
+function VoiceCard(props: {
+  group: VoiceGroup;
+  participants: ParticipantView[];
+  /** The other top-level voices this one can be declared the same person as. */
+  candidates: VoiceView[];
+  rejected: boolean;
+  playing: string | null;
+  onPlay: (idx: number) => void;
+  onOpenTranscript: () => void;
+  onReject: () => void;
+  onAssign: (participantId: string | null) => Promise<boolean>;
+  onAssignNew: (name: string) => Promise<boolean>;
+  onMerge: (voiceId: string, into: string | null) => Promise<boolean>;
+}) {
+  const { group, participants, candidates, rejected, playing } = props;
+  const { voice, merged } = group;
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const state = voiceState(voice, participants, rejected);
+  const named = participantName(participants, voice.assignedParticipantId);
+  const known = participants.some((p) => p.id === voice.assignedParticipantId);
+  const assigned = voice.assignedParticipantId ?? "";
+  let selected = "";
+  if (creating) selected = NEW;
+  else if (voice.confirmed) selected = known ? assigned : SKIP;
+  else if (voice.decision === "auto" && known) selected = assigned;
+
+  const pick = (value: string) => {
+    if (value === NEW) {
+      setCreating(true);
+    } else {
+      setCreating(false);
+      void props.onAssign(value === SKIP ? null : value);
+    }
+  };
+
+  const nameOf = (v: VoiceView) => {
+    const n = participantName(participants, v.assignedParticipantId);
+    return n ? `${v.label} (${n})` : v.label;
+  };
+
+  return (
+    <article className={`panel voice voice-${state.kind}`} aria-label={voice.label}>
+      <div className="panel-body">
+        <h3 className="card-title">
+          {voice.label}
+          {named && <span className="voice-name">{named}</span>}
+          <span className={`badge badge-voice-${state.kind}`}>{state.label}</span>
+        </h3>
+        <p className="card-when">Speaking time {formatDuration(voice.speechMs)}</p>
+
+        {state.kind === "suggested" && (
+          <div className="voice-suggest">
+            <button
+              className="btn btn-small"
+              aria-label={`Accept the suggestion for ${voice.label}`}
+              onClick={() => void props.onAssign(state.participantId)}
+            >
+              Accept
+            </button>
+            <button
+              className="btn btn-small btn-ghost"
+              aria-label={`Reject the suggestion for ${voice.label}`}
+              onClick={props.onReject}
+            >
+              Reject
+            </button>
+          </div>
+        )}
+        {state.kind === "auto" && (
+          <div className="voice-suggest">
+            <button
+              className="btn btn-small"
+              aria-label={`Confirm the match for ${voice.label}`}
+              onClick={() => void props.onAssign(state.participantId)}
+            >
+              Confirm
+            </button>
+          </div>
+        )}
+
+        {voice.clips.length > 0 ? (
+          <ul className="clips" aria-label={`Sample clips of ${voice.label}`}>
+            {voice.clips.map((c) => {
+              const on = playing === `${voice.voiceId}:${c.idx}`;
+              return (
+                <li key={c.idx} className={on ? "clip clip-on" : "clip"}>
+                  <button
+                    className="btn btn-small btn-stop clip-play"
+                    aria-label={`${on ? "Stop" : "Play"} clip ${c.idx + 1} of ${voice.label}`}
+                    onClick={() => props.onPlay(c.idx)}
+                  >
+                    {on ? "Stop" : "Play"}
+                  </button>
+                  <span className="clip-time">{formatDuration(c.endMs - c.startMs)}</span>
+                  <span className="clip-text">{c.text}</span>
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <p className="clip-missing">
+            No sample clips are available for this voice; use the transcript to recognize it.{" "}
+            <button className="link-btn" onClick={props.onOpenTranscript}>
+              Open the transcript
+            </button>
+          </p>
+        )}
+
+        <div className="voice-tools">
+          <select
+            className="voice-select"
+            aria-label={`Name for ${voice.label}`}
+            value={selected}
+            onChange={(e) => pick(e.target.value)}
+          >
+            <option value="" disabled>
+              Choose a name…
+            </option>
+            {participants.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+            <option value={NEW}>New participant…</option>
+            <option value={SKIP}>Not a person / skip</option>
+          </select>
+          <select
+            className="voice-select"
+            aria-label={`Same person as, for ${voice.label}`}
+            value=""
+            disabled={candidates.length === 0}
+            onChange={(e) => void props.onMerge(voice.voiceId, e.target.value)}
+          >
+            <option value="" disabled>
+              Same person as…
+            </option>
+            {candidates.map((v) => (
+              <option key={v.voiceId} value={v.voiceId}>
+                {nameOf(v)}
+              </option>
+            ))}
+          </select>
+        </div>
+        {creating && (
+          <form
+            className="voice-new"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void props.onAssignNew(newName).then((ok) => {
+                if (ok) {
+                  setCreating(false);
+                  setNewName("");
+                }
+              });
+            }}
+          >
+            <input
+              className="voice-input"
+              aria-label={`Name of the new participant for ${voice.label}`}
+              placeholder="Name of the new participant"
+              maxLength={80}
+              autoFocus
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+            />
+            <button className="btn btn-small" type="submit" disabled={newName.trim() === ""}>
+              Create and name
+            </button>
+            <button
+              className="btn btn-small btn-ghost"
+              type="button"
+              onClick={() => {
+                setCreating(false);
+                setNewName("");
+              }}
+            >
+              Cancel
+            </button>
+          </form>
+        )}
+
+        {merged.length > 0 && (
+          <ul className="merged" aria-label={`Voices merged into ${voice.label}`}>
+            {merged.map((m) => (
+              <li key={m.voiceId}>
+                <span className="merged-label">{m.label}</span>
+                <span className="merged-note">
+                  same person · speaking time {formatDuration(m.speechMs)}
+                </span>
+                <button
+                  className="btn btn-small btn-ghost"
+                  aria-label={`Undo the merge of ${m.label}`}
+                  onClick={() => void props.onMerge(m.voiceId, null)}
+                >
+                  Undo
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </article>
+  );
+}

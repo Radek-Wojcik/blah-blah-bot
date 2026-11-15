@@ -29,6 +29,8 @@ describe("labels", () => {
   it("names every stage, stage status and job state", () => {
     expect(stageLabel("diarize")).toBe("Speaker separation");
     expect(stageLabel("audio_cleanup")).toBe("Audio cleanup");
+    expect(stageLabel("speaker_id")).toBe("Speaker recognition");
+    expect(stageLabel("clips")).toBe("Sample clips");
     expect(stageStatusLabel("failed")).toBe("Failed");
     expect(jobStateLabel("running")).toBe("Processing");
   });

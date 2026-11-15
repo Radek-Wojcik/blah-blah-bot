@@ -13,6 +13,8 @@ import type {
   SourceInfo,
   StartRecordingRequest,
   TranscriptData,
+  ParticipantView,
+  VoicesData,
 } from "./types";
 
 export type Unsubscribe = () => void;
@@ -54,6 +56,27 @@ export interface Backend {
   editSegment(id: string, segmentId: number, edit: SegmentEdit): Promise<void>;
   /** A screenshot of a meeting, as a URL usable in an img tag. */
   meetingImage(id: string, file: string): Promise<string>;
+
+  /** The detected voices of a meeting with their match, sample clips and the known participants. */
+  getMeetingVoices(id: string): Promise<VoicesData>;
+  /** Name a voice after a participant; `null` leaves it deliberately unnamed. */
+  assignVoice(id: string, voiceId: string, participantId: string | null): Promise<VoicesData>;
+  /** Name a voice after a new participant (or the existing one with the same name). */
+  assignVoiceNew(id: string, voiceId: string, name: string): Promise<VoicesData>;
+  /** Declare a voice to be the same person as another one; `null` undoes it. */
+  mergeVoices(id: string, voiceId: string, into: string | null): Promise<VoicesData>;
+  /** Accept every automatic match of a meeting. */
+  confirmMatches(id: string): Promise<VoicesData>;
+  /** A sample clip as a WAV, as a URL usable for an audio element. Revoke it when done. */
+  voiceClip(id: string, voiceId: string, idx: number): Promise<string>;
+  listParticipants(): Promise<ParticipantView[]>;
+  createParticipant(name: string): Promise<ParticipantView>;
+  renameParticipant(participantId: string, name: string): Promise<void>;
+  deleteParticipant(participantId: string): Promise<void>;
+  /** Forget the voice of a participant but keep the name. */
+  resetProfile(participantId: string): Promise<void>;
+  /** Delete every profile, stored voice embedding and sample clip. */
+  deleteVoiceData(): Promise<void>;
 
   getProcessingSettings(): Promise<ProcessingSettings>;
   saveProcessingSettings(settings: ProcessingSettings): Promise<void>;

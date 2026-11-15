@@ -83,6 +83,9 @@ export type IpcErrorCode =
   | "not_ready"
   | "already_queued"
   | "job_running"
+  | "invalid"
+  | "not_found"
+  | "duplicate"
   | "io"
   | "internal";
 
@@ -106,7 +109,8 @@ export interface Region {
 
 // ---------- Stage 2: processing pipeline ----------
 
-export type StageName = "asr" | "diarize" | "merge" | "audio_cleanup" | "vision";
+export type StageName =
+  "asr" | "diarize" | "merge" | "speaker_id" | "clips" | "audio_cleanup" | "vision";
 export type StageStatus = "pending" | "running" | "done" | "failed";
 export type JobState = "queued" | "waiting" | "running" | "failed" | "done";
 
@@ -198,6 +202,14 @@ export interface ProcessingSettings {
   modelsDir: string;
   /** Whether a Hugging Face token is stored. The token itself is never returned. */
   hfTokenSet: boolean;
+  /** Cosine score from which a voice is named automatically (0..1). */
+  voiceAccept: number;
+  /** Cosine score from which a name is only suggested (0..1, not above `voiceAccept`). */
+  voiceSuggest: number;
+  /** Minimum gap between the best and the second best match (0 or more). */
+  voiceMargin: number;
+  /** Days after which unconfirmed sample clips are deleted (1 or more). */
+  clipMaxDays: number;
 }
 
 export type ModelKey = "whisper-turbo" | "whisper-large-v3" | "diarization" | "vision";
@@ -214,4 +226,50 @@ export interface ModelsProgress {
   key: string;
   fraction: number;
   message: string;
+}
+
+// ---------- Stage 3: speakers and voice profiles ----------
+
+/** How the matcher treated a voice: no match, named automatically, or only a suggestion. */
+export type VoiceDecision = "unknown" | "auto" | "suggested";
+
+export interface ClipView {
+  idx: number;
+  startMs: number;
+  endMs: number;
+  /** What was said in the clip, from the transcript. */
+  text: string;
+}
+
+export interface VoiceView {
+  voiceId: string;
+  track: string;
+  /** The label of the diarization, e.g. `SPEAKER_00`. */
+  label: string;
+  speechMs: number;
+  decision: VoiceDecision;
+  /** Cosine similarity of the match, 0 to 1. */
+  score?: number | null;
+  suggestedParticipantId?: string | null;
+  assignedParticipantId?: string | null;
+  /** True once the user decided (or accepted the automatic match). */
+  confirmed: boolean;
+  /** The voice this one was declared to be the same person as. */
+  mergedInto?: string | null;
+  clips: ClipView[];
+}
+
+export interface ParticipantView {
+  id: string;
+  name: string;
+  /** Number of confirmed voice samples the profile was learned from. */
+  sampleCount: number;
+  speechMs: number;
+}
+
+export interface VoicesData {
+  meetingId: string;
+  voices: VoiceView[];
+  participants: ParticipantView[];
+  allConfirmed: boolean;
 }

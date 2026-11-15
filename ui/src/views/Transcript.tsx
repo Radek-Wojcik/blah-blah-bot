@@ -7,8 +7,12 @@ import type { ScreenshotDescription, TranscriptData, TranscriptSegment } from ".
 import { buildTimeline, speakerColors } from "../processing";
 
 /** Transcript of one meeting: speakers, segments with screenshots in between, and the editor. */
-export function TranscriptView(props: { meetingId: string; onBack: () => void }) {
-  const { meetingId, onBack } = props;
+export function TranscriptView(props: {
+  meetingId: string;
+  onBack: () => void;
+  onOpenSpeakers: () => void;
+}) {
+  const { meetingId, onBack, onOpenSpeakers } = props;
   const backend = useBackend();
   const [data, setData] = useState<TranscriptData | null>(null);
   const [title, setTitle] = useState<string>("");
@@ -68,9 +72,14 @@ export function TranscriptView(props: { meetingId: string; onBack: () => void })
             Transcript
           </span>
         </h2>
-        <button className="btn btn-small btn-ghost" onClick={onBack}>
-          Back to meetings
-        </button>
+        <span className="head-actions">
+          <button className="btn btn-small" onClick={onOpenSpeakers}>
+            Name speakers
+          </button>
+          <button className="btn btn-small btn-ghost" onClick={onBack}>
+            Back to meetings
+          </button>
+        </span>
       </div>
       {title && <p className="card-when">{title}</p>}
       {error && (
