@@ -18,7 +18,7 @@ Local meeting recorder for Windows that turns calls into GitHub issues and Disco
 - **Processing queue.** One job per meeting, split into stages (transcription, speaker separation, merge, audio cleanup, screenshot description). It starts when you say so, waits while another program is using the GPU and shows why, runs one model at a time, and continues from the stage it stopped in after a crash.
 - **Transcript with speakers.** Whisper large-v3-turbo transcribes each track with word timestamps; pyannote separates the voices of application tracks; your microphone is you. Screenshots are described by a local vision model and placed in the transcript by time.
 - **Review and edit.** Correct any passage or exclude it; excluded text is kept out of everything that leaves the transcript view. Edits survive a re-run.
-- **Audio retention.** Full audio is deleted only after every stage that reads it succeeded, and keeping it is the default. You can choose to delete it after processing or after a number of days.
+- **Audio retention.** Full audio is deleted only after every stage that reads it succeeded, and deleting it after processing is the default. You can choose to keep it, or to keep it for a number of days.
 - **Offline once set up.** Models are downloaded on first use with your Hugging Face token (kept in the Windows Credential Manager); processing itself needs no network.
 - **Demo mode.** The interface runs on fictional data without any audio device, which is how the screenshots below are produced.
 

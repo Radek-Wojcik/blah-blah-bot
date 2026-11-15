@@ -20,10 +20,10 @@ pub enum AudioRetention {
     KeepDays { days: u32 },
 }
 
-/// Not deleting is the default until the user decides otherwise.
+/// Deleting once processing succeeded is the default (the user decided so after Stage 2).
 impl Default for AudioRetention {
     fn default() -> Self {
-        Self::Keep
+        Self::Delete
     }
 }
 
@@ -227,14 +227,14 @@ mod tests {
     }
 
     #[test]
-    fn keep_is_the_default_and_leaves_the_files() {
+    fn keep_leaves_the_files_and_delete_is_the_default() {
         let root = tmp("keep");
         let s = setup(&root);
         finish(&s, &["asr", "diarize"], 10);
         let job = s.get_job("m").unwrap().unwrap();
-        assert_eq!(AudioRetention::default(), AudioRetention::Keep);
+        assert_eq!(AudioRetention::default(), AudioRetention::Delete);
         assert_eq!(
-            apply(&s, &job, &root, AudioRetention::default(), 100).unwrap(),
+            apply(&s, &job, &root, AudioRetention::Keep, 100).unwrap(),
             CleanupOutcome::Kept
         );
         assert!(root.join("m/mic/000000.wav").exists());

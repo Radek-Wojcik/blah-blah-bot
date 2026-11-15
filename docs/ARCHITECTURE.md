@@ -351,7 +351,7 @@ Each stage writes its output to the meeting's working folder and records complet
 
 ### 7.3 Audio retention
 
-- Full audio is deleted once transcription, diarization, voice embedding and clip extraction have all succeeded, and never before. The setting is *keep* (the default until deletion is made the default), *delete after processing* or *keep for N days*.
+- Full audio is deleted once transcription, diarization, voice embedding and clip extraction have all succeeded, and never before. The setting is *delete after processing* (the default), *keep* or *keep for N days*.
 - A few short sample clips per detected voice are kept until the speakers of that meeting are confirmed, then deleted. An upper retention limit applies if labeling is never completed.
 - An optional setting keeps full audio for a number of days. It is off by default.
 - After deletion the only correction path is editing the transcript.

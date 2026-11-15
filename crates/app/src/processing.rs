@@ -57,9 +57,9 @@ pub struct RetentionSetting {
 
 impl Default for RetentionSetting {
     fn default() -> Self {
-        // Keeping the audio is the default until the user decides to delete it.
+        // Deleting the audio once processing succeeded is the default; the user chose this.
         Self {
-            mode: RetentionMode::Keep,
+            mode: RetentionMode::Delete,
             days: 7,
         }
     }
@@ -753,13 +753,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_keep_the_audio_and_ask_after_recording() {
+    fn defaults_delete_the_audio_after_processing_and_ask_after_recording() {
         let s = ProcessingSettings::default();
         assert_eq!(s.process_after_recording, ProcessAfter::Ask);
-        assert_eq!(s.audio_retention.mode, RetentionMode::Keep);
+        assert_eq!(s.audio_retention.mode, RetentionMode::Delete);
         assert_eq!(
             AudioRetention::from(s.audio_retention),
-            AudioRetention::Keep
+            AudioRetention::Delete
         );
     }
 
@@ -767,7 +767,7 @@ mod tests {
     fn settings_use_the_camel_case_contract() {
         let json = serde_json::to_value(ProcessingSettings::default()).unwrap();
         assert_eq!(json["processAfterRecording"], "ask");
-        assert_eq!(json["audioRetention"]["mode"], "keep");
+        assert_eq!(json["audioRetention"]["mode"], "delete");
         assert!(json.get("gpuIdleSeconds").is_some());
         let parsed: ProcessingSettings = serde_json::from_str(
             r#"{"audioRetention":{"mode":"keepDays","days":3},"hfTokenSet":true}"#,
