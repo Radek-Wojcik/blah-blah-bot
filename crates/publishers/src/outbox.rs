@@ -108,6 +108,9 @@ pub trait Env: Send + Sync {
     fn outbox_changed(&self) {}
     /// Files of the cycle repository changed (a commit landed in the clone).
     fn repo_changed(&self, _cycle_id: &str) {}
+    /// Right before each push of a commit (attempts count from 1). A seam for tests of a
+    /// remote that changes under the publisher's feet; the application does nothing here.
+    fn before_push(&self, _attempt: u32) {}
 }
 
 /// What one tick did.
@@ -330,14 +333,36 @@ impl Dispatcher {
         let visibility = match cached {
             Some(v) => v,
             None => {
-                let v = match &ctx.github {
+                let (v, why) = match &ctx.github {
                     Some(g) => {
                         let (github, _) = self.github(&g.api)?;
-                        gate::probe(&github, &g.repo)
+                        gate::probe_with_error(&github, &g.repo)
                     }
-                    None => RepoVisibility::Unknown,
+                    None => (RepoVisibility::Unknown, None),
                 };
-                lock(&self.visibility).insert(key.clone(), (now, v));
+                // An answer that is only missing because the network is down is not kept,
+                // and not final: see below.
+                let transient = why
+                    .as_ref()
+                    .is_some_and(|e| matches!(e.failure(), Failure::Transient { .. }));
+                if !transient {
+                    lock(&self.visibility).insert(key.clone(), (now, v));
+                }
+                if let (RepoVisibility::Unknown, Some(e), true) = (v, why, transient) {
+                    let confirmed = self
+                        .with_store(|s| s.get_repo_confirmation(&key))?
+                        .is_some();
+                    if !confirmed {
+                        // Not a refusal: the repository may well be private. Wait for the
+                        // network instead of asking the user about it.
+                        let mut err = OpError::from(e);
+                        err.message = format!(
+                            "cannot check whether the repository is public yet: {}",
+                            err.message
+                        );
+                        return Err(err);
+                    }
+                }
                 v
             }
         };
@@ -397,16 +422,21 @@ impl Dispatcher {
             message: &message,
             auth: auth.as_ref(),
         };
-        let published = cycle_store::publish_meeting(&ctx.repo, &request).map_err(|e| OpError {
-            offline: e.kind == PublishErrorKind::Transient && !e.message.contains("kept changing"),
-            failure: match e.kind {
-                PublishErrorKind::Transient => Failure::Transient {
-                    retry_after_ms: None,
+        let published =
+            cycle_store::publish::publish_meeting_observed(&ctx.repo, &request, &mut |attempt| {
+                self.env.before_push(attempt)
+            })
+            .map_err(|e| OpError {
+                offline: e.kind == PublishErrorKind::Transient
+                    && !e.message.contains("kept changing"),
+                failure: match e.kind {
+                    PublishErrorKind::Transient => Failure::Transient {
+                        retry_after_ms: None,
+                    },
+                    PublishErrorKind::Permanent => Failure::Permanent,
                 },
-                PublishErrorKind::Permanent => Failure::Permanent,
-            },
-            message: e.message,
-        })?;
+                message: e.message,
+            })?;
 
         let report_url = match (&ctx.github, published.pushed) {
             (Some(g), true) => Some(addr::report_url(

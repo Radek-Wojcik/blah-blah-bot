@@ -9,6 +9,7 @@
 //! past a repository that has become public since.
 
 use crate::github::{Github, RepoRef};
+use crate::http::HttpError;
 
 /// Prefix of the error of an operation that was refused by the check; the dispatcher
 /// stores it so a confirmation can find the operations it unblocks.
@@ -58,10 +59,16 @@ pub fn require(visibility: RepoVisibility, confirmed: bool) -> Result<(), Public
 
 /// Asks GitHub. A repository that cannot be read is `Unknown`, never "private".
 pub fn probe(github: &Github, repo: &RepoRef) -> RepoVisibility {
+    probe_with_error(github, repo).0
+}
+
+/// [`probe`] that also says why the answer is unknown, so a caller that can wait (the
+/// dispatcher) can tell a network that is down from a repository that cannot be seen.
+pub fn probe_with_error(github: &Github, repo: &RepoRef) -> (RepoVisibility, Option<HttpError>) {
     match github.repo_info(repo) {
-        Ok(info) if info.is_public() => RepoVisibility::Public,
-        Ok(_) => RepoVisibility::NotPublic,
-        Err(_) => RepoVisibility::Unknown,
+        Ok(info) if info.is_public() => (RepoVisibility::Public, None),
+        Ok(_) => (RepoVisibility::NotPublic, None),
+        Err(e) => (RepoVisibility::Unknown, Some(e)),
     }
 }
 
@@ -98,5 +105,8 @@ mod tests {
         assert_eq!(of("o/missing"), RepoVisibility::Unknown);
         gh.go_offline();
         assert_eq!(of("o/r"), RepoVisibility::Unknown);
+        let (v, why) = probe_with_error(&api, &RepoRef::parse("o/r").unwrap());
+        assert_eq!(v, RepoVisibility::Unknown);
+        assert!(why.unwrap().is_offline());
     }
 }

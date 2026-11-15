@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use cycle_store::{Decision, ItemType, ProposedStatus, PublishMode};
+use cycle_store::{Decision, ItemType, ProposedStatus};
 use store::OpState;
 
 use super::*;
@@ -11,7 +11,7 @@ use crate::plan::{DiscordPayload, COMMIT_KEY};
 use crate::rules::{PublishTarget, Trigger};
 use crate::testing::fixtures::{item, proposal, task};
 use crate::testing::github::{secondary_rate_limit, Visibility};
-use crate::testing::lab::{lab_draft, Lab, LabOptions, MEETING, TOKEN, WEBHOOK_REF};
+use crate::testing::lab::{lab_draft, Lab, LabOptions, MEETING, TOKEN};
 use crate::testing::{Fault, Reply};
 
 const BOTH: [PublishTarget; 2] = [PublishTarget::Github, PublishTarget::Discord];
@@ -232,6 +232,32 @@ fn the_dispatcher_checks_the_repository_again_before_it_sends() {
     assert_eq!(released, 1);
     assert_eq!(lab.tick().done, 3, "{:?}", lab.states());
     assert_eq!(lab.remote_commits(), 2);
+}
+
+#[test]
+fn a_github_that_cannot_be_reached_is_waited_for_not_taken_for_a_public_repository() {
+    let lab = Lab::new(LabOptions::default());
+    publish(&lab, &GITHUB);
+    // The network goes away after the user queued the publication of a private repository.
+    lab.github.go_offline();
+    let report = lab.tick();
+    assert_eq!(
+        (report.done, report.retrying, report.failed),
+        (0, 1, 0),
+        "{:?}",
+        lab.states()
+    );
+    let commit = lab.op(COMMIT_KEY);
+    assert_eq!(commit.state, OpState::Queued, "a retry, not a refusal");
+    assert!(commit
+        .last_error
+        .unwrap()
+        .contains("cannot check whether the repository is public"));
+    assert_eq!(lab.remote_commits(), 1);
+
+    lab.github.go_online();
+    lab.env.advance(31_000);
+    assert_eq!(lab.tick().done, 3, "{:?}", lab.states());
 }
 
 #[test]
@@ -460,5 +486,4 @@ fn a_local_only_repository_commits_without_pushing_or_issues() {
         0,
         "GitHub was not asked anything"
     );
-    let _ = (PublishMode::Auto, WEBHOOK_REF);
 }

@@ -99,7 +99,13 @@ pub struct LabEnv {
     pub changes: Mutex<u32>,
     /// The cycles whose files changed in the clone.
     pub repo_changes: Mutex<Vec<String>>,
+    /// Called right before every push of a commit, with the attempt number: a test makes the
+    /// remote change here, as a colleague would.
+    pub push_hook: Mutex<Option<PushHook>>,
 }
+
+/// See [`LabEnv::push_hook`].
+pub type PushHook = Box<dyn FnMut(u32) + Send>;
 
 impl LabEnv {
     pub fn advance(&self, ms: i64) {
@@ -185,6 +191,12 @@ impl Env for LabEnv {
     fn repo_changed(&self, cycle_id: &str) {
         self.repo_changes.lock().unwrap().push(cycle_id.to_string());
     }
+
+    fn before_push(&self, attempt: u32) {
+        if let Some(hook) = self.push_hook.lock().unwrap().as_mut() {
+            hook(attempt);
+        }
+    }
 }
 
 pub struct Lab {
@@ -199,6 +211,8 @@ pub struct Lab {
     pub env: Arc<LabEnv>,
     pub dispatcher: Dispatcher,
     pub options: LabOptions,
+    /// The database file of the store.
+    pub db_path: PathBuf,
 }
 
 fn topic(id: &str, text: &str) -> Topic {
@@ -260,7 +274,9 @@ impl Lab {
         )
         .unwrap();
 
-        let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
+        // A file, so that a test can look for secrets in it.
+        let db_path = tmp.path().join("blah-blah-bot.db");
+        let store = Arc::new(Mutex::new(Store::open(&db_path).unwrap()));
         store
             .lock()
             .unwrap()
@@ -287,6 +303,7 @@ impl Lab {
             sleeps: Mutex::new(Vec::new()),
             changes: Mutex::new(0),
             repo_changes: Mutex::new(Vec::new()),
+            push_hook: Mutex::new(None),
         });
         let dispatcher = Dispatcher::new(store.clone(), env.clone());
         Lab {
@@ -299,6 +316,7 @@ impl Lab {
             env,
             dispatcher,
             options,
+            db_path,
         }
     }
 
@@ -399,19 +417,12 @@ impl Lab {
 
     /// A colleague pushes a commit adding `files` to the remote.
     pub fn colleague_pushes(&self, name: &str, files: &[(&str, &str)]) {
-        let dir = self.tmp.path().join(format!("colleague-{name}"));
-        let repo = Repo::clone(self.remote.to_str().unwrap(), &dir).unwrap();
-        for (path, text) in files {
-            let target = repo.root().join(path);
-            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
-            std::fs::write(target, text).unwrap();
-        }
-        git(&dir, &["add", "-A"]);
-        git(
-            &dir,
-            &["commit", "--quiet", "-m", &format!("colleague {name}")],
+        colleague_push(
+            &self.remote,
+            &self.tmp.path().join("colleagues"),
+            name,
+            files,
         );
-        git(&dir, &["push", "--quiet", "origin", "main"]);
     }
 
     /// The remote disappears (renamed), as when the network is gone for Git.
@@ -441,6 +452,24 @@ impl Lab {
         }
         max_ticks
     }
+}
+
+/// A colleague clones `remote` into `scratch/<name>`, adds `files` and pushes. Free of the lab
+/// so that a push hook (which must be `'static`) can call it.
+pub fn colleague_push(remote: &Path, scratch: &Path, name: &str, files: &[(&str, &str)]) {
+    let dir = scratch.join(format!("colleague-{name}"));
+    let repo = Repo::clone(remote.to_str().unwrap(), &dir).unwrap();
+    for (path, text) in files {
+        let target = repo.root().join(path);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(target, text).unwrap();
+    }
+    git(&dir, &["add", "-A"]);
+    git(
+        &dir,
+        &["commit", "--quiet", "-m", &format!("colleague {name}")],
+    );
+    git(&dir, &["push", "--quiet", "origin", "main"]);
 }
 
 fn draft_meeting_id(draft: &Draft) -> &str {
