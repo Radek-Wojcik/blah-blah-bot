@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Radek-Wojcik/blah-blah-bot/schemas/screenshot-descriptions.schema.json",
+  "title": "Screenshot descriptions",
+  "description": "Text descriptions of the screenshots of one meeting.",
+  "type": "object",
+  "required": ["version", "meeting_id", "items"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 1 },
+    "meeting_id": { "type": "string", "minLength": 1 },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["file", "offset_ms", "description"],
+        "additionalProperties": false,
+        "properties": {
+          "file": { "type": "string", "minLength": 1, "description": "Path relative to the meeting folder" },
+          "offset_ms": { "type": "integer", "minimum": 0 },
+          "description": { "type": "string" },
+          "model": { "type": "string" }
+        }
+      }
+    }
+  }
+}

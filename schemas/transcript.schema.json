@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Radek-Wojcik/blah-blah-bot/schemas/transcript.schema.json",
+  "title": "Transcript",
+  "description": "Merged transcript of one meeting. All times are milliseconds on the session clock.",
+  "type": "object",
+  "required": ["version", "meeting_id", "language", "speakers", "segments"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 1 },
+    "meeting_id": { "type": "string", "minLength": 1 },
+    "language": { "type": "string", "description": "Dominant language code, or \"und\" when unknown" },
+    "speakers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "kind"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "label": { "type": "string", "minLength": 1 },
+          "kind": { "enum": ["user", "voice", "source", "unknown"] },
+          "track": { "type": "string" }
+        }
+      }
+    },
+    "segments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "track", "speaker", "start_ms", "end_ms", "text", "words"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "integer", "minimum": 0 },
+          "track": { "type": "string", "minLength": 1 },
+          "speaker": { "type": "string", "minLength": 1 },
+          "start_ms": { "type": "integer", "minimum": 0 },
+          "end_ms": { "type": "integer", "minimum": 0 },
+          "text": { "type": "string" },
+          "words": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["start_ms", "end_ms", "text"],
+              "additionalProperties": false,
+              "properties": {
+                "start_ms": { "type": "integer", "minimum": 0 },
+                "end_ms": { "type": "integer", "minimum": 0 },
+                "text": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,102 @@
+"""Describe each screenshot with a local vision model.
+
+The transcript around the screenshot's moment is given as context so that names and
+terms spoken in the meeting are used correctly. This step always runs locally.
+"""
+
+from __future__ import annotations
+
+import base64
+from contextlib import nullcontext
+from typing import Any
+
+from .. import llama, models, protocol, schema, transcript
+from ..manifest import Manifest
+from . import read_json, write_json
+
+MAX_CONTEXT_CHARS = 3000
+
+PROMPT = (
+    "Describe this screenshot from a meeting for the meeting notes. State every title, label, "
+    "name and number you can read, and what the chart, table, code or diagram shows. Do not add "
+    "anything that is not visible. Use the discussion only to interpret what you see; do not "
+    "summarise it. Write the description in {language}.\n\n"
+    "Discussion around the moment of the screenshot:\n{context}"
+)
+
+LANGUAGE_NAMES = {"pl": "Polish", "en": "English"}
+
+
+def context_text(doc: dict[str, Any], offset_ms: float) -> str:
+    """Speaker-labelled transcript lines around a moment, capped in length."""
+    labels = {s["id"]: s["label"] for s in doc["speakers"]}
+    lines = [
+        f"{labels.get(s['speaker'], s['speaker'])}: {s['text']}"
+        for s in transcript.context_around(doc, offset_ms)
+    ]
+    text = "\n".join(lines)
+    return text[-MAX_CONTEXT_CHARS:] if len(text) > MAX_CONTEXT_CHARS else text
+
+
+def build_payload(image_png: bytes, prompt: str) -> dict[str, Any]:
+    b64 = base64.b64encode(image_png).decode("ascii")
+    return {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                ],
+            }
+        ],
+        "temperature": 0,
+        "max_tokens": 600,
+    }
+
+
+def run(manifest: Manifest) -> None:
+    out_path = manifest.work_dir / "descriptions.json"
+    items: list[dict[str, Any]] = []
+    if not manifest.screenshots:
+        doc = {"version": 1, "meeting_id": manifest.meeting_id, "items": items}
+        schema.validate("screenshot-descriptions", doc)
+        write_json(out_path, doc)
+        return
+
+    transcript_doc = read_json(manifest.work_dir / "transcript.json")
+    language = LANGUAGE_NAMES.get(transcript_doc["language"], "the language of the discussion")
+
+    external = manifest.options.get("vision_base_url")
+    if external:
+        server = nullcontext(external)
+        model_name = "external"
+    else:
+        folder = models.local_path("vision")
+        server = llama.running(
+            folder / "Qwen3VL-8B-Instruct-Q4_K_M.gguf",
+            mmproj=folder / "mmproj-Qwen3VL-8B-Instruct-F16.gguf",
+            ctx=8192,
+        )
+        model_name = "Qwen3-VL-8B-Instruct"
+
+    with server as base:
+        for i, (rel, offset_ms) in enumerate(manifest.screenshots):
+            image = (manifest.meeting_dir / rel).read_bytes()
+            prompt = PROMPT.format(
+                language=language, context=context_text(transcript_doc, offset_ms)
+            )
+            resp = llama.chat(base, build_payload(image, prompt))
+            items.append(
+                {
+                    "file": rel,
+                    "offset_ms": int(offset_ms),
+                    "description": resp["choices"][0]["message"]["content"].strip(),
+                    "model": model_name,
+                }
+            )
+            protocol.progress("vision", (i + 1) / len(manifest.screenshots), rel)
+
+    doc = {"version": 1, "meeting_id": manifest.meeting_id, "items": items}
+    schema.validate("screenshot-descriptions", doc)
+    write_json(out_path, doc)

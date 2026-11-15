@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Radek-Wojcik/blah-blah-bot/schemas/job-manifest.schema.json",
+  "title": "Job manifest",
+  "description": "Input of the processing worker, written by the application from the database.",
+  "type": "object",
+  "required": ["version", "meeting_id", "tracks", "screenshots", "options"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 1 },
+    "meeting_id": { "type": "string", "minLength": 1 },
+    "tracks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "source", "offset_ms", "segments"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "source": { "type": "string", "description": "microphone, app:<name> or tab:<name>" },
+          "offset_ms": { "type": "number", "minimum": 0 },
+          "segments": {
+            "type": "array",
+            "description": "Contiguous 16 kHz mono 16-bit WAV segments in order, relative to the meeting folder",
+            "items": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "screenshots": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["file", "offset_ms"],
+        "additionalProperties": false,
+        "properties": {
+          "file": { "type": "string", "minLength": 1 },
+          "offset_ms": { "type": "number", "minimum": 0 }
+        }
+      }
+    },
+    "options": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "language": { "enum": ["auto", "pl", "en"], "default": "auto" },
+        "asr_model": { "enum": ["turbo", "large-v3"], "default": "turbo" },
+        "glossary": { "type": "array", "items": { "type": "string" } },
+        "max_speakers": { "type": ["integer", "null"], "minimum": 1 }
+      }
+    }
+  }
+}
