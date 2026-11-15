@@ -908,7 +908,7 @@ mod tests {
         }
         .to_comment()
         .unwrap();
-        let entries = vec![
+        let entries = [
             entry(1, "open", &format!("text\n{}", marked("i1")), false),
             entry(2, "closed", &marked("i2"), false),
             entry(3, "open", "made by hand", false),
