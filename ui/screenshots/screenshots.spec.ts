@@ -72,7 +72,16 @@ test.describe("static screenshots", () => {
     await expect(shot).toBeVisible();
     await shot.scrollIntoViewIfNeeded();
     await settle(page);
-    await page.screenshot({ path: path.join(OUT, "screenshot-description.png") });
+    // Only the screenshot with its description and the passages around it.
+    const rows = page.getByRole("list", { name: "Transcript" }).getByRole("listitem");
+    const row = rows.filter({ has: shot });
+    await row.locator("xpath=preceding-sibling::li[2]").scrollIntoViewIfNeeded();
+    const box = await row.boundingBox();
+    expect(box).not.toBeNull();
+    await page.screenshot({
+      path: path.join(OUT, "screenshot-description.png"),
+      clip: { x: 250, y: Math.max(0, box!.y - 130), width: 1020, height: 330 },
+    });
   });
 });
 
@@ -110,4 +119,36 @@ test("record flow GIF", async ({ page }) => {
     ...frames,
   ]);
   expect(fs.statSync(path.join(OUT, "record-flow.gif")).size).toBeLessThan(10_000_000);
+});
+
+test("processing GIF", async ({ page }) => {
+  const frames: string[] = [];
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bbb-gif-"));
+  const shot = async (wait = 350) => {
+    await page.waitForTimeout(wait);
+    const file = path.join(dir, `f${String(frames.length).padStart(2, "0")}.png`);
+    await page.screenshot({ path: file });
+    frames.push(file);
+  };
+  await page.setViewportSize({ width: 960, height: 640 });
+  await page.goto("/?view=main&backend=mock&jobms=1400");
+  await shot();
+  const card = page.getByRole("article").filter({ hasText: "Kickoff" });
+  await card.getByRole("button", { name: "Process" }).click();
+  await shot();
+  await page.getByRole("button", { name: "Queue", exact: true }).click();
+  const job = page.getByRole("article", { name: "Kickoff" });
+  await expect(job).toBeVisible();
+  // One frame per stage while the simulated pipeline advances.
+  for (let i = 0; i < 6; i++) await shot(1_300);
+  await expect(job.getByText("Processed", { exact: true })).toBeVisible({ timeout: 20_000 });
+  await shot();
+  fs.mkdirSync(OUT, { recursive: true });
+  execFileSync("python", [
+    path.join(here, "make-gif.py"),
+    path.join(OUT, "processing.gif"),
+    "900",
+    ...frames,
+  ]);
+  expect(fs.statSync(path.join(OUT, "processing.gif")).size).toBeLessThan(10_000_000);
 });
