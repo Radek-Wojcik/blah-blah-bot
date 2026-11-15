@@ -148,6 +148,7 @@ function demoIssues(): FakeIssue[] {
   ): FakeIssue => ({ number, title, assignee, state, meeting, item, due: null });
   return [
     issue(9, "Book the test range for the December firing", "alex-demo", "closed", "m3", "i02"),
+    issue(10, "Prepare the field test checklist", "jan-demo", "open", "m3", "i04"),
     issue(11, "Order the spare thruster valves", "kasia-demo", "open", "m4", "i05"),
     issue(12, "Finish the antenna mount drawings", "jan-demo", "open", "m4", "i07"),
   ];

@@ -404,13 +404,13 @@ describe("a closed issue is done in the next context", () => {
     let tasks = await b.cycleTasks("NOMAD");
     expect(tasks.repo).toBe("demo-org/nomad-cycles");
     expect(tasks.asOf).toBe("2026-11-12");
-    expect(tasks.open.map((t) => t.number)).toEqual([11, 12]);
+    expect(tasks.open.map((t) => t.number)).toEqual([10, 11, 12]);
     expect(tasks.done.map((t) => t.number)).toEqual([9]);
     expect(
       hooks()
         .nextContext("NOMAD")
         .map((i) => i.issue),
-    ).toEqual(["#11", "#12"]);
+    ).toEqual(["#10", "#11", "#12"]);
 
     // A colleague closes the issue made from the task of Alex.
     hooks().closeIssue(15);
@@ -418,10 +418,10 @@ describe("a closed issue is done in the next context", () => {
     tasks = await b.cycleTasks("NOMAD");
     expect(tasks.asOf).toBe("2026-11-13");
     expect(tasks.done.map((t) => t.number).sort((a, b) => a - b)).toEqual([9, 11, 12, 15]);
-    expect(tasks.open.map((t) => t.number)).toEqual([13, 14, 16]);
-    expect(tasks.open[0].url).toBe("https://github.com/demo-org/nomad-cycles/issues/13");
+    expect(tasks.open.map((t) => t.number)).toEqual([10, 13, 14, 16]);
+    expect(tasks.open[1].url).toBe("https://github.com/demo-org/nomad-cycles/issues/13");
     const context = hooks().nextContext("NOMAD");
-    expect(context.map((i) => i.issue)).toEqual(["#13", "#14", "#16"]);
+    expect(context.map((i) => i.issue)).toEqual(["#10", "#13", "#14", "#16"]);
     expect(context.map((i) => i.issue)).not.toContain("#15");
   });
 
