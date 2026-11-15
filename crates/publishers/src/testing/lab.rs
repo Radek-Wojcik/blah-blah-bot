@@ -425,6 +425,11 @@ impl Lab {
         );
     }
 
+    /// A colleague pushes a new `topics.yaml` of the cycle.
+    pub fn colleagues_push_topics(&self, yaml: &str) {
+        self.colleague_pushes("topics", &[("cycles/NOMAD/topics.yaml", yaml)]);
+    }
+
     /// The remote disappears (renamed), as when the network is gone for Git.
     pub fn remote_offline(&self) {
         std::fs::rename(&self.remote, self.remote.with_extension("away")).unwrap();

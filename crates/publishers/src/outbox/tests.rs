@@ -464,6 +464,57 @@ fn approved_status_changes_close_issues_and_comment() {
 }
 
 #[test]
+fn a_topic_changed_on_the_remote_and_here_reports_both_versions() {
+    let lab = Lab::new(LabOptions::default());
+    // A colleague rewrote the text of t-1 and pushed it; this clone has not pulled yet.
+    let theirs = cycle_store::topics_to_yaml(&[
+        cycle_store::Topic {
+            id: "t-1".into(),
+            text: "Wheel size and tyres".into(),
+            status: cycle_store::TopicStatus::Open,
+            opened_in: "2026-11-06".into(),
+            closed_in: None,
+        },
+        cycle_store::Topic {
+            id: "t-2".into(),
+            text: "Battery".into(),
+            status: cycle_store::TopicStatus::Open,
+            opened_in: "2026-11-06".into(),
+            closed_in: None,
+        },
+    ])
+    .unwrap();
+    lab.colleagues_push_topics(&theirs);
+    let mut d = draft();
+    d.status_proposals = vec![proposal(
+        "s1",
+        "t-1",
+        ProposedStatus::Done,
+        Decision::Approved,
+    )];
+    lab.publish(&d, Trigger::Explicit, &GITHUB, &anchors())
+        .unwrap();
+    lab.tick();
+    let result: Value =
+        serde_json::from_str(lab.op(COMMIT_KEY).result.as_deref().unwrap()).unwrap();
+    let topics = &result["topics"];
+    assert_eq!(topics["conflicts"], json!(["t-1"]));
+    assert_eq!(
+        topics["conflict_details"],
+        json!([{
+            "id": "t-1",
+            "theirs": { "text": "Wheel size and tyres", "status": "open" },
+            "ours": { "text": "Wheel size", "status": "closed" },
+        }]),
+        "last write wins: ours was kept, and both versions are reported"
+    );
+    // Ours won on the remote.
+    assert!(lab
+        .remote_show("cycles/NOMAD/topics.yaml")
+        .contains("status: closed"));
+}
+
+#[test]
 fn a_local_only_repository_commits_without_pushing_or_issues() {
     let lab = Lab::new(LabOptions {
         remote: false,

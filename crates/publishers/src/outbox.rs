@@ -180,6 +180,11 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// One side of a `topics.yaml` conflict, as the screens show it.
+fn topic_version(t: &cycle_store::Topic) -> Value {
+    json!({ "text": t.text, "status": t.status })
+}
+
 fn payload<T: DeserializeOwned>(op: &OutboxOp) -> Result<T, OpError> {
     serde_json::from_str(&op.payload)
         .map_err(|e| OpError::permanent(format!("the operation cannot be read: {e}")))
@@ -480,6 +485,12 @@ impl Dispatcher {
                 "changed": t.diff.changed.len(),
                 "removed": t.diff.removed.len(),
                 "conflicts": t.conflicts.iter().map(|c| c.id.clone()).collect::<Vec<_>>(),
+                // Both versions, so the screen can show what the last write replaced.
+                "conflict_details": t.conflicts.iter().map(|c| json!({
+                    "id": c.id,
+                    "theirs": c.theirs.as_ref().map(topic_version),
+                    "ours": c.ours.as_ref().map(topic_version),
+                })).collect::<Vec<_>>(),
             })),
         }))
     }
