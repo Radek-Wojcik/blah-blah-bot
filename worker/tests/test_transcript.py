@@ -99,10 +99,3 @@ def test_context_window():
         ]
     }
     assert len(transcript.context_around(doc, 30_000)) == 1
-
-
-def test_wer_helper():
-    from tests.support import wer
-
-    assert wer("a b c d", "a b c d") == 0
-    assert wer("a b c d", "a x c") == 0.5

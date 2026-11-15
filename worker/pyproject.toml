@@ -17,9 +17,12 @@ dependencies = [
 ]
 
 [dependency-groups]
+# Everything the CPU-only tests need. CI installs only this group (no models, no torch).
 dev = [
     "pytest>=8",
     "ruff>=0.6",
+    "numpy>=1.26",
+    "jsonschema>=4.20",
 ]
 
 [[tool.uv.index]]
@@ -39,7 +42,7 @@ packages = ["src/bbb_worker"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = [".", "src"]
 addopts = "-m 'not models'"
 markers = ["models: needs real models and a GPU (run locally before a release)"]
 

@@ -156,8 +156,8 @@ Rust modules are crates in one Cargo workspace. Licenses of third-party parts ar
 ### 4.6 `queue` (Rust)
 
 - **Responsibility:** persistent job queue in SQLite, one job per meeting, split into resumable stages (section 7.2). Starts on user request ("Process"), never on its own.
-- **GPU guard:** reads utilization, free memory and the process list through NVML. A stage starts only when the GPU has been idle for a configurable period and enough memory is free for that stage. The guard is evaluated between stages, not during one.
-- **Supervisor:** spawns the AI worker and, when configured, a local `llama-server`; enforces that only one model process exists; kills and retries on timeout.
+- **GPU guard:** reads utilization, free memory and the process list through NVML. A stage starts only when the GPU has stayed below a utilization limit for a configurable period (defaults 40 % and 10 s) and enough memory is free for that stage (3.0, 3.5 and 9.5 GB for ASR, diarization and vision). The guard is evaluated between stages, not during one; the reason for waiting is shown in the queue. Without NVML readings the job waits. See [ADR 0015](decisions/0015-processing-pipeline.md).
+- **Supervisor:** runs one stage at a time (a second request is refused while a stage runs), spawns the AI worker, which starts the local `llama-server` for the vision step itself; kills the whole process tree on timeout; a stage interrupted by a crash resumes after the restart and is marked failed after three crashes in a row, and a failed stage waits for an explicit retry.
 
 ### 4.7 `ai-worker` (Python sidecar)
 
@@ -174,7 +174,7 @@ Runs only while a job is processing. The environment is created with `uv` on fir
 | `extract` | Map step: structured items per transcript window | HTTP client to the LLM server, JSON Schema constrained output |
 | `reduce` | Deduplication, linking to open tasks and topics, status proposals, hierarchical summary | Same |
 
-Each step is a separate process invocation with file inputs and outputs, so a crash or restart resumes from the last completed step.
+Each step is a separate process invocation with file inputs and outputs, so a crash or restart resumes from the last completed step. Stage 2 implements `asr`, `diarize`, `merge` and `vision`; the application also runs a `models` command (download with progress, cache status). The contract (manifest, outputs, progress lines, schemas under `schemas/`) is described in [ADR 0015](decisions/0015-processing-pipeline.md).
 
 ### 4.8 `store` (Rust, SQLite)
 
@@ -332,7 +332,8 @@ stateDiagram-v2
     [*] --> queued
     queued --> asr: Process + GPU free
     asr --> diarize
-    diarize --> speaker_id
+    diarize --> merge
+    merge --> speaker_id
     speaker_id --> clips
     clips --> audio_cleanup
     audio_cleanup --> vision
@@ -346,11 +347,11 @@ stateDiagram-v2
     failed --> queued: retry from failed stage
 ```
 
-Each stage writes its output to the meeting's working folder and records completion in the database. Stages are idempotent and resumable.
+Each stage writes its output to the meeting's working folder and records completion in the database. Stages are idempotent and resumable. Stage 2 runs `asr`, `diarize`, `merge`, `audio_cleanup` and `vision`; `speaker_id`, `clips`, `extract` and `reduce` follow in later stages.
 
 ### 7.3 Audio retention
 
-- Full audio is deleted automatically once transcription, diarization, voice embedding and clip extraction have all succeeded.
+- Full audio is deleted once transcription, diarization, voice embedding and clip extraction have all succeeded, and never before. The setting is *keep* (the default until deletion is made the default), *delete after processing* or *keep for N days*.
 - A few short sample clips per detected voice are kept until the speakers of that meeting are confirmed, then deleted. An upper retention limit applies if labeling is never completed.
 - An optional setting keeps full audio for a number of days. It is off by default.
 - After deletion the only correction path is editing the transcript.
@@ -453,7 +454,9 @@ See [ADR 0005](decisions/0005-llm-backend.md).
 | Tauri 2 | Application shell | Apache-2.0 OR MIT | Confirmed (crates.io, 2.12.5) |
 | `wasapi` crate | Audio capture | MIT | Confirmed (0.27.0) |
 | `windows` crate | Win32 bindings | MIT OR Apache-2.0 | Confirmed (0.62.2) |
-| `nvml-wrapper`, `keyring` crates | GPU guard, secret storage | MIT OR Apache-2.0 | Confirmed (0.13.0, 4.2.0) |
+| `nvml-wrapper` crate | GPU guard | MIT OR Apache-2.0 | Confirmed (0.13.0) |
+| `keyring-core`, `windows-native-keyring-store` crates | Secret storage (the `keyring` 4 crate is a demo wrapper; applications use these directly) | MIT OR Apache-2.0 | Confirmed (1.0.1, 1.1.0) |
+| `huggingface_hub` | Model download with progress, offline cache lookup | Apache-2.0 | Confirmed (2.4.0; strict about incomplete snapshots, so file lists are explicit) |
 | faster-whisper, Whisper large-v3 | ASR | MIT | Confirmed (1.2.1) |
 | Parakeet-TDT-0.6B-v3 | ASR alternative | CC-BY-4.0 | Confirmed |
 | pyannote.audio | Diarization toolkit | MIT | Confirmed (4.0.7) |
