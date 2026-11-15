@@ -79,6 +79,7 @@ Only `id` and `name` are required. Unknown keys are rejected, so a misspelled ke
 | `report.by_type` | map | empty | Meeting type (for example `technical`, `budget`, `casual`) to template name. |
 | `targets.github.path` | relative path | `meetings` | Folder for meeting reports. |
 | `targets.github.publish` | `auto`, `on-approval`, `off` | `on-approval` | Whether the report is committed automatically, after approval in the draft view, or not at all. |
+| `targets.github.issues` | `true`, `false` | `true` | Whether task items become GitHub issues and approved status changes are written back to them. With `false` only the report is committed. |
 | `targets.discord.webhook` | `cred:` reference | required | Name of a secret in the Windows Credential Manager, for example `cred:discord/nomad`. A URL is rejected: the webhook URL never appears in the repository. |
 | `targets.discord.publish` | as above | `on-approval` | |
 | `targets.discord.template` | template name | none | Separate, usually shorter, template for the Discord message. |
