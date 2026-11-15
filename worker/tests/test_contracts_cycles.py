@@ -95,3 +95,74 @@ def test_optional_fields_may_be_missing():
 
 def test_a_hand_added_item_has_no_source():
     assert fixture("meeting.valid.json")["items"][1]["source"] is None
+
+
+# ----- Stage 5 additions: all optional, the Stage 4 fixtures above stay valid ------------
+
+STAGE5 = (
+    ("extraction", "extraction.status.valid.json"),
+    ("meeting", "meeting.proposals.valid.json"),
+    ("cycle-context", "cycle-context.issue.valid.json"),
+)
+
+
+@pytest.mark.parametrize(("name", "file"), STAGE5)
+def test_stage5_fixture_is_accepted(name, file):
+    schema.validate(name, fixture(file))
+
+
+def test_stage4_documents_have_none_of_the_new_fields():
+    # They are what older versions wrote; they must keep validating without the additions.
+    assert "status_changes" not in fixture("extraction.valid.json")
+    assert "status_proposals" not in fixture("meeting.valid.json")
+    assert all("issue" not in p for p in fixture("cycle-context.valid.json")["previous_items"])
+
+
+STATUS_CHANGE_BREAKS = [
+    lambda d: d["status_changes"][0].pop("quote"),
+    lambda d: d["status_changes"][0].pop("target"),
+    lambda d: d["status_changes"][0].update(status="open"),
+    lambda d: d["status_changes"][0].update(time="13:32"),
+    lambda d: d["status_changes"][0].update(reason=""),
+    lambda d: d["status_changes"][0].update(extra=True),
+]
+
+PROPOSAL_BREAKS = [
+    lambda d: d["status_proposals"][0].update(id="p1"),
+    lambda d: d["status_proposals"][0].update(status="closed"),
+    lambda d: d["status_proposals"][0].update(decision="maybe"),
+    lambda d: d["status_proposals"][0].update(target=""),
+    lambda d: d["status_proposals"][0].pop("edited"),
+    lambda d: d["status_proposals"][0]["source"].update(match=2),
+    lambda d: d["status_proposals"][0].update(extra=True),
+]
+
+ISSUE_BREAKS = [
+    lambda d: d["previous_items"][0].update(issue=14),
+    lambda d: d["previous_items"][0].update(extra="x"),
+]
+
+STAGE5_VIOLATIONS = [
+    *[("extraction", "extraction.status.valid.json", m) for m in STATUS_CHANGE_BREAKS],
+    *[("meeting", "meeting.proposals.valid.json", m) for m in PROPOSAL_BREAKS],
+    *[("cycle-context", "cycle-context.issue.valid.json", m) for m in ISSUE_BREAKS],
+]
+
+
+@pytest.mark.parametrize(("name", "file", "mutate"), STAGE5_VIOLATIONS)
+def test_each_stage5_violation_is_rejected(name, file, mutate):
+    doc = copy.deepcopy(fixture(file))
+    mutate(doc)
+    with pytest.raises(jsonschema.ValidationError):
+        schema.validate(name, doc)
+
+
+def test_an_empty_status_changes_list_is_valid():
+    doc = fixture("extraction.valid.json")
+    doc["status_changes"] = []
+    schema.validate("extraction", doc)
+
+
+def test_a_hand_added_proposal_has_no_source_or_comment():
+    proposals = fixture("meeting.proposals.valid.json")["status_proposals"]
+    assert proposals[1]["source"] is None and proposals[1]["comment"] is None

@@ -71,6 +71,39 @@
         }
       }
     },
+    "status_proposals": {
+      "type": "array",
+      "description": "Proposed status changes of open issues or topics, decided by the user in the draft view. Optional: drafts without proposals are valid and do not carry the key.",
+      "items": {
+        "type": "object",
+        "required": ["id", "target", "status", "reason", "comment", "source", "decision", "edited"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^s[0-9]+$" },
+          "target": { "type": "string", "minLength": 1, "description": "An open issue (for example #12) or a topic id" },
+          "status": { "enum": ["done", "open"] },
+          "reason": { "type": "string", "description": "Why the model thinks the status changed" },
+          "comment": { "type": ["string", "null"], "description": "Text posted with the change; null until the user writes one" },
+          "source": {
+            "type": ["object", "null"],
+            "description": "null for proposals added by hand",
+            "required": ["track", "speaker", "t_start_ms", "t_end_ms", "quote", "verified", "match"],
+            "additionalProperties": false,
+            "properties": {
+              "track": { "type": "string" },
+              "speaker": { "type": "string" },
+              "t_start_ms": { "type": "integer", "minimum": 0 },
+              "t_end_ms": { "type": "integer", "minimum": 0 },
+              "quote": { "type": "string" },
+              "verified": { "type": "boolean" },
+              "match": { "type": "number", "minimum": 0, "maximum": 1, "description": "Similarity of the quote to the best matching transcript text" }
+            }
+          },
+          "decision": { "enum": ["proposed", "approved", "rejected"] },
+          "edited": { "type": "boolean" }
+        }
+      }
+    },
     "warnings": {
       "type": "array",
       "items": {
