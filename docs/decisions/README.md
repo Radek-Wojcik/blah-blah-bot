@@ -1,6 +1,6 @@
 # Architecture decision records
 
-Each record states the context, the decision, its consequences and the alternatives considered. Records marked *Proposed* are confirmed at the Stage 0 decision gate (see [RISKS-AND-POC.md](../RISKS-AND-POC.md)).
+Each record states the context, the decision, its consequences and the alternatives considered. Records marked *Proposed* wait for confirmation: at the Stage 0 decision gate (see [RISKS-AND-POC.md](../RISKS-AND-POC.md)) or at the stop-and-ask point of their stage in [ROADMAP.md](../ROADMAP.md).
 
 | No. | Decision | Status |
 |---|---|---|
@@ -21,3 +21,5 @@ Each record states the context, the decision, its consequences and the alternati
 | [0015](0015-processing-pipeline.md) | Processing pipeline: queue, worker contract and GPU guard | Accepted |
 | [0016](0016-speaker-recognition.md) | Speaker recognition: embeddings, thresholds, profiles and sample clips | Accepted |
 | [0017](0017-cycles-extraction-and-drafts.md) | Cycles, extraction, report modes and drafts | Accepted |
+| [0018](0018-publishing.md) | Publishing: commit, issues, Discord and the outbox | Accepted |
+| [0019](0019-default-publish-rule-per-target.md) | Default publish rule per target | Proposed |
