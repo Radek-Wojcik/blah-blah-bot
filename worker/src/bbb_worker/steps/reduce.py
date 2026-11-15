@@ -7,6 +7,10 @@ output language when `windows.json` does not say), writes `work/draft.json` (sch
 In order: deduplicate across windows, validate assignees, due dates and links against the
 context, number the items by time, write the hierarchical summary, and choose the sections.
 A failed summary or section call never fails the step; it falls back and says so.
+
+The status changes the model proposed for open issues and topics become `status_proposals`:
+only targets that exist in the context are kept, one proposal per target (see
+`build_status_proposals`), always with the decision `proposed`. Nothing here ever approves one.
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ SUMMARY_TOKENS = 1024
 SECTIONS_TOKENS = 4096
 FIRST_SENTENCE = re.compile(r"^.*?[.!?](?=\s|$)", re.DOTALL)
 ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+ISSUE_NUMBER = re.compile(r"\d+")
 
 SUMMARY_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -143,6 +148,85 @@ def validate_items(items: list[dict[str, Any]], context: dict[str, Any]) -> list
 def number_items(items: list[dict[str, Any]]) -> None:
     for n, it in enumerate(items, 1):
         it["id"] = f"i{n:03d}"
+
+
+# Status proposals -----------------------------------------------------------------------
+
+
+def status_targets(context: dict[str, Any]) -> dict[str, str]:
+    """Targets a status change may name, by lower-case key: the open issues, the issues linked
+    to items of earlier meetings, and the open topics of the cycle."""
+    targets: dict[str, str] = {}
+    ids = [i["id"] for i in context["open_issues"]]
+    ids += [p["issue"] for p in context["previous_items"] if p.get("issue")]
+    ids += [t["id"] for t in context["open_topics"]]
+    for target in ids:
+        targets.setdefault(target.casefold(), target)
+    return targets
+
+
+def resolve_target(value: str, targets: dict[str, str]) -> str | None:
+    """The canonical id for what the model wrote (`#12`, `12` and a topic id in any case)."""
+    wanted = value.strip()
+    if ISSUE_NUMBER.fullmatch(wanted):
+        wanted = f"#{wanted}"
+    return targets.get(wanted.casefold())
+
+
+def build_status_proposals(
+    results: list[dict[str, Any]], context: dict[str, Any]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Proposals of the draft and the warnings about the ones whose quote is unverified.
+
+    A change whose target is not an open issue, a linked issue or an open topic of the
+    context is dropped, so the model cannot invent targets. Several changes of one target
+    become one: the latest in the meeting wins, but a change with a verified quote beats one
+    without. The proposals are ordered by time, numbered `s1`, `s2`, ... and never approved.
+    A window result written before status changes existed has none."""
+    targets = status_targets(context)
+    best: dict[str, dict[str, Any]] = {}
+    for window in results:
+        for change in window.get("status_changes", []):
+            target = resolve_target(change["target"], targets)
+            if target is None:
+                continue
+            rank = (change["source"]["verified"], change["source"]["t_start_ms"])
+            current = best.get(target)
+            if current is None or rank >= current["rank"]:
+                best[target] = {"rank": rank, "target": target, "change": change}
+    chosen = sorted(
+        best.values(),
+        key=lambda c: (c["change"]["source"]["t_start_ms"], c["target"]),
+    )
+    proposals: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    for n, entry in enumerate(chosen, 1):
+        change = entry["change"]
+        source = dict(change["source"])
+        proposals.append(
+            {
+                "id": f"s{n}",
+                "target": entry["target"],
+                "status": change["status"],
+                "reason": change["reason"],
+                "comment": None,
+                "source": source,
+                "decision": "proposed",
+                "edited": False,
+            }
+        )
+        if not source["verified"]:
+            warnings.append(
+                {
+                    "code": "quote_unverified",
+                    "message": f"The quote of the status change of {entry['target']} was not found "
+                    f"in the transcript (match {source['match']:.2f}, "
+                    f"at {format_clock(source['t_start_ms'])})",
+                    "t_start_ms": source["t_start_ms"],
+                    "t_end_ms": source["t_end_ms"],
+                }
+            )
+    return proposals, warnings
 
 
 # Summary --------------------------------------------------------------------------------
@@ -339,7 +423,8 @@ def build_draft(
         )
     sections, note = layout(backend, items, context, language)
     final = [draft_item(it) for it in items]
-    warnings = [*unverified_warnings(items), *warnings]
+    proposals, proposal_warnings = build_status_proposals(results, context)
+    warnings = [*unverified_warnings(items), *proposal_warnings, *warnings]
     doc = {
         "version": 1,
         "meeting_id": manifest.meeting_id,
@@ -354,6 +439,12 @@ def build_draft(
         "items": final,
         "warnings": warnings,
     }
+    if proposals:
+        # Left out while empty: a draft without proposals is byte for byte what Stage 4 wrote.
+        # Placed before the warnings, the order of the draft type of the application.
+        doc = {**{k: v for k, v in doc.items() if k != "warnings"}}
+        doc["status_proposals"] = proposals
+        doc["warnings"] = warnings
     return doc, note
 
 
@@ -395,4 +486,6 @@ def run(manifest: Manifest) -> None:
     if target.name == draft.DRAFT_NEW:
         protocol.progress(STEP, 1.0, f"{draft.DRAFT} has edits; wrote {draft.DRAFT_NEW} instead")
     else:
-        protocol.progress(STEP, 1.0, f"{len(doc['items'])} items, {note}")
+        proposed = len(doc.get("status_proposals", []))
+        extra = f", {proposed} status proposals" if proposed else ""
+        protocol.progress(STEP, 1.0, f"{len(doc['items'])} items, {note}{extra}")
