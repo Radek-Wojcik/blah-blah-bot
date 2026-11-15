@@ -5,6 +5,7 @@
 //! GPU, and records every transition in the store, so a crash resumes from the stage that
 //! was interrupted.
 
+pub mod gpu;
 pub mod stage;
 mod supervisor;
 
