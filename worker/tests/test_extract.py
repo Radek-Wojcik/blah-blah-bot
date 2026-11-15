@@ -319,7 +319,8 @@ def test_cloud_without_a_key_makes_no_request(tmp_path, monkeypatch):
         assert fake.requests == []
 
 
-def test_external_backend_sends_no_authorization(tmp_path):
+def test_external_backend_sends_no_authorization_without_a_key(tmp_path, monkeypatch):
+    monkeypatch.delenv("BBB_LLM_API_KEY", raising=False)
     with FakeLlm(extraction_for(RULES)) as fake:
         m = make_meeting(tmp_path, small_transcript(), context_doc(), llm_options(fake.url))
         extract.run(m)
@@ -475,7 +476,8 @@ def test_halves_overlap_items_are_deduplicated_by_reduce(tmp_path):
 def test_splitting_stops_after_two_levels_and_the_window_is_skipped(tmp_path):
     with FakeLlm(lambda body, n: Truncated('{"summary": "cut')) as fake:
         m = long_meeting(tmp_path, fake.url)
-        extract.run(m)
+        with pytest.raises(llm_client.LlmError, match="no usable answer"):
+            extract.run(m)
         sent = user_prompts(fake)
     assert len(sent) == 7 and len(set(sent)) == 7  # 1 + 2 + 4
     (window,) = windows_doc(m)["windows"]
@@ -487,7 +489,8 @@ def test_truncated_window_that_cannot_be_split_is_skipped_after_one_request(tmp_
     with FakeLlm(lambda body, n: Truncated('{"summary": "cut')) as fake:
         doc = transcript_doc([segment(0, 0, 5_000, "One short line only.")])
         m = make_meeting(tmp_path, doc, context_doc(), llm_options(fake.url))
-        extract.run(m)
+        with pytest.raises(llm_client.LlmError, match="no usable answer"):
+            extract.run(m)
         assert len(fake.requests) == 1
     (window,) = windows_doc(m)["windows"]
     assert window["skipped"] and window["attempts"] == 1

@@ -15,6 +15,11 @@ what ASR and models really change (an ending, a dropped letter, a missing articl
 quickly when words are replaced, so a reworded quote (a paraphrase) scores below the
 threshold. Candidates are runs of consecutive tokens, so a quote may be part of a segment or
 span several segments.
+
+Only speech counts as transcript: screenshot descriptions are model text and are left out of
+the corpus. A quote with fewer than MIN_QUOTE_TOKENS words or MIN_QUOTE_CHARS normalised
+characters ("yes", "okay, done") fits almost any conversation, so it is verified only when it
+equals the whole text of one segment; otherwise its match is capped below the threshold.
 """
 
 # ruff: noqa: SIM905  (word lists are written as one string and split)
@@ -27,12 +32,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
-from .windows import Line
+from .windows import SPEECH, Line
 
 THRESHOLD = 0.85
 NEAR_MS = 90_000
 # A near match this good is final; anything weaker is compared with the whole window.
 GOOD_ENOUGH = 0.98
+MIN_QUOTE_TOKENS = 3
+MIN_QUOTE_CHARS = 12
 _TOP_STARTS = 3
 _SLACK = 2
 
@@ -82,6 +89,7 @@ class Corpus:
     def from_lines(cls, lines: Sequence[Line]) -> Corpus:
         tokens: list[str] = []
         owner: list[int] = []
+        lines = [ln for ln in lines if ln.kind == SPEECH]
         for i, line in enumerate(lines):
             words = normalize(line.text).split()
             tokens.extend(words)
@@ -179,12 +187,29 @@ def _nearest_line(corpus: Corpus, time_ms: int) -> Line | None:
     )
 
 
+def _is_short(q_text: str) -> bool:
+    return len(q_text.split()) < MIN_QUOTE_TOKENS or len(q_text) < MIN_QUOTE_CHARS
+
+
+def _whole_line(q_text: str, time_ms: int, corpus: Corpus) -> Line | None:
+    """The line (nearest to `time_ms`) whose whole normalised text is `q_text`."""
+    same = [ln for ln in corpus.lines if normalize(ln.text) == q_text]
+    if not same:
+        return None
+    return min(same, key=lambda ln: min(abs(ln.start_ms - time_ms), abs(ln.end_ms - time_ms)))
+
+
 def verify(quote: str, time_ms: int, corpus: Corpus, threshold: float = THRESHOLD) -> Verification:
     """Match `quote` near `time_ms` first, then in the whole window; keep the better match.
 
     A verified item gets the position of the matched lines. An unverified one gets the line
     nearest to the stated time, because a poor match says nothing about where the item is.
+    A short quote is verified only as the whole text of a line (see the module docstring).
     """
+    q_text = normalize(quote)
+    short = _is_short(q_text)
+    if short and (whole := _whole_line(q_text, time_ms, corpus)) is not None:
+        return Verification(True, 1.0, whole.start_ms, whole.end_ms, whole.track, whole.speaker)
     near = best_match(quote, corpus, *corpus.token_range(time_ms - NEAR_MS, time_ms + NEAR_MS))
     best = near
     if best is None or best.score < GOOD_ENOUGH:
@@ -192,6 +217,8 @@ def verify(quote: str, time_ms: int, corpus: Corpus, threshold: float = THRESHOL
         if anywhere is not None and (best is None or anywhere.score > best.score):
             best = anywhere
     score = best.score if best else 0.0
+    if short:
+        score = min(score, round(threshold - 0.01, 4))
     if best is not None and score >= threshold:
         first = corpus.lines[corpus.owner[best.first_token]]
         last = corpus.lines[corpus.owner[best.last_token - 1]]

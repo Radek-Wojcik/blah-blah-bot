@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
 from . import schema
-from .steps import read_json, write_json
+from .steps import write_bytes, write_json
 
 DRAFT = "draft.json"
 DRAFT_NEW = "draft.new.json"
+# SHA-256 (lowercase hex) of the exact bytes of the `draft.json` that `reduce` wrote last.
+BASE_HASH = "draft.base.sha256"
 
 # Built-in sections of the fixed layout, in this order.
 FIXED_ORDER = ("decision", "task", "topic", "note", "idea", "budget")
@@ -57,24 +61,43 @@ def assign_by_type(items: list[dict[str, Any]]) -> None:
         it["section"] = FIXED_IDS[it["type"]]
 
 
+def sha256_hex(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
 def has_user_edits(path: Path) -> bool:
-    """True when the draft at `path` has an item the user touched. A draft that cannot be
-    read is treated as edited, because it is not ours to overwrite blindly."""
+    """True when the draft at `path` was touched by the user: an item has `edited: true`, or
+    the file no longer has the bytes `reduce` wrote (the hash recorded next to it in
+    `draft.base.sha256`). Deleting items or changing sections and the report mode set no flag,
+    so the hash is what catches them. Without a recorded hash only the flags count. A draft
+    that cannot be read, or a recorded hash that is not a hash, is treated as edited, because
+    the draft is not ours to overwrite blindly."""
     if not path.exists():
         return False
     try:
-        doc = read_json(path)
-        return any(it.get("edited") for it in doc.get("items", []))
-    except (ValueError, AttributeError, TypeError):
+        raw = path.read_bytes()
+        doc = json.loads(raw.decode("utf-8"))
+        if any(it.get("edited") for it in doc.get("items", [])):
+            return True
+        recorded_file = path.with_name(BASE_HASH)
+        if not recorded_file.exists():
+            return False
+        recorded = recorded_file.read_text(encoding="utf-8").strip().lower()
+    except (OSError, ValueError, AttributeError, TypeError):
         return True
+    return recorded != sha256_hex(raw)
 
 
 def write_draft(work_dir: Path, draft: dict[str, Any]) -> Path:
     """Validate and write the draft. A draft with the user's edits is never overwritten: the
-    new one goes to `draft.new.json` and the caller reports that."""
+    new one goes to `draft.new.json` and the caller reports that. A written `draft.json` is
+    followed by `draft.base.sha256`, the SHA-256 (lowercase hex) of its exact bytes, which the
+    editor compares with the file to know whether it was changed since."""
     schema.validate("meeting", draft)
     target = work_dir / DRAFT
     if has_user_edits(target):
-        target = work_dir / DRAFT_NEW
-    write_json(target, draft)
+        write_json(work_dir / DRAFT_NEW, draft)
+        return work_dir / DRAFT_NEW
+    data = write_json(target, draft)
+    write_bytes(work_dir / BASE_HASH, sha256_hex(data).encode("ascii"))
     return target

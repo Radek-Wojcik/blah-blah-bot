@@ -1,9 +1,11 @@
 """Deduplication of items found by overlapping windows.
 
-Two items are the same when they come from different windows (or parts of a split window), have the same type, say nearly
-the same thing and are close in time. Windows overlap by a minute, so a statement near a cut
-is extracted twice; items of one window are never merged with each other, because a window
-can legitimately contain two similar items.
+Two items are the same when they come from different windows (or parts of a split window),
+have the same type, say nearly the same thing, are close in time and do not disagree on the
+assignee or the due date (two different non-null values mean two different tasks; a null on
+one side is filled from the other). Windows overlap by a minute, so a statement near a cut is
+extracted twice; items of one window are never merged with each other, not even through a
+third item, because a window can legitimately contain two similar items.
 
 Items are the raw dictionaries of `windows.json`: `type`, `text`, `assignee`, `due`,
 `certainty`, `window` and `source` (`t_start_ms`, `t_end_ms`, `verified`, `match`).
@@ -42,10 +44,20 @@ def close_in_time(a: dict[str, Any], b: dict[str, Any]) -> bool:
     )
 
 
+def conflicting(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    """Two different non-null assignees or due dates make two different tasks ("send the report"
+    for Alex and for Bea). A null on either side does not conflict: the other value is kept."""
+    return any(
+        a[field] is not None and b[field] is not None and a[field] != b[field]
+        for field in ("assignee", "due")
+    )
+
+
 def is_duplicate(a: dict[str, Any], b: dict[str, Any]) -> bool:
     return (
         (a["window"], a.get("part", "")) != (b["window"], b.get("part", ""))
         and a["type"] == b["type"]
+        and not conflicting(a, b)
         and close_in_time(a, b)
         and similar(a["text"], b["text"])
     )
@@ -89,9 +101,19 @@ def merge_group(group: list[dict[str, Any]]) -> dict[str, Any]:
     return winner
 
 
+def _can_join(group_a: list[dict[str, Any]], group_b: list[dict[str, Any]]) -> bool:
+    """Groups are joined only when nothing in them conflicts and no window would contribute
+    two items: a chain a~b~c must not merge a and c when they differ (a null in b links them)."""
+    places = {(it["window"], it.get("part", "")) for it in group_a}
+    if any((it["window"], it.get("part", "")) in places for it in group_b):
+        return False
+    return not any(conflicting(x, y) for x in group_a for y in group_b)
+
+
 def _groups(items: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     """Union of duplicate pairs; `items` must be sorted by start time."""
     parent = list(range(len(items)))
+    members: dict[int, list[dict[str, Any]]] = {i: [it] for i, it in enumerate(items)}
 
     def find(i: int) -> int:
         while parent[i] != i:
@@ -104,12 +126,11 @@ def _groups(items: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
             b = items[j]
             if b["source"]["t_start_ms"] > a["source"]["t_end_ms"] + MAX_GAP_MS:
                 break
-            if is_duplicate(a, b):
-                parent[find(j)] = find(i)
-    grouped: dict[int, list[dict[str, Any]]] = {}
-    for i, item in enumerate(items):
-        grouped.setdefault(find(i), []).append(item)
-    return list(grouped.values())
+            ri, rj = find(i), find(j)
+            if ri != rj and is_duplicate(a, b) and _can_join(members[ri], members[rj]):
+                parent[rj] = ri
+                members[ri] += members.pop(rj)
+    return list(members.values())
 
 
 def merge_duplicates(items: list[dict[str, Any]]) -> list[dict[str, Any]]:

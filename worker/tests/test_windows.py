@@ -110,7 +110,7 @@ def test_screenshot_during_an_excluded_passage_is_dropped():
     shots = windows.screenshot_lines(
         {
             "items": [
-                {"file": "a.png", "offset_ms": 500, "description": "kept"},
+                {"file": "a.png", "offset_ms": 200_000, "description": "kept"},
                 {"file": "b.png", "offset_ms": 2500, "description": "dropped"},
             ]
         },

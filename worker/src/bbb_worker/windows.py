@@ -14,6 +14,8 @@ import bisect
 from dataclasses import dataclass
 from typing import Any
 
+from .transcript import CONTEXT_WINDOW_MS
+
 WINDOW_MS = 15 * 60_000
 OVERLAP_MS = 60_000
 PAUSE_SEARCH_MS = 120_000
@@ -122,16 +124,29 @@ def excluded_ranges(
     ]
 
 
+def touches_excluded(at_ms: int, excluded: list[tuple[int, int]] | None) -> bool:
+    """True when an excluded passage overlaps the discussion the vision model was given for a
+    screenshot taken at `at_ms` (CONTEXT_WINDOW_MS before and after it)."""
+    lo, hi = at_ms - CONTEXT_WINDOW_MS, at_ms + CONTEXT_WINDOW_MS
+    return any(ex_hi >= lo and ex_lo <= hi for ex_lo, ex_hi in excluded or [])
+
+
 def screenshot_lines(
     descriptions: dict[str, Any] | None, excluded: list[tuple[int, int]] | None = None
 ) -> list[Line]:
-    """Screenshot descriptions as lines. A screenshot taken while an excluded passage was
-    spoken is dropped as well: it may show what the user chose to keep out."""
+    """Screenshot descriptions as lines. A description is dropped when an excluded passage lies
+    within its context window (CONTEXT_WINDOW_MS either side of the screenshot, which includes
+    the moment itself): the vision model saw that discussion and the description may repeat
+    it. This holds for `descriptions.json` of older runs, which carry no marker of what the
+    description was built from. Entries without a usable time or text are ignored."""
     out: list[Line] = []
     for item in (descriptions or {}).get("items", []):
-        at = int(item["offset_ms"])
-        text = " ".join(item["description"].split())
-        if not text or any(lo <= at <= hi for lo, hi in excluded or []):
+        try:
+            at = int(item["offset_ms"])
+            text = " ".join(str(item["description"]).split())
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not text or touches_excluded(at, excluded):
             continue
         out.append(Line(at, at, "screenshot", "screenshot", "screenshot", text, SCREENSHOT))
     return sorted(out, key=lambda ln: ln.start_ms)

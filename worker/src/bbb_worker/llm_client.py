@@ -3,10 +3,14 @@
 Three backends, all spoken to through an OpenAI-compatible `chat/completions` endpoint:
 
 - `managed`: a `llama-server` started from a GGUF path (`llama.running`), always terminated.
-- `external`: a server the user runs (`base_url` and `model`).
-- `cloud`: the same shape plus a key from the environment variable `BBB_LLM_API_KEY`, sent as a
-  bearer token. It runs only when `cloud_confirmed` is true; otherwise it is refused before
-  any network use. There is no fallback to the cloud.
+- `external`: a server the user runs (`base_url` and `model`). A key from the environment
+  variable `BBB_LLM_API_KEY` is sent as a bearer token when present (vLLM `--api-key`, a proxy).
+- `cloud`: the same shape; the key is required. It runs only when `cloud_confirmed` is true;
+  otherwise it is refused before any network use. There is no fallback to the cloud. The
+  address must be `https://` (plain http only for loopback).
+
+The key is never sent to the managed backend, never embedded in a URL, and never forwarded
+on a redirect: a redirect is refused.
 
 Neither keys nor prompts are ever printed or logged.
 """
@@ -15,10 +19,11 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,6 +40,16 @@ REQUEST_TIMEOUT_S = 600.0
 KEY_VARIABLE = "BBB_LLM_API_KEY"
 _LOOPBACK = ("localhost", "127.0.0.1", "::1")
 _PREVIOUS_ANSWER_CHARS = 4000
+# Pauses before the retries of a transient failure (timeout, 429, 5xx), in seconds, each
+# stretched or shrunk by up to JITTER. `Retry-After` replaces the pause, capped at MAX_RETRY_AFTER_S.
+BACKOFF_S = (2.0, 5.0, 10.0)
+JITTER = 0.2
+MAX_RETRY_AFTER_S = 30.0
+
+
+def _sleep(seconds: float) -> None:
+    """The pause between retries; tests replace it so that they do not wait."""
+    time.sleep(seconds)
 
 
 class LlmError(RuntimeError):
@@ -57,7 +72,28 @@ class TruncatedOutputError(InvalidOutputError):
 
 
 class _Transient(Exception):
-    """A failure worth another attempt (timeout, server error)."""
+    """A failure worth another attempt (timeout, rate limit, server error)."""
+
+    def __init__(self, message: str, retry_after: float | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+def _retry_after(headers: Any) -> float | None:
+    """Seconds from a numeric `Retry-After` header, None when absent or not a number."""
+    try:
+        value = float(headers.get("Retry-After"))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
+def backoff_delay(retries_so_far: int, retry_after: float | None) -> float:
+    """Pause before the next attempt of a transient failure."""
+    if retry_after is not None:
+        return min(retry_after, MAX_RETRY_AFTER_S)
+    base = BACKOFF_S[min(retries_so_far, len(BACKOFF_S) - 1)]
+    return base * (1 + random.uniform(-JITTER, JITTER))
 
 
 @dataclass(frozen=True)
@@ -118,7 +154,7 @@ class Backend:
                 return json.loads(resp.read())
         except urllib.error.HTTPError as e:
             if e.code >= 500 or e.code == 429:
-                raise _Transient(f"HTTP {e.code}") from None
+                raise _Transient(f"HTTP {e.code}", _retry_after(e.headers)) from None
             raise LlmError(f"the model server rejected the request: HTTP {e.code}") from None
         except TimeoutError:
             raise _Transient("timeout") from None
@@ -130,11 +166,31 @@ class Backend:
             raise _Transient("the response was not JSON") from None
 
 
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """urllib would copy the Authorization header to the new address (any host, any scheme).
+    A model endpoint has no reason to redirect, so a redirect is an error."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        raise LlmError(f"the model server answered with a redirect (HTTP {code}), which is refused")
+
+
 def _opener(url: str) -> urllib.request.OpenerDirector:
-    """Local servers are never reached through a system proxy."""
+    """Local servers are never reached through a system proxy. Redirects are refused."""
     if urlparse(url).hostname in _LOOPBACK:
-        return urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    return urllib.request.build_opener()
+        return urllib.request.build_opener(urllib.request.ProxyHandler({}), _RefuseRedirects())
+    return urllib.request.build_opener(_RefuseRedirects())
+
+
+def check_base_url(kind: str, url: str) -> None:
+    """Refuse an address that would expose the transcript or the key: embedded credentials,
+    a scheme other than http(s), and for the cloud anything but https (loopback excepted)."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise LlmError("options.llm.base_url must be an http(s) address with a host")
+    if parsed.username is not None or parsed.password is not None or "@" in parsed.netloc:
+        raise LlmError("options.llm.base_url must not contain credentials")
+    if kind == "cloud" and parsed.scheme != "https" and parsed.hostname not in _LOOPBACK:
+        raise LlmError("the cloud backend needs an https:// address")
 
 
 @contextmanager
@@ -149,13 +205,10 @@ def open_backend(cfg: LlmConfig) -> Iterator[Backend]:
         return
     if not cfg.base_url:
         raise LlmError("options.llm.base_url is required for the external and cloud backends")
-    key = None
-    if cfg.kind == "cloud":
-        key = os.environ.get(KEY_VARIABLE) or None
-        if not key:
-            raise LlmError(
-                f"cloud backend needs the key in the environment variable {KEY_VARIABLE}"
-            )
+    check_base_url(cfg.kind, cfg.base_url)
+    key = os.environ.get(KEY_VARIABLE) or None
+    if cfg.kind == "cloud" and not key:
+        raise LlmError(f"cloud backend needs the key in the environment variable {KEY_VARIABLE}")
     yield Backend(cfg.base_url, cfg.model, key, cfg.kind, cfg.ctx)
 
 
@@ -206,12 +259,18 @@ def complete_json(
     max_tokens: int,
     max_retries: int = MAX_RETRIES,
     timeout: float = REQUEST_TIMEOUT_S,
+    sleep: Callable[[float], None] | None = None,
 ) -> Completion:
     """Ask for JSON that validates against `schema`; on invalid output retry with the error.
 
-    Raises `InvalidOutputError` after `max_retries` retries and `LlmError` for a failure that
-    another attempt cannot fix (unreachable server, rejected request).
+    A transient failure (timeout, 429, 5xx) is retried separately, after a pause that grows
+    (`BACKOFF_S`, with jitter) or follows `Retry-After`. `sleep` replaces the pause in tests.
+
+    Raises `InvalidOutputError` after `max_retries` retries of invalid output (or the retries
+    of transient failures) and `LlmError` for a failure that another attempt cannot fix
+    (unreachable server, rejected request).
     """
+    pause = sleep or _sleep
     validator = jsonschema.Draft202012Validator(schema)
     messages: list[dict[str, str]] = [
         {"role": "system", "content": system},
@@ -220,7 +279,15 @@ def complete_json(
     usage = {"prompt_tokens": 0, "completion_tokens": 0}
     started = time.monotonic()
     last_error = "no attempt was made"
-    for attempt in range(1, max_retries + 2):
+    attempt = 0
+    invalid_retries = 0
+    transient_retries = 0
+
+    def failure() -> InvalidOutputError:
+        return InvalidOutputError(last_error, attempt, usage, round(time.monotonic() - started, 3))
+
+    while True:
+        attempt += 1
         payload: dict[str, Any] = {
             "messages": messages,
             "temperature": 0,
@@ -233,6 +300,10 @@ def complete_json(
             resp = backend.post(payload, timeout)
         except _Transient as e:
             last_error = str(e)
+            if transient_retries >= len(BACKOFF_S):
+                raise failure() from None
+            pause(backoff_delay(transient_retries, e.retry_after))
+            transient_retries += 1
             continue
         for key in usage:
             usage[key] += int(resp.get("usage", {}).get(key, 0) or 0)
@@ -251,6 +322,9 @@ def complete_json(
         if problem is None:
             return Completion(data, attempt, usage, round(time.monotonic() - started, 3))
         last_error = problem
+        if invalid_retries >= max_retries:
+            raise failure()
+        invalid_retries += 1
         messages = [
             *messages[:2],
             {"role": "assistant", "content": text[:_PREVIOUS_ANSWER_CHARS]},
@@ -260,6 +334,3 @@ def complete_json(
                 "Answer again with JSON that follows the schema exactly.",
             },
         ]
-    raise InvalidOutputError(
-        last_error, max_retries + 1, usage, round(time.monotonic() - started, 3)
-    )

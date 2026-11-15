@@ -54,8 +54,10 @@ def allowed_sections(context: dict[str, Any]) -> set[str]:
 def build_items(
     data: dict[str, Any], window: windows.Window, context: dict[str, Any]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Verified raw items of one window and the warnings about the unverified ones."""
-    corpus = quotes.Corpus.from_lines(window.lines)
+    """Verified raw items of one window and the warnings about the unverified ones. Quotes
+    are checked against what people said; screenshot descriptions are model text and do not
+    count as a source."""
+    corpus = quotes.Corpus.from_lines(window.speech)
     sections = allowed_sections(context)
     items: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
@@ -244,3 +246,10 @@ def run(manifest: Manifest) -> None:
     write_json(manifest.work_dir / "extract" / "windows.json", doc)
     skipped = sum(1 for r in results if r["skipped"])
     protocol.progress(STEP, 1.0, f"{len(results)} windows, {skipped} skipped")
+    if results and skipped == len(results):
+        # Nothing was extracted. Finishing "done" would give an empty draft that looks like a
+        # meeting without items; failing lets the stage be retried (windows.json stays).
+        raise llm_client.LlmError(
+            f"the model gave no usable answer for any of the {len(results)} windows "
+            "(rate limit, outage or invalid output); retry the stage"
+        )

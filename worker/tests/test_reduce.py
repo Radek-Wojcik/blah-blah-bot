@@ -271,6 +271,7 @@ def test_existing_draft_without_edits_is_replaced(tmp_path):
         doc = read_draft(m)
         doc["summary"] = "stale"
         (m.work_dir / "draft.json").write_text(json.dumps(doc), encoding="utf-8")
+        (m.work_dir / draft.BASE_HASH).unlink()  # a draft from before the hash existed
         reduce.run(m)
     assert read_draft(m)["summary"] == "The meeting in four sentences."
     assert not (m.work_dir / "draft.new.json").exists()

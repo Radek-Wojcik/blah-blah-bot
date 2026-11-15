@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Self
 
 from bbb_worker import manifest as manifest_mod
+from bbb_worker import prompts
 
 # A handler gets the request body and the 1-based number of the request, and returns the
 # content of the answer (a string, or a dict that is sent as JSON).
@@ -35,9 +36,10 @@ class FakeLlm:
                 outer.requests.append(body)
                 outer.headers.append({k.lower(): v for k, v in self.headers.items()})
                 answer = outer.handler(body, len(outer.requests))
-                status = 200
-                if isinstance(answer, tuple):
-                    status, answer = answer
+                status, extra = 200, {}
+                if isinstance(answer, tuple):  # (status, content) or (status, content, headers)
+                    status, answer, *more = answer
+                    extra = more[0] if more else {}
                 content = answer if isinstance(answer, str) else json.dumps(answer)
                 payload = json.dumps(
                     {
@@ -55,6 +57,8 @@ class FakeLlm:
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(payload)))
+                for key, value in extra.items():
+                    self.send_header(key, value)
                 self.end_headers()
                 self.wfile.write(payload)
 
@@ -211,7 +215,8 @@ def extraction_for(rules: list[dict[str, Any]]) -> Callable[[dict[str, Any], int
     import re
 
     def handle(body: dict[str, Any], n: int) -> Any:
-        window = body["messages"][1]["content"].split("Transcript window:\n", 1)[1]
+        begin = prompts.TRANSCRIPT_BEGIN + "\n"
+        window = body["messages"][1]["content"].split(begin, 1)[1]
         items = []
         for rule in rules:
             found = re.search(rf"\[(\d\d:\d\d:\d\d)\][^\n]*{re.escape(rule['quote'])}", window)

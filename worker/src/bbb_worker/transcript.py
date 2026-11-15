@@ -15,6 +15,9 @@ MAX_GAP_MS = 1500
 # at most this far away; otherwise it is attributed to "unknown".
 NEAREST_TOLERANCE_MS = 500
 
+# How far around a screenshot the discussion is given to the vision model as context.
+CONTEXT_WINDOW_MS = 60_000
+
 Turn = tuple[float, float, str]
 
 
@@ -154,7 +157,7 @@ def merge(
 
 
 def context_around(
-    transcript: dict[str, Any], offset_ms: float, window_ms: int = 60_000
+    transcript: dict[str, Any], offset_ms: float, window_ms: int = CONTEXT_WINDOW_MS
 ) -> list[dict[str, Any]]:
     """Segments within `window_ms` before and after a moment, for the vision prompt."""
     return [

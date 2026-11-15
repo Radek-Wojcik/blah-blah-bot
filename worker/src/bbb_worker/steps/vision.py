@@ -27,12 +27,20 @@ PROMPT = (
 LANGUAGE_NAMES = {"pl": "Polish", "en": "English"}
 
 
-def context_text(doc: dict[str, Any], offset_ms: float) -> str:
-    """Speaker-labelled transcript lines around a moment, capped in length."""
+def excluded_ids(edits: dict[str, Any] | None) -> set[int]:
+    """Ids of the segments the user excluded (`edits.json`)."""
+    segments = (edits or {}).get("segments", {}) or {}
+    return {int(k) for k, v in segments.items() if isinstance(v, dict) and v.get("excluded")}
+
+
+def context_text(doc: dict[str, Any], offset_ms: float, excluded: set[int] | None = None) -> str:
+    """Speaker-labelled transcript lines around a moment, capped in length. Excluded segments
+    never become context: the description would carry them into the report."""
     labels = {s["id"]: s["label"] for s in doc["speakers"]}
     lines = [
         f"{labels.get(s['speaker'], s['speaker'])}: {s['text']}"
         for s in transcript.context_around(doc, offset_ms)
+        if s["id"] not in (excluded or ())
     ]
     text = "\n".join(lines)
     return text[-MAX_CONTEXT_CHARS:] if len(text) > MAX_CONTEXT_CHARS else text
@@ -65,6 +73,8 @@ def run(manifest: Manifest) -> None:
         return
 
     transcript_doc = read_json(manifest.work_dir / "transcript.json")
+    edits_path = manifest.work_dir / "edits.json"
+    excluded = excluded_ids(read_json(edits_path) if edits_path.exists() else None)
     language = LANGUAGE_NAMES.get(transcript_doc["language"], "the language of the discussion")
 
     external = manifest.options.get("vision_base_url")
@@ -84,7 +94,7 @@ def run(manifest: Manifest) -> None:
         for i, (rel, offset_ms) in enumerate(manifest.screenshots):
             image = (manifest.meeting_dir / rel).read_bytes()
             prompt = PROMPT.format(
-                language=language, context=context_text(transcript_doc, offset_ms)
+                language=language, context=context_text(transcript_doc, offset_ms, excluded)
             )
             resp = llama.chat(base, build_payload(image, prompt))
             items.append(
