@@ -1407,6 +1407,25 @@ pub fn pull_for_briefing(
         if found.setting.kind == RepoKind::Clone {
             log_pull(cycle_id, found.repo.pull_rebase());
         }
+        // The state of the cycle's issues: what was closed since the last meeting is done.
+        if let Some(list) = crate::issue_sync::refresh_cycle_issues(
+            &crate::secrets::Credentials,
+            &found.setting,
+            &found.repo,
+            cycle_id,
+            crate::issue_sync::quick_client(),
+        ) {
+            match list.error {
+                Some(why) => {
+                    tracing::warn!(cycle = cycle_id, %why, "issues not refreshed, using the last known state");
+                }
+                None => tracing::info!(
+                    cycle = cycle_id,
+                    closed = list.closed.len(),
+                    "issues refreshed"
+                ),
+            }
+        }
     }
 }
 

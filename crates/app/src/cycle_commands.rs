@@ -175,9 +175,20 @@ pub async fn pull_cycle_repo(
         .find(|r| r.id == repo_id)
         .ok_or_else(|| IpcError::new("not_found", "this cycle repository is not registered"))?;
     let task = setting.clone();
-    let mut result = tauri::async_runtime::spawn_blocking(move || cycles::pull_repo(&task))
-        .await
-        .map_err(join_error)??;
+    let mut result = tauri::async_runtime::spawn_blocking(move || {
+        let mut result = cycles::pull_repo(&task)?;
+        // The state of the issues is part of what a pull brings up to date.
+        result
+            .warnings
+            .extend(crate::issue_sync::refresh_repo_issues(
+                &crate::secrets::Credentials,
+                &task,
+                crate::issue_sync::quick_client,
+            ));
+        Ok::<_, IpcError>(result)
+    })
+    .await
+    .map_err(join_error)??;
     result
         .warnings
         .extend(cycles::sync_repo(&setting, state.inner()));

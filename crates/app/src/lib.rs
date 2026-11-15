@@ -6,6 +6,7 @@ mod cycles;
 mod draft_commands;
 mod hotkeys;
 mod ipc;
+mod issue_sync;
 mod llm;
 mod logging;
 mod overlay;
