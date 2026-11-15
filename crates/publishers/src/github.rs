@@ -4,6 +4,9 @@
 //! Everything goes through [`HttpClient`](crate::http::HttpClient), so a token never reaches an
 //! error text, a redirect is never followed and plain `http` only works for this machine.
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+
 use serde_json::Value;
 
 use crate::http::{parse_endpoint, ErrorKind, HttpClient, HttpError, Request};
@@ -11,6 +14,13 @@ use crate::http::{parse_endpoint, ErrorKind, HttpClient, HttpError, Request};
 /// The public GitHub API.
 pub const DEFAULT_API: &str = "https://api.github.com";
 const API_VERSION: &str = "2022-11-28";
+
+mod issues;
+
+pub use issues::{
+    defuse_mentions, issue_body, DueOutcome, IssueOutcome, IssueSpec, StatusOutcome, StatusSpec,
+    DUE_FIELD_NAME, WRITE_PACING,
+};
 
 // ----- repository identity -----------------------------------------------------------------
 
@@ -131,10 +141,14 @@ pub struct Github {
     client: HttpClient,
     api: String,
     token: String,
+    /// The id of the organisation issue field for due dates, by organisation: `None` when
+    /// the organisation has none. Only definitive answers are kept.
+    due_fields: Mutex<HashMap<String, Option<u64>>>,
 }
 
 impl Github {
-    /// A client with the default timeouts. `api` is checked with [`normalize_api_base`].
+    /// A client with the default timeouts. `api` is checked with [`normalize_api_base`]. An
+    /// empty `token` makes anonymous requests, enough to read a public repository.
     pub fn new(api: &str, token: &str) -> Result<Github, HttpError> {
         Self::with_client(HttpClient::new(), api, token)
     }
@@ -152,6 +166,7 @@ impl Github {
             client: client.with_secret(token),
             api,
             token: token.to_string(),
+            due_fields: Mutex::new(HashMap::new()),
         })
     }
 
@@ -160,10 +175,20 @@ impl Github {
     }
 
     fn authorised(&self, request: Request) -> Request {
-        request
-            .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", API_VERSION)
-            .bearer(&self.token)
+        self.with_token(
+            request
+                .header("Accept", "application/vnd.github+json")
+                .header("X-GitHub-Api-Version", API_VERSION),
+        )
+    }
+
+    /// The token as a bearer; an empty token (reading a public repository) sends none.
+    fn with_token(&self, request: Request) -> Request {
+        if self.token.is_empty() {
+            request
+        } else {
+            request.bearer(&self.token)
+        }
     }
 
     fn get(&self, path: &str) -> Result<Value, HttpError> {

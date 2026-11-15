@@ -15,8 +15,13 @@
 //! (404); writes need a token; assignees who cannot be assigned are dropped silently; labels
 //! are created on first use; closing an issue sets `state_reason` to `completed`.
 //!
-//! Not implemented: the organisation issue field "Target date" (open question Q1 of the
-//! plan, unverified), so a client has to use the `Due:` line.
+//! Organisation issue fields, as documented on docs.github.com (API version 2026-03-10):
+//! `GET /orgs/{org}/issue-fields` (id, name, data type) and `GET`, `POST` and `PUT`
+//! `/repos/{owner}/{repo}/issues/{n}/issue-field-values` with a body
+//! `{"issue_field_values": [{"field_id": 1, "value": "2026-11-20"}]}`. Only for repositories
+//! of an organisation; a `date` field takes an ISO date. Whether GitHub still has these
+//! behind a preview, and which token permission they need, is not known: the fake does not
+//! check either, and the publisher treats any failure as "no field".
 
 use std::collections::BTreeMap;
 use std::ops::Deref;
@@ -51,6 +56,14 @@ pub struct StoredComment {
     pub body: String,
 }
 
+/// An organisation issue field definition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueField {
+    pub id: u64,
+    pub name: String,
+    pub data_type: String,
+}
+
 /// An issue (or pull request) as stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredIssue {
@@ -77,6 +90,8 @@ struct Repo {
     /// `None`: everybody can be assigned.
     assignable: Option<Vec<String>>,
     issues: Vec<StoredIssue>,
+    /// Field values by issue number: `(field id, value)`.
+    field_values: BTreeMap<u64, Vec<(u64, Value)>>,
     labels: Vec<String>,
     next_number: u64,
     next_comment_id: u64,
@@ -85,6 +100,9 @@ struct Repo {
 struct State {
     base: String,
     repos: BTreeMap<String, Repo>,
+    /// Issue fields by organisation (lower case).
+    org_fields: BTreeMap<String, Vec<IssueField>>,
+    next_field_id: u64,
     token: Option<String>,
     clock: u64,
 }
@@ -141,6 +159,8 @@ impl FakeGithub {
         let state = Arc::new(Mutex::new(State {
             base: String::new(),
             repos: BTreeMap::new(),
+            org_fields: BTreeMap::new(),
+            next_field_id: 100,
             token: None,
             clock: 0,
         }));
@@ -172,6 +192,7 @@ impl FakeGithub {
                 push_allowed: true,
                 assignable: None,
                 issues: Vec::new(),
+                field_values: BTreeMap::new(),
                 labels: Vec::new(),
                 next_number: 1,
                 next_comment_id: 1,
@@ -195,6 +216,31 @@ impl FakeGithub {
     /// Makes the owner an organisation.
     pub fn set_organization(&self, full_name: &str) {
         self.with_repo(full_name, |r| r.owner_type = "Organization");
+    }
+
+    /// Defines an issue field of an organisation (`data_type`: `date`, `text`, ...) and
+    /// returns its id.
+    pub fn add_org_issue_field(&self, org: &str, name: &str, data_type: &str) -> u64 {
+        let mut state = lock(&self.state);
+        let id = state.next_field_id;
+        state.next_field_id += 1;
+        state
+            .org_fields
+            .entry(org.to_ascii_lowercase())
+            .or_default()
+            .push(IssueField {
+                id,
+                name: name.to_string(),
+                data_type: data_type.to_string(),
+            });
+        id
+    }
+
+    /// The field values of an issue as `(field id, value)`.
+    pub fn issue_field_values(&self, full_name: &str, number: u64) -> Vec<(u64, Value)> {
+        self.with_repo(full_name, |r| {
+            r.field_values.get(&number).cloned().unwrap_or_default()
+        })
     }
 
     /// Whether the token's user may push: `permissions.push` of the repository answer.
@@ -348,8 +394,39 @@ fn handle(shared: &Mutex<State>, req: &Recorded) -> Reply {
                 error(401, "Requires authentication")
             }
         }
+        ["orgs", org, "issue-fields"] if req.method == "GET" => {
+            if !authed {
+                return error(401, "Requires authentication");
+            }
+            let is_org = state.repos.iter().any(|(k, r)| {
+                r.owner_type == "Organization"
+                    && k.starts_with(&format!("{}/", org.to_ascii_lowercase()))
+            });
+            if !is_org {
+                return not_found();
+            }
+            let fields = state
+                .org_fields
+                .get(&org.to_ascii_lowercase())
+                .cloned()
+                .unwrap_or_default();
+            Reply::json(
+                200,
+                &Value::Array(
+                    fields
+                        .iter()
+                        .map(|f| json!({"id": f.id, "name": f.name, "data_type": f.data_type, "visibility": "all"}))
+                        .collect(),
+                ),
+            )
+        }
         ["repos", owner, name, rest @ ..] => {
             let key = format!("{owner}/{name}").to_ascii_lowercase();
+            let fields = state
+                .org_fields
+                .get(&owner.to_ascii_lowercase())
+                .cloned()
+                .unwrap_or_default();
             let at = state.tick();
             let base = state.base.clone();
             let Some(repo) = state.repos.get_mut(&key) else {
@@ -362,7 +439,7 @@ fn handle(shared: &Mutex<State>, req: &Recorded) -> Reply {
             if req.method != "GET" && !authed {
                 return error(401, "Requires authentication");
             }
-            route(repo, rest, req, &base, at, authed)
+            route(repo, rest, req, &base, at, authed, &fields)
         }
         _ => not_found(),
     }
@@ -375,6 +452,7 @@ fn route(
     base: &str,
     at: u64,
     authed: bool,
+    fields: &[IssueField],
 ) -> Reply {
     match (req.method.as_str(), rest) {
         ("GET", []) => Reply::json(
@@ -410,8 +488,93 @@ fn route(
             None => not_found(),
         },
         ("POST", ["issues", n, "comments"]) => post_comment(repo, n, req, base, at),
+        ("GET", ["issues", n, "issue-field-values"]) => match find_issue(repo, n) {
+            Some(i) => Reply::json(200, &field_values_json(repo, repo.issues[i].number, fields)),
+            None => not_found(),
+        },
+        (m @ ("PUT" | "POST"), ["issues", n, "issue-field-values"]) => {
+            set_field_values(repo, n, req, fields, m == "PUT")
+        }
         _ => not_found(),
     }
+}
+
+fn field_values_json(repo: &Repo, number: u64, fields: &[IssueField]) -> Value {
+    let list = repo.field_values.get(&number).cloned().unwrap_or_default();
+    Value::Array(
+        list.iter()
+            .map(|(id, value)| {
+                let def = fields.iter().find(|f| f.id == *id);
+                json!({
+                    "issue_field_id": id,
+                    "issue_field_name": def.map(|f| f.name.clone()),
+                    "data_type": def.map(|f| f.data_type.clone()),
+                    "value": value,
+                })
+            })
+            .collect(),
+    )
+}
+
+fn valid_iso_date(text: &str) -> bool {
+    let b = text.as_bytes();
+    b.len() == 10
+        && b.iter().enumerate().all(|(i, c)| match i {
+            4 | 7 => *c == b'-',
+            _ => c.is_ascii_digit(),
+        })
+        && matches!(text[5..7].parse::<u32>(), Ok(1..=12))
+        && matches!(text[8..10].parse::<u32>(), Ok(1..=31))
+}
+
+fn set_field_values(
+    repo: &mut Repo,
+    number: &str,
+    req: &Recorded,
+    fields: &[IssueField],
+    replace: bool,
+) -> Reply {
+    if repo.owner_type != "Organization" {
+        return not_found();
+    }
+    let Some(i) = find_issue(repo, number) else {
+        return not_found();
+    };
+    let body = match parse_body(req) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let Some(list) = body.get("issue_field_values").and_then(Value::as_array) else {
+        return validation_failed("issue_field_values", "missing_field");
+    };
+    let mut parsed = Vec::new();
+    for entry in list {
+        let id = entry.get("field_id").and_then(Value::as_u64);
+        let value = entry.get("value").cloned().unwrap_or(Value::Null);
+        let Some(def) = id.and_then(|id| fields.iter().find(|f| f.id == id)) else {
+            return validation_failed("field_id", "invalid");
+        };
+        let ok = match def.data_type.as_str() {
+            "date" => value.as_str().is_some_and(valid_iso_date),
+            "text" | "single_select" => value.is_string(),
+            "number" => value.is_number(),
+            _ => true,
+        };
+        if !ok {
+            return validation_failed("value", "invalid");
+        }
+        parsed.push((def.id, value));
+    }
+    let n = repo.issues[i].number;
+    let stored = repo.field_values.entry(n).or_default();
+    if replace {
+        stored.clear();
+    }
+    for (id, value) in parsed {
+        stored.retain(|(existing, _)| *existing != id);
+        stored.push((id, value));
+    }
+    Reply::json(200, &field_values_json(repo, n, fields))
 }
 
 fn find_issue(repo: &Repo, number: &str) -> Option<usize> {
