@@ -767,7 +767,7 @@ mod tests {
 
     #[test]
     fn the_api_key_never_appears_in_debug_output_or_the_manifest() {
-        let key = "sk-test-0123456789-SECRET";
+        let key = "placeholder-not-a-key";
         let cfg = WorkerConfig {
             uv: "uv".into(),
             worker_dir: "worker".into(),
