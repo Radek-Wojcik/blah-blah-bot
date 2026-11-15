@@ -3208,6 +3208,7 @@ dependencies = [
 name = "publishers"
 version = "0.4.0"
 dependencies = [
+ "cycle-store",
  "serde_json",
  "store",
  "thiserror 2.0.21",

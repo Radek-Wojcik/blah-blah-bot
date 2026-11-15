@@ -2,6 +2,7 @@
 //! publishers, and (behind the `test-support` feature) stateful fake servers to test them
 //! against. No test in this repository talks to a real host.
 
+pub mod discord;
 pub mod github;
 pub mod http;
 pub mod webhook;

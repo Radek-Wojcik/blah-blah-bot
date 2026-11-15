@@ -13,6 +13,7 @@ publish.workspace = true
 test-support = []
 
 [dependencies]
+cycle-store = { path = "../cycle-store" }
 serde_json.workspace = true
 store = { path = "../store" }
 thiserror.workspace = true
