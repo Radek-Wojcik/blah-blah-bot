@@ -1,6 +1,6 @@
 """P4b: distribution of voice-embedding similarity for the same and for different voices.
 
-    uv run --group diar python -m bbb_bench.proto.p4_similarity \n        data/audio/pl-04a data/audio/pl-04b ...
+    uv run --group diar python -m bbb_bench.proto.p4_similarity data/audio/pl-04a ...
 
 Every meeting is diarized with the speaker count bounded by its script and one embedding
 is kept per speaker. Speakers are identified across meetings by their synthesized voice,
