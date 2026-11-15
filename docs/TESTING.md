@@ -129,8 +129,8 @@ The `extraction` set is used to compare language models and prompts under identi
 
 ## 9. Publishing tests
 
-- Mock HTTP servers emulate the GitHub, Discord and Notion endpoints used by the publishers, including error and rate-limit responses.
-- Before each release the publishers run against a dedicated test repository, a test Discord webhook and a test Notion database. Credentials for these exist only on the release machine.
+- Mock HTTP servers emulate the GitHub and Discord endpoints used by the publishers, including error and rate-limit responses (Notion arrives with its publisher in Stage 7); the Git side runs against local bare remotes. Details are in section 14.
+- Before each release the publishers run against a dedicated test repository and a test Discord webhook (and, from Stage 7, a test Notion database). Credentials for these exist only on the release machine, in the Windows Credential Manager.
 - Limits are tested at the boundary: message length, number of embeds, number and size of attachments.
 
 ## 10. Continuous integration
@@ -189,12 +189,29 @@ The fake worker in `crates/queue/tests/stage4_fake_worker.rs` is a small Python 
 
 | What | Command | Runs |
 |---|---|---|
+| Unit tests for the Git side against local bare remotes in temporary folders: new files only, folder suffixes `-2` and `-3`, a push refused by a concurrent commit and built again on the new tip, three tries then left for later, `topics.yaml` merged per topic with a recorded conflict, an unrelated uncommitted file left alone and the branch fast-forwarded, a repository without a remote, an answer lost after the push (idempotent), a remote that is not there and then is, the token only in the environment of Git and never in its arguments, Git output scrubbed; issue markers, the issue cache and closed or linked issues in the context; the published transcript with its anchors (`cycle-store`, `queue`) | `cargo test -p cycle-store -p queue` | CI |
+| Status proposals: `status_changes` in the extraction answer (verified and unverified quotes, unknown targets dropped, one proposal per target, an older `windows.json` without the field), the schemas and the shared fixtures from both sides | `cd worker && uv sync --frozen --only-group dev && uv run --no-sync pytest` | CI |
 | Rules of the targets (`auto`, `on-approval`, `off` and their defaults), the publish plan, the public-repository check, the frozen snapshot and the draft lock, the outbox dispatcher (claim, execute, backoff and `Retry-After`, offline pause, crash recovery, progress of a Discord post), against a local bare Git remote, a fake GitHub and a fake Discord webhook (`publishers`); the outbox state machine, a Discord post held for the issues of its meeting, operations enqueued again after a cancel (`store`); status decisions in the draft (`queue`); planning, publishing, the lock, the `auto` rule, the tasks of a cycle and the check for a public repository through the command layer (`app`) | `cargo test -p publishers -p store -p queue -p app` | CI |
 | The whole loop on a demo-like cycle (approved status changes, report, transcript, screenshots and `topics.yaml` in the remote, issues with assignee, due date and report link, an issue closed on the fake GitHub that is done in the next context, a Discord message with mentions and issue links) | `cargo test -p publishers --test full_loop` | CI |
 | Faults: no network at publishing and recovery through the outbox, a push rejected by a concurrent commit and built again on the new tip, a remote that keeps changing, an answer lost after an issue or a comment was created (no duplicate), a rate limit, a crash while an operation runs, and a scan of the database file, the snapshots, the working tree, the history of both repositories, the log of the dispatcher and the outbox rows for the mock token and webhook | `cargo test -p publishers --test resilience` | CI |
 | Release check against the real services: a test GitHub repository (token and push rights, an issue created once, closed with a comment and read back, a commit pushed to a new branch that is removed again) and a test Discord webhook (the webhook exists, one message is posted) | `BBB_RELEASE_CHECK=yes BBB_RC_REPO=<owner/name> BBB_RC_DISCORD_REF=<cred:...> cargo test -p app release_check -- --ignored --test-threads=1 --nocapture` | Locally before a release |
 
 Every test is written against fakes: the "network" is loopback ports that the tests start, the "remote" is a bare repository in a temporary folder, and "offline" is a closed port or a renamed folder. No normal test talks to a real host.
+
+**The fakes.** `crates/publishers/src/testing/` (feature `test-support`, used by this crate's tests and by `app`) holds hand-written servers on `TcpListener` and a lab that wires them together:
+
+| Fake | What it models |
+|---|---|
+| Fake GitHub | Repositories with visibility, push permission and owner type; issues with labels, assignees, comments, state, paging and `Link` headers; the organization issue-field endpoints; primary and secondary rate limits |
+| Fake Discord webhook | The 2000 character, 10 file and size limits, `allowed_mentions` checks, `?wait=true`, multipart bodies, 429 with `retry_after` |
+| Fault injection (both) | A given status for the next N requests, a dropped connection, a delay, "offline" as a closed port |
+| Lab | A bare remote, a clone, a file database and a manual clock, so backoff and `Retry-After` are tested without waiting |
+
+No HTTP mocking crate is used (it would pull `tokio` and `hyper` into the build). The fake GitHub implements the organization issue field as the documentation describes it, which is not proof that a real organization behaves the same way: the real check is in the release check below.
+
+**The unit level.** Besides the rows above, `cargo test -p publishers` covers: error classification (408, 5xx, 429, a 403 that is a rate limit, other 4xx), `Retry-After` and rate-limit reset parsing, redaction of tokens, authorization values and webhook URLs, webhook address validation, message splitting at exactly 2000 and 2001 characters, in multibyte text and in one long line, 10 and 11 files, the size boundary and a skipped oversized file, mention rendering for users, roles and unknown ids, `@everyone` neutralized, `allowed_mentions` per message, the multipart body, resuming after the messages already sent, the issue body and marker, and the plan for each rule.
+
+**Resilience.** `crates/publishers/tests/resilience.rs` covers: no network for every target and recovery; a dead Discord that does not hold back the report or the issues; a push rejected by a concurrent commit; a remote that keeps changing; an answer lost after an issue was created (no duplicate), after a crash too; a status change written once when answers are lost; Discord's 429 waiting for the time named; a GitHub rate limit pausing only that operation and a permanent error stopping at once; a crash while an operation runs; and the scan for secrets. `crates/publishers/tests/full_loop.rs` runs a demo-like meeting through all targets, an issue closed on the fake GitHub that is done in the next context, and a second meeting on the same day.
 
 **The release check.** The tests of `crates/app/src/release_check.rs` are `#[ignore]`d and refuse to run unless `BBB_RELEASE_CHECK=yes` is set. They use a throwaway repository and webhook that exist only for this purpose:
 
