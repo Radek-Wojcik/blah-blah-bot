@@ -7,8 +7,8 @@
 use std::path::Path;
 
 use cycle_store::{
-    Certainty, Cycle, Draft, Item, ItemType, Language, Participant, ReportMode, Section, Source,
-    Template, Variant, Warning, WarningCode,
+    Certainty, Cycle, Decision, Draft, Item, ItemType, Language, Participant, ProposedStatus,
+    ReportMode, Section, Source, StatusProposal, Template, Variant, Warning, WarningCode,
 };
 use queue::draft::{self as ops, DraftError, DraftFiles, ItemPatch, NewItem};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -130,6 +130,34 @@ impl From<&Warning> for WarningDto {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct StatusProposalDto {
+    pub id: String,
+    pub target: String,
+    pub status: ProposedStatus,
+    pub reason: String,
+    pub comment: Option<String>,
+    pub source: Option<SourceDto>,
+    pub decision: Decision,
+    pub edited: bool,
+}
+
+impl From<&StatusProposal> for StatusProposalDto {
+    fn from(p: &StatusProposal) -> Self {
+        Self {
+            id: p.id.clone(),
+            target: p.target.clone(),
+            status: p.status,
+            reason: p.reason.clone(),
+            comment: p.comment.clone(),
+            source: p.source.as_ref().map(Into::into),
+            decision: p.decision,
+            edited: p.edited,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DraftDto {
     pub meeting_id: String,
     pub cycle: String,
@@ -141,6 +169,9 @@ pub struct DraftDto {
     pub sections: Vec<SectionDto>,
     pub summary: String,
     pub items: Vec<ItemDto>,
+    /// Absent while the draft has no status proposals.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub status_proposals: Vec<StatusProposalDto>,
     pub warnings: Vec<WarningDto>,
 }
 
@@ -157,6 +188,7 @@ impl From<&Draft> for DraftDto {
             sections: d.sections.iter().map(Into::into).collect(),
             summary: d.summary.clone(),
             items: d.items.iter().map(Into::into).collect(),
+            status_proposals: d.status_proposals.iter().map(Into::into).collect(),
             warnings: d.warnings.iter().map(Into::into).collect(),
         }
     }

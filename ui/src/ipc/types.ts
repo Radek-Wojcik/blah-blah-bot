@@ -410,7 +410,8 @@ export interface CycleParticipant {
 }
 
 export interface CycleTargets {
-  github?: { path: string; publish: PublishMode } | null;
+  /** `issues` (default true): create issues for tasks and write back status changes. */
+  github?: { path: string; publish: PublishMode; issues?: boolean } | null;
   /** `webhook` is a `cred:` reference, never a URL. */
   discord?: { webhook: string; publish: PublishMode; template?: string } | null;
   notion?: { database: string; publish: PublishMode } | null;
@@ -609,6 +610,25 @@ export interface DraftWarning {
   tEndMs?: number;
 }
 
+export type ProposedStatus = "done" | "open";
+export type StatusDecision = "proposed" | "approved" | "rejected";
+
+/** A proposed status change of an open issue or topic. Nothing is written back before it is approved. */
+export interface StatusProposal {
+  /** `s1`, `s2`, ... */
+  id: string;
+  /** An open issue (`#12`) or a topic id. */
+  target: string;
+  status: ProposedStatus;
+  reason: string;
+  /** Posted with the change; null until the user writes one. */
+  comment: string | null;
+  /** Null for a proposal added by hand. */
+  source: DraftSource | null;
+  decision: StatusDecision;
+  edited: boolean;
+}
+
 export interface Draft {
   meetingId: string;
   cycle: string;
@@ -620,6 +640,8 @@ export interface Draft {
   sections: DraftSection[];
   summary: string;
   items: DraftItem[];
+  /** Absent while the draft has none. */
+  statusProposals?: StatusProposal[];
   warnings: DraftWarning[];
 }
 

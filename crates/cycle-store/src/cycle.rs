@@ -96,10 +96,22 @@ pub struct GithubTarget {
     pub path: String,
     #[serde(default)]
     pub publish: PublishMode,
+    /// Create GitHub issues for task items and write back status changes. Left out of the
+    /// file while true, so existing files keep their bytes.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub issues: bool,
 }
 
 fn default_github_path() -> String {
     "meetings".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 impl Default for GithubTarget {
@@ -107,6 +119,7 @@ impl Default for GithubTarget {
         Self {
             path: default_github_path(),
             publish: PublishMode::OnApproval,
+            issues: true,
         }
     }
 }
@@ -365,6 +378,36 @@ targets:
             cycle.targets.notion.as_ref().unwrap().publish,
             PublishMode::Off
         );
+    }
+
+    #[test]
+    fn github_issues_default_to_true_and_are_read_when_given() {
+        let cycle = Cycle::from_yaml_str(FULL).unwrap();
+        assert!(cycle.targets.github.as_ref().unwrap().issues);
+        let off = FULL.replace(
+            "github: { path: meetings, publish: auto }",
+            "github: { path: meetings, publish: auto, issues: false }",
+        );
+        let cycle = Cycle::from_yaml_str(&off).unwrap();
+        assert!(!cycle.targets.github.as_ref().unwrap().issues);
+        // A value that is not a boolean is refused with its path.
+        let bad = FULL.replace(
+            "github: { path: meetings, publish: auto }",
+            "github: { path: meetings, issues: sometimes }",
+        );
+        assert!(!issues_of(&bad).is_empty());
+    }
+
+    #[test]
+    fn the_issues_flag_is_written_only_when_it_is_off() {
+        let mut target = GithubTarget::default();
+        let on = serde_json::to_value(&target).unwrap();
+        assert!(on.get("issues").is_none(), "{on}");
+        target.issues = false;
+        let off = serde_json::to_value(&target).unwrap();
+        assert_eq!(off["issues"], false);
+        let back: GithubTarget = serde_json::from_value(on).unwrap();
+        assert!(back.issues);
     }
 
     #[test]

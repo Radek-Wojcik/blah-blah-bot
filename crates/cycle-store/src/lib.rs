@@ -29,8 +29,8 @@ pub use cycle::{
     Participant, PublishMode, Report, Targets, DEFAULT_TEMPLATE_NAME,
 };
 pub use draft::{
-    Certainty, CertaintyLevel, Draft, Item, ItemType, Language, LanguageSetting, ReportMode,
-    Section, Source, Warning, WarningCode,
+    Certainty, CertaintyLevel, Decision, Draft, Item, ItemType, Language, LanguageSetting,
+    ProposedStatus, ReportMode, Section, Source, StatusProposal, Warning, WarningCode,
 };
 pub use error::{CycleError, Result, ValidationIssue};
 pub use git::git_available;

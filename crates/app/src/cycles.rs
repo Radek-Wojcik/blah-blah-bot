@@ -114,6 +114,13 @@ impl Default for ReportDto {
 pub struct GithubTargetDto {
     pub path: String,
     pub publish: PublishMode,
+    /// Create issues for task items and write back status changes.
+    #[serde(default = "default_true")]
+    pub issues: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -199,6 +206,7 @@ impl From<&Cycle> for CycleDto {
                 github: c.targets.github.as_ref().map(|t| GithubTargetDto {
                     path: t.path.clone(),
                     publish: t.publish,
+                    issues: t.issues,
                 }),
                 discord: c.targets.discord.as_ref().map(|t| DiscordTargetDto {
                     webhook: t.webhook.clone(),
@@ -254,6 +262,7 @@ impl From<CycleDto> for Cycle {
                 github: d.targets.github.map(|t| GithubTarget {
                     path: t.path,
                     publish: t.publish,
+                    issues: t.issues,
                 }),
                 discord: d.targets.discord.map(|t| DiscordTarget {
                     webhook: t.webhook,
