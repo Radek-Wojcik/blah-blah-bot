@@ -4,16 +4,24 @@ import type {
   CycleDetails,
   CycleDto,
   CycleListItem,
+  CycleTasks,
   CycleRepoView,
   DraftItemPatch,
   DraftSection,
   DraftView,
+  GithubAccess,
   MeetingDetails,
   MeetingSummary,
   ModelStatus,
   ModelsProgress,
   ProcessOptions,
   ProcessingSettings,
+  ProposedStatus,
+  PublicRepoConfirmation,
+  PublishPlan,
+  PublishResult,
+  PublishingSecrets,
+  OutboxState,
   PullResult,
   QueueState,
   Region,
@@ -26,6 +34,7 @@ import type {
   Settings,
   SourceInfo,
   StartRecordingRequest,
+  StatusDecision,
   TemplateCheck,
   TemplateDto,
   TemplateSummary,
@@ -33,6 +42,7 @@ import type {
   NewDraftItem,
   ParticipantView,
   VoicesData,
+  WebhookCheck,
 } from "./types";
 
 export type Unsubscribe = () => void;
@@ -170,6 +180,63 @@ export interface Backend {
   /** Keep the edited draft and throw the newer one away. */
   discardNewDraft(meetingId: string): Promise<DraftView>;
   renderReport(meetingId: string, variant: RenderVariant): Promise<string>;
+  /**
+   * Decide a proposed status change. Nothing is written back before it is `approved`. `comment`
+   * absent keeps the text, an empty one clears it. Rejects with `published` while the draft is
+   * locked.
+   */
+  setStatusDecision(
+    meetingId: string,
+    proposalId: string,
+    decision: StatusDecision,
+    comment?: string,
+  ): Promise<DraftView>;
+  /** Add a status change by hand: `#12` for an issue, else the id of a topic. It waits for approval. */
+  addStatusProposal(
+    meetingId: string,
+    target: string,
+    status: ProposedStatus,
+    comment?: string,
+  ): Promise<DraftView>;
+
+  /**
+   * Which GitHub tokens and webhooks are set, never their values, with the GitHub hosts of the
+   * registered repositories and the `cred:` references of the cycles.
+   */
+  publishingSecrets(): Promise<PublishingSecrets>;
+  /** Write-only. `api` absent means github.com. A token with spaces or line breaks is refused. */
+  setGithubToken(token: string, api?: string): Promise<void>;
+  clearGithubToken(api?: string): Promise<void>;
+  /** Checks the stored token against the GitHub repository of the cycle. A failure is a result, not an error. */
+  testGithubAccess(cycleId: string): Promise<GithubAccess>;
+  /** Links a registered repository to a GitHub repository (`owner/name`); empty values clear the link. */
+  setGithubRepo(repoId: string, githubRepo?: string, githubApi?: string): Promise<CycleRepoView>;
+  /**
+   * Write-only value of a `cred:` reference. A Discord webhook is validated first and rejects with
+   * `invalid_webhook`; the message never repeats the value.
+   */
+  setTargetSecret(reference: string, value: string): Promise<void>;
+  clearTargetSecret(reference: string): Promise<void>;
+  /** Asks Discord whether the stored webhook exists. Nothing is posted. */
+  testDiscordWebhook(reference: string): Promise<WebhookCheck>;
+
+  /** What publishing to `targets` (all of the cycle's when absent) would do. Changes nothing. */
+  publishPlan(meetingId: string, targets?: string[]): Promise<PublishPlan>;
+  /**
+   * Queue the publication. Rejects with `public_repo_unconfirmed` until `confirmPublicRepo`, with
+   * `new_draft_pending` while a newer draft waits, with `discord_webhook_missing` and
+   * `nothing_to_publish`. From then on the draft is read-only.
+   */
+  publishMeeting(meetingId: string, targets: string[]): Promise<PublishResult>;
+  /** The user accepts publishing to the repository of the cycle although it is (or may be) public. */
+  confirmPublicRepo(cycleId: string): Promise<PublicRepoConfirmation>;
+  outboxState(): Promise<OutboxState>;
+  /** Retries one operation now, or (without an id) everything that failed or waits for its backoff. */
+  retryOutboxOp(id?: number): Promise<OutboxState>;
+  /** Drops a queued or failed operation. Cancelling all operations of a meeting unlocks its draft. */
+  cancelOutboxOp(id: number): Promise<OutboxState>;
+  /** Open and done tasks of a cycle as the last read of its GitHub issues has them. */
+  cycleTasks(cycleId: string): Promise<CycleTasks>;
 
   onRecordingState(cb: (state: RecordingState) => void): Promise<Unsubscribe>;
   onMeetingsChanged(cb: () => void): Promise<Unsubscribe>;
@@ -180,4 +247,6 @@ export interface Backend {
   onDraftChanged(cb: (meetingId: string) => void): Promise<Unsubscribe>;
   /** A cycle, template or repository changed. */
   onCyclesChanged(cb: () => void): Promise<Unsubscribe>;
+  /** Payload: the whole state of the outbox, after every change. */
+  onOutboxChanged(cb: (state: OutboxState) => void): Promise<Unsubscribe>;
 }

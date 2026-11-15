@@ -18,6 +18,8 @@ export function selectBackend(search: string = window.location.search): Backend 
     recording: params.get("state") === "recording",
     // `newdraft=1` starts with a newer draft next to the edited one of the demo meeting.
     newDraft: params.get("newdraft") === "1",
+    // `net=offline` starts with the network off: publishing waits until it is back.
+    offline: params.get("net") === "offline",
     ...(rate === null ? {} : { clockRate: Number(rate) }),
     ...(jobms === null ? {} : { jobStepMs: Number(jobms) }),
   });

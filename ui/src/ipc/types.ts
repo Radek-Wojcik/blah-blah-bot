@@ -111,7 +111,18 @@ export type IpcErrorCode =
   /** The draft does not exist before the reduce stage has run. */
   | "no_draft"
   | "no_new_draft"
-  | "draft_invalid";
+  | "draft_invalid"
+  // Stage 5: publishing.
+  /** The draft is read-only: operations for the meeting are in the outbox. */
+  | "published"
+  /** The repository is public (or its visibility is unknown) and the user has not confirmed it. */
+  | "public_repo_unconfirmed"
+  | "discord_webhook_missing"
+  | "nothing_to_publish"
+  /** A newer draft waits for a decision. */
+  | "new_draft_pending"
+  /** The value is not a Discord webhook; the message never repeats it. */
+  | "invalid_webhook";
 
 export interface IpcError {
   code: IpcErrorCode;
@@ -341,6 +352,10 @@ export interface CycleRepoSetting {
   path: string;
   remote: string | null;
   kind: RepoKind;
+  /** `owner/name` of the GitHub repository when it cannot be taken from the remote. */
+  githubRepo?: string | null;
+  /** API address of a GitHub Enterprise server; absent means github.com. */
+  githubApi?: string | null;
 }
 
 export interface LastReport {
@@ -657,6 +672,8 @@ export interface DraftView {
   transcriptPresent: boolean;
   /** Set when the template could not be used and the built-in layout was rendered instead. */
   reportWarning: string | null;
+  /** The draft is read-only: the meeting is published or operations for it are queued. */
+  locked: boolean;
 }
 
 /** Absent fields stay as they are; `null` clears `assignee` and `due`. */
@@ -676,3 +693,227 @@ export interface NewDraftItem {
 
 /** `markdown`: GitHub (task checkboxes). `chat`: Discord and Notion (plain bullets). */
 export type RenderVariant = "markdown" | "chat";
+
+// ---------- Stage 5: publishing ----------
+
+/** A GitHub API host and whether a token is stored for it. The token itself is never returned. */
+export interface GithubHost {
+  host: string;
+  api: string;
+  tokenSet: boolean;
+}
+
+/** A secret a cycle file refers to as `cred:name` (a Discord webhook). */
+export interface TargetSecret {
+  reference: string;
+  /** The cycle that uses it. */
+  cycleId: string;
+  kind: "discord";
+  set: boolean;
+  /** The host and the ends of the webhook id, never the address. */
+  masked: string | null;
+}
+
+export interface PublishingSecrets {
+  github: GithubHost[];
+  targets: TargetSecret[];
+}
+
+/** An expected failure is a result with a message, not an error. */
+export interface GithubAccess {
+  ok: boolean;
+  message: string;
+  repo: string | null;
+  host: string | null;
+  tokenSet: boolean;
+  login: string | null;
+  visibility: "public" | "private" | "internal" | null;
+  canPush: boolean | null;
+  hasIssues: boolean | null;
+}
+
+export interface WebhookCheck {
+  ok: boolean;
+  message: string;
+  name: string | null;
+}
+
+export type PublishTargetName = "github" | "discord";
+
+export interface PublishTargetView {
+  target: PublishTargetName;
+  /** The rule of the cycle; null when the cycle has no such target. */
+  mode: PublishMode | null;
+  /** An explicit publication may use it. */
+  available: boolean;
+}
+
+export interface PlannedIssue {
+  itemId: string;
+  title: string;
+  assignee: string | null;
+  due: string | null;
+}
+
+export interface PlannedStatus {
+  proposalId: string;
+  target: string;
+  /** True reopens, false closes. */
+  open: boolean;
+}
+
+export interface PlannedTopicSet {
+  id: string;
+  /** True reopens, false closes. */
+  open: boolean;
+}
+
+export interface PlanSummary {
+  commit: boolean;
+  pushes: boolean;
+  files: string[];
+  issues: PlannedIssue[];
+  statuses: PlannedStatus[];
+  topicsAdded: string[];
+  topicsSet: PlannedTopicSet[];
+  discord: boolean;
+  /** Status changes that were not approved: they are not written back. */
+  proposalsPending: number;
+}
+
+export type PlanBlockCode =
+  "public_repo_unconfirmed" | "discord_webhook_missing" | "nothing_to_publish";
+
+export interface PlanBlock {
+  code: PlanBlockCode;
+  message: string;
+  /** For `public_repo_unconfirmed`: `public` or `unknown`. */
+  visibility: string | null;
+}
+
+export type RepoVisibility = "public" | "private" | "unknown";
+
+export interface RepoPublishInfo {
+  key: string | null;
+  /** `owner/name` of the GitHub repository, when linked. */
+  github: string | null;
+  hasRemote: boolean;
+  visibility: RepoVisibility;
+  confirmed: boolean;
+}
+
+export type OpTarget = "github" | "issues" | "discord";
+export type OpKind = "commit_meeting" | "create_issue" | "set_issue_state" | "post_discord";
+export type OpState = "queued" | "running" | "done" | "failed" | "cancelled";
+
+/** One operation of the outbox. `result` is what the operation reported, as JSON. */
+export interface OutboxOp {
+  id: number;
+  meetingId: string;
+  target: OpTarget;
+  kind: OpKind;
+  opKey: string;
+  /** What the operation does, for a list. */
+  label: string;
+  state: OpState;
+  attempts: number;
+  nextAttemptUnixMs: number | null;
+  lastError: string | null;
+  result: OpResult | null;
+  afterId: number | null;
+  createdUnixMs: number;
+  updatedUnixMs: number;
+}
+
+/** A topic as one side of a `topics.yaml` conflict. */
+export interface TopicVersion {
+  text: string;
+  status: "open" | "closed";
+}
+
+/** A topic changed on the remote and by us: ours was kept (last write wins per topic). */
+export interface TopicConflictDetail {
+  id: string;
+  /** The remote's version; null when it was removed meanwhile. */
+  theirs: TopicVersion | null;
+  /** Our version, the one that was kept; null when we removed the topic. */
+  ours: TopicVersion | null;
+}
+
+/** The fields the operations report (the keys are written as the backend writes them). */
+export interface OpResult {
+  folder?: string;
+  commit?: string;
+  branch?: string;
+  pushed?: boolean;
+  already_published?: boolean;
+  report_url?: string | null;
+  local?: "updated" | "behind";
+  local_note?: string | null;
+  topics?: {
+    added: number;
+    changed: number;
+    removed: number;
+    /** The ids of the topics where our version replaced a different change of the remote. */
+    conflicts: string[];
+    /** With the two versions, when the backend reports them. */
+    conflict_details?: TopicConflictDetail[];
+  } | null;
+  number?: number;
+  url?: string;
+  sent_chunks?: number;
+}
+
+export interface OutboxState {
+  ops: OutboxOp[];
+  /** Targets that did not answer: operations for them wait until the network is back. */
+  offline: OpTarget[];
+  nowUnixMs: number;
+}
+
+export interface PublishPlan {
+  meetingId: string;
+  cycleId: string;
+  targets: PublishTargetView[];
+  summary: PlanSummary;
+  blocks: PlanBlock[];
+  notes: string[];
+  repo: RepoPublishInfo;
+  /** The draft is read-only because operations exist for it. */
+  locked: boolean;
+  /** A newer draft waits for a decision: publish after choosing one. */
+  newDraftPending: boolean;
+  ops: OutboxOp[];
+}
+
+export interface PublishResult {
+  plan: PublishPlan;
+  /** Operations that were queued by this call. */
+  queued: number;
+}
+
+export interface PublicRepoConfirmation {
+  key: string | null;
+  visibility: RepoVisibility;
+  /** Operations the check had refused that run again. */
+  released: number;
+}
+
+export interface CycleTask {
+  number: number;
+  title: string;
+  assignee: string | null;
+  url: string | null;
+  /** The meeting the issue was made in, when it was made from an item. */
+  meeting: string | null;
+}
+
+export interface CycleTasks {
+  cycleId: string;
+  /** `owner/name`, when the repository is linked to GitHub. */
+  repo: string | null;
+  /** `YYYY-MM-DD` of the last successful read of the issues; null when never read. */
+  asOf: string | null;
+  open: CycleTask[];
+  done: CycleTask[];
+}

@@ -237,6 +237,9 @@ export type RecordingReport = {
 
 export const DEFAULT_REPO_ID = "local";
 
+/** The fictional GitHub repository the demo cycle repository publishes to. */
+export const DEMO_GITHUB_REPO = "demo-org/nomad-cycles";
+
 /** The id a name or an address is turned into, e.g. `https://x/team-cycles.git` to `team-cycles`. */
 export function slug(source: string, taken: string[], fallback: string): string {
   const last =
@@ -286,6 +289,13 @@ export interface CycleStore {
   addParticipant(cycleId: string, name: string): string;
   renameParticipant(cycleId: string, id: string, name: string): void;
   removeParticipant(cycleId: string, id: string): void;
+  /** The topics of the cycle as `topics.yaml` of the local clone has them. */
+  topics(cycleId: string): Topic[];
+  setTopics(cycleId: string, topics: Topic[]): void;
+  /** The registered repository a cycle lives in. */
+  repoOf(cycleId: string): CycleRepoView;
+  /** Links a repository to a GitHub repository (`owner/name`) and API address; empty clears. */
+  setGithubRepo(repoId: string, githubRepo?: string, githubApi?: string): CycleRepoView;
 }
 
 export function createCycleStore(): CycleStore {
@@ -305,6 +315,8 @@ export function createCycleStore(): CycleStore {
       path: "C:\\Users\\demo\\AppData\\Roaming\\BlahBlahBot\\clones\\team-cycles",
       remote: "https://git.example.org/team/team-cycles.git",
       kind: "clone",
+      githubRepo: DEMO_GITHUB_REPO,
+      githubApi: null,
       available: true,
       stateAsOf: "2026-11-12",
       offline: false,
@@ -638,6 +650,21 @@ export function createCycleStore(): CycleStore {
     removeParticipant: (cycleId, id) => {
       const e = entryOf(cycleId);
       e.cycle.participants = e.cycle.participants.filter((p) => p.id !== id);
+    },
+    topics: (cycleId) => structuredClone(entryOf(cycleId).topics),
+    setTopics: (cycleId, topics) => void (entryOf(cycleId).topics = structuredClone(topics)),
+    repoOf: (cycleId) => ({ ...repoOf(entryOf(cycleId).repoId) }),
+    setGithubRepo: (repoId, githubRepo, githubApi) => {
+      const repo = repoOf(repoId);
+      const name = (githubRepo ?? "").trim();
+      const api = (githubApi ?? "").trim();
+      if (name !== "" && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(name))
+        fail("invalid", "the GitHub repository must be written owner/name");
+      if (api !== "" && !/^https:\/\/[^/\s]+(\/[^\s]*)?$/.test(api))
+        fail("invalid", "the API address must start with https://");
+      repo.githubRepo = name === "" ? null : name;
+      repo.githubApi = api === "" ? null : api.replace(/\/+$/, "");
+      return { ...repo };
     },
   };
   return store;

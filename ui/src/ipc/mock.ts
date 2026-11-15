@@ -14,6 +14,7 @@ import {
 } from "./mock-demo";
 import { createCycleStore, type RecordingReport } from "./mock-cycles";
 import { createMockDrafts } from "./mock-drafts";
+import { createMockPublishing, type MockHooks } from "./mock-publish";
 import { fail } from "./mock-util";
 import { isLocalHost, missingForKind, urlHost, validateLlmSettings } from "../llm";
 import { validateVoiceSettings } from "../speakers";
@@ -89,10 +90,13 @@ export interface MockOptions {
   jobStepMs?: number;
   /** Start with a newer draft next to the edited one of the demo meeting (the banner). */
   newDraft?: boolean;
+  /** Start with the network off: publishing waits until it is back. */
+  offline?: boolean;
 }
 
 /** In-memory backend that serves the fictional demo cycle. No audio devices, files or network. */
 export function createMockBackend(opts: MockOptions = {}): Backend {
+  const startedAt = Date.now();
   const settings: Settings = {
     recordingsDir: "Documents\\BlahBlahBot\\recordings",
     recordHotkey: "Ctrl+Alt+R",
@@ -129,7 +133,23 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
   const models = demoModels();
   let jobs: JobView[] = demoJobs();
   const transcripts = new Map<string, TranscriptData>([["m5", demoTranscript("m5")]]);
-  const drafts = createMockDrafts(cycles, (id) => transcripts.has(id));
+  const lock: { is: (meetingId: string) => boolean } = { is: () => false };
+  const drafts = createMockDrafts(
+    cycles,
+    (id) => transcripts.has(id),
+    (id) => lock.is(id),
+  );
+  const publishing = createMockPublishing({
+    cycles,
+    drafts,
+    stepMs,
+    now: () => DEMO_NOW + (Date.now() - startedAt),
+    screenshotCount: (id) => meetings.find((m) => m.id === id)?.screenshotCount ?? 0,
+    onUnlocked: (id) => drafts.touch(id),
+  });
+  lock.is = publishing.isLocked;
+  if (opts.offline) publishing.hooks.setOffline(true);
+  (globalThis as { __bbbMock?: MockHooks }).__bbbMock = publishing.hooks;
   drafts.create("m5", reports.get("m5")!);
   if (opts.newDraft) drafts.leaveNewDraft("m5");
   /** The backend each job was started with; a job without an entry has none. */
@@ -741,6 +761,8 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         path: r.path,
         remote: r.remote,
         kind: r.kind,
+        githubRepo: r.githubRepo ?? null,
+        githubApi: r.githubApi ?? null,
       })),
       lastReport: cycles.lastReport(),
     }),
@@ -842,6 +864,8 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     },
     pullCycleRepo: async (repoId) => {
       const result = cycles.pullRepo(repoId);
+      // A pull also reads the state of the issues again.
+      publishing.refreshIssues(repoId);
       emitCycles();
       return result;
     },
@@ -850,5 +874,8 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
 
     // ----- drafts -----
     ...drafts.methods,
+
+    // ----- publishing -----
+    ...publishing.methods,
   };
 }
