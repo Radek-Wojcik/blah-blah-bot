@@ -258,3 +258,64 @@ test("naming voices GIF", async ({ page }) => {
   ]);
   expect(fs.statSync(path.join(OUT, "naming-voices.gif")).size).toBeLessThan(10_000_000);
 });
+
+test("draft editing GIF", async ({ page }) => {
+  const frames: string[] = [];
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bbb-gif-"));
+  const shot = async (wait = 350) => {
+    await page.waitForTimeout(wait);
+    const file = path.join(dir, `f${String(frames.length).padStart(2, "0")}.png`);
+    await page.screenshot({ path: file });
+    frames.push(file);
+  };
+  await page.setViewportSize({ width: 1000, height: 1000 });
+  await page.goto("/?view=main&backend=mock&rate=0&page=transcript&meeting=m5");
+  await expect(page.getByRole("img", { name: "Screenshot taken at 0:40" })).toBeVisible();
+  await shot();
+  // From the transcript back to the list, then into the draft of the meeting.
+  await page.getByRole("button", { name: "Back to meetings" }).click();
+  const open = page.getByRole("button", { name: /^Open the draft of / }).first();
+  await expect(open).toBeVisible();
+  await shot();
+  await open.click();
+  const columns = page.getByLabel("Sections", { exact: true });
+  await expect(columns.getByRole("region")).toHaveCount(4);
+  await shot();
+  // The source of an item: the quote and the time in the meeting.
+  const ground = "Update the ground station schedule for Thursday.";
+  await page.getByRole("button", { name: `Source of: ${ground}` }).click();
+  await expect(page.getByRole("dialog", { name: `Source of: ${ground}` })).toBeVisible();
+  await shot();
+  await page.getByRole("button", { name: `Source of: ${ground}` }).click();
+  // A template with its own sections.
+  await page.getByLabel("Report mode").selectOption("template");
+  const template = page.getByLabel("Template", { exact: true });
+  await expect(template).toBeVisible();
+  await template.selectOption("budget-review");
+  await expect(template).toHaveValue("budget-review");
+  await expect(columns.getByRole("region").first()).toBeVisible();
+  await shot(600);
+  // Move an item to another section from its menu.
+  const move = page.getByLabel(/^Move to section:/).first();
+  const text = (await move.getAttribute("aria-label"))!.replace("Move to section: ", "");
+  const options = await move.locator("option").allTextContents();
+  const target = options.filter((o) => o !== "Move to…")[0]!;
+  await move.focus();
+  await shot();
+  await move.selectOption({ label: target });
+  await expect(
+    page.getByRole("list", { name: `Items of ${target}` }).getByRole("button", { name: text, exact: true }),
+  ).toBeVisible();
+  await shot(600);
+  await page.getByRole("button", { name: "Rendered report" }).click();
+  await expect(page.getByLabel("Rendered report")).toContainText(text);
+  await shot(600);
+  fs.mkdirSync(OUT, { recursive: true });
+  execFileSync("python", [
+    path.join(here, "make-gif.py"),
+    path.join(OUT, "draft-editing.gif"),
+    "1300",
+    ...frames,
+  ]);
+  expect(fs.statSync(path.join(OUT, "draft-editing.gif")).size).toBeLessThan(1_500_000);
+});
