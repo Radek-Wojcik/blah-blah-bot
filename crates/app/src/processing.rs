@@ -16,7 +16,7 @@ use queue::{GateDecision, GpuGate, Next, Stage, StepOutcome, Supervisor, STAGES}
 use serde::{Deserialize, Serialize};
 use speakers::Thresholds;
 use store::{LlmKind, StageStatus, Store};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::cycles::{PullLedger, RepoCycleSource};
 use crate::ipc::{IpcError, IpcResult};
@@ -676,7 +676,15 @@ impl Processing {
             for id in ids {
                 self.prepare_step(&id);
                 match self.supervisor.step(&id) {
-                    Ok(StepOutcome::Ran { .. }) => progressed = true,
+                    Ok(StepOutcome::Ran { stage }) => {
+                        progressed = true;
+                        // The draft is complete: what the cycle publishes by itself goes now.
+                        if matches!(stage, Stage::Reduce) {
+                            if let Some(state) = self.app.try_state::<crate::state::AppState>() {
+                                state.publishing().draft_completed(&id);
+                            }
+                        }
+                    }
                     Ok(StepOutcome::Failed { stage, error }) => {
                         tracing::error!(meeting = %id, stage = stage.as_str(), %error, "stage failed");
                         progressed = true;

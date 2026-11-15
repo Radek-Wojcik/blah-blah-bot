@@ -10,6 +10,7 @@ use tauri::{AppHandle, Manager};
 use crate::cycles::ParticipantSync;
 use crate::ipc::{IpcError, IpcResult};
 use crate::processing::Processing;
+use crate::publishing::{AppEnv, Publishing};
 use crate::recording::Recorder;
 use crate::settings::{CycleRepoSetting, Settings};
 
@@ -27,6 +28,7 @@ pub struct AppState {
     default_recordings: PathBuf,
     pub recorder: Recorder,
     processing: Arc<Processing>,
+    publishing: Arc<Publishing>,
     pub pending_shot: Mutex<Option<PendingShot>>,
 }
 
@@ -95,9 +97,30 @@ impl AppState {
                     .unwrap_or_default()
             },
         );
+        let env_settings = settings.clone();
+        let env_app = app.clone();
+        let publishing = Publishing::new(
+            store.clone(),
+            Arc::new(AppEnv::new(
+                move || {
+                    env_settings
+                        .lock()
+                        .map(|s| s.cycle_repos.clone())
+                        .unwrap_or_default()
+                },
+                move || {
+                    env_app
+                        .state::<AppState>()
+                        .recordings_root()
+                        .unwrap_or_default()
+                },
+                Arc::new(crate::secrets::Credentials),
+            )),
+        );
         Ok(Self {
             recorder: Recorder::new(store.clone(), backend, demo),
             processing,
+            publishing,
             store,
             settings,
             settings_path,
@@ -140,6 +163,10 @@ impl AppState {
 
     pub fn processing(&self) -> &Arc<Processing> {
         &self.processing
+    }
+
+    pub fn publishing(&self) -> &Arc<Publishing> {
+        &self.publishing
     }
 
     pub fn mark_interrupted(&self) -> IpcResult<Vec<String>> {

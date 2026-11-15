@@ -381,8 +381,6 @@ pub fn scrub_with(values: &[&str], text: &str) -> String {
 /// `text` with every secret this application holds for publishing masked: the GitHub tokens
 /// and the values behind `cred:` references of the cycles. For anything that is stored or
 /// shown: outbox errors, log lines, git output.
-// Used by the outbox dispatcher, which is wired in a later step.
-#[allow(dead_code)]
 pub fn scrub(store: &dyn SecretStore, repos: &[CycleRepoSetting], text: &str) -> String {
     let mut values: Vec<String> = Vec::new();
     for (host, _) in api_hosts(repos) {

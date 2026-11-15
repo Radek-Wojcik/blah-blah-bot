@@ -1,6 +1,7 @@
-//! IPC commands of publishing. This file holds the secret and access commands; the rules are
-//! in `publish_secrets.rs`, so each is tested without Tauri. Values of secrets only ever
-//! travel from the UI to the credential store: no command returns one.
+//! IPC commands of publishing: the secret and access commands (rules in `publish_secrets.rs`)
+//! and the publication itself (plan, publish, confirm a public repository, the outbox, the
+//! tasks of a cycle; rules in `publishing.rs`), each tested without Tauri. Values of secrets
+//! only ever travel from the UI to the credential store: no command returns one.
 
 use tauri::{AppHandle, Emitter, State};
 
@@ -8,6 +9,7 @@ use crate::cycle_commands::EVENT_CYCLES;
 use crate::cycles::{self, RepoDto};
 use crate::ipc::{IpcError, IpcResult};
 use crate::publish_secrets::{self, GithubAccessDto, PublishingSecretsDto, WebhookCheckDto};
+use crate::publishing::{ConfirmDto, CycleTasksDto, OutboxStateDto, PlanDto, PublishResultDto};
 use crate::secrets::Credentials;
 use crate::state::AppState;
 use publishers::http::HttpClient;
@@ -97,4 +99,76 @@ pub async fn test_discord_webhook(reference: String) -> IpcResult<WebhookCheckDt
     })
     .await
     .map_err(join_error)?
+}
+
+// ----- the publication ---------------------------------------------------------------------
+
+/// What publishing the meeting to `targets` (all of the cycle's when absent) would do: the
+/// files, issues, status changes and message, the rules of each target, the visibility of the
+/// repository and whether it needs the user's confirmation. Changes nothing.
+#[tauri::command]
+pub async fn publish_plan(
+    state: State<'_, AppState>,
+    meeting_id: String,
+    targets: Option<Vec<String>>,
+) -> IpcResult<PlanDto> {
+    let publishing = state.publishing().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        publishing.plan(&meeting_id, &targets.unwrap_or_default())
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// Queues the publication of the meeting to `targets` (`github`, `discord`). A public or
+/// unknown repository is refused with `public_repo_unconfirmed` until `confirm_public_repo`.
+/// From then on the draft is read-only.
+#[tauri::command]
+pub async fn publish_meeting(
+    state: State<'_, AppState>,
+    meeting_id: String,
+    targets: Vec<String>,
+) -> IpcResult<PublishResultDto> {
+    let publishing = state.publishing().clone();
+    tauri::async_runtime::spawn_blocking(move || publishing.publish(&meeting_id, &targets))
+        .await
+        .map_err(join_error)?
+}
+
+/// The user accepts publishing to the repository of the cycle although it is (or may be)
+/// public. Remembered for that repository.
+#[tauri::command]
+pub async fn confirm_public_repo(
+    state: State<'_, AppState>,
+    cycle_id: String,
+) -> IpcResult<ConfirmDto> {
+    let publishing = state.publishing().clone();
+    tauri::async_runtime::spawn_blocking(move || publishing.confirm_public_repo(&cycle_id))
+        .await
+        .map_err(join_error)?
+}
+
+/// Every operation of the outbox with its state, and the targets that are offline.
+#[tauri::command]
+pub fn outbox_state(state: State<'_, AppState>) -> IpcResult<OutboxStateDto> {
+    state.publishing().state()
+}
+
+/// Retries one operation now, or (without an id) everything that failed or waits for its
+/// backoff.
+#[tauri::command]
+pub fn retry_outbox_op(state: State<'_, AppState>, id: Option<i64>) -> IpcResult<OutboxStateDto> {
+    state.publishing().retry(id)
+}
+
+/// Drops a queued or failed operation.
+#[tauri::command]
+pub fn cancel_outbox_op(state: State<'_, AppState>, id: i64) -> IpcResult<OutboxStateDto> {
+    state.publishing().cancel(id)
+}
+
+/// Open and done tasks of a cycle as the last read of its GitHub issues has them.
+#[tauri::command]
+pub fn cycle_tasks(state: State<'_, AppState>, cycle_id: String) -> IpcResult<CycleTasksDto> {
+    state.publishing().cycle_tasks(&cycle_id)
 }
