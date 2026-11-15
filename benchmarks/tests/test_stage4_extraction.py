@@ -509,7 +509,7 @@ class FakeModel:
                 "assignments": [{"item": i, "section": "plans"} for i in ids],
             }
         allowed = re.findall(r"^- ([a-z][a-z0-9_-]*): ", user.split("Allowed sections")[1], re.M)
-        window = user.split("Transcript window:\n", 1)[1]
+        window = user.split("<<<TRANSCRIPT BEGIN>>>\n", 1)[1]
         items = []
         for type_, text, assignee, due, quote in self.planted():
             found = re.search(rf"\[(\d\d:\d\d:\d\d)\] [^:\n]+: {re.escape(quote)}", window)
