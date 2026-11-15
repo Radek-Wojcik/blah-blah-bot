@@ -183,7 +183,7 @@ pub fn anchor_at(view: &TranscriptView, t_ms: u64) -> Option<String> {
     };
     published()
         .find(|(s, _)| s.start_ms <= t_ms && t_ms < s.end_ms)
-        .or_else(|| published().filter(|(s, _)| s.start_ms <= t_ms).last())
+        .or_else(|| published().rfind(|(s, _)| s.start_ms <= t_ms))
         .or_else(|| published().next())
         .map(|(_, a)| a.to_string())
 }
