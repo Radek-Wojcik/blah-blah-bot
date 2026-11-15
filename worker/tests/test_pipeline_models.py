@@ -115,3 +115,40 @@ def test_a_killed_step_leaves_no_partial_output_and_can_be_rerun(en_meeting, ste
     run_step(step, manifest, meeting)
     assert any(out_dir.glob("*.json"))
     assert not list(out_dir.glob("*.tmp"))
+
+
+SLIDES = os.environ.get("BBB_SLIDES_DIR")
+VISION = os.environ.get("BBB_VISION_DIR")
+LLAMA = os.environ.get("BBB_LLAMA_SERVER")
+
+
+@pytest.mark.skipif(
+    not (SLIDES and VISION and LLAMA),
+    reason="BBB_SLIDES_DIR, BBB_VISION_DIR and BBB_LLAMA_SERVER are not set",
+)
+def test_screenshots_are_described_with_the_facts_on_the_slide(tmp_path):
+    slides = Path(SLIDES)
+    facts = json.loads((slides / "facts.json").read_text(encoding="utf-8"))
+    shots = [(slides / "bullets-1.png", 5_000), (slides / "bars-1.png", 20_000)]
+    meeting, manifest = make_meeting(
+        tmp_path,
+        [("mic", "microphone", mini("mini-en") / "track-magda.wav")],
+        screenshots=shots,
+    )
+    run_step("asr", manifest, meeting)
+    run_step("merge", manifest, meeting)
+    run_step("vision", manifest, meeting)
+
+    doc = json.loads((meeting / "work" / "descriptions.json").read_text(encoding="utf-8"))
+    schema.validate("screenshot-descriptions", doc)
+    assert [i["offset_ms"] for i in doc["items"]] == [5_000, 20_000]
+
+    bench = Path(__file__).resolve().parents[2] / "benchmarks" / "src"
+    sys.path.insert(0, str(bench))
+    from bbb_bench.metrics.text import normalize
+
+    for item, (image, _) in zip(doc["items"], shots, strict=True):
+        haystack = " " + " ".join(normalize(item["description"])) + " "
+        wanted = facts[image.name]
+        found = [f for f in wanted if f" {' '.join(normalize(f))} " in haystack]
+        assert len(found) / len(wanted) >= 0.9, (image.name, wanted, item["description"])

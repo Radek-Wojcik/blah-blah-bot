@@ -74,8 +74,16 @@ def asr_key(asr_model: str) -> str:
 
 
 def local_path(key: str) -> Path:
-    """Folder of a cached model. Never uses the network."""
+    """Folder of a cached model. Never uses the network.
+
+    `BBB_VISION_DIR` points the vision model at a folder that already holds the two GGUF
+    files (for example the models of an existing llama.cpp setup).
+    """
     from huggingface_hub import snapshot_download
+
+    override = os.environ.get("BBB_VISION_DIR")
+    if key == "vision" and override:
+        return Path(override)
 
     spec = MODELS[key]
     try:
