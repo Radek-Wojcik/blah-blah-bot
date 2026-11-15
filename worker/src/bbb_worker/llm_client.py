@@ -30,6 +30,7 @@ import jsonschema
 from . import llama
 
 MAX_RETRIES = 2
+DEFAULT_CTX = 16384
 REQUEST_TIMEOUT_S = 600.0
 KEY_VARIABLE = "BBB_LLM_API_KEY"
 _LOOPBACK = ("localhost", "127.0.0.1", "::1")
@@ -50,6 +51,11 @@ class InvalidOutputError(LlmError):
         self.seconds = seconds
 
 
+class TruncatedOutputError(InvalidOutputError):
+    """The answer hit the token limit. Asking again with the same prompt gives the same
+    result, so the caller must ask for less (a smaller window) instead of retrying."""
+
+
 class _Transient(Exception):
     """A failure worth another attempt (timeout, server error)."""
 
@@ -58,7 +64,7 @@ class _Transient(Exception):
 class LlmConfig:
     kind: str
     model_path: str | None = None
-    ctx: int = 16384
+    ctx: int | None = None  # None: not configured (the managed server then uses DEFAULT_CTX)
     base_url: str | None = None
     model: str | None = None
     cloud_confirmed: bool = False
@@ -80,7 +86,7 @@ def config_from(options: dict[str, Any]) -> LlmConfig:
     return LlmConfig(
         kind=raw["kind"],
         model_path=raw.get("model_path"),
-        ctx=int(raw.get("ctx", 16384)),
+        ctx=int(raw["ctx"]) if raw.get("ctx") else None,
         base_url=raw.get("base_url"),
         model=raw.get("model"),
         cloud_confirmed=bool(raw.get("cloud_confirmed", False)),
@@ -95,6 +101,7 @@ class Backend:
     model: str | None = None
     api_key: str | None = field(default=None, repr=False)
     kind: str = "external"
+    ctx: int | None = None  # context size in tokens when known
 
     def post(self, payload: dict[str, Any], timeout: float = REQUEST_TIMEOUT_S) -> dict[str, Any]:
         headers = {"Content-Type": "application/json"}
@@ -136,8 +143,9 @@ def open_backend(cfg: LlmConfig) -> Iterator[Backend]:
     if cfg.kind == "managed":
         if not cfg.model_path:
             raise LlmError("options.llm.model_path is required for the managed backend")
-        with llama.running(Path(cfg.model_path), ctx=cfg.ctx) as base:
-            yield Backend(f"{base}/v1", None, None, "managed")
+        ctx = cfg.ctx or DEFAULT_CTX
+        with llama.running(Path(cfg.model_path), ctx=ctx) as base:
+            yield Backend(f"{base}/v1", None, None, "managed", ctx)
         return
     if not cfg.base_url:
         raise LlmError("options.llm.base_url is required for the external and cloud backends")
@@ -148,7 +156,7 @@ def open_backend(cfg: LlmConfig) -> Iterator[Backend]:
             raise LlmError(
                 f"cloud backend needs the key in the environment variable {KEY_VARIABLE}"
             )
-    yield Backend(cfg.base_url, cfg.model, key, cfg.kind)
+    yield Backend(cfg.base_url, cfg.model, key, cfg.kind, cfg.ctx)
 
 
 @dataclass(frozen=True)
@@ -179,6 +187,13 @@ def _parse(resp: dict[str, Any]) -> tuple[Any, str]:
     if not text:
         raise ValueError("empty answer")
     return json.loads(text), text
+
+
+def _finish_reason(resp: dict[str, Any]) -> str | None:
+    try:
+        return resp["choices"][0].get("finish_reason")
+    except (KeyError, IndexError, AttributeError, TypeError):
+        return None
 
 
 def complete_json(
@@ -221,6 +236,13 @@ def complete_json(
             continue
         for key in usage:
             usage[key] += int(resp.get("usage", {}).get(key, 0) or 0)
+        if _finish_reason(resp) == "length":
+            raise TruncatedOutputError(
+                "the answer was cut off at the token limit",
+                attempt,
+                usage,
+                round(time.monotonic() - started, 3),
+            )
         try:
             data, text = _parse(resp)
             problem = _first_error(validator, data)

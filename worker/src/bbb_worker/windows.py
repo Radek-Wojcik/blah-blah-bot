@@ -43,6 +43,7 @@ class Window:
     span_start_ms: int  # screenshots in [span_start, span_end) belong to the window
     span_end_ms: int
     lines: tuple[Line, ...]
+    part: str = ""  # "" for a window; "0"/"1" per split of a window that was too long
 
     @property
     def start_ms(self) -> int:
@@ -188,3 +189,27 @@ def split_windows(speech: list[Line], screenshots: list[Line] | None = None) -> 
         lines = sorted([*speech[a:b], *shots], key=lambda ln: (ln.start_ms, ln.kind != SPEECH))
         windows.append(Window(i, lo, hi, tuple(lines)))
     return windows
+
+
+def split_in_two(window: Window) -> tuple[Window, Window] | None:
+    """Halve a window by lines. The second half starts one minute before the cut, like
+    windows do, so a statement at the cut is seen whole by one of them. None when the window
+    has too little speech to split."""
+    lines = window.lines
+    if len(window.speech) < 2:
+        return None
+    mid = len(lines) // 2
+    cut = lines[mid].start_ms
+    starts = [ln.start_ms for ln in lines]
+    second_from = min(max(bisect.bisect_left(starts, cut - OVERLAP_MS), 1), mid)
+    first = Window(window.index, window.span_start_ms, cut, lines[:mid], window.part + "0")
+    second = Window(
+        window.index,
+        max(window.span_start_ms, cut - OVERLAP_MS),
+        window.span_end_ms,
+        lines[second_from:],
+        window.part + "1",
+    )
+    if not first.speech or not second.speech:
+        return None
+    return first, second

@@ -1,6 +1,6 @@
 """Deduplication of items found by overlapping windows.
 
-Two items are the same when they come from different windows, have the same type, say nearly
+Two items are the same when they come from different windows (or parts of a split window), have the same type, say nearly
 the same thing and are close in time. Windows overlap by a minute, so a statement near a cut
 is extracted twice; items of one window are never merged with each other, because a window
 can legitimately contain two similar items.
@@ -44,7 +44,7 @@ def close_in_time(a: dict[str, Any], b: dict[str, Any]) -> bool:
 
 def is_duplicate(a: dict[str, Any], b: dict[str, Any]) -> bool:
     return (
-        a["window"] != b["window"]
+        (a["window"], a.get("part", "")) != (b["window"], b.get("part", ""))
         and a["type"] == b["type"]
         and close_in_time(a, b)
         and similar(a["text"], b["text"])

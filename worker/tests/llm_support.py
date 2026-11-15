@@ -16,6 +16,10 @@ from bbb_worker import manifest as manifest_mod
 Handler = Callable[[dict[str, Any], int], Any]
 
 
+class Truncated(str):
+    """An answer cut off at the token limit: sent with finish_reason "length"."""
+
+
 class FakeLlm:
     """Records every request; answers with whatever the handler returns."""
 
@@ -37,7 +41,14 @@ class FakeLlm:
                 content = answer if isinstance(answer, str) else json.dumps(answer)
                 payload = json.dumps(
                     {
-                        "choices": [{"message": {"content": content}, "finish_reason": "stop"}],
+                        "choices": [
+                            {
+                                "message": {"content": content},
+                                "finish_reason": "length"
+                                if isinstance(answer, Truncated)
+                                else "stop",
+                            }
+                        ],
                         "usage": {"prompt_tokens": 10, "completion_tokens": 5},
                     }
                 ).encode("utf-8")

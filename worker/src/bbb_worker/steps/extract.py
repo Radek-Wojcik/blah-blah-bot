@@ -11,6 +11,7 @@ matched lines, not from the model.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,11 @@ from ..manifest import Manifest
 from . import read_json, write_json
 
 STEP = "extract"
-MAX_TOKENS = 4096
+MAX_TOKENS = 8192
+MIN_TOKENS = 1024
+CONTEXT_RESERVE = 512
+CHARS_PER_TOKEN = 3
+MAX_SPLIT_DEPTH = 2
 TEMPLATE_MODES = ("template", "by-type")
 
 
@@ -75,6 +80,7 @@ def build_items(
                     "match": found.match,
                 },
                 "window": window.index,
+                "part": window.part,
             }
         )
         if not found.verified:
@@ -90,14 +96,17 @@ def build_items(
     return items, warnings
 
 
-def extract_window(
-    backend: llm_client.Backend,
-    window: windows.Window,
-    context: dict[str, Any],
-    language: str,
-) -> dict[str, Any]:
-    """Run the model on one window; a window that stays invalid is recorded as skipped."""
-    result: dict[str, Any] = {
+def output_budget(prompt_chars: int, ctx: int | None) -> int:
+    """Tokens the answer may use: what the context leaves after the prompt (estimated from
+    its length), at most MAX_TOKENS, at least MIN_TOKENS."""
+    if not ctx:
+        return MAX_TOKENS
+    estimated_prompt = prompt_chars // CHARS_PER_TOKEN
+    return max(MIN_TOKENS, min(MAX_TOKENS, ctx - estimated_prompt - CONTEXT_RESERVE))
+
+
+def _empty_result(window: windows.Window) -> dict[str, Any]:
+    return {
         "index": window.index,
         "t_start_ms": window.start_ms,
         "t_end_ms": window.end_ms,
@@ -109,26 +118,76 @@ def extract_window(
         "usage": {"prompt_tokens": 0, "completion_tokens": 0},
         "seconds": 0.0,
     }
+
+
+def _skip(window: windows.Window, error: llm_client.InvalidOutputError) -> dict[str, Any]:
+    result = _empty_result(window)
+    result.update(skipped=True, attempts=error.attempts, usage=error.usage, seconds=error.seconds)
+    result["warnings"].append(
+        {
+            "code": "window_skipped",
+            "message": f"The model gave no valid answer for this window: {error}",
+            "t_start_ms": window.start_ms,
+            "t_end_ms": window.end_ms,
+        }
+    )
+    return result
+
+
+def merge_results(
+    window: windows.Window, first: dict[str, Any], rest: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """One record for a window that was answered in parts. `first` carries what the failed
+    whole-window attempt cost; `rest` are the part results in time order."""
+    merged = _empty_result(window)
+    merged["attempts"] = first["attempts"]
+    merged["usage"] = dict(first["usage"])
+    merged["seconds"] = first["seconds"]
+    for part in rest:
+        merged["items"] += part["items"]
+        merged["warnings"] += part["warnings"]
+        merged["attempts"] += part["attempts"]
+        merged["seconds"] = round(merged["seconds"] + part["seconds"], 3)
+        for key in merged["usage"]:
+            merged["usage"][key] += part["usage"][key]
+    merged["summary"] = " ".join(p["summary"] for p in rest if p["summary"])
+    merged["skipped"] = all(p["skipped"] for p in rest)
+    merged["split"] = True
+    return merged
+
+
+def extract_window(
+    backend: llm_client.Backend,
+    window: windows.Window,
+    context: dict[str, Any],
+    language: str,
+    notify: Callable[[str], None] = lambda _message: None,
+) -> dict[str, Any]:
+    """Run the model on one window. An answer that hit the token limit is not asked for
+    again: the window is halved (at most MAX_SPLIT_DEPTH times) and the halves are merged
+    into one record. A window that stays invalid is recorded as skipped."""
+    system = prompts.extract_system(language)
+    user = prompts.extract_user(context, windows.render_window(window))
     try:
         done = llm_client.complete_json(
             backend,
-            system=prompts.extract_system(language),
-            user=prompts.extract_user(context, windows.render_window(window)),
+            system=system,
+            user=user,
             schema=schema.load("extraction"),
             name="extraction",
-            max_tokens=MAX_TOKENS,
+            max_tokens=output_budget(len(system) + len(user), backend.ctx),
         )
+    except llm_client.TruncatedOutputError as e:
+        halves = windows.split_in_two(window) if len(window.part) < MAX_SPLIT_DEPTH else None
+        if halves is None:
+            return _skip(window, e)
+        notify(f"window {window.index + 1} is too long for one answer, splitting it")
+        failed = _skip(window, e)
+        parts = [extract_window(backend, half, context, language, notify) for half in halves]
+        return merge_results(window, failed, parts)
     except llm_client.InvalidOutputError as e:
-        result.update(skipped=True, attempts=e.attempts, usage=e.usage, seconds=e.seconds)
-        result["warnings"].append(
-            {
-                "code": "window_skipped",
-                "message": f"The model gave no valid answer for this window: {e}",
-                "t_start_ms": window.start_ms,
-                "t_end_ms": window.end_ms,
-            }
-        )
-        return result
+        return _skip(window, e)
+    result = _empty_result(window)
     items, warnings = build_items(done.data, window, context)
     result.update(
         summary=done.data["summary"].strip(),
@@ -165,7 +224,16 @@ def run(manifest: Manifest) -> None:
     if parts:
         with llm_client.open_backend(cfg) as backend:
             for i, window in enumerate(parts):
-                results.append(extract_window(backend, window, context, language))
+                fraction = i / len(parts)
+                results.append(
+                    extract_window(
+                        backend,
+                        window,
+                        context,
+                        language,
+                        lambda message, f=fraction: protocol.progress(STEP, f, message),
+                    )
+                )
                 protocol.progress(STEP, (i + 1) / len(parts), f"window {i + 1}/{len(parts)}")
     doc = {
         "version": 1,

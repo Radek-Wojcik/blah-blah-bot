@@ -46,8 +46,10 @@ it, otherwise null.
 verbatim from that line, without changes.
 - Lines marked (screenshot) describe what was shown on screen; use them for context and \
 names, and do not treat them as something a person said.
-- Write `text` and `summary` in {language}. State each item briefly in the form of the \
-speech (verb and object for tasks).
+- Be compact. One item per commitment or decision: never report the same agreed item twice \
+and do not split one commitment into several items. Keep `text` short (one sentence, at most \
+20 words, verb and object for tasks) and do not restate the quote in it.
+- Write `text` and `summary` in {language}.
 - `summary` is two to four sentences about this window.
 - If the window contains no items, return an empty list and still write the summary.
 """

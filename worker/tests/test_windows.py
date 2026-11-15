@@ -134,3 +134,26 @@ def test_ten_hour_transcript_is_windowed_fast():
     assert elapsed < 2.0
     assert 40 <= len(parts) <= 50
     assert {ln.segment_id for w in parts for ln in w.lines} == {ln.segment_id for ln in speech}
+
+
+def window_of(spans):
+    return windows.split_windows(lines(spans))[0]
+
+
+def test_split_in_two_halves_with_one_minute_overlap():
+    whole = window_of(continuous(14))  # 84 lines of 10 s
+    first, second = windows.split_in_two(whole)
+    assert (first.part, second.part) == ("0", "1")
+    assert first.index == second.index == whole.index
+    cut = whole.lines[len(whole.lines) // 2].start_ms
+    assert first.lines[-1].start_ms < cut and second.lines[0].start_ms == cut - MIN
+    ids = [ln.segment_id for ln in whole.lines]
+    assert {ln.segment_id for ln in first.lines} | {ln.segment_id for ln in second.lines} == set(
+        ids
+    )
+    assert len(first.lines) + len(second.lines) == len(ids) + 6
+    assert windows.split_in_two(first)[0].part == "00"
+
+
+def test_a_window_with_one_line_cannot_be_split():
+    assert windows.split_in_two(window_of([(0, 1000)])) is None

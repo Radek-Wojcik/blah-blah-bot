@@ -9,6 +9,7 @@ from bbb_worker.steps import extract, read_json
 
 from .llm_support import (
     FakeLlm,
+    Truncated,
     by_kind,
     context_doc,
     extraction_for,
@@ -393,3 +394,140 @@ def test_complete_json_reports_attempts_and_usage():
 def test_extraction_fixture_schema_is_what_the_prompt_asks_for():
     sent = schema.load("extraction")
     assert sent["properties"]["items"]["items"]["required"][-1] == "quote"
+
+
+# Truncated answers ------------------------------------------------------------------------
+
+PROFILES = "We decided to use aluminium profiles."
+SPLIT_RULES = [
+    *RULES,
+    {"quote": PROFILES, "text": "Use aluminium profiles", "fields": {"type": "decision"}},
+]
+
+
+def too_long_for(max_lines, then=None):
+    """Truncated output for a window with more than `max_lines` lines, a valid answer otherwise."""
+    answer = then or extraction_for(SPLIT_RULES)
+
+    def handle(body, n):
+        text = body["messages"][1]["content"]
+        if text.count("Filler talk number") > max_lines:
+            return Truncated('{"summary": "A very long start of an answer that never e')
+        return answer(body, n)
+
+    return handle
+
+
+def long_meeting(tmp_path, url, **options):
+    # one 14-minute window of 84 lines; the mount line (40) is in the overlap of the halves
+    doc = long_transcript(14, {40: MOUNT, 70: PROFILES})
+    opts = llm_options(url, **options)
+    return make_meeting(tmp_path, doc, context_doc(mode="fixed"), opts)
+
+
+def user_prompts(fake):
+    return [r["messages"][1]["content"] for r in fake.requests]
+
+
+def test_truncated_window_is_split_not_retried(tmp_path):
+    with FakeLlm(too_long_for(50)) as fake:
+        m = long_meeting(tmp_path, fake.url)
+        extract.run(m)
+        sent = user_prompts(fake)
+    assert len(sent) == 3 and len(set(sent)) == 3  # whole, first half, second half; no repeats
+    (window,) = windows_doc(m)["windows"]
+    assert window["split"] and not window["skipped"] and window["index"] == 0
+    assert window["attempts"] == 3
+    assert window["usage"] == {"prompt_tokens": 30, "completion_tokens": 15}
+    assert window["warnings"] == []
+    assert window["summary"].count("Summary of a window") == 2
+    parts = sorted((i["part"], i["text"]) for i in window["items"])
+    assert parts == [
+        ("0", "Alex prepares the monitor mount"),
+        ("1", "Alex prepares the monitor mount"),
+        ("1", "Use aluminium profiles"),
+    ]
+    assert all(i["source"]["verified"] and i["window"] == 0 for i in window["items"])
+    schema_ok = windows_doc(m)
+    assert schema_ok["windows"][0]["t_end_ms"] > schema_ok["windows"][0]["t_start_ms"]
+
+
+def test_halves_overlap_items_are_deduplicated_by_reduce(tmp_path):
+    from bbb_worker.steps import reduce
+
+    h = by_kind(
+        extraction=too_long_for(50),
+        summary=lambda b, n: {"summary": "Joined."},
+    )
+    with FakeLlm(h) as fake:
+        m = long_meeting(tmp_path, fake.url)
+        extract.run(m)
+        reduce.run(m)
+    doc = read_json(m.work_dir / "draft.json")
+    schema.validate("meeting", doc)
+    assert sorted(i["text"] for i in doc["items"]) == [
+        "Alex prepares the monitor mount",
+        "Use aluminium profiles",
+    ]
+    assert all("part" not in i for i in doc["items"])
+
+
+def test_splitting_stops_after_two_levels_and_the_window_is_skipped(tmp_path):
+    with FakeLlm(lambda body, n: Truncated('{"summary": "cut')) as fake:
+        m = long_meeting(tmp_path, fake.url)
+        extract.run(m)
+        sent = user_prompts(fake)
+    assert len(sent) == 7 and len(set(sent)) == 7  # 1 + 2 + 4
+    (window,) = windows_doc(m)["windows"]
+    assert window["skipped"] and window["items"] == []
+    assert [w["code"] for w in window["warnings"]] == ["window_skipped"] * 4
+
+
+def test_truncated_window_that_cannot_be_split_is_skipped_after_one_request(tmp_path):
+    with FakeLlm(lambda body, n: Truncated('{"summary": "cut')) as fake:
+        doc = transcript_doc([segment(0, 0, 5_000, "One short line only.")])
+        m = make_meeting(tmp_path, doc, context_doc(), llm_options(fake.url))
+        extract.run(m)
+        assert len(fake.requests) == 1
+    (window,) = windows_doc(m)["windows"]
+    assert window["skipped"] and window["attempts"] == 1
+
+
+def test_complete_json_does_not_retry_a_truncated_answer():
+    with FakeLlm(lambda body, n: Truncated('{"summary": "cu')) as fake:
+        backend = llm_client.Backend(fake.url, "fake")
+        schema_doc = {"type": "object", "required": ["summary"]}
+        with pytest.raises(llm_client.TruncatedOutputError) as raised:
+            llm_client.complete_json(
+                backend, system="s", user="u", schema=schema_doc, name="x", max_tokens=10
+            )
+        assert len(fake.requests) == 1
+    assert isinstance(raised.value, llm_client.InvalidOutputError)
+    assert raised.value.attempts == 1 and raised.value.usage["prompt_tokens"] == 10
+
+
+def test_output_budget_follows_the_context():
+    assert extract.output_budget(17_400, 16384) == 8192  # about 5.8k prompt tokens
+    assert extract.output_budget(17_400, 8192) == 8192 - 5_800 - 512
+    assert extract.output_budget(17_400, 4096) == 1024
+    assert extract.output_budget(17_400, None) == 8192
+
+
+def test_request_uses_the_budget_from_the_configured_context(tmp_path):
+    with FakeLlm(extraction_for([])) as fake:
+        m = make_meeting(
+            tmp_path, small_transcript(), context_doc(), llm_options(fake.url, ctx=2048)
+        )
+        extract.run(m)
+        assert fake.requests[0]["max_tokens"] == 1024
+    with FakeLlm(extraction_for([])) as fake:
+        m = make_meeting(
+            tmp_path / "b", small_transcript(), context_doc(), llm_options(fake.url, ctx=16384)
+        )
+        extract.run(m)
+        assert fake.requests[0]["max_tokens"] == 8192
+
+
+def test_prompt_asks_for_compact_output():
+    system = prompts.extract_system("en")
+    assert "never report the same agreed item twice" in system and "Keep `text` short" in system
