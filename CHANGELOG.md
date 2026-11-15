@@ -34,6 +34,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Extraction quality in Polish depends on the model and was measured on synthetic transcripts only.
 - The new screens are tested on the mock backend; an end-to-end test in the real application is not part of this release.
 
+### Stage 5
+
+Publishing. Implemented and tested against fake servers and local Git repositories; not yet run against a real repository or channel.
+
+#### Added
+
+- Publishing to the cycle repository: the report, the transcript with a time anchor per line, the meeting data and the screenshots are committed as new files under `meetings/<ID>/<date>` (a suffix `-2`, `-3` for a second meeting on a date) and pushed. The commit is built from the remote's tip with Git plumbing and a temporary index, so the working copy is never touched; a push refused because of a concurrent commit is built again on the new tip, up to three times per run. `topics.yaml` is merged per topic (last write wins, overridden remote versions are recorded).
+- GitHub issues: one per task with the label `cycle:<id>`, the assignee from the participant's GitHub login, the due date, a link to the report and to the transcript passage, the quote and a hidden marker that keeps a retry from creating a duplicate. The due date goes into the organization issue field "Target date" when there is one, otherwise a `Due:` line in the body.
+- Status proposals: `extract` returns `status_changes` and `reduce` turns them into `status_proposals` of the draft, which you approve, reject or comment on. An approved proposal closes or reopens the issue with a comment (or changes the topic in `topics.yaml`). Nothing is approved automatically.
+- Issue state is read before the briefing and on a manual pull (all states, with the links of issues to items): an item whose issue was closed counts as done, an item with an open issue carries its number in the context.
+- Discord webhook publisher: per-target template (a built-in short one by default) and `{report_link}`, mentions of participants' Discord users and roles with an explicit `allowed_mentions` on every message, `@everyone` and `@here` neutralized, splitting at 2000 characters, screenshots in batches of at most 10 files and 8 MiB, rate limits honoured, a retry resumes after the messages already sent.
+- Rules per target (`auto`, `on-approval`, `off`) and an outbox in the local database (schema version 5, with a migration): operations are retried with a backoff or the wait a service names, survive a restart, are idempotent, pause per target when a host is unreachable, and can be retried or cancelled by the user. A frozen snapshot is what gets published, and the draft of a meeting with queued or finished operations is read-only.
+- Public-repository warning: a repository that is public, or whose visibility cannot be read, needs a confirmation once per repository, checked when the plan is built, when publishing starts and before each operation reaches the repository.
+- Secrets for publishing: a GitHub token per API host and the Discord webhooks that cycle files refer to as `cred:` references, stored in the Windows Credential Manager in a namespace of their own, validated when saved, never returned to the interface and scrubbed from every stored or logged error.
+- `targets.github.issues` in `cycle.yaml` (default `true`); optional `status_proposals` in `meeting.json`, `previous_items[].issue` in the context and `status_changes` in the extraction answer (schema versions unchanged).
+- ADR 0018 (publishing) and ADR 0019 (default publish rule per target, proposed); documentation of the publishing setup in the README and of the publishing rules in `docs/CYCLES.md`.
+- Tests: the Git side against local bare remotes, the outbox state machine, the publish plan and rules, both publishers against stateful fake GitHub and Discord servers with fault injection, a whole-loop test and resilience tests (no network and recovery, rejected push, lost answers without duplicates, rate limits, a crash while an operation runs, no secret in any file, log or the database), worker tests for status proposals, and release checks for a real test repository and webhook that are ignored by default.
+
+#### Changed
+
+- The extraction answer must contain `status_changes` (possibly empty); answers without it are retried. Existing `windows.json` files still reduce.
+- Open issues are read through the new HTTP layer (no redirects, redaction) and, with a token, also from private repositories.
+- Publishing commits only the meeting folder and `topics.yaml`; edits of `cycle.yaml` and templates stay in the working tree.
+
+#### Known issues
+
+- Nothing has been published to a real repository or Discord channel yet. The organization issue field "Target date", the Discord upload limits for webhooks (a conservative 8 MiB per message is used), whether GitHub resolves the transcript anchors and the quality of status proposals from a real model are unverified.
+- The default rule per target (`on-approval` for both) is a proposal awaiting confirmation.
+- `targets.github.path` is accepted but not used: reports always go to `meetings/<ID>/<folder>`.
+- A meeting cannot be published twice or edited after publishing. A Discord message can be posted twice when a request times out after Discord stored it.
+- The Discord bot and Notion publishers are not part of this stage.
+
 ## [0.4.0] - 2026-11-15
 
 ### Added
