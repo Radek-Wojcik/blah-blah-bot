@@ -67,6 +67,7 @@ version = "0.4.0"
 dependencies = [
  "cycle-store",
  "keyring-core",
+ "publishers",
  "queue",
  "recorder",
  "serde",
