@@ -167,8 +167,6 @@ Runs only while a job is processing. The environment is created with `uv` on fir
 |---|---|---|
 | `asr` | Transcription per track with word timestamps | faster-whisper large-v3-turbo, language `auto` (alternative: Parakeet-TDT-0.6B-v3; large-v3 as an option) |
 | `diarize` | Speaker segments per multi-speaker track | pyannote.audio 4 with `speaker-diarization-community-1` |
-| `speaker-id` | Voice embeddings per detected speaker, matching against cycle voice profiles | Embedding model shipped with the diarization pipeline (**pending** API confirmation) |
-| `clips` | Sample clips per detected voice for labeling | ffmpeg or direct PCM slicing |
 | `merge` | One transcript from all tracks, ordered by time, with speaker and source | Own code |
 | `vision` | Description of each screenshot with surrounding transcript as context | HTTP client to the VLM server |
 | `extract` | Map step: structured items per transcript window | HTTP client to the LLM server, JSON Schema constrained output |
@@ -347,7 +345,7 @@ stateDiagram-v2
     failed --> queued: retry from failed stage
 ```
 
-Each stage writes its output to the meeting's working folder and records completion in the database. Stages are idempotent and resumable. Stage 2 runs `asr`, `diarize`, `merge`, `audio_cleanup` and `vision`; `speaker_id`, `clips`, `extract` and `reduce` follow in later stages.
+Each stage writes its output to the meeting's working folder and records completion in the database. Stages are idempotent and resumable. Stage 3 adds `speaker_id` and `clips`, so the pipeline runs `asr`, `diarize`, `merge`, `speaker_id`, `clips`, `audio_cleanup` and `vision`; `extract` and `reduce` follow in later stages. `speaker_id` and `clips` run in the application process (crates `speakers` and `queue`), not in the worker: the embeddings are part of the diarization output, so no model is loaded and no GPU is needed. Only `clips` reads the audio and therefore counts as audio-dependent.
 
 ### 7.3 Audio retention
 
@@ -363,6 +361,14 @@ Each stage writes its output to the meeting's working folder and records complet
 3. For each detected voice an embedding is computed and compared with the cycle's voice profiles. A strong match assigns the name automatically; a weak match becomes a suggestion; no match yields an unknown voice.
 4. The labeling screen lists detected voices, each with sample clips of clear, non-overlapping speech. The user plays a clip and picks a participant, creates a new one, or merges two voices.
 5. Confirmed labels update the voice profiles, so recognition improves with every meeting.
+
+Details (see [ADR 0016](decisions/0016-speaker-recognition.md)):
+
+- A profile is the weighted mean of one embedding per confirmed voice (up to 20 samples; the longest are kept). Voices with less than 5 s of speech are named but not learned.
+- Thresholds are cosine similarities: automatic from 0.75 with a 0.10 lead over the runner-up, suggestion from 0.60; all three are settings. A participant is assigned automatically to at most one voice of a meeting.
+- An automatic name is applied to the transcript immediately but teaches the profile only after the user confirms it, so a wrong match cannot reinforce itself.
+- Clips are 2.5 to 8 s of one speaker, isolated from other speech by 0.5 s and mostly voiced; up to three per voice, spread over the meeting. They are deleted when every voice of the meeting is decided, after 30 days at the latest (setting), and with the meeting.
+- The labeling screen offers naming, a new participant, "same person as" merging, skipping and one-click confirmation of automatic matches. A minimal local participant list stands in for the cycle's participants until Stage 4.
 
 Voice profiles are biometric data. They are stored only in the local database, are never committed or published, and can be deleted per participant or per cycle.
 

@@ -160,3 +160,13 @@ A pull request or push is mergeable only when all jobs pass.
 | Time and peak VRAM for a 2 hour recording, per stage | `cd benchmarks && uv run python -m bbb_bench.proto.stage2_pipeline --audio ... --hours 2 --slides ... --worker-python ../worker/.venv/Scripts/python.exe` | Locally before a release |
 
 The GPU guard is tested on recorded traces: a real trace of the idle reference machine (`crates/queue/tests/traces/idle-recorded.json`, recorded with the `record_gpu_trace` example, process ids replaced by their order) and traces derived from it for a busy GPU, a load that ends, a short spike and memory held by another process.
+
+## 12. Stage 3 test commands
+
+| What | Command | Runs |
+|---|---|---|
+| Similarity, thresholds, margin rule, profile update, clip selection on synthetic segment lists (`speakers`); participants, profiles, voices and clips in the database (`store`); `speaker_id` and `clips` stages, naming, merging, learning, clip retention and transcript names (`queue`) | `cargo test -p speakers -p store -p queue` | CI |
+| Labeling screen and profile management on the mock backend | `cd ui && npm test && npm run test:e2e` | CI |
+| Enrollment from one meeting and recognition in the next with real models; a new voice stays unknown | `BBB_AUDIO_DIR=... cargo test -p queue --test speakers_models a_voice_named -- --ignored --test-threads=1` | Locally before a release |
+| Speaker accuracy and false accept rate over seven synthetic meetings in sequence (profiles are taught after each meeting); writes `benchmarks/results/stage3-speaker-recognition.json` when `BBB_RESULTS_OUT` is set | `BBB_AUDIO_DIR=... BBB_RESULTS_OUT=... cargo test -p queue --test speakers_models recognition_accuracy -- --ignored --test-threads=1 --nocapture` | Locally before a release |
+| Distribution of similarity for the same and for different voices, clean and narrowband with noise | `cd benchmarks && uv run --group diar python -m bbb_bench.proto.p4_similarity data/audio/<meeting> ...` | When thresholds change |
