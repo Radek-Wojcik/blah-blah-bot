@@ -21,6 +21,7 @@ import type {
   ReportMode,
 } from "../ipc/types";
 import { MODE_HELP, MODE_NAMES, REPORT_MODES } from "../report-gate";
+import { CycleTasksView } from "./CycleTasks";
 import { TemplateEditor } from "./TemplateEditor";
 
 const LANGUAGES: { value: LanguageSetting; label: string }[] = [
@@ -518,7 +519,7 @@ export function CycleEditor(props: { cycleId: string; onBack: () => void }) {
       <Section
         id="targets"
         title="Targets"
-        hint="Where a report is published (publishing itself arrives in a later release). Secrets are never stored here: Discord and Notion refer to them as cred:name."
+        hint="Where a report is published, and when: after approval (when you press Publish in the draft), automatically when the draft is complete, or never. Secrets are never stored here: Discord and Notion refer to them as cred:name."
       >
         <div className="form targets">
           <fieldset>
@@ -544,6 +545,18 @@ export function CycleEditor(props: { cycleId: string; onBack: () => void }) {
                     onChange={(e) => setTargets({ github: { ...github, path: e.target.value } })}
                   />
                   <Problems issues={issues} path="targets.github.path" />
+                </label>
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={github.issues !== false}
+                    onChange={(e) =>
+                      setTargets({
+                        github: { ...github, issues: e.target.checked ? undefined : false },
+                      })
+                    }
+                  />
+                  Create issues for tasks and write back approved status changes
                 </label>
                 <label>
                   Publish
@@ -684,6 +697,14 @@ export function CycleEditor(props: { cycleId: string; onBack: () => void }) {
             )}
           </fieldset>
         </div>
+      </Section>
+
+      <Section
+        id="tasks"
+        title="Tasks"
+        hint="The tasks of this cycle that became GitHub issues. A closed issue counts as done."
+      >
+        <CycleTasksView cycleId={cycleId} repoId={details.repoId} />
       </Section>
 
       <h3 className="sub-head">Open topics</h3>
