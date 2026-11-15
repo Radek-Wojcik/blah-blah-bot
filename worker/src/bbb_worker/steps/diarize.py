@@ -14,6 +14,22 @@ from ..manifest import SAMPLE_RATE, Manifest, load_track_audio
 from . import write_json
 
 
+def finite_embeddings(embeddings: Any) -> list[list[float]]:
+    """Embeddings as plain lists, with an empty list for any that is not finite.
+
+    A voice with very little speech can come back with an embedding of NaN. Such a vector is
+    not valid JSON and cannot be compared, so the voice is reported without an embedding and
+    stays unknown.
+    """
+    out: list[list[float]] = []
+    array = np.asarray(embeddings, dtype=np.float32)
+    if array.size == 0:
+        return out
+    for row in array.reshape(len(array), -1):
+        out.append(row.tolist() if np.isfinite(row).all() else [])
+    return out
+
+
 def run(manifest: Manifest) -> None:
     import torch
     from pyannote.audio import Pipeline
@@ -50,7 +66,7 @@ def run(manifest: Manifest) -> None:
                 )
             labels = list(out.speaker_diarization.labels())
             if out.speaker_embeddings is not None:
-                embeddings = np.asarray(out.speaker_embeddings, dtype=np.float32).tolist()
+                embeddings = finite_embeddings(out.speaker_embeddings)
         write_json(
             out_dir / f"{track.name}.json",
             {"track": track.name, "speakers": labels, "turns": turns, "embeddings": embeddings},

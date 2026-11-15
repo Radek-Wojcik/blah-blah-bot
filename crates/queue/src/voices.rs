@@ -50,8 +50,18 @@ struct DiarizeDoc {
     speakers: Vec<String>,
     #[serde(default)]
     turns: Vec<DiarizeTurn>,
+    /// A voice whose embedding was not finite has `null` values, which count as no embedding.
     #[serde(default)]
-    embeddings: Vec<Vec<f32>>,
+    embeddings: Vec<Vec<Option<f32>>>,
+}
+
+impl DiarizeDoc {
+    /// The embedding of voice `i`, or `None` when it is missing, empty or not finite.
+    fn embedding(&self, i: usize) -> Option<Vec<f32>> {
+        let row = self.embeddings.get(i)?;
+        let values: Option<Vec<f32>> = row.iter().copied().collect();
+        values.filter(|v| !v.is_empty() && v.iter().all(|x| x.is_finite()))
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,8 +76,18 @@ fn read_diarization(meeting_dir: &Path, track: &str) -> Result<Option<DiarizeDoc
         .join("work")
         .join("diarize")
         .join(format!("{track}.json"));
-    match fs::read(&path) {
-        Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes).map_err(err)?)),
+    match fs::read_to_string(&path) {
+        // Older worker versions wrote `NaN` for a voice with too little speech, which is not
+        // valid JSON; read it as `null`.
+        Ok(text) => Ok(Some(
+            serde_json::from_str(
+                &text
+                    .replace("-Infinity", "null")
+                    .replace("Infinity", "null")
+                    .replace("NaN", "null"),
+            )
+            .map_err(err)?,
+        )),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(err(e)),
     }
@@ -132,7 +152,7 @@ pub fn run_speaker_id(
             let Some(&speech_ms) = speech.get(label.as_str()) else {
                 continue;
             };
-            let embedding = doc.embeddings.get(i).cloned().unwrap_or_default();
+            let embedding = doc.embedding(i).unwrap_or_default();
             let id = voice_id(&track.name, label);
             if !embedding.is_empty() {
                 candidates.push(Candidate {
@@ -918,6 +938,46 @@ mod tests {
         assert_eq!(unknown.decision, VoiceDecision::Unknown);
         assert_eq!(unknown.assigned_participant, None);
         assert_eq!(known.speech_ms, 10_000);
+    }
+
+    #[test]
+    fn a_voice_without_a_usable_embedding_stays_unknown_and_does_not_fail_the_stage() {
+        let s = setup();
+        let dir = tempdir("nan");
+        let work = dir.join("work").join("diarize");
+        fs::create_dir_all(&work).unwrap();
+        // Written by an older worker: NaN is not valid JSON.
+        fs::write(
+            work.join("t.json"),
+            r#"{"track":"t","speakers":["S0","S1"],
+                "turns":[{"start_ms":0,"end_ms":1200,"speaker":"S0"},
+                         {"start_ms":2000,"end_ms":9000,"speaker":"S1"}],
+                "embeddings":[[NaN,NaN],[1.0,0.0]]}"#,
+        )
+        .unwrap();
+        s.upsert_track(
+            "m",
+            &Track {
+                name: "t".into(),
+                source: "system".into(),
+                pid: None,
+                offset_ms: 0.0,
+                ended: true,
+                end_offset_ms: None,
+                total_samples: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            run_speaker_id(&s, "m", &dir, &VoiceSettings::default()).unwrap(),
+            2
+        );
+        let voices = s.list_meeting_voices("m").unwrap();
+        let broken = voices.iter().find(|v| v.label == "S0").unwrap();
+        assert!(broken.embedding.is_empty());
+        assert_eq!(broken.decision, VoiceDecision::Unknown);
+        let fine = voices.iter().find(|v| v.label == "S1").unwrap();
+        assert_eq!(fine.embedding, vec![1.0, 0.0]);
     }
 
     #[test]

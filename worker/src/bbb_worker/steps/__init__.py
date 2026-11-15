@@ -13,7 +13,7 @@ def write_json(path: Path, doc: Any) -> None:
     """Write atomically: a crash never leaves a half-written output that looks complete."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(doc, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.write_text(json.dumps(doc, ensure_ascii=False, indent=1, allow_nan=False), encoding="utf-8")
     os.replace(tmp, path)
 
 
