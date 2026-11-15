@@ -23,8 +23,8 @@ pub struct WorkerConfig {
     pub worker_dir: PathBuf,
     /// Where the Python environment is created (outside the installation folder).
     pub env_dir: PathBuf,
-    /// Cache folder for downloaded models.
-    pub models_dir: PathBuf,
+    /// Cache folder for downloaded models; `None` uses the Hugging Face default cache.
+    pub models_dir: Option<PathBuf>,
     /// `llama-server` executable for the managed vision model.
     pub llama_server: Option<PathBuf>,
     /// Hugging Face access token for gated models; passed only through the environment.
@@ -147,12 +147,14 @@ fn command(cfg: &WorkerConfig, args: &[&str]) -> Command {
         .arg("--project")
         .arg(&cfg.worker_dir)
         .env("UV_PROJECT_ENVIRONMENT", &cfg.env_dir)
-        .env("BBB_MODELS_DIR", &cfg.models_dir)
         .env("PYTHONUNBUFFERED", "1")
         .env("PYTHONIOENCODING", "utf-8")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(dir) = &cfg.models_dir {
+        cmd.env("BBB_MODELS_DIR", dir);
+    }
     if let Some(p) = &cfg.llama_server {
         cmd.env("BBB_LLAMA_SERVER", p);
     }

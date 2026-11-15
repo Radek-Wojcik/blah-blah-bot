@@ -78,6 +78,8 @@ pub struct MeetingSummary {
     pub state: MeetingState,
     pub track_count: u32,
     pub screenshot_count: u32,
+    /// State of the processing job, when the meeting has one.
+    pub job: Option<crate::processing::JobState>,
 }
 
 impl From<store::MeetingSummary> for MeetingSummary {
@@ -90,6 +92,7 @@ impl From<store::MeetingSummary> for MeetingSummary {
             state: s.meeting.state.into(),
             track_count: s.track_count,
             screenshot_count: s.screenshot_count,
+            job: None,
         }
     }
 }
