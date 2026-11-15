@@ -10,6 +10,7 @@ import { CyclesView } from "./Cycles";
 import { DraftEditor } from "./DraftEditor";
 import { ProcessPrompt } from "./ProcessPrompt";
 import { ProcessingSettingsView } from "./ProcessingSettings";
+import { PublishingSettingsView } from "./PublishingSettings";
 import { QueueView } from "./Queue";
 import { SpeakersView } from "./Speakers";
 import { TranscriptView } from "./Transcript";
@@ -343,6 +344,7 @@ function SettingsView() {
         </div>
       </div>
       <CycleRepos />
+      <PublishingSettingsView />
       <ProcessingSettingsView />
     </>
   );
