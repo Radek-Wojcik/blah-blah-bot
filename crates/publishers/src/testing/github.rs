@@ -2,7 +2,7 @@
 //!
 //! Implemented, as documented on docs.github.com for the 2022-11-28 API version:
 //!
-//! * `GET /repos/{owner}/{repo}`: name, `private`, `visibility`, owner type.
+//! * `GET /repos/{owner}/{repo}`: name, `private`, `visibility`, owner type, `permissions`.
 //! * `GET /repos/{owner}/{repo}/issues`: `state`, `labels` (comma separated, all required),
 //!   `sort` and `direction`, `per_page` (at most 100), `page`, a `Link` header; pull requests
 //!   are included and carry a `pull_request` key, as on GitHub.
@@ -72,6 +72,8 @@ struct Repo {
     visibility: Visibility,
     owner_type: &'static str,
     issues_enabled: bool,
+    /// What `permissions.push` of the repository says for an authenticated client.
+    push_allowed: bool,
     /// `None`: everybody can be assigned.
     assignable: Option<Vec<String>>,
     issues: Vec<StoredIssue>,
@@ -167,6 +169,7 @@ impl FakeGithub {
                 visibility,
                 owner_type: "User",
                 issues_enabled: true,
+                push_allowed: true,
                 assignable: None,
                 issues: Vec::new(),
                 labels: Vec::new(),
@@ -192,6 +195,11 @@ impl FakeGithub {
     /// Makes the owner an organisation.
     pub fn set_organization(&self, full_name: &str) {
         self.with_repo(full_name, |r| r.owner_type = "Organization");
+    }
+
+    /// Whether the token's user may push: `permissions.push` of the repository answer.
+    pub fn set_push_permission(&self, full_name: &str, allowed: bool) {
+        self.with_repo(full_name, |r| r.push_allowed = allowed);
     }
 
     /// Turns issues off: the issue endpoints answer 410.
@@ -354,13 +362,20 @@ fn handle(shared: &Mutex<State>, req: &Recorded) -> Reply {
             if req.method != "GET" && !authed {
                 return error(401, "Requires authentication");
             }
-            route(repo, rest, req, &base, at)
+            route(repo, rest, req, &base, at, authed)
         }
         _ => not_found(),
     }
 }
 
-fn route(repo: &mut Repo, rest: &[&str], req: &Recorded, base: &str, at: u64) -> Reply {
+fn route(
+    repo: &mut Repo,
+    rest: &[&str],
+    req: &Recorded,
+    base: &str,
+    at: u64,
+    authed: bool,
+) -> Reply {
     match (req.method.as_str(), rest) {
         ("GET", []) => Reply::json(
             200,
@@ -370,6 +385,7 @@ fn route(repo: &mut Repo, rest: &[&str], req: &Recorded, base: &str, at: u64) ->
                 "visibility": repo.visibility.as_str(),
                 "owner": {"type": repo.owner_type},
                 "has_issues": repo.issues_enabled,
+                "permissions": {"admin": false, "push": authed && repo.push_allowed, "pull": true},
             }),
         ),
         (_, ["issues", ..]) if !repo.issues_enabled => {
