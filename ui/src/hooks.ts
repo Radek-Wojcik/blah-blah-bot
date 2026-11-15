@@ -4,10 +4,13 @@ import { isIpcError } from "./ipc/tauri";
 import type {
   CycleListItem,
   CycleRepoView,
+  CycleTasks,
   MeetingSummary,
+  OutboxState,
   QueueState,
   RecordingState,
   SourceInfo,
+  Topic,
 } from "./ipc/types";
 
 const idle: RecordingState = {
@@ -133,4 +136,63 @@ export function useCycles(): {
     };
   }, [backend, reload]);
   return { cycles, repos, reload };
+}
+
+/** The outbox of publishing: loaded once, then replaced by every `outbox-changed` event. */
+export function useOutbox(): OutboxState | null {
+  const backend = useBackend();
+  const [state, setState] = useState<OutboxState | null>(null);
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    let cancelled = false;
+    void backend.outboxState().then((s) => !cancelled && setState(s));
+    void backend.onOutboxChanged(setState).then((u) => {
+      if (cancelled) u();
+      else off = u;
+    });
+    return () => {
+      cancelled = true;
+      off?.();
+    };
+  }, [backend]);
+  return state;
+}
+
+/**
+ * The tasks of a cycle (its GitHub issues as last read) and its topics, again on every
+ * `cycles-changed` event: a pull of the repository reads the issues again.
+ */
+export function useCycleFacts(cycleId: string | undefined): {
+  tasks: CycleTasks | null;
+  topics: Topic[];
+  reload: () => void;
+} {
+  const backend = useBackend();
+  const [tasks, setTasks] = useState<CycleTasks | null>(null);
+  const [topics, setTopics] = useState<Topic[]>([]);
+  const reload = useCallback(() => {
+    if (!cycleId) return;
+    void backend
+      .cycleTasks(cycleId)
+      .then(setTasks)
+      .catch(() => setTasks(null));
+    void backend
+      .getCycle(cycleId)
+      .then((d) => setTopics(d.topics))
+      .catch(() => setTopics([]));
+  }, [backend, cycleId]);
+  useEffect(() => {
+    reload();
+    let off: (() => void) | undefined;
+    let cancelled = false;
+    void backend.onCyclesChanged(reload).then((u) => {
+      if (cancelled) u();
+      else off = u;
+    });
+    return () => {
+      cancelled = true;
+      off?.();
+    };
+  }, [backend, reload]);
+  return { tasks, topics, reload };
 }
