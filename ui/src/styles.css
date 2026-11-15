@@ -842,13 +842,42 @@ select {
 .stats dd {
   text-shadow: 0 0 10px rgba(0, 240, 255, 0.5);
 }
-.card-title {
-  transition: text-shadow 0.2s;
+/* A short flash on hover that settles back, so the title stays readable. */
+@keyframes title-glitch {
+  0%,
+  100% {
+    text-shadow: none;
+    transform: translate(0);
+  }
+  15% {
+    text-shadow:
+      -2px 0 var(--magenta),
+      2px 0 var(--cyan);
+    transform: translate(1px, 0);
+  }
+  35% {
+    text-shadow:
+      2px 0 var(--magenta),
+      -2px 0 var(--cyan);
+    transform: translate(-1px, 0);
+  }
+  55% {
+    text-shadow:
+      -1px 0 var(--magenta),
+      1px 0 var(--cyan);
+    transform: translate(0);
+  }
+  75% {
+    text-shadow: none;
+  }
 }
 .cards .panel:hover .card-title {
-  text-shadow:
-    -2px 0 var(--magenta),
-    2px 0 var(--cyan);
+  animation: title-glitch 0.4s ease-out 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cards .panel:hover .card-title {
+    animation: none;
+  }
 }
 
 /* Scrolling system ticker in the sidebar. */
