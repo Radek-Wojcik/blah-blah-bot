@@ -20,13 +20,16 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use cycle_store::{Draft, Topic};
+use cycle_store::{Correction, Draft, Topic};
 use store::{OpState, OutboxOp, Publication, Store, StoreError};
 
+use crate::correction::{self, CorrectionPlan, CorrectionPlanInput};
 use crate::gate::{self, RepoVisibility};
 use crate::github::Github;
 use crate::outbox::{Env, RepoContext};
-use crate::plan::{self, Block, PlanInput, PublishPlan, RepoFacts, SnapshotRef, TopicsPlan};
+use crate::plan::{
+    self, Block, PlanInput, PublishPlan, RepoFacts, SnapshotRef, TopicsPlan, COMMIT_KEY,
+};
 use crate::rules::{PublishTarget, Trigger};
 
 /// Folder of the snapshots below the meeting folder.
@@ -406,6 +409,106 @@ pub fn publish(store: &Store, p: &Prepared<'_>) -> Result<Outcome, StartError> {
             Err(e)
         }
     }
+}
+
+// ----- corrections ---------------------------------------------------------------------------
+
+/// What the application knows when a correction is published (or when it is written under an
+/// `auto` rule).
+pub struct PreparedCorrection<'a> {
+    pub meeting_id: &'a str,
+    /// The meeting folder, relative to the snapshot root of the environment.
+    pub meeting_rel: &'a str,
+    /// `YYYY-MM-DD`, the day of the meeting that is corrected.
+    pub meeting_date: &'a str,
+    pub ctx: &'a RepoContext,
+    pub correction: &'a Correction,
+    pub trigger: Trigger,
+}
+
+/// Where the rendered correction files are written, relative to the snapshot root.
+pub fn correction_out_dir(meeting_rel: &str) -> String {
+    format!("{}/work/corrections-out", meeting_rel.trim_end_matches('/'))
+}
+
+fn correction_input<'a>(
+    p: &'a PreparedCorrection<'a>,
+    facts: &'a RepoFacts,
+    existing: &'a [OutboxOp],
+    out_dir: &'a str,
+    in_repository: bool,
+) -> CorrectionPlanInput<'a> {
+    CorrectionPlanInput {
+        meeting_id: p.meeting_id,
+        meeting_date: p.meeting_date,
+        cycle: &p.ctx.cycle,
+        correction: p.correction,
+        repo: facts,
+        existing,
+        trigger: p.trigger,
+        out_dir,
+        in_repository,
+    }
+}
+
+/// The meeting is in the repository (its commit landed) or its commit is still on its way.
+fn meeting_in_repository(
+    store: &Store,
+    meeting_id: &str,
+    existing: &[OutboxOp],
+) -> Result<bool, StoreError> {
+    let landed = store
+        .get_publication(meeting_id)?
+        .is_some_and(|row| row.folder.is_some());
+    let on_its_way = existing
+        .iter()
+        .any(|o| o.op_key == COMMIT_KEY && o.state != OpState::Cancelled);
+    Ok(landed || on_its_way)
+}
+
+/// What publishing the correction would do, without queueing anything. Asks GitHub for the
+/// visibility of the repository.
+pub fn preview_correction(
+    env: &dyn Env,
+    store: &Store,
+    p: &PreparedCorrection<'_>,
+) -> Result<CorrectionPlan, StoreError> {
+    let facts = repo_facts(env, store, p.ctx)?;
+    let existing = store.list_ops(Some(p.meeting_id))?;
+    let in_repository = meeting_in_repository(store, p.meeting_id, &existing)?;
+    let out_dir = correction_out_dir(p.meeting_rel);
+    Ok(correction::build(&correction_input(
+        p,
+        &facts,
+        &existing,
+        &out_dir,
+        in_repository,
+    )))
+}
+
+/// What a queued correction did.
+pub struct CorrectionOutcome {
+    pub plan: CorrectionPlan,
+    /// Each operation and whether it is new.
+    pub ops: Vec<(OutboxOp, bool)>,
+}
+
+/// Plans and queues the operations of a correction. A refused plan queues nothing. Queueing
+/// the same correction twice changes nothing; one the user cancelled is queued again.
+pub fn publish_correction(
+    env: &dyn Env,
+    store: &Store,
+    p: &PreparedCorrection<'_>,
+) -> Result<CorrectionOutcome, StartError> {
+    let plan = preview_correction(env, store, p)?;
+    if plan.is_blocked() {
+        return Err(StartError::Blocked(plan.blocks.clone()));
+    }
+    let mut ops = Vec::new();
+    for op in &plan.ops {
+        ops.push(store.enqueue_op(op, env.now_ms())?);
+    }
+    Ok(CorrectionOutcome { plan, ops })
 }
 
 /// Records that the user confirmed publishing to the repository, with the visibility it has

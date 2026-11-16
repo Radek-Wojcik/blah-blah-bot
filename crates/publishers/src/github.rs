@@ -18,8 +18,8 @@ const API_VERSION: &str = "2022-11-28";
 mod issues;
 
 pub use issues::{
-    defuse_mentions, issue_body, DueOutcome, IssueOutcome, IssueSpec, StatusOutcome, StatusSpec,
-    DUE_FIELD_NAME, WRITE_PACING,
+    defuse_mentions, issue_body, CorrectionSpec, DueOutcome, IssueOutcome, IssueSpec,
+    StatusOutcome, StatusSpec, DUE_FIELD_NAME, WRITE_PACING,
 };
 
 // ----- repository identity -----------------------------------------------------------------

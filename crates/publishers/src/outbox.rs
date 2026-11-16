@@ -28,19 +28,23 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use cycle_store::publish::{GitAuth, PublishErrorKind, PublishFile, PublishRequest};
+use cycle_store::publish::{
+    AddFileRequest, GitAuth, PublishErrorKind, PublishFile, PublishRequest,
+};
 use cycle_store::{Cycle, Draft, Repo};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use store::{Failure, OpState, OutboxKind, OutboxOp, OutboxTarget, Store};
 
 use crate::addr;
+use crate::correction::{file_key, CorrectionPayload};
 use crate::discord::{self, Attachment, Pacing};
 use crate::gate::{self, RepoVisibility};
-use crate::github::{Github, IssueSpec, StatusSpec, WRITE_PACING};
+use crate::github::{CorrectionSpec, Github, IssueSpec, StatusSpec, WRITE_PACING};
 use crate::http::{HttpClient, HttpError};
 use crate::plan::{
-    apply_topics, CommitPayload, DiscordPayload, GithubIdentity, IssuePayload, StatusPayload,
+    apply_topics, issue_key, CommitPayload, DiscordPayload, GithubIdentity, IssuePayload,
+    StatusPayload,
 };
 use crate::webhook::Webhook;
 
@@ -185,6 +189,33 @@ fn topic_version(t: &cycle_store::Topic) -> Value {
     json!({ "text": t.text, "status": t.status })
 }
 
+/// `targets.github.path`, the folder of the meetings in the repository; the publisher refuses a
+/// value that is not a safe folder.
+fn meetings_path(ctx: &RepoContext) -> &str {
+    ctx.cycle
+        .targets
+        .github
+        .as_ref()
+        .map_or(cycle_store::cycle::DEFAULT_MEETINGS_PATH, |g| {
+            g.path.as_str()
+        })
+}
+
+/// A failed Git publication as the outbox sees it: a transient one that is not just a remote
+/// that kept changing means the remote could not be reached.
+fn git_error(e: cycle_store::PublishError) -> OpError {
+    OpError {
+        offline: e.kind == PublishErrorKind::Transient && !e.message.contains("kept changing"),
+        failure: match e.kind {
+            PublishErrorKind::Transient => Failure::Transient {
+                retry_after_ms: None,
+            },
+            PublishErrorKind::Permanent => Failure::Permanent,
+        },
+        message: e.message,
+    }
+}
+
 fn payload<T: DeserializeOwned>(op: &OutboxOp) -> Result<T, OpError> {
     serde_json::from_str(&op.payload)
         .map_err(|e| OpError::permanent(format!("the operation cannot be read: {e}")))
@@ -304,6 +335,8 @@ impl Dispatcher {
             OutboxKind::CreateIssue => self.create_issue(op),
             OutboxKind::SetIssueState => self.set_issue_state(op),
             OutboxKind::PostDiscord => self.post_discord(op),
+            OutboxKind::CommitCorrection => self.commit_correction(op),
+            OutboxKind::CommentCorrection => self.comment_correction(op),
         }
     }
 
@@ -411,23 +444,9 @@ impl Dispatcher {
                 .map_err(|e| OpError::permanent(format!("topics.yaml cannot be read: {e}")))?;
             Some(apply_topics(&local, &p.topics_add, &p.topics_set, &p.date))
         };
-        let auth = ctx.github.as_ref().and_then(|g| {
-            let token = self.env.github_token(&g.api)?;
-            Some(GitAuth {
-                base_url: format!("{}/", addr::web_base(&g.api)),
-                token,
-            })
-        });
+        let auth = self.git_auth(&ctx);
         let message = format!("Add meeting {}/{{folder}}", p.cycle);
-        // `targets.github.path`; the publisher refuses a value that is not a safe folder.
-        let base_path = ctx
-            .cycle
-            .targets
-            .github
-            .as_ref()
-            .map_or(cycle_store::cycle::DEFAULT_MEETINGS_PATH, |g| {
-                g.path.as_str()
-            });
+        let base_path = meetings_path(&ctx);
         let request = PublishRequest {
             cycle_id: &p.cycle,
             base_path,
@@ -441,17 +460,7 @@ impl Dispatcher {
             cycle_store::publish::publish_meeting_observed(&ctx.repo, &request, &mut |attempt| {
                 self.env.before_push(attempt)
             })
-            .map_err(|e| OpError {
-                offline: e.kind == PublishErrorKind::Transient
-                    && !e.message.contains("kept changing"),
-                failure: match e.kind {
-                    PublishErrorKind::Transient => Failure::Transient {
-                        retry_after_ms: None,
-                    },
-                    PublishErrorKind::Permanent => Failure::Permanent,
-                },
-                message: e.message,
-            })?;
+            .map_err(git_error)?;
 
         let report_url = match (&ctx.github, published.pushed) {
             (Some(g), true) => Some(addr::report_url(
@@ -613,6 +622,150 @@ impl Dispatcher {
             "changed": outcome.changed,
             "commented": outcome.commented,
         }))
+    }
+
+    // ----- corrections ----------------------------------------------------------------------
+
+    /// Adds the correction as a new file to the meeting's folder in the repository.
+    fn commit_correction(&self, op: &OutboxOp) -> OpResult {
+        let p: CorrectionPayload = payload(op)?;
+        let ctx = self.context(&p.cycle)?;
+        self.gate(&ctx)?;
+        let folder = self
+            .publication(op)?
+            .and_then(|row| row.folder)
+            .ok_or_else(|| {
+                OpError::permanent(
+                    "the meeting is not in the repository yet: publish it first, then retry",
+                )
+            })?;
+        let text = cycle_store::corrections::render_markdown(
+            &p.cycle,
+            &op.meeting_id,
+            &p.meeting_date,
+            &p.correction,
+        )
+        .ok_or_else(|| {
+            OpError::permanent("the correction cannot be written: an id is not usable")
+        })?;
+        // Rendered next to the meeting, so what was published can be looked at afterwards.
+        let out = self.env.snapshot_root().join(&p.out_dir);
+        std::fs::create_dir_all(&out)
+            .map_err(|e| OpError::permanent(format!("the correction cannot be written: {e}")))?;
+        let path = out.join(format!("{}.md", p.correction.id));
+        std::fs::write(&path, text.as_bytes())
+            .map_err(|e| OpError::permanent(format!("the correction cannot be written: {e}")))?;
+        let auth = self.git_auth(&ctx);
+        let base_path = meetings_path(&ctx);
+        let message = format!("Add a correction to meeting {}/{folder}", p.cycle);
+        let request = AddFileRequest {
+            cycle_id: &p.cycle,
+            base_path,
+            folder: &folder,
+            stem: cycle_store::corrections::FILE_STEM,
+            ext: cycle_store::corrections::FILE_EXT,
+            path: &path,
+            message: &message,
+            auth: auth.as_ref(),
+        };
+        let added = cycle_store::publish::add_file_observed(&ctx.repo, &request, &mut |attempt| {
+            self.env.before_push(attempt)
+        })
+        .map_err(git_error)?;
+        let url = match (&ctx.github, added.pushed) {
+            (Some(g), true) => Some(format!(
+                "{}/{}/blob/{}/{}",
+                addr::web_base(&g.api),
+                g.repo.full_name(),
+                added.branch,
+                added.repo_path
+            )),
+            _ => None,
+        };
+        self.env.repo_changed(&p.cycle);
+        let (local, note) = match &added.local {
+            cycle_store::LocalSync::Updated => ("updated", None),
+            cycle_store::LocalSync::Behind(why) => ("behind", Some(why.clone())),
+        };
+        Ok(json!({
+            "file": added.file,
+            "path": added.repo_path,
+            "commit": added.commit,
+            "branch": added.branch,
+            "pushed": added.pushed,
+            "already_published": added.already_published,
+            "attempts": added.attempts,
+            "local": local,
+            "local_note": note,
+            "url": url,
+        }))
+    }
+
+    /// The issue a correction is about: the one it names, or the issue made from its item.
+    /// `Ok(None)` when there is none (the comment is skipped); an issue that is still being
+    /// created is a transient failure.
+    fn correction_issue(
+        &self,
+        op: &OutboxOp,
+        correction: &cycle_store::Correction,
+    ) -> Result<Option<u64>, OpError> {
+        if let Some(n) = correction.issue_number() {
+            return Ok(Some(n));
+        }
+        let Some(item) = &correction.item else {
+            return Ok(None);
+        };
+        let made = self.with_store(|s| s.get_op_by_key(&op.meeting_id, &issue_key(item)))?;
+        match made {
+            Some(o) if o.state == OpState::Done => Ok(o
+                .result
+                .as_deref()
+                .and_then(|r| serde_json::from_str::<Value>(r).ok())
+                .and_then(|v| v.get("number").and_then(Value::as_u64))),
+            Some(o) if matches!(o.state, OpState::Queued | OpState::Running) => Err(
+                OpError::transient("the issue of the item is not created yet; waiting for it"),
+            ),
+            _ => Ok(None),
+        }
+    }
+
+    /// Comments the correction on the issue it is about, once.
+    fn comment_correction(&self, op: &OutboxOp) -> OpResult {
+        let p: CorrectionPayload = payload(op)?;
+        let Some(number) = self.correction_issue(op, &p.correction)? else {
+            return Ok(json!({ "skipped": "no issue was made for this item" }));
+        };
+        let (_, identity, github, report_url) = self.repository_for_issues(op, &p.cycle)?;
+        let file_url = self
+            .with_store(|s| s.get_op_by_key(&op.meeting_id, &file_key(&p.correction.id)))?
+            .and_then(|o| o.result)
+            .and_then(|r| serde_json::from_str::<Value>(&r).ok())
+            .and_then(|v| v.get("url").and_then(Value::as_str).map(String::from));
+        let spec = CorrectionSpec {
+            cycle_id: p.cycle.clone(),
+            meeting_id: op.meeting_id.clone(),
+            correction_id: p.correction.id.clone(),
+            meeting_date: p.meeting_date.clone(),
+            correction_date: p.correction.date.clone(),
+            text: p.correction.text.clone(),
+            report_url,
+            file_url,
+        };
+        let commented = github.comment_correction(&identity.repo, number, &spec)?;
+        if commented {
+            self.env.sleep(WRITE_PACING);
+        }
+        Ok(json!({ "number": number, "commented": commented }))
+    }
+
+    fn git_auth(&self, ctx: &RepoContext) -> Option<GitAuth> {
+        ctx.github.as_ref().and_then(|g| {
+            let token = self.env.github_token(&g.api)?;
+            Some(GitAuth {
+                base_url: format!("{}/", addr::web_base(&g.api)),
+                token,
+            })
+        })
     }
 
     // ----- discord --------------------------------------------------------------------------

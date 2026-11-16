@@ -315,6 +315,9 @@ pub enum Block {
     DiscordWebhookMissing,
     /// Nothing is left to publish.
     NothingToPublish,
+    /// A correction needs the meeting in the repository, and it is not there (its commit has
+    /// not been queued, or it was cancelled).
+    MeetingNotInRepository,
 }
 
 impl Block {
@@ -323,6 +326,7 @@ impl Block {
             Self::PublicRepoUnconfirmed { .. } => gate::PUBLIC_REPO_CODE,
             Self::DiscordWebhookMissing => "discord_webhook_missing",
             Self::NothingToPublish => "nothing_to_publish",
+            Self::MeetingNotInRepository => "not_in_repository",
         }
     }
 
@@ -337,6 +341,10 @@ impl Block {
             }
             Self::NothingToPublish => {
                 "there is nothing to publish with the rules of this cycle".into()
+            }
+            Self::MeetingNotInRepository => {
+                "the meeting is not in the repository: publish it to GitHub first, then its corrections can follow"
+                    .into()
             }
         }
     }
@@ -634,7 +642,7 @@ pub fn build(input: &PlanInput<'_>) -> PublishPlan {
     plan
 }
 
-fn to_json<T: Serialize>(payload: &T) -> String {
+pub(crate) fn to_json<T: Serialize>(payload: &T) -> String {
     serde_json::to_string(payload).unwrap_or_else(|_| "{}".to_string())
 }
 

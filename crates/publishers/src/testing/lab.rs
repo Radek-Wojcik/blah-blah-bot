@@ -11,13 +11,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use cycle_store::{
-    render, Cycle, Draft, PublishMode, RenderOptions, Repo, Topic, TopicStatus, Variant,
-    DEFAULT_TEMPLATE_TEXT,
+    render, Correction, Cycle, Draft, PublishMode, RenderOptions, Repo, Topic, TopicStatus,
+    Variant, DEFAULT_TEMPLATE_TEXT,
 };
 use store::{Meeting, MeetingState, OutboxOp, Store};
 
 use crate::discord::Pacing;
-use crate::flow::{self, Outcome, Prepared, StartError};
+use crate::flow::{self, CorrectionOutcome, Outcome, Prepared, PreparedCorrection, StartError};
 use crate::github::RepoRef;
 use crate::http::{redact, HttpClient};
 use crate::outbox::{Dispatcher, Env, RepoContext};
@@ -405,6 +405,28 @@ impl Lab {
         self.with_prepared(draft, trigger, targets, anchors, |store, prepared| {
             flow::preview(store, prepared).expect("preview")
         })
+    }
+
+    /// Queues the publication of a correction to the lab meeting the way the application does.
+    pub fn publish_correction(
+        &self,
+        correction: &Correction,
+        trigger: Trigger,
+    ) -> Result<CorrectionOutcome, StartError> {
+        let ctx = self.env.context("NOMAD").unwrap();
+        let store = self.store.lock().unwrap();
+        flow::publish_correction(
+            self.env.as_ref(),
+            &store,
+            &PreparedCorrection {
+                meeting_id: MEETING,
+                meeting_rel: MEETING,
+                meeting_date: "2026-11-13",
+                ctx: &ctx,
+                correction,
+                trigger,
+            },
+        )
     }
 
     pub fn tick(&self) -> crate::outbox::TickReport {

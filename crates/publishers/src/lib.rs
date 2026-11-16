@@ -5,6 +5,7 @@
 //! host.
 
 pub mod addr;
+pub mod correction;
 pub mod discord;
 pub mod flow;
 pub mod gate;

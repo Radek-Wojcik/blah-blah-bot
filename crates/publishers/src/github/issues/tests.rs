@@ -737,6 +737,91 @@ fn a_reason_with_a_mention_does_not_notify() {
         .contains("@\u{200b}alex-example"));
 }
 
+// ----- corrections ----------------------------------------------------------------------------------
+
+fn correction(id: &str) -> CorrectionSpec {
+    CorrectionSpec {
+        cycle_id: "NOMAD".into(),
+        meeting_id: "20261113-140501".into(),
+        correction_id: id.into(),
+        meeting_date: "2026-11-13".into(),
+        correction_date: "2026-11-16".into(),
+        text: "The battery was ordered, thanks @alex-example.\nThe due date is 2026-12-01.".into(),
+        report_url: Some("https://github.test/r/report.md".into()),
+        file_url: Some("https://github.test/r/corrections.md".into()),
+    }
+}
+
+#[test]
+fn a_correction_is_commented_once_and_does_not_notify() {
+    let gh = fake();
+    let github = api(&gh);
+    let n = github
+        .publish_issue(&repo(), &spec("i3"), false)
+        .unwrap()
+        .number;
+    assert!(github
+        .comment_correction(&repo(), n, &correction("c1"))
+        .unwrap());
+    let issue = gh.issue(REPO, n).unwrap();
+    assert!(issue.open, "a comment never changes the state");
+    let body = &issue.comments[0].body;
+    assert!(
+        body.starts_with(
+            "Correction to the [meeting 2026-11-13](https://github.test/r/report.md), written on 2026-11-16:"
+        ),
+        "{body}"
+    );
+    assert!(body.contains("> The battery was ordered, thanks @\u{200b}alex-example."));
+    assert!(body.contains("> The due date is 2026-12-01."));
+    assert!(body
+        .contains("[The correction note in the repository](https://github.test/r/corrections.md)"));
+    let marker = CorrectionMarker::parse(body).unwrap();
+    assert_eq!(
+        marker,
+        CorrectionMarker::short("NOMAD", "20261113-140501", "c1")
+    );
+
+    // A retry says nothing twice; another correction is another comment.
+    assert!(!github
+        .comment_correction(&repo(), n, &correction("c1"))
+        .unwrap());
+    assert!(github
+        .comment_correction(&repo(), n, &correction("c2"))
+        .unwrap());
+    assert_eq!(gh.issue(REPO, n).unwrap().comments.len(), 2);
+}
+
+#[test]
+fn a_correction_whose_answer_was_lost_is_not_posted_twice_and_a_missing_issue_is_permanent() {
+    let gh = fake();
+    let github = api(&gh);
+    let n = github
+        .publish_issue(&repo(), &spec("i3"), false)
+        .unwrap()
+        .number;
+    gh.inject_for(
+        "POST",
+        "/repos/owner/rover/issues/1/comments",
+        Fault::DropAfter,
+        1,
+    );
+    assert!(github
+        .comment_correction(&repo(), n, &correction("c1"))
+        .is_err());
+    assert_eq!(gh.issue(REPO, n).unwrap().comments.len(), 1);
+    assert!(!github
+        .comment_correction(&repo(), n, &correction("c1"))
+        .unwrap());
+    assert_eq!(gh.issue(REPO, n).unwrap().comments.len(), 1);
+
+    let err = github
+        .comment_correction(&repo(), 999, &correction("c1"))
+        .unwrap_err();
+    assert_eq!(err.status, Some(404));
+    assert_eq!(err.failure(), store::Failure::Permanent);
+}
+
 // ----- reading ------------------------------------------------------------------------------------
 
 #[test]

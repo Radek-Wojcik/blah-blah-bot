@@ -23,10 +23,14 @@
 //! * **Status.** Closing or reopening is a `PATCH` (skipped when the issue is already in that
 //!   state) followed by a comment that carries a hidden marker; a retry finds the marker and
 //!   does not comment twice.
+//! * **Corrections.** A correction to a published meeting is a comment on the issue of the
+//!   item it is about, with its own marker and the same comment-once rule. It never changes the
+//!   state of the issue.
 
 use std::time::Duration;
 
 use cycle_store::issues::{parse_issue_record, IssueRecord, ItemMarker, StatusMarker, MAX_PAGES};
+use cycle_store::CorrectionMarker;
 use serde_json::{json, Value};
 
 use super::{Github, RepoRef};
@@ -535,8 +539,25 @@ impl Github {
             self.send_json(Request::patch_json(issue_url, &body))?;
         }
 
-        // Has an earlier attempt commented already?
-        let mut commented_before = false;
+        let commented = self.comment_once(
+            repo,
+            number,
+            &format!("{}\n\n{marker_comment}\n", spec.comment_text()),
+            |body| StatusMarker::parse(body).is_some_and(|m| m == marker),
+        )?;
+        Ok(StatusOutcome { changed, commented })
+    }
+
+    /// Posts `text` as a comment on issue `number` unless a comment that `is_ours` accepts is
+    /// there already (an earlier attempt posted it and its answer was lost). Returns whether a
+    /// comment was posted now.
+    fn comment_once(
+        &self,
+        repo: &RepoRef,
+        number: u64,
+        text: &str,
+        is_ours: impl Fn(&str) -> bool,
+    ) -> Result<bool, HttpError> {
         for page in 1..=MAX_PAGES {
             let url = format!(
                 "{}/issues/{number}/comments?per_page={PER_PAGE}&page={page}",
@@ -544,30 +565,81 @@ impl Github {
             );
             let value = self.send_json(Request::get(url))?;
             let list = value.as_array().cloned().unwrap_or_default();
-            if list.iter().any(|c| {
-                c.get("body")
-                    .and_then(Value::as_str)
-                    .and_then(StatusMarker::parse)
-                    .is_some_and(|m| m == marker)
-            }) {
-                commented_before = true;
-                break;
+            if list
+                .iter()
+                .any(|c| c.get("body").and_then(Value::as_str).is_some_and(&is_ours))
+            {
+                return Ok(false);
             }
             if list.len() < PER_PAGE {
                 break;
             }
         }
-        if !commented_before {
-            let text = format!("{}\n\n{marker_comment}\n", spec.comment_text());
-            self.send_json(Request::post_json(
-                format!("{}/issues/{number}/comments", self.repo_path(repo)),
-                &json!({ "body": text }),
-            ))?;
-        }
-        Ok(StatusOutcome {
-            changed,
-            commented: !commented_before,
+        self.send_json(Request::post_json(
+            format!("{}/issues/{number}/comments", self.repo_path(repo)),
+            &json!({ "body": text }),
+        ))?;
+        Ok(true)
+    }
+
+    // ----- corrections ---------------------------------------------------------------------------
+
+    /// Comments a correction on the issue, once: a retry finds the comment by its marker.
+    /// Returns whether a comment was posted now.
+    pub fn comment_correction(
+        &self,
+        repo: &RepoRef,
+        number: u64,
+        spec: &CorrectionSpec,
+    ) -> Result<bool, HttpError> {
+        let marker = CorrectionMarker::short(&spec.cycle_id, &spec.meeting_id, &spec.correction_id);
+        let comment = marker
+            .to_comment()
+            .ok_or_else(|| invalid("the correction cannot be linked: an id is not usable"))?;
+        let text = format!("{}\n\n{comment}\n", spec.comment_text());
+        self.comment_once(repo, number, &text, |body| {
+            CorrectionMarker::parse(body).is_some_and(|m| m == marker)
         })
+    }
+}
+
+/// A correction to post on the issue of an item.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CorrectionSpec {
+    pub cycle_id: String,
+    pub meeting_id: String,
+    /// The id of the correction (`c1`).
+    pub correction_id: String,
+    /// `YYYY-MM-DD`, the day of the meeting that is corrected.
+    pub meeting_date: String,
+    /// `YYYY-MM-DD`, the day the correction was written.
+    pub correction_date: String,
+    pub text: String,
+    /// Address of the published report of the meeting.
+    pub report_url: Option<String>,
+    /// Address of the published correction file.
+    pub file_url: Option<String>,
+}
+
+impl CorrectionSpec {
+    /// The visible part of the comment.
+    fn comment_text(&self) -> String {
+        let meeting = match &self.report_url {
+            Some(url) => format!("[meeting {}]({url})", self.meeting_date),
+            None => format!("meeting {}", self.meeting_date),
+        };
+        let mut parts = vec![format!(
+            "Correction to the {meeting}, written on {}:",
+            self.correction_date
+        )];
+        let quoted = quote_block(&self.text);
+        if !quoted.is_empty() {
+            parts.push(quoted);
+        }
+        if let Some(url) = &self.file_url {
+            parts.push(format!("[The correction note in the repository]({url})"));
+        }
+        parts.join("\n\n")
     }
 }
 
