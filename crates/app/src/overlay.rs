@@ -141,6 +141,9 @@ pub fn overlay_finish(
         .lock()
         .map_err(|_| IpcError::new("internal", "overlay lock poisoned"))?
         .take();
+    // Close the overlay first: cropping and saving the PNG can take a moment, and the frozen
+    // desktop must not stay on screen (or flash black) while it runs.
+    cancel(&app);
     let result = (|| {
         let (Some(shot), Some(region)) = (shot, region) else {
             return Ok(());
@@ -159,7 +162,6 @@ pub fn overlay_finish(
         }
         Ok(())
     })();
-    cancel(&app);
     result
 }
 
