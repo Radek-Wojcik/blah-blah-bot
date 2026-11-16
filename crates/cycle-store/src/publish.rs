@@ -1117,6 +1117,15 @@ fn build_file(
         .map(String::from)
         .collect();
     if names.is_empty() {
+        // The clone has the folder (the meeting was published from it) but the remote does not
+        // show it: a remote that has not caught up with a push of a moment ago. It is waited
+        // for, not given up on.
+        let here = g.try_ok(&["ls-tree", "--name-only", "HEAD", &format!("{dir}/")])?;
+        if here.is_some_and(|l| !l.is_empty()) {
+            return Err(PublishError::transient(format!(
+                "the remote does not show the folder {dir} of the meeting yet; it will be tried again"
+            )));
+        }
         return Err(PublishError::permanent(format!(
             "the folder {dir} of the meeting is not in the repository (yet): publish the meeting first"
         )));

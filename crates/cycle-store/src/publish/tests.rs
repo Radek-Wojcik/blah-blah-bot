@@ -1254,3 +1254,29 @@ fn a_repository_without_a_remote_gets_a_local_commit_for_the_file() {
     assert_eq!(added.local, LocalSync::Updated);
     assert_eq!(g(repo.root(), &["rev-parse", "HEAD"]), added.commit);
 }
+
+#[test]
+fn a_remote_that_has_not_caught_up_with_the_meeting_is_waited_for() {
+    let lab = Lab::new();
+    let repo = lab.clone("clone");
+    let before = lab.tip();
+    let snap = snapshot(lab.tmp.path(), "ab", "A");
+    let meeting = publish_meeting(&repo, &request(&snap.files, None)).unwrap();
+    let file = note(lab.tmp.path(), "c.md", "late\n");
+
+    // The remote still serves the tip from before the push (a lagging replica).
+    g(&lab.remote, &["update-ref", "refs/heads/main", &before]);
+    let err = add_file(&repo, &add_request(&file)).unwrap_err();
+    assert!(err.is_transient(), "{err}");
+    assert!(err.message.contains("does not show the folder"), "{err}");
+    assert_eq!(lab.tip(), before, "nothing was pushed");
+
+    // It catches up: the same call goes through.
+    g(
+        &lab.remote,
+        &["update-ref", "refs/heads/main", &meeting.commit],
+    );
+    let added = add_file(&repo, &add_request(&file)).unwrap();
+    assert!(added.pushed && !added.already_published);
+    assert_eq!(added.file, "corrections.md");
+}
