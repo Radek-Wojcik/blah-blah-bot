@@ -11,13 +11,11 @@ import type {
 } from "../ipc/types";
 import {
   DEFAULT_PUBLISH_RULE,
-  RULE_HELP,
   STATUS_WRITE_BACK_NOTE,
-  autoWarning,
   parseWebhook,
   tokenProblem,
 } from "../publish";
-import { RuleSwitch } from "./RuleSwitch";
+import { RuleChoice } from "./RuleChoice";
 
 /** What a check of a stored secret answered. */
 interface Check {
@@ -269,19 +267,14 @@ function CycleRules(props: { cycle: CycleListItem; version: unknown }) {
   const discord = targets.discord?.publish ?? null;
   const row = (target: PublishTargetName, label: string, mode: PublishMode) => (
     <div className="rule-row">
-      <div className="inline-field">
-        <span className="field-label">{label}</span>
-        <RuleSwitch
-          name={`${label}, cycle ${cycle.name}`}
-          value={mode}
-          disabled={busy}
-          onChange={(m) => change(target, m)}
-        />
-      </div>
-      <span className="target-rule-help">{RULE_HELP[mode]}</span>
-      {autoWarning(target, mode) && (
-        <span className="target-rule-warn">{autoWarning(target, mode)}</span>
-      )}
+      <span className="field-label">{label}</span>
+      <RuleChoice
+        name={`${label}, cycle ${cycle.name}`}
+        target={target}
+        value={mode}
+        disabled={busy}
+        onChange={(m) => change(target, m)}
+      />
     </div>
   );
   return (

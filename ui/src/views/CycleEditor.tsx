@@ -20,8 +20,10 @@ import type {
   PublishMode,
   ReportMode,
 } from "../ipc/types";
+import { DEFAULT_PUBLISH_RULE } from "../publish";
 import { MODE_HELP, MODE_NAMES, REPORT_MODES } from "../report-gate";
 import { CycleTasksView } from "./CycleTasks";
+import { RuleChoice } from "./RuleChoice";
 import { TemplateEditor } from "./TemplateEditor";
 
 const LANGUAGES: { value: LanguageSetting; label: string }[] = [
@@ -519,7 +521,7 @@ export function CycleEditor(props: { cycleId: string; onBack: () => void }) {
       <Section
         id="targets"
         title="Targets"
-        hint="Where a report is published, and when: after approval (when you press Publish in the draft), automatically when the draft is complete, or never. Secrets are never stored here: Discord and Notion refer to them as cred:name."
+        hint="Where a report is published, and when. For GitHub and Discord you choose the rule yourself: Off, On approval (when you press Publish in the draft) or Automatic (as soon as the draft is complete). Until you choose, On approval is used, so nothing is published by itself. Secrets are never stored here: Discord and Notion refer to them as cred:name."
       >
         <div className="form targets">
           <fieldset>
@@ -530,7 +532,9 @@ export function CycleEditor(props: { cycleId: string; onBack: () => void }) {
                 checked={github != null}
                 onChange={(e) =>
                   setTargets({
-                    github: e.target.checked ? { path: "meetings", publish: "on-approval" } : null,
+                    github: e.target.checked
+                      ? { path: "meetings", publish: DEFAULT_PUBLISH_RULE.github }
+                      : null,
                   })
                 }
               />
@@ -558,22 +562,15 @@ export function CycleEditor(props: { cycleId: string; onBack: () => void }) {
                   />
                   Create issues for tasks and write back approved status changes
                 </label>
-                <label>
-                  Publish
-                  <select
-                    aria-label="GitHub publish"
-                    value={github.publish}
-                    onChange={(e) =>
-                      setTargets({ github: { ...github, publish: e.target.value as PublishMode } })
-                    }
-                  >
-                    {PUBLISH.map((p) => (
-                      <option key={p.value} value={p.value}>
-                        {p.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <div className="field-group">
+                  <span className="field-label">When to publish</span>
+                  <RuleChoice
+                    name="GitHub"
+                    target="github"
+                    value={github.publish ?? DEFAULT_PUBLISH_RULE.github}
+                    onChange={(publish) => setTargets({ github: { ...github, publish } })}
+                  />
+                </div>
               </>
             )}
           </fieldset>
@@ -585,7 +582,9 @@ export function CycleEditor(props: { cycleId: string; onBack: () => void }) {
                 checked={discordRef != null}
                 onChange={(e) =>
                   setTargets({
-                    discord: e.target.checked ? { webhook: "cred:", publish: "on-approval" } : null,
+                    discord: e.target.checked
+                      ? { webhook: "cred:", publish: DEFAULT_PUBLISH_RULE.discord }
+                      : null,
                   })
                 }
               />
@@ -628,24 +627,15 @@ export function CycleEditor(props: { cycleId: string; onBack: () => void }) {
                   </select>
                   <Problems issues={issues} path="targets.discord.template" />
                 </label>
-                <label>
-                  Publish
-                  <select
-                    aria-label="Discord publish"
-                    value={discordRef.publish}
-                    onChange={(e) =>
-                      setTargets({
-                        discord: { ...discordRef, publish: e.target.value as PublishMode },
-                      })
-                    }
-                  >
-                    {PUBLISH.map((p) => (
-                      <option key={p.value} value={p.value}>
-                        {p.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <div className="field-group">
+                  <span className="field-label">When to publish</span>
+                  <RuleChoice
+                    name="Discord"
+                    target="discord"
+                    value={discordRef.publish ?? DEFAULT_PUBLISH_RULE.discord}
+                    onChange={(publish) => setTargets({ discord: { ...discordRef, publish } })}
+                  />
+                </div>
               </>
             )}
           </fieldset>

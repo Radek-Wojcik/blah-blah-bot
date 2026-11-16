@@ -218,15 +218,19 @@ describe("when to publish", () => {
     const set = vi.spyOn(backend, "setTargetRule");
     await mount(backend);
     const github = () => group("GitHub, cycle Nomad rover publishing rule");
-    expect(host.textContent).not.toContain("cannot be taken back");
+    const warning = () => host.querySelector(".target-rule-warn")?.textContent ?? null;
+    // Every rule is explained, whichever is chosen; the warning only comes with Automatic.
+    expect(host.textContent).toContain("Nothing is ever published to this target");
+    expect(host.textContent).toContain("This is what is used until you choose another rule.");
+    expect(warning()).toBeNull();
     await click(radio(github(), "Automatic"));
     expect(set).toHaveBeenCalledWith("NOMAD", "github", "auto");
     expect(checked(github())).toEqual(["Automatic"]);
-    expect(host.textContent).toContain("cannot be taken back");
+    expect(warning()).toContain("cannot be taken back");
     expect((await backend.getCycle("NOMAD")).cycle.targets.github?.publish).toBe("auto");
     await click(radio(github(), "Off"));
     expect(checked(github())).toEqual(["Off"]);
-    expect(host.textContent).not.toContain("cannot be taken back");
+    expect(warning()).toBeNull();
   });
 
   it("moves with the arrow keys like a radio group", async () => {

@@ -2809,3 +2809,77 @@ textarea {
   gap: 6px 16px;
   margin-bottom: 12px;
 }
+
+/* The rule of a target: the switch and what each position does. */
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.rule-choice {
+  display: flex;
+  flex: 1 1 100%;
+  flex-direction: column;
+  gap: 6px;
+}
+.rule-options {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8em;
+  color: var(--muted);
+}
+.rule-option {
+  padding: 3px 8px;
+  border-left: 2px solid var(--line);
+}
+.rule-option-on {
+  border-left-color: var(--cyan);
+  color: var(--text);
+}
+.rule-chosen {
+  color: var(--cyan);
+}
+
+/* Corrections to a published meeting. */
+.corrections {
+  list-style: none;
+  margin: var(--gap) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.correction {
+  padding: 8px 10px;
+  border-left: 2px solid var(--line);
+  background: var(--panel-2);
+}
+.correction-published {
+  border-left-color: var(--green);
+}
+.correction-failed {
+  border-left-color: var(--magenta);
+}
+.correction-running {
+  border-left-color: var(--cyan);
+}
+.correction-text {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.correction-form {
+  margin: var(--gap) 0;
+}
+.form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+.form-row > label {
+  flex: 1 1 180px;
+}
