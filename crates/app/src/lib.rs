@@ -251,6 +251,7 @@ pub fn run() {
             publish_commands::clear_github_token,
             publish_commands::test_github_access,
             publish_commands::set_github_repo,
+            publish_commands::set_target_rule,
             publish_commands::set_target_secret,
             publish_commands::clear_target_secret,
             publish_commands::test_discord_webhook,

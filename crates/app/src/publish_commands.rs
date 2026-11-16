@@ -6,12 +6,13 @@
 use tauri::{AppHandle, Emitter, State};
 
 use crate::cycle_commands::EVENT_CYCLES;
-use crate::cycles::{self, RepoDto};
+use crate::cycles::{self, RepoDto, TargetsDto};
 use crate::ipc::{IpcError, IpcResult};
 use crate::publish_secrets::{self, GithubAccessDto, PublishingSecretsDto, WebhookCheckDto};
 use crate::publishing::{ConfirmDto, CycleTasksDto, OutboxStateDto, PlanDto, PublishResultDto};
 use crate::secrets::Credentials;
 use crate::state::AppState;
+use cycle_store::PublishMode;
 use publishers::http::HttpClient;
 
 fn join_error(e: impl std::fmt::Display) -> IpcError {
@@ -99,6 +100,25 @@ pub async fn test_discord_webhook(reference: String) -> IpcResult<WebhookCheckDt
     })
     .await
     .map_err(join_error)?
+}
+
+/// Sets when a target of a cycle is published (`targets.<target>.publish` of `cycle.yaml`:
+/// `auto`, `on-approval` or `off`) and returns the cycle's targets as saved. Status changes
+/// are never written back automatically with any value, and the public-repository check
+/// applies to all of them.
+#[tauri::command]
+pub fn set_target_rule(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    cycle_id: String,
+    target: String,
+    mode: PublishMode,
+) -> IpcResult<TargetsDto> {
+    let targets = cycles::set_target_rule(&state.cycle_repos(), &cycle_id, &target, mode)?;
+    if let Err(e) = app.emit(EVENT_CYCLES, ()) {
+        tracing::warn!(error = %e, "could not emit the cycles change");
+    }
+    Ok(targets)
 }
 
 // ----- the publication ---------------------------------------------------------------------

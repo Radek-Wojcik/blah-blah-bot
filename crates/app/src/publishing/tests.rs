@@ -516,6 +516,42 @@ fn a_public_repository_is_refused_until_the_user_confirms_it() {
 }
 
 #[test]
+fn the_public_repository_check_holds_when_the_user_switches_a_target_to_automatic() {
+    let (rig, lab) = gated(Visibility::Public);
+    rig.save_draft(&draft());
+    let repos = || rig.repos.lock().unwrap().clone();
+    // The default is on-approval: a completed draft publishes nothing by itself.
+    assert_eq!(rig.publishing.auto_publish(MEETING).unwrap(), 0);
+
+    crate::cycles::set_target_rule(&repos(), "NOMAD", "github", PublishMode::Auto).unwrap();
+    let plan = rig.publishing.plan(MEETING, &github_only()).unwrap();
+    assert_eq!(plan.targets[0].mode, Some("auto"));
+    // Automatic, but the repository is public and nobody confirmed it: nothing is queued,
+    // nothing is frozen, nothing leaves the machine.
+    assert_eq!(rig.publishing.auto_publish(MEETING).unwrap(), 0);
+    assert!(rig.ops().is_empty());
+    assert!(!rig.meeting_dir().join("work/publish").exists());
+    assert!(!git(&lab.remote, &["ls-tree", "-r", "--name-only", "main"]).contains("report.md"));
+    // An explicit publication is refused as well.
+    let err = rig.publishing.publish(MEETING, &github_only()).unwrap_err();
+    assert_eq!(err.code, "public_repo_unconfirmed");
+
+    // After the confirmation the rule works, and still queues no status change.
+    rig.publishing.confirm_public_repo("NOMAD").unwrap();
+    assert_eq!(rig.publishing.auto_publish(MEETING).unwrap(), 2);
+    assert_eq!(rig.tick().done, 2);
+
+    // Off is absolute, also for a click.
+    let (off, _lab) = gated(Visibility::Private);
+    off.save_draft(&draft());
+    let repos = off.repos.lock().unwrap().clone();
+    crate::cycles::set_target_rule(&repos, "NOMAD", "github", PublishMode::Off).unwrap();
+    let err = off.publishing.publish(MEETING, &github_only()).unwrap_err();
+    assert_eq!(err.code, "nothing_to_publish");
+    assert!(off.ops().is_empty());
+}
+
+#[test]
 fn a_private_repository_needs_no_confirmation() {
     let (rig, lab) = gated(Visibility::Private);
     rig.save_draft(&draft());

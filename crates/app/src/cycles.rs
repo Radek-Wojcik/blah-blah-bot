@@ -834,6 +834,58 @@ pub fn save_cycle<S: ParticipantSync + ?Sized>(
     })
 }
 
+/// Sets the publish rule of one target of a cycle (`targets.<target>.publish` of
+/// `cycle.yaml`) and nothing else, and returns the targets as they are written. The rules
+/// are the ones of ADR 0019: `github` covers the report, the issues and the status
+/// write-back, but no mode lets a status change go out without the user's approval and an
+/// explicit publication; the public-repository check applies to every mode.
+///
+/// A cycle without `targets.github` gets one with the default folder and issues on. Discord
+/// needs a webhook reference, which only the cycle editor can add, so a cycle without a
+/// Discord target is refused (`no_target`). Nothing is written when the rule is already set.
+pub fn set_target_rule(
+    repos: &[CycleRepoSetting],
+    cycle_id: &str,
+    target: &str,
+    mode: PublishMode,
+) -> IpcResult<TargetsDto> {
+    let located = locate_or_err(repos, cycle_id)?;
+    let mut cycle = load_valid(&located)?;
+    let changed = match target {
+        "github" => {
+            let existed = cycle.targets.github.is_some();
+            let github = cycle
+                .targets
+                .github
+                .get_or_insert_with(GithubTarget::default);
+            let changed = !existed || github.publish != mode;
+            github.publish = mode;
+            changed
+        }
+        "discord" => {
+            let discord = cycle.targets.discord.as_mut().ok_or_else(|| {
+                IpcError::new(
+                    "no_target",
+                    "this cycle has no Discord target: add one in the cycle settings first",
+                )
+            })?;
+            let changed = discord.publish != mode;
+            discord.publish = mode;
+            changed
+        }
+        other => {
+            return Err(IpcError::new(
+                "invalid",
+                format!("{other} is not a target with a publishing rule (github or discord)"),
+            ))
+        }
+    };
+    if changed {
+        located.repo.save_cycle(&cycle)?;
+    }
+    Ok(CycleDto::from(&cycle).targets)
+}
+
 /// Brings the stored participants of a cycle in line with its `cycle.yaml`. A cycle that is
 /// not available or not valid is left alone.
 pub fn sync_cycle<S: ParticipantSync + ?Sized>(
@@ -1724,6 +1776,86 @@ pub(crate) mod tests {
         // A local repository has no pull state and is never "offline".
         assert_eq!(list[0].state_as_of, None);
         assert!(!list[0].offline);
+    }
+
+    #[test]
+    fn the_rule_of_a_target_is_set_in_cycle_yaml_and_nothing_else_changes() {
+        let lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        let repo = lab.repo();
+        let yaml = |repo: &Repo| {
+            std::fs::read_to_string(repo.cycle_dir("NOMAD").unwrap().join("cycle.yaml")).unwrap()
+        };
+        let before = yaml(&repo);
+        assert!(!before.contains("targets"), "a new cycle has no targets");
+
+        // GitHub: the target is created with the default folder, then only the rule changes.
+        let t = set_target_rule(lab.repos(), "NOMAD", "github", PublishMode::Auto).unwrap();
+        let github = t.github.unwrap();
+        assert_eq!(
+            (github.publish, github.path.as_str(), github.issues),
+            (PublishMode::Auto, "meetings", true)
+        );
+        let written = repo.load_cycle("NOMAD").unwrap();
+        assert_eq!(written.targets.github.unwrap().publish, PublishMode::Auto);
+        let t = set_target_rule(lab.repos(), "NOMAD", "github", PublishMode::Off).unwrap();
+        assert_eq!(t.github.unwrap().publish, PublishMode::Off);
+        // Setting the value it already has writes nothing.
+        let text = yaml(&repo);
+        set_target_rule(lab.repos(), "NOMAD", "github", PublishMode::Off).unwrap();
+        assert_eq!(yaml(&repo), text);
+
+        // Discord needs a target with a webhook reference.
+        let e = set_target_rule(lab.repos(), "NOMAD", "discord", PublishMode::Auto).unwrap_err();
+        assert_eq!(e.code, "no_target");
+        let mut cycle = repo.load_cycle("NOMAD").unwrap();
+        cycle.targets.discord = Some(DiscordTarget {
+            webhook: "cred:discord/nomad".into(),
+            publish: PublishMode::OnApproval,
+            template: Some("short".into()),
+        });
+        repo.save_cycle(&cycle).unwrap();
+        let t = set_target_rule(lab.repos(), "NOMAD", "discord", PublishMode::Auto).unwrap();
+        let discord = t.discord.unwrap();
+        assert_eq!(discord.publish, PublishMode::Auto);
+        assert_eq!(
+            discord.webhook, "cred:discord/nomad",
+            "the reference is kept"
+        );
+        assert_eq!(discord.template.as_deref(), Some("short"));
+
+        // The rest of the file is as it was, and the other target kept its rule.
+        let after = repo.load_cycle("NOMAD").unwrap();
+        assert_eq!(after.targets.github.unwrap().publish, PublishMode::Off);
+        assert_eq!(after.name, "Nomad rover");
+
+        // Other targets and unknown cycles are refused.
+        for bad in ["notion", "", "Github", "slack"] {
+            let e = set_target_rule(lab.repos(), "NOMAD", bad, PublishMode::Auto).unwrap_err();
+            assert_eq!(e.code, "invalid", "{bad:?}");
+        }
+        let e = set_target_rule(lab.repos(), "GHOST", "github", PublishMode::Auto).unwrap_err();
+        assert_eq!(e.code, "not_found");
+    }
+
+    #[test]
+    fn a_cycle_that_cannot_be_used_is_not_rewritten_by_a_rule_change() {
+        let lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        let path = lab.repo().cycle_dir("NOMAD").unwrap().join("cycle.yaml");
+        std::fs::write(
+            &path,
+            "id: NOMAD
+name: Nomad
+targets:
+  github: { path: \"../x\" }
+",
+        )
+        .unwrap();
+        let before = std::fs::read_to_string(&path).unwrap();
+        let e = set_target_rule(lab.repos(), "NOMAD", "github", PublishMode::Auto).unwrap_err();
+        assert_eq!(e.code, "cycle_invalid");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
     }
 
     #[test]
