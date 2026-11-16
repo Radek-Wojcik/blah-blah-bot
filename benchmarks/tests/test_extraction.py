@@ -1,6 +1,11 @@
 import pytest
 
-from bbb_bench.metrics import quote_validity, schema_validity, score_extraction
+from bbb_bench.metrics import (
+    quote_validity,
+    schema_validity,
+    score_by_owner_due,
+    score_extraction,
+)
 
 REF = [
     {"text": "Design the monitor mount", "assignee": "alex", "due": "2026-11-20"},
@@ -39,6 +44,71 @@ def test_matching_is_one_to_one():
     r = score_extraction(REF, pred)
     assert r["matched"] == 1
     assert r["precision"] == pytest.approx(0.5)
+
+
+REPEATED = [
+    {"text": "order the module", "assignee": "ann", "due": "2026-11-20"},
+    {"text": "order the module", "assignee": "bob", "due": "2026-11-25"},
+]
+
+
+def test_equal_texts_are_paired_by_list_order_in_the_plain_metric():
+    # Both predictions are right, but listed in the other order than the reference: the plain
+    # matching pairs equal texts by position, so assignee and due look wrong ...
+    pred = [REPEATED[1], REPEATED[0]]
+    r = score_extraction(REPEATED, pred)
+    assert r["recall"] == 1.0 and r["precision"] == 1.0
+    assert r["assignee_accuracy"] == 0.0 and r["due_accuracy"] == 0.0
+    # ... while the paired variant takes the pair that agrees.
+    assert r["assignee_accuracy_paired"] == 1.0 and r["due_accuracy_paired"] == 1.0
+
+
+def test_paired_accuracy_does_not_hide_real_mistakes():
+    pred = [
+        {"text": "order the module", "assignee": "ann", "due": "2026-11-20"},
+        {"text": "order the module", "assignee": "cid", "due": "2026-11-30"},
+    ]
+    r = score_extraction(REPEATED, pred)
+    assert r["assignee_accuracy_paired"] == 0.5 and r["due_accuracy_paired"] == 0.5
+    assert r["matched"] == 2 and r["recall"] == 1.0
+
+
+def test_paired_accuracy_follows_the_plain_one_without_repeats():
+    r = score_extraction(REF, REF)
+    assert r["assignee_accuracy_paired"] == r["assignee_accuracy"] == 1.0
+    assert score_extraction(REF, [])["assignee_accuracy_paired"] == 0.0
+
+
+def test_owner_and_due_match_ignores_the_wording():
+    # A Polish noun form instead of the infinitive scores zero on the text overlap ...
+    ref = [{"text": "zamówić moduł GNSS", "assignee": "zosia", "due": "2026-11-24"}]
+    pred = [{"text": "Zamówienie modułu GNSS", "assignee": "zosia", "due": "2026-11-24"}]
+    assert score_extraction(ref, pred)["recall"] == 0.0
+    # ... but it is the same commitment by owner and date.
+    r = score_by_owner_due(ref, pred)
+    assert r["recall"] == 1.0 and r["precision"] == 1.0 and r["matched"] == 1
+
+
+def test_owner_and_due_match_is_one_to_one_and_needs_both_fields():
+    ref = [
+        {"text": "a", "assignee": "ann", "due": "2026-11-20"},
+        {"text": "b", "assignee": "ann", "due": "2026-11-21"},
+    ]
+    pred = [
+        {"text": "x", "assignee": "ann", "due": "2026-11-20"},
+        {"text": "y", "assignee": "ann", "due": "2026-11-20"},  # the same pair again
+        {"text": "z", "assignee": "bob", "due": "2026-11-21"},  # wrong owner
+        {"text": "w", "assignee": "ann", "due": None},  # no date
+    ]
+    r = score_by_owner_due(ref, pred)
+    assert r["matched"] == 1
+    assert r["recall"] == 0.5 and r["precision"] == 0.25
+
+
+def test_owner_and_due_match_of_empty_lists():
+    assert score_by_owner_due([], [])["recall"] == 1.0
+    assert score_by_owner_due(REF, [])["recall"] == 0.0
+    assert score_by_owner_due([], REF)["precision"] == 0.0
 
 
 def test_empty_prediction():

@@ -57,7 +57,8 @@ describe("overlay window readiness", () => {
   it("still shows the window, with the error hint, when the image fails", async () => {
     const { backend, events } = await mount(() => Promise.reject(new Error("no capture")));
     expect(host!.querySelector("img.shot-image")).toBeNull();
-    expect(host!.textContent).toContain("The screenshot could not be shown");
+    expect(host!.textContent).toContain("no capture");
+    expect(host!.querySelector("[role=alert]")).not.toBeNull();
     expect(events).toEqual(["image", "ready"]);
     expect(backend.overlayReady).toHaveBeenCalledTimes(1);
   });

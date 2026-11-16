@@ -55,3 +55,29 @@ Observations:
 ## Gate decision (Stage 0)
 
 Gemma 4 12B Q4_K_M accepted as the default. Confirmation on a real meeting transcript is a Stage 1 acceptance test; the default changes only if that test fails.
+
+## Measurements (Stage 4, production steps)
+
+The same ten synthetic transcripts (4 Polish, 3 English, 3 mixed; about 2,100 words each), now run through the production `extract` and `reduce` steps (windows, quote verification, deduplication) with `llama-server`, Q4_K_M, context 16384. Raw results: `benchmarks/results/stage4-extraction-*.json`.
+
+| Measure | Gemma 4 12B | Qwen3 14B | Target |
+|---|---|---|---|
+| Schema validity | 100% (met) | 100% (met) | 100% |
+| Task recall | 86.0% (met) | 71.7% (missed) | 80% or more |
+| Task precision | 89.3% (met) | 94.1% (met) | 80% or more |
+| Assignee accuracy | 92.8% (met) | 65.5% (missed) | 85% or more |
+| Due-date accuracy | 92.2% (met) | 60.2% (missed) | 85% or more |
+| Decision recall / precision | 49.9% / 90.5% | 40.4% / 77.8% | none |
+| Budget recall / precision | 54.3% / 80.0% | 55.3% / 100% | none |
+| Quote validity | 100% (met) | 99.4% (met) | 95% or more |
+| Seconds per 1000 words (extract and reduce) | 41.3 | 46.3 | none |
+| Peak VRAM above baseline | 8,867 MiB (met) | 11,129 MiB (met) | 11.5 GB or less (11,776 MiB) |
+
+- Gemma 4 12B meets every threshold; Qwen3 14B misses task recall, assignee accuracy and due-date accuracy.
+- An earlier prompt gave task recall 58.6% (Gemma 4 12B) and 58.4% (Qwen3 14B); the final prompt asks for the task text as an infinitive phrase and takes weekday dates from the calendar (`*-initial-prompt.json` keeps the first run).
+- English meetings are near 100% with Gemma 4 12B; per-meeting task recall in Polish and mixed meetings ranges from 43.5% to 100%.
+- Text-based assignee and due-date scores are pessimistic where different people have tasks with equal text; the paired metrics in the JSON files are higher (Gemma 4 12B: 99.5% and 98.4%).
+- The data is synthetic and the task phrasing is simple; in mixed meetings the task text is written in the report language. Gemma 4 12B on a 10 hour transcript: see ADR 0007.
+
+**Confirmed (Stage 4): Gemma 4 12B Q4_K_M stays the default.** It is the only candidate with a recorded Stage 4 run that meets all extraction thresholds; a model becomes the default only with a recorded run, and the recorded run exists for Gemma 4 12B.
+

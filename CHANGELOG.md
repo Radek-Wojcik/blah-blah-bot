@@ -6,33 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-### Added
+### Fixed
 
-- Cycles: a cycle repository (a Git clone or a local repository) with `cycle.yaml`, `topics.yaml` and Markdown templates, validated against versioned schemas. The `cycle-store` crate parses, validates and writes the files, runs the `git` command line, keeps the pull state and an issue cache inside `.git`, and works offline with a visible "state as of" date.
-- Cycle screens: list of repositories and cycles, add a repository by address or folder, create a cycle, edit participants, glossary, report defaults and targets, and a template editor with placeholder validation. Participants belong to a cycle, and voice profiles are kept per participant of a cycle.
-- Report mode gate before recording: cycle, mode, template or meeting type, and report language; a recording cannot start without a cycle and a mode.
-- Four report modes (`fixed`, `template`, `auto`, `by-type`) rendered by deterministic templates from the same extracted items, so the mode can be changed after recording while the draft is not published.
-- Pipeline stages `extract` and `reduce`: windows of 15 minutes, items validated against `schemas/extraction.schema.json`, quote verification against the transcript, deduplication across windows, links to open topics and issues, hierarchical summary and proposed sections. Result: `work/draft.json` (`schemas/meeting.schema.json`).
-- Context for the extraction (`work/context.json`) built from the cycle, its open topics, cached open issues and the items of previous meetings; a named transcript with participant names.
-- Draft editor: edit items, assignees and due dates, add and delete items, rename, add and reorder sections, move items between sections, and open the source of an item (quote, time, jump to the transcript). A new draft is kept aside when the existing one has edits.
-- Output language `auto`, `pl` or `en` per cycle and per meeting.
-- Language model backends: managed `llama-server`, external OpenAI-compatible server and a cloud endpoint chosen per meeting. The cloud needs a confirmation that states the endpoint host and the amount of text, and is refused by the supervisor, the runner and the worker without it. Keys stay in the Windows Credential Manager.
-- Schema version 4 of the local database, with a migration of existing data.
-- ADR 0017; tests for cycle files, templates and rendering, the context builder, draft operations, the new stages with a fake worker, contracts on shared fixtures, the worker steps against a mock server, the new screens on the mock backend; a test with real models for meetings of a cycle through all nine stages; the benchmark script `bbb_bench.proto.stage4_extraction`.
-
-### Changed
-
-- A window whose answer is cut off by the token limit is split in two (at most two levels) instead of being asked again.
-- Meetings of a cycle use the participants of the cycle instead of the local participant list of the previous version; a meeting without a cycle still uses the local list.
-- `targets.<name>.publish` accepts a third value, `off`.
-
-### Known issues
-
-- The cloud backend is tested only against a mock server.
-- Open issues are read from a cache. Fetching them from GitHub needs a token, and the application has no setting for one yet, so the cache stays empty unless it is filled otherwise.
-- Cycle files edited in the application are not committed or pushed until the publishing stage.
-- Extraction quality in Polish depends on the model and was measured on synthetic transcripts only.
-- The new screens are tested on the mock backend; an end-to-end test in the real application is not part of this release.
+- Region screenshot (Ctrl+Alt+S) showed a black screen over every monitor. The desktop was captured correctly; the cause was in the display path. The content security policy did not allow the page to reach the IPC protocol, so Tauri fell back to the postMessage interface, which returns binary results as an array of numbers; the overlay built its image from that array as if it were bytes, the PNG could not be decoded and the black page background was all that was left. The policy now allows the IPC protocol, binary results are converted correctly in both modes, and the frozen desktop is encoded with fast compression off the main thread. The overlay window now stays hidden until its page has decoded the frozen desktop, so the live desktop remains on screen until then, and it closes before the region is cropped and saved, which happen off the window thread. A capture that is all black, cannot be decoded or does not arrive within 20 seconds is reported in a message and the overlay closes itself (Escape and a click close it in every state), and the window is placed again when the system moved or resized it.
 
 ### Stage 5
 
@@ -71,6 +47,45 @@ Publishing. Implemented and tested against fake servers and local Git repositori
 - The default rule per target (`on-approval` for both) is a proposal awaiting confirmation.
 - A meeting cannot be published twice or edited after publishing. A Discord message can be posted twice when a request times out after Discord stored it.
 - The Discord bot and Notion publishers are not part of this stage.
+
+## [0.5.0] - 2026-11-16
+
+### Added
+
+- Cycles: a cycle repository (a Git clone or a local repository) with `cycle.yaml`, `topics.yaml` and Markdown templates, validated against versioned schemas. The `cycle-store` crate parses, validates and writes the files, runs the `git` command line, keeps the pull state and an issue cache inside `.git`, and works offline with a visible "state as of" date.
+- Cycle screens: list of repositories and cycles, add a repository by address or folder, create a cycle, edit participants, glossary, report defaults and targets, and a template editor with placeholder validation. Participants belong to a cycle, and voice profiles are kept per participant of a cycle.
+- Report mode gate before recording: cycle, mode, template or meeting type, and report language; a recording cannot start without a cycle and a mode.
+- Four report modes (`fixed`, `template`, `auto`, `by-type`) rendered by deterministic templates from the same extracted items, so the mode can be changed after recording while the draft is not published.
+- Pipeline stages `extract` and `reduce`: windows of 15 minutes, items validated against `schemas/extraction.schema.json`, quote verification against the transcript, deduplication across windows, links to open topics and issues, hierarchical summary and proposed sections. Result: `work/draft.json` (`schemas/meeting.schema.json`).
+- Context for the extraction (`work/context.json`) built from the cycle, its open topics, cached open issues and the items of previous meetings; a named transcript with participant names.
+- Draft editor: edit items, assignees and due dates, add and delete items, rename, add and reorder sections, move items between sections, and open the source of an item (quote, time, jump to the transcript). A new draft is kept aside when the existing one has edits.
+- Output language `auto`, `pl` or `en` per cycle and per meeting.
+- Language model backends: managed `llama-server`, external OpenAI-compatible server and a cloud endpoint chosen per meeting. The cloud needs a confirmation that states the endpoint host and the amount of text, and is refused by the supervisor, the runner and the worker without it. Keys stay in the Windows Credential Manager.
+- Schema version 4 of the local database, with a migration of existing data.
+- ADR 0017; tests for cycle files, templates and rendering, the context builder, draft operations, the new stages with a fake worker, contracts on shared fixtures, the worker steps against a mock server, the new screens on the mock backend; a test with real models for meetings of a cycle through all nine stages; the benchmark script `bbb_bench.proto.stage4_extraction`.
+
+### Measured
+
+- Extraction on ten synthetic meetings with the production steps (`benchmarks/results/stage4-extraction-*.json`). Gemma 4 12B Q4_K_M: schema validity 100%, task recall 86.0%, task precision 89.3%, assignee accuracy 92.8%, due-date accuracy 92.2%, quote validity 100%, 41.3 s per 1,000 words, peak VRAM 8,867 MiB above baseline; all extraction thresholds met. Qwen3 14B Q4_K_M: recall 71.7%, precision 94.1%, assignee 65.5%, due date 60.2%, quote validity 99.4%, 46.3 s per 1,000 words, 11,129 MiB; recall, assignee and due-date accuracy below the thresholds.
+- The first run with an earlier prompt gave task recall of 58.6% (Gemma 4 12B) and 58.4% (Qwen3 14B); the final prompt asks for the task text as an infinitive phrase and takes weekday dates from the calendar.
+- 10 hour transcript (repeated synthetic meetings, so time and memory only): 43 windows, none skipped, extraction and reduce 51.4 minutes (21.4% of the 4 hour budget), peak VRAM 9,217 MiB above baseline, valid draft with 1,431 items. With the Stage 0 transcription and diarization times the estimate for the whole pipeline is about 86 minutes.
+- All four report modes produce a valid draft on one meeting with both models.
+
+### Changed
+
+- A window whose answer is cut off by the token limit is split in two (at most two levels) instead of being asked again.
+- Meetings of a cycle use the participants of the cycle instead of the local participant list of the previous version; a meeting without a cycle still uses the local list.
+- `targets.<name>.publish` accepts a third value, `off`.
+
+### Known issues
+
+- The cloud backend is tested only against a mock server.
+- Open issues are read from a cache. Fetching them from GitHub needs a token, and the application has no setting for one yet, so the cache stays empty unless it is filled otherwise.
+- Cycle files edited in the application are not committed or pushed until the publishing stage.
+- Extraction quality in Polish depends on the model and was measured on synthetic transcripts only; per-meeting task recall of Gemma 4 12B is 43.5% to 100% in Polish and mixed meetings.
+- In mixed-language meetings the task text is written in the report language, so English tasks are translated.
+- Qwen3 14B misses the extraction thresholds (task recall, assignee and due-date accuracy) on this set; Gemma 4 12B stays the default.
+- The new screens are tested on the mock backend; an end-to-end test in the real application is not part of this release.
 
 ## [0.4.0] - 2026-11-15
 

@@ -214,14 +214,14 @@ Each target has its own template and its own rule (`auto`, `on-approval`, `off`;
 
 ## 5. Model loading order on a 12 GB GPU
 
-Reference hardware: RTX 3080 12 GB, 32 GB RAM. Models run strictly one after another; each process exits before the next starts. VRAM values are peaks above the idle baseline from the Stage 0 prototypes (`benchmarks/results/`); after a model is released 285 to 326 MiB remain allocated, which is why stages run in separate processes. Measured on synthetic data; a ten-hour recording takes about 58 minutes end to end (extraction extrapolated).
+Reference hardware: RTX 3080 12 GB, 32 GB RAM. Models run strictly one after another; each process exits before the next starts. VRAM values are peaks above the idle baseline from the Stage 0 prototypes (`benchmarks/results/`); after a model is released 285 to 326 MiB remain allocated, which is why stages run in separate processes. Measured on synthetic data; for a ten-hour recording extraction and reduce were measured at 51.4 minutes (Stage 4), which with the Stage 0 transcription and diarization times gives about 86 minutes end to end as an estimate (see ADR 0007).
 
 | Order | Step | Model | VRAM (*estimate*) |
 |---|---|---|---|
 | 1 | ASR | faster-whisper large-v3-turbo, `int8_float16` | 1.5 GB (measured on a 10 h file) |
 | 2 | Diarization and voice embeddings | pyannote community-1 | 2.3 GB (measured on a 10 h file) |
 | 3 | Vision | Qwen3-VL-8B, GGUF Q4_K_M with mmproj | 7.7 GB (measured) |
-| 4 | Extraction and summary | Gemma 4 12B, GGUF Q4_K_M (default; see ADR 0005) | 8.9 GB (measured) |
+| 4 | Extraction and summary | Gemma 4 12B, GGUF Q4_K_M (default; see ADR 0005) | 9.2 GB (measured on a 10 h transcript, Stage 4) |
 
 When an external server (Ollama, LM Studio, Strata) is configured, steps 3 and 4 call that endpoint and the application does not manage its memory. The user is responsible for the server being able to load the configured model.
 

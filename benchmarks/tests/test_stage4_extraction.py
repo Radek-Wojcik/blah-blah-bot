@@ -340,6 +340,31 @@ def test_wrong_and_extra_items_lower_the_scores():
     assert score["warning_codes"] == {"quote_unverified": 1}
 
 
+def test_paired_scores_are_reported_but_do_not_change_the_task_scores():
+    draft = perfect_draft()
+    first, second = draft["items"][0], draft["items"][1]
+    first["text"] = second["text"] = "do the work"  # one task for two people
+    annotation = make_annotation()
+    annotation["tasks"][0]["text"] = annotation["tasks"][1]["text"] = "do the work"
+    draft["items"][0], draft["items"][1] = second, first  # listed in the other order
+    score = s4.score_draft(annotation, draft, entries_of_script())
+    assert score["task_recall"] == 1.0 and score["task_precision"] == 1.0
+    assert score["assignee_accuracy"] == 0.0 and score["due_accuracy"] == 0.0
+    assert score["assignee_accuracy_paired"] == 1.0 and score["due_accuracy_paired"] == 1.0
+    assert "assignee_accuracy_paired" in s4.MEAN_KEYS and "due_accuracy_paired" in s4.MEAN_KEYS
+    assert "assignee_accuracy_paired" not in s4.TARGETS
+    assert "task_recall_by_owner_due" not in s4.TARGETS
+    assert set(s4.METRIC_NOTES) >= {"meets_targets", "task_recall_by_owner_due"}
+
+
+def test_translated_task_is_found_by_owner_and_due_but_not_by_text():
+    draft = perfect_draft()
+    draft["items"][0]["text"] = "zamówić nowe czujniki"  # the report language is not the speech
+    score = s4.score_draft(make_annotation(), draft, entries_of_script())
+    assert score["task_recall"] == 0.5 and score["task_recall_by_owner_due"] == 1.0
+    assert score["task_precision_by_owner_due"] == 1.0
+
+
 def test_items_of_other_types_do_not_count_as_tasks():
     draft = perfect_draft()
     draft["items"] = [i for i in draft["items"] if i["type"] != "task"]

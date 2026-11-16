@@ -81,7 +81,9 @@ test.describe("screenshot overlay on the mock backend", () => {
   test("dragging selects a region and Escape cancels", async ({ page }) => {
     await page.goto("/?view=overlay&backend=mock");
     const stage = page.getByRole("application");
-    await expect(page.locator("img.shot-image")).toBeVisible();
+    const img = page.locator("img.shot-image");
+    await expect(img).toBeVisible();
+    await expect(stage).toHaveAttribute("data-phase", "ready");
     await page.mouse.move(200, 150);
     await page.mouse.down();
     await page.mouse.move(520, 380, { steps: 5 });
@@ -89,6 +91,43 @@ test.describe("screenshot overlay on the mock backend", () => {
     await page.mouse.up();
     await expect(stage).toBeVisible();
   });
+
+  test("the picture is decoded, fills the window and is not hidden", async ({ page }) => {
+    await page.goto("/?view=overlay&backend=mock");
+    const img = page.locator("img.shot-image");
+    await expect(img).toBeVisible();
+    await expect(page.getByRole("application")).toHaveAttribute("data-phase", "ready");
+    const state = await img.evaluate((el: HTMLImageElement) => {
+      const r = el.getBoundingClientRect();
+      const css = getComputedStyle(el);
+      return {
+        decoded: el.complete && el.naturalWidth > 0 && el.naturalHeight > 0,
+        width: r.width,
+        height: r.height,
+        opacity: Number(css.opacity),
+        visibility: css.visibility,
+        display: css.display,
+        viewport: [innerWidth, innerHeight],
+      };
+    });
+    expect(state.decoded).toBe(true);
+    expect(state.opacity).toBe(1);
+    expect(state.visibility).toBe("visible");
+    expect(state.display).not.toBe("none");
+    expect(state.width).toBeGreaterThanOrEqual(state.viewport[0] - 1);
+    expect(state.height).toBeGreaterThanOrEqual(state.viewport[1] - 1);
+  });
+
+  for (const fault of ["blank", "black", "broken"]) {
+    test(`a ${fault} capture shows a message instead of a black screen`, async ({ page }) => {
+      await page.goto(`/?view=overlay&backend=mock&overlayfault=${fault}`);
+      const alert = page.getByRole("alert");
+      await expect(alert).toBeVisible();
+      await expect(alert).toContainText("Screenshot failed");
+      await expect(page.getByRole("application")).toHaveAttribute("data-phase", "problem");
+      await expect(page.locator("img.shot-image")).toHaveCount(0);
+    });
+  }
 });
 
 // A short stage time keeps the simulated pipeline fast: seven stages take about three seconds.

@@ -13,6 +13,8 @@
 //!   marker.
 //! * An assignee id is shown as the participant's name; an id that is not a participant
 //!   is shown as it is.
+//! * The words `due` and `unverified quote` are the same in every report language: item
+//!   lines stay machine-friendly. Only the built-in headings are localised.
 
 use crate::cycle::Participant;
 use crate::draft::{CertaintyLevel, Draft, Item, ItemType, Language, ReportMode};
@@ -308,6 +310,19 @@ impl Renderer<'_> {
         blocks.join("\n\n")
     }
 
+    /// The summary under its localised heading, or nothing when the summary is empty.
+    fn summary_section(&self) -> String {
+        let summary = self.draft.summary.trim();
+        if summary.is_empty() {
+            return String::new();
+        }
+        format!(
+            "## {}\n\n{}",
+            BuiltinSection::Summary.heading(self.draft.language),
+            self.plain(summary)
+        )
+    }
+
     fn section_list(&self, id: &str) -> String {
         let Some(idx) = self.draft.sections.iter().position(|s| s.id == id) else {
             return String::new();
@@ -334,6 +349,7 @@ impl Renderer<'_> {
                 .collect::<Vec<_>>()
                 .join(", "),
             Placeholder::Summary => self.plain(self.draft.summary.trim()),
+            Placeholder::SummarySection => self.summary_section(),
             Placeholder::Sections => self.sections_block(),
             Placeholder::Section(id) => self.section_list(id),
             Placeholder::Tasks => self.of_type(ItemType::Task),
@@ -356,8 +372,12 @@ impl Renderer<'_> {
 ///   with an unknown one, go to the last section.
 /// * `{section:<id>}` is the list of one section; `{tasks}`, `{decisions}`, `{topics}`,
 ///   `{notes}`, `{ideas}` and `{budgets}` are the lists of one type.
+/// * `{summary}` is the bare summary text; `{summary_section}` is the summary under the
+///   localised heading (`## Summary` or `## Podsumowanie`) and nothing when the summary is
+///   empty.
 /// * Headings (level 2 and deeper) with nothing under them are removed, so empty sections
-///   never appear; runs of blank lines collapse to one.
+///   never appear. The result has exactly one blank line between blocks (a heading always
+///   has one before and after it), no trailing spaces and a single final newline.
 ///
 /// An unknown or malformed placeholder is an error; see [`crate::validate_template`].
 pub fn render(
@@ -390,7 +410,8 @@ fn heading_level(line: &str) -> Option<usize> {
     ((1..=6).contains(&hashes) && line[hashes..].starts_with(' ')).then_some(hashes)
 }
 
-/// Removes empty headings (level 2 and deeper), trailing spaces and extra blank lines.
+/// Removes empty headings (level 2 and deeper), trailing spaces and extra blank lines, and
+/// puts one blank line around every heading.
 fn tidy(text: &str) -> String {
     let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
     // Mark which lines sit inside a code fence: headings there are not headings.
@@ -439,21 +460,29 @@ fn tidy(text: &str) -> String {
     }
 
     let mut out = String::new();
-    let mut blank_run = 0;
+    // True at the start of the output and right after a blank line.
+    let mut at_block_start = true;
+    let mut prev_heading = false;
     for (i, line) in lines.iter().enumerate() {
         if !keep[i] {
             continue;
         }
         if line.is_empty() {
-            blank_run += 1;
-            if blank_run > 1 || out.is_empty() {
-                continue;
+            if !at_block_start {
+                out.push('\n');
+                at_block_start = true;
             }
-        } else {
-            blank_run = 0;
+            continue;
+        }
+        let heading = level_at(i).is_some();
+        // A heading is always set apart from the text before and after it.
+        if !at_block_start && (heading || prev_heading) {
+            out.push('\n');
         }
         out.push_str(line);
         out.push('\n');
+        at_block_start = false;
+        prev_heading = heading;
     }
     while out.ends_with("\n\n") {
         out.pop();
@@ -600,7 +629,7 @@ mod tests {
             &opts(),
         )
         .unwrap();
-        let expected = "# Weekly sync\n\n2026-11-13 · Alex Example, Sam Sample\n\n## Summary\nWe agreed on the mount.\n\n## Decisions\n\n- Use aluminium\n\n## Tasks\n\n- [ ] Design the mount (@Alex Example, due 2026-11-20)\n\n## Open topics\n\n- Battery supplier\n\n## Notes\n\n- Wheels are 20 cm\n\n## Ideas\n\n- Add a camera\n\n## Budgets\n\n- 300 PLN for sensors\n\n---\n[Full transcript](transcript.md)\n";
+        let expected = "# Weekly sync\n\n2026-11-13 · Alex Example, Sam Sample\n\n## Summary\n\nWe agreed on the mount.\n\n## Decisions\n\n- Use aluminium\n\n## Tasks\n\n- [ ] Design the mount (@Alex Example, due 2026-11-20)\n\n## Open topics\n\n- Battery supplier\n\n## Notes\n\n- Wheels are 20 cm\n\n## Ideas\n\n- Add a camera\n\n## Budgets\n\n- 300 PLN for sensors\n\n---\n[Full transcript](transcript.md)\n";
         assert_eq!(md, expected);
     }
 
@@ -672,6 +701,107 @@ mod tests {
         let md = render(&quiet, &people(), DEFAULT_TEMPLATE_TEXT, &opts()).unwrap();
         assert!(!md.contains("## Summary"), "{md}");
         assert!(md.contains("---\n[Full transcript]"));
+    }
+
+    #[test]
+    fn default_template_in_polish_has_no_english_heading() {
+        let md = render(
+            &fixed_draft(Language::Pl),
+            &people(),
+            DEFAULT_TEMPLATE_TEXT,
+            &opts(),
+        )
+        .unwrap();
+        let expected = "# Weekly sync\n\n2026-11-13 · Alex Example, Sam Sample\n\n## Podsumowanie\n\nWe agreed on the mount.\n\n## Decyzje\n\n- Use aluminium\n\n## Zadania\n\n- [ ] Design the mount (@Alex Example, due 2026-11-20)\n\n## Otwarte tematy\n\n- Battery supplier\n\n## Notatki\n\n- Wheels are 20 cm\n\n## Pomysły\n\n- Add a camera\n\n## Budżety\n\n- 300 PLN for sensors\n\n---\n[Full transcript](transcript.md)\n";
+        assert_eq!(md, expected);
+        for english in [
+            "Summary",
+            "Decisions",
+            "Tasks",
+            "Open topics",
+            "Notes",
+            "Ideas",
+            "Budgets",
+        ] {
+            assert!(!md.contains(&format!("## {english}")), "{english} in {md}");
+        }
+    }
+
+    #[test]
+    fn summary_section_is_localised_and_vanishes_when_empty() {
+        let mut d = fixed_draft(Language::Pl);
+        assert_eq!(
+            render(&d, &people(), "{summary_section}", &opts()).unwrap(),
+            "## Podsumowanie\n\nWe agreed on the mount.\n"
+        );
+        d.language = Language::En;
+        assert_eq!(
+            render(&d, &people(), "{summary_section}", &opts()).unwrap(),
+            "## Summary\n\nWe agreed on the mount.\n"
+        );
+        // Surrounding whitespace of the summary is dropped.
+        d.summary = "\n  Two lines  \n second  \n".into();
+        assert_eq!(
+            render(&d, &people(), "{summary_section}", &opts()).unwrap(),
+            "## Summary\n\nTwo lines\n second\n"
+        );
+        // An empty summary leaves no heading and no gap.
+        for empty in ["", "  \n "] {
+            d.summary = empty.into();
+            assert_eq!(
+                render(&d, &people(), "{summary_section}", &opts()).unwrap(),
+                ""
+            );
+            let body = "# T\n\n{summary_section}\n\n{tasks}\n";
+            let md = render(&d, &people(), body, &opts()).unwrap();
+            assert_eq!(
+                md,
+                "# T\n\n- [ ] Design the mount (@Alex Example, due 2026-11-20)\n"
+            );
+        }
+    }
+
+    #[test]
+    fn custom_template_keeps_the_bare_summary() {
+        let mut d = fixed_draft(Language::Pl);
+        d.summary = "Ustalono uchwyt.".into();
+        let body = "# {title}\n\n## Streszczenie\n{summary}\n\n{tasks}\n";
+        let md = render(&d, &people(), body, &opts()).unwrap();
+        assert_eq!(
+            md,
+            "# Weekly sync\n\n## Streszczenie\n\nUstalono uchwyt.\n\n- [ ] Design the mount (@Alex Example, due 2026-11-20)\n"
+        );
+        assert!(!md.contains("Podsumowanie"));
+    }
+
+    #[test]
+    fn blocks_are_separated_by_exactly_one_blank_line() {
+        let mut d = fixed_draft(Language::En);
+        d.summary = "First.  \n\n\n\nSecond.   ".into();
+        let body = "\n\n# {title}   \n\n\n\n{summary_section}\n\n\n\n{sections}\n\n\n---\n[Full transcript](transcript.md)   \n\n\n";
+        let md = render(&d, &people(), body, &opts()).unwrap();
+        assert!(!md.contains("\n\n\n"), "{md:?}");
+        assert!(!md.contains(" \n"), "{md:?}");
+        assert!(md.ends_with("(transcript.md)\n"));
+        assert!(md.starts_with("# Weekly sync\n\n## Summary\n\nFirst.\n\nSecond.\n\n## Decisions"));
+        // A heading written without blank lines around it gets them.
+        let tight = render(&d, &people(), "# A\n## B\ntext\n{tasks}\n", &opts()).unwrap();
+        assert_eq!(
+            tight,
+            "# A\n\n## B\n\ntext\n- [ ] Design the mount (@Alex Example, due 2026-11-20)\n"
+        );
+        // Headings inside a code fence are left alone.
+        let fenced = render(&d, &people(), "```\n# x\ntext\n```\n", &opts()).unwrap();
+        assert_eq!(fenced, "```\n# x\ntext\n```\n");
+    }
+
+    #[test]
+    fn due_wording_is_the_same_in_polish() {
+        let md = render(&fixed_draft(Language::Pl), &people(), "{tasks}", &opts()).unwrap();
+        assert_eq!(
+            md,
+            "- [ ] Design the mount (@Alex Example, due 2026-11-20)\n"
+        );
     }
 
     fn template_draft() -> Draft {
@@ -860,7 +990,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             md,
-            "**Weekly sync** · 2026-11-13\n\nWe agreed on the mount.\n\n## Decisions\n- Use aluminium\n\n## Tasks\n- Design the mount (<@111111111111111111>, due 2026-11-20)\n\n[Full report](https://example.test/r)\n"
+            "**Weekly sync** · 2026-11-13\n\nWe agreed on the mount.\n\n## Decisions\n\n- Use aluminium\n\n## Tasks\n\n- Design the mount (<@111111111111111111>, due 2026-11-20)\n\n[Full report](https://example.test/r)\n"
         );
     }
 

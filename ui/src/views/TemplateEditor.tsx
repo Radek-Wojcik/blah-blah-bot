@@ -234,6 +234,7 @@ export function TemplateEditor(props: {
                   "date",
                   "participants",
                   "summary",
+                  "summary_section",
                   "sections",
                   "section:<id>",
                   "tasks",

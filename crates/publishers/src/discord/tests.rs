@@ -250,7 +250,7 @@ fn the_short_template_mentions_assignees_and_links_the_report() {
     assert_eq!(
         text,
         format!(
-            "**Weekly sync** \u{b7} 2026-11-13\n\nWe agreed on the mount.\n\n## Decisions\n- Use aluminium\n\n## Tasks\n- Design the mount (<@{USER}>, due ?)\n- Order parts (<@&{ROLE}>, due ?)\n- Check wiring (@Kim Plain, due ?)\n\n[Full report](https://example.test/report.md)\n"
+            "**Weekly sync** \u{b7} 2026-11-13\n\nWe agreed on the mount.\n\n## Decisions\n\n- Use aluminium\n\n## Tasks\n\n- Design the mount (<@{USER}>, due ?)\n- Order parts (<@&{ROLE}>, due ?)\n- Check wiring (@Kim Plain, due ?)\n\n[Full report](https://example.test/report.md)\n"
         )
     );
     // Notes are not part of the short message.

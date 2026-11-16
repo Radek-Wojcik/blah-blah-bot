@@ -24,6 +24,12 @@ Stage 1 turns the audio prototype into an application: a tray widget starts and 
 - Windows are created from async commands or from a separate thread. Creating a window in a synchronous command deadlocks on Windows (found in testing).
 - The embedded UI is not rebuilt by cargo when only the front-end files change; the build has to be forced after `npm run build`.
 
+## Addendum: the black overlay (after 0.5.0)
+
+The overlay showed a black screen on a machine with a 4K monitor at 200 % and a Full HD monitor at 100 %. The live capture (`cargo test -p recorder --lib live_capture -- --ignored --nocapture`) is correct on both monitors, so GDI `BitBlt` with `CAPTUREBLT`, the alpha handling and the multi-monitor geometry were not the cause. In the running application the `img` element existed, filled the window and was not hidden, but `naturalWidth` was 0: the picture could not be decoded. The content security policy had no `connect-src`, so the web view refused `http://ipc.localhost`, Tauri switched to the postMessage interface and returned the PNG as an array of numbers, and `new Blob([array])` holds the text "137,80,78,..." instead of the bytes. Playwright's `toBeVisible` accepts such a broken image, which is why the end-to-end test did not notice.
+
+Decisions: the policy allows `connect-src ipc: http://ipc.localhost`; every binary result goes through one conversion (`bytesToBlob`) that accepts both forms; the end-to-end test requires a decoded picture and the overlay phase `ready`. The command encoding the picture is asynchronous (a synchronous command blocks the main thread) and uses fast PNG compression, because the frame of several monitors is tens of megabytes. The overlay must never remain as a black sheet over all monitors: a capture that is blank (checked in Rust on the full-resolution frame and again on the decoded picture), cannot be decoded or does not arrive in 20 seconds shows a message and closes itself, and Escape and clicks close it in every state. The overlay window is read back after placement and placed again when the system changed it.
+
 ## Alternatives
 
 - **A native overlay window drawn in Rust:** no web view cost, but all selection drawing and accessibility work would be duplicated.

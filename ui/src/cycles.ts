@@ -125,7 +125,7 @@ export function emptyTemplate(name: string): TemplateDto {
   return {
     name,
     sections: [],
-    body: "# {title}\n\n{date} · {participants}\n\n## Summary\n{summary}\n\n{sections}\n",
+    body: "# {title}\n\n{date} · {participants}\n\n{summary_section}\n\n{sections}\n",
   };
 }
 

@@ -16,7 +16,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use recorder::screenshot::{capture_virtual_desktop, encode_png_fast, Frame, Rect};
+use recorder::screenshot::{
+    capture_virtual_desktop, encode_png_preview, overlay_window_rect, Frame, Rect,
+};
 use serde::Deserialize;
 use tauri::ipc::Response;
 use tauri::window::Color;
@@ -35,17 +37,34 @@ const MIN_SIDE: u32 = 4;
 /// a page that failed to load still gets the window with its error hint (and an Escape key).
 const SHOW_TIMEOUT: Duration = Duration::from_secs(4);
 
+/// Why a capture has no preview: the IPC error code and message the overlay page receives.
+type PreviewError = (&'static str, String);
+
 /// The preview PNG of a capture. Whoever asks first encodes it, the others wait for the result.
+///
+/// A capture without any visible content (all black or fully transparent) has no preview: it is
+/// refused with the code `blank_capture` so the overlay can say so instead of presenting a black
+/// screen.
 #[derive(Default)]
-pub struct Preview(OnceLock<Result<Vec<u8>, String>>);
+pub struct Preview(OnceLock<Result<Vec<u8>, PreviewError>>);
 
 impl Preview {
-    pub fn get_or_encode(&self, frame: &Frame) -> Result<&[u8], &str> {
+    pub fn get_or_encode(&self, frame: &Frame) -> Result<&[u8], &PreviewError> {
         self.0
             .get_or_init(|| {
                 let started = Instant::now();
-                let png = encode_png_fast(frame).map_err(|e| e.to_string());
+                let stats = frame.stats();
+                if frame.rgba.is_empty() || stats.is_blank() {
+                    tracing::warn!(?stats, rect = ?frame.rect, "the desktop capture is blank");
+                    return Err((
+                        "blank_capture",
+                        "The screen capture came back empty (all black). The screenshot was cancelled."
+                            .to_owned(),
+                    ));
+                }
+                let png = encode_png_preview(frame).map_err(|e| ("io", e.to_string()));
                 tracing::debug!(
+                    ?stats,
                     ms = started.elapsed().as_millis() as u64,
                     bytes = png.as_ref().map_or(0, Vec::len),
                     "overlay preview encoded"
@@ -54,7 +73,6 @@ impl Preview {
             })
             .as_ref()
             .map(Vec::as_slice)
-            .map_err(String::as_str)
     }
 }
 
@@ -141,7 +159,7 @@ pub fn begin(app: &AppHandle) -> IpcResult<()> {
     // Capture before any of our own windows appear.
     let frame =
         Arc::new(capture_virtual_desktop().map_err(|e| IpcError::new("io", e.to_string()))?);
-    let rect = frame.rect;
+    let rect = overlay_window_rect(frame.rect);
     let preview = Arc::new(Preview::default());
     {
         // Encode while the window and its page start up.
@@ -194,12 +212,40 @@ pub fn begin(app: &AppHandle) -> IpcResult<()> {
     Ok(())
 }
 
+/// Show the overlay window and bring it to the front.
+///
+/// The window is created on the primary monitor and moved afterwards; with monitors of
+/// different scale factors Windows may adjust the size while the window changes monitor, so the
+/// result is read back and applied once more when it differs.
 fn show(app: &AppHandle) -> tauri::Result<()> {
-    if let Some(w) = app.get_webview_window(LABEL) {
-        w.show()?;
-        w.set_focus()?;
+    let Some(w) = app.get_webview_window(LABEL) else {
+        return Ok(());
+    };
+    w.show()?;
+    let rect = app.try_state::<AppState>().and_then(|state| {
+        let pending = state.pending_shot.lock().ok()?;
+        pending.as_ref().map(|s| overlay_window_rect(s.frame.rect))
+    });
+    if let Some(rect) = rect {
+        let placed =
+            |w: &tauri::WebviewWindow| -> tauri::Result<bool> {
+                let (pos, size) = (w.outer_position()?, w.outer_size()?);
+                Ok((pos.x, pos.y, size.width, size.height)
+                    == (rect.x, rect.y, rect.width, rect.height))
+            };
+        if !placed(&w)? {
+            tracing::warn!(
+                ?rect,
+                "overlay window was moved or resized by the system; placing it again"
+            );
+            w.set_position(PhysicalPosition::new(rect.x, rect.y))?;
+            w.set_size(PhysicalSize::new(rect.width, rect.height))?;
+            if !placed(&w)? {
+                tracing::warn!(?rect, "overlay window does not cover the desktop exactly");
+            }
+        }
     }
-    Ok(())
+    w.set_focus()
 }
 
 /// Close the overlay and drop the frozen capture.
@@ -215,7 +261,8 @@ pub fn cancel(app: &AppHandle) {
 }
 
 /// The frozen capture as PNG bytes, for the overlay page. Async so that waiting for the
-/// encoder never blocks the thread that draws the windows.
+/// encoder never blocks the thread that draws the windows. A blank capture is refused with the
+/// code `blank_capture`.
 #[tauri::command]
 pub async fn overlay_image(state: State<'_, AppState>) -> IpcResult<Response> {
     let (frame, preview) = {
@@ -232,11 +279,11 @@ pub async fn overlay_image(state: State<'_, AppState>) -> IpcResult<Response> {
         preview
             .get_or_encode(&frame)
             .map(<[u8]>::to_vec)
-            .map_err(str::to_owned)
+            .map_err(Clone::clone)
     })
     .await
     .map_err(|e| IpcError::new("internal", e.to_string()))?
-    .map_err(|e| IpcError::new("io", e))?;
+    .map_err(|(code, message)| IpcError::new(code, message))?;
     Ok(Response::new(png))
 }
 
@@ -408,6 +455,27 @@ mod tests {
         assert_eq!(&first[1..4], b"PNG");
         let again = preview.get_or_encode(&frame).unwrap();
         assert!(std::ptr::eq(first, again));
+    }
+
+    #[test]
+    fn a_blank_capture_has_no_preview_and_says_so() {
+        let preview = Preview::default();
+        for rgba in [[0, 0, 0, 255], [200, 100, 50, 0]] {
+            let frame = Frame::new(Rect::new(0, 0, 4, 2), rgba.repeat(8)).unwrap();
+            let fresh = Preview::default();
+            let (code, message) = fresh.get_or_encode(&frame).unwrap_err();
+            assert_eq!(*code, "blank_capture");
+            assert!(message.contains("empty"), "{message}");
+        }
+        let black = Frame::new(Rect::new(0, 0, 4, 2), [0, 0, 0, 255].repeat(8)).unwrap();
+        assert_eq!(
+            preview.get_or_encode(&black).unwrap_err().0,
+            "blank_capture"
+        );
+        assert_eq!(
+            preview.get_or_encode(&black).unwrap_err().0,
+            "blank_capture"
+        );
     }
 
     #[test]

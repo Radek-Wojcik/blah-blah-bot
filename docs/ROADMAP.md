@@ -241,13 +241,13 @@ flowchart LR
 - *Measurements:* extraction metrics and quote validity (TESTING section 5); time for a 10-hour transcript.
 
 **Definition of done**
-- [ ] All four report modes produce a draft
-- [ ] Every task, decision and topic shows a verifiable quote and timestamp
-- [ ] Inferred fields and unverified quotes are marked in the draft
-- [ ] Recording cannot start without a report mode
-- [ ] Report language follows the cycle setting, including `auto`
-- [ ] Cloud processing happens only after explicit per-meeting confirmation
-- [ ] Release v0.5.0 published
+- [x] All four report modes produce a draft
+- [x] Every task, decision and topic shows a verifiable quote and timestamp
+- [x] Inferred fields and unverified quotes are marked in the draft
+- [x] Recording cannot start without a report mode
+- [x] Report language follows the cycle setting, including `auto`
+- [x] Cloud processing happens only after explicit per-meeting confirmation
+- [x] Release v0.5.0 published
 
 **Demo and visuals.** GIF: from transcript to draft, moving an item between sections. Screenshots: cycle settings, draft with source popover, report mode picker.
 
@@ -287,12 +287,12 @@ flowchart LR
 - *Resilience:* publish without network, then recover; push rejected by a concurrent commit.
 
 **Definition of done**
-- [x] Report, transcript and screenshots committed under the cycle and date folder (tested against local bare remotes)
-- [x] Tasks created as issues with assignee and due date (tested against a fake GitHub; the issue field "Target date" is unverified, the `Due:` line is the tested path)
-- [x] Approved status changes written to GitHub; closed issues read back as done (tested against a fake GitHub)
-- [x] Discord summary posted with role and user mentions and screenshots (tested against a fake webhook)
-- [x] Each target follows its own rule and template (rules `auto`, `on-approval`, `off`; defaults proposed in [ADR 0019](decisions/0019-default-publish-rule-per-target.md))
-- [x] No token appears in files, logs or the database (scan of the database, outbox rows, snapshots, both repositories and the log in the resilience tests)
+- [ ] Report, transcript and screenshots committed under the cycle and date folder (tested against local bare remotes)
+- [ ] Tasks created as issues with assignee and due date (tested against a fake GitHub; the issue field "Target date" is unverified, the `Due:` line is the tested path)
+- [ ] Approved status changes written to GitHub; closed issues read back as done (tested against a fake GitHub)
+- [ ] Discord summary posted with role and user mentions and screenshots (tested against a fake webhook)
+- [ ] Each target follows its own rule and template (rules `auto`, `on-approval`, `off`; defaults proposed in [ADR 0019](decisions/0019-default-publish-rule-per-target.md))
+- [ ] No token appears in files, logs or the database (scan of the database, outbox rows, snapshots, both repositories and the log in the resilience tests)
 - [ ] Release check passed once against a real test repository and a real test webhook (written, not run)
 - [ ] The organization issue field "Target date" verified on a real organization
 - [ ] Release v0.6.0 published

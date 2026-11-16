@@ -1,0 +1,125 @@
+{
+  "prototype": "stage4-modes",
+  "name": "gemma-4-12b-q4",
+  "timestamp": "2026-11-15T22:01:43+00:00",
+  "environment": {
+    "os": "Windows-10-10.0.19045-SP0",
+    "os_build": "10.0.19045",
+    "python": "3.11.9",
+    "machine": "AMD64",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 3080",
+      "memory_total_mib": 12288,
+      "memory_used_mib": 833,
+      "driver": "617.42"
+    }
+  },
+  "status": "ok",
+  "config": {
+    "model": "gemma-4-12b-it-Q4_K_M.gguf",
+    "ctx": 16384,
+    "backend": "llama-server (managed)",
+    "mode": "fixed",
+    "output_language": "annotation",
+    "llama_server": "llama-server.exe",
+    "meeting": "en-0"
+  },
+  "modes": [
+    {
+      "mode": "fixed",
+      "ok": true,
+      "error": "",
+      "extract_reused": false,
+      "extract_seconds": 77.5,
+      "reduce_seconds": 5.4,
+      "draft_valid": true,
+      "draft_errors": [],
+      "draft_mode": "fixed",
+      "items": 39,
+      "sections": 0,
+      "section_ids": [],
+      "items_in_sections": 0,
+      "items_with_unknown_section": [],
+      "sections_match_template": null,
+      "warnings": 0,
+      "reduce_note": "39 items, fixed sections",
+      "passed": true
+    },
+    {
+      "mode": "template",
+      "ok": true,
+      "error": "",
+      "extract_reused": false,
+      "extract_seconds": 80.0,
+      "reduce_seconds": 5.5,
+      "draft_valid": true,
+      "draft_errors": [],
+      "draft_mode": "template",
+      "items": 39,
+      "sections": 4,
+      "section_ids": [
+        "decisions",
+        "actions",
+        "budget",
+        "other"
+      ],
+      "items_in_sections": 39,
+      "items_with_unknown_section": [],
+      "sections_match_template": true,
+      "warnings": 0,
+      "reduce_note": "39 items, template sections",
+      "passed": true
+    },
+    {
+      "mode": "auto",
+      "ok": true,
+      "error": "",
+      "extract_reused": true,
+      "extract_seconds": 0.0,
+      "reduce_seconds": 19.2,
+      "draft_valid": true,
+      "draft_errors": [],
+      "draft_mode": "auto",
+      "items": 39,
+      "sections": 4,
+      "section_ids": [
+        "financial_budgets",
+        "action_items",
+        "strategic_decisions",
+        "technical_notes"
+      ],
+      "items_in_sections": 39,
+      "items_with_unknown_section": [],
+      "sections_match_template": null,
+      "warnings": 0,
+      "reduce_note": "39 items, 4 sections proposed",
+      "passed": true
+    },
+    {
+      "mode": "by-type",
+      "ok": true,
+      "error": "",
+      "extract_reused": false,
+      "extract_seconds": 80.0,
+      "reduce_seconds": 5.5,
+      "draft_valid": true,
+      "draft_errors": [],
+      "draft_mode": "by-type",
+      "items": 39,
+      "sections": 4,
+      "section_ids": [
+        "decisions",
+        "actions",
+        "budget",
+        "other"
+      ],
+      "items_in_sections": 39,
+      "items_with_unknown_section": [],
+      "sections_match_template": true,
+      "warnings": 0,
+      "reduce_note": "39 items, template sections",
+      "passed": true
+    }
+  ],
+  "all_modes_valid": true
+}

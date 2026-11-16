@@ -1,6 +1,6 @@
 # 0017. Cycles, extraction, report modes and drafts
 
-**Status:** Accepted (design); the two product decisions marked *Proposed* below wait for confirmation.
+**Status:** Accepted
 
 ## Context
 
@@ -51,7 +51,7 @@ The extraction stages accept three backends in `options.llm`: `managed` (a `llam
 
 The draft is `work/draft.json`. User changes (edited text, assignee, due date, moved items, deleted items, added items, renamed sections) are saved into the same file with `edited: true` on touched items; running `reduce` again does not overwrite a draft that has user edits unless the user asks for it. Every item shows its quote, the time and a jump to the transcript.
 
-## Proposed: built-in sections and default template (awaiting confirmation)
+## Built-in sections and default template (confirmed)
 
 Built-in sections, in this order, empty ones omitted from the output: Summary, Decisions, Tasks, Open topics, Notes, Ideas, Budgets. Default template:
 
@@ -60,8 +60,7 @@ Built-in sections, in this order, empty ones omitted from the output: Summary, D
 
 {date} · {participants}
 
-## Summary
-{summary}
+{summary_section}
 
 {sections}
 
@@ -69,9 +68,9 @@ Built-in sections, in this order, empty ones omitted from the output: Summary, D
 [Full transcript](transcript.md)
 ```
 
-The same text is a file in the repository (`templates/default.md`), so wording can change without code. The choice is recorded here once confirmed.
+`{summary_section}` renders the summary under a localised heading (`## Summary` or `## Podsumowanie`) and renders to nothing when the summary is empty, so a Polish report has no English heading and an empty summary leaves no empty heading; `{summary}` stays available as the bare text for custom templates. Item lines keep `due` in every language. Existing cycles keep the `default.md` they have; files are not migrated. The same text is a file in the repository (`templates/default.md`), so wording can change without code. The choice is recorded here once confirmed.
 
-## Proposed: default model after the measurements (awaiting confirmation)
+## Default model after the measurements (confirmed)
 
 Gemma 4 12B Q4_K_M stays the default unless the Stage 4 measurements (`benchmarks/results/stage4-*.json`) show otherwise; see the measurements section. The default is a setting, not code.
 

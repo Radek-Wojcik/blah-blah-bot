@@ -119,12 +119,14 @@ test("record three tracks, add a source, take a screenshot, stop", async () => {
     const overlay = await overlayPromise;
     await overlay.waitForLoadState();
     await expect(overlay.locator("img.shot-image")).toBeVisible({ timeout: 20_000 });
-    // A broken image is still "visible": check that it decoded (it was black once).
-    await expect
-      .poll(() =>
-        overlay.locator("img.shot-image").evaluate((i: HTMLImageElement) => i.naturalWidth),
-      )
-      .toBeGreaterThan(0);
+    // The picture must be decoded and accepted as non-blank: a broken image is "visible" too,
+    // and used to leave a black screen over every monitor.
+    await expect(overlay.getByRole("application")).toHaveAttribute("data-phase", "ready", {
+      timeout: 30_000,
+    });
+    expect(
+      await overlay.locator("img.shot-image").evaluate((el: HTMLImageElement) => el.naturalWidth),
+    ).toBeGreaterThan(0);
     await overlay.mouse.move(100, 100);
     await overlay.mouse.down();
     await overlay.mouse.move(420, 300, { steps: 8 });

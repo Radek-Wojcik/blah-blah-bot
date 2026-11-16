@@ -50,7 +50,7 @@ const CTX: u32 = 16_384;
 const STARTED_UNIX_MS: i64 = 1_794_564_000_000;
 const TEMPLATE_NAME: &str = "sprint";
 const TEMPLATE_BODY: &str =
-    "# {title}\n\n{date} · {participants}\n\n## Summary\n{summary}\n\n{sections}\n";
+    "# {title}\n\n{date} · {participants}\n\n{summary_section}\n\n{sections}\n";
 /// How long a stage may wait for the GPU guard before the test gives up.
 const GATE_PATIENCE: Duration = Duration::from_secs(45 * 60);
 
