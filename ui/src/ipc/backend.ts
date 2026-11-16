@@ -70,6 +70,11 @@ export interface Backend {
   takeScreenshot(): Promise<void>;
   /** The frozen desktop shown by the screenshot overlay, as a URL usable in an img tag. */
   overlayImage(): Promise<string>;
+  /**
+   * The overlay window is created hidden: call this once the image is decoded (or could not be)
+   * to show it, so the live desktop stays visible until the frozen one can take its place.
+   */
+  overlayReady(): Promise<void>;
   /** Save the chosen region, or only close the overlay when `region` is null. */
   overlayFinish(region: Region | null): Promise<void>;
 

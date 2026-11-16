@@ -512,6 +512,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#101a33"/><stop offset="1" stop-color="#3a1030"/></linearGradient></defs><rect width="1600" height="900" fill="url(#g)"/><g fill="#00f0ff" opacity=".5"><rect x="120" y="120" width="560" height="320"/><rect x="760" y="200" width="680" height="480"/></g></svg>';
       return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
     },
+    overlayReady: async () => {},
     overlayFinish: async (region) => {
       if (region && state.status === "recording") {
         state = { ...state, screenshotCount: state.screenshotCount + 1 };

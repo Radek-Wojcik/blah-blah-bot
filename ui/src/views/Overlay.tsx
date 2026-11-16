@@ -20,10 +20,20 @@ export function toRegion(a: Point, b: Point, width: number, height: number): Reg
   };
 }
 
+/** Resolves once the browser has decoded the image, so showing it later costs no waiting. */
+export function decodeImage(url: string): Promise<void> {
+  const img = new Image();
+  img.src = url;
+  return "decode" in img ? img.decode() : Promise.resolve();
+}
+
 /**
  * Full-desktop overlay: the frozen desktop with a dimming layer; drag to select a region,
  * Escape or right click to cancel. The selection is reported as fractions of the image so it
  * does not depend on monitor scaling.
+ *
+ * The window starts hidden. Once the image is decoded and in the page (or could not be loaded)
+ * the backend is told to show it, so the live desktop is never replaced by a black window.
  */
 export function Overlay() {
   const backend = useBackend();
@@ -38,8 +48,9 @@ export function Overlay() {
     let cancelled = false;
     backend
       .overlayImage()
-      .then((u) => {
+      .then(async (u) => {
         url = u;
+        await decodeImage(u);
         if (!cancelled) setSrc(u);
       })
       .catch(() => {
@@ -52,6 +63,11 @@ export function Overlay() {
       if (url?.startsWith("blob:")) URL.revokeObjectURL(url);
     };
   }, [backend]);
+
+  const shown = src !== null || failed;
+  useEffect(() => {
+    if (shown) void backend.overlayReady().catch(() => undefined);
+  }, [shown, backend]);
 
   const cancel = useCallback(() => void backend.overlayFinish(null), [backend]);
 

@@ -29,6 +29,7 @@ export function createTauriBackend(): Backend {
     removeSource: (sourceId) => invoke("remove_source", { sourceId }),
     takeScreenshot: () => invoke("take_screenshot"),
     overlayImage: async () => pngObjectUrl(await invoke<ArrayBuffer | number[]>("overlay_image")),
+    overlayReady: () => invoke("overlay_ready"),
     overlayFinish: (region) => invoke("overlay_finish", { region }),
     processMeeting: (id, options) => invoke("process_meeting", { id, options: options ?? null }),
     queueState: () => invoke("queue_state"),
