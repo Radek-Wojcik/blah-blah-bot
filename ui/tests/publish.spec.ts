@@ -11,6 +11,12 @@ interface Hooks {
   discordPosts(): { content: string }[];
   nextContext(cycleId: string): { text: string; issue: string }[];
   setTopicsUnknown(unknown: boolean): void;
+  issues(): { number: number; meeting: string | null; item: string | null }[];
+  issueComments(number: number): string[];
+  correctionFiles(): { path: string; text: string }[];
+  nextCorrections(
+    cycleId: string,
+  ): { text: string; item: string | null; issue: string | null; date: string }[];
 }
 const hooks = <T>(page: Page, run: (h: Hooks) => T): Promise<T> =>
   page.evaluate(`(${run.toString()})(window.__bbbMock)`) as Promise<T>;
@@ -255,7 +261,11 @@ test.describe("publishing on the mock backend", () => {
     // The choice is the cycle's: it shows in the cycle settings too.
     await page.getByRole("button", { name: "Cycles", exact: true }).click();
     await page.getByRole("button", { name: "Edit NOMAD" }).click();
-    await expect(page.getByLabel("Discord publish")).toHaveValue("on-approval");
+    await expect(
+      page
+        .getByRole("radiogroup", { name: "Discord publishing rule" })
+        .getByRole("radio", { name: "On approval" }),
+    ).toBeChecked();
   });
 
   test("Automatic is a position of the switch with its warning, and status changes stay manual", async ({
@@ -278,7 +288,11 @@ test.describe("publishing on the mock backend", () => {
     // The choice reaches cycle.yaml: the cycle editor shows it.
     await page.getByRole("button", { name: "Cycles", exact: true }).click();
     await page.getByRole("button", { name: "Edit NOMAD" }).click();
-    await expect(page.getByLabel("GitHub publish")).toHaveValue("auto");
+    await expect(
+      page
+        .getByRole("radiogroup", { name: "GitHub publishing rule" })
+        .getByRole("radio", { name: "Automatic" }),
+    ).toBeChecked();
   });
 
   test("the public repository check still holds under Automatic", async ({ page }) => {
@@ -482,5 +496,249 @@ test.describe("token setup", () => {
     await bad.getByLabel("GitHub repository of local").fill("not a repository");
     await bad.getByRole("button", { name: "Save link" }).click();
     await expect(bad.getByRole("alert")).toContainText("owner/name");
+  });
+});
+
+test.describe("the rule of a target is chosen explicitly", () => {
+  const CYCLE = `${MAIN}&page=cycle&cycle=NOMAD`;
+  const group = (page: Page, target: "GitHub" | "Discord") =>
+    page.getByRole("radiogroup", { name: `${target} publishing rule` });
+
+  test("switching a target on shows the three rules with what each does, On approval in use", async ({
+    page,
+  }) => {
+    await page.goto(CYCLE);
+    for (const [target, label] of [
+      ["GitHub", "Commit reports to the repository"],
+      ["Discord", "Post a summary to a channel"],
+    ] as const) {
+      const box = page.getByRole("checkbox", { name: label });
+      await box.uncheck();
+      await expect(group(page, target)).toHaveCount(0);
+      await box.check();
+      // Never Automatic by itself: the rule in use is On approval until one is picked.
+      await expect(group(page, target).getByRole("radio")).toHaveText([
+        "Off",
+        "On approval",
+        "Automatic",
+      ]);
+      await expect(group(page, target).getByRole("radio", { name: "On approval" })).toBeChecked();
+      const options = page.getByRole("list", { name: `What each ${target} rule does` });
+      await expect(options.getByRole("listitem")).toHaveCount(3);
+      await expect(options).toContainText("Nothing is ever published to this target");
+      await expect(options).toContainText("This is what is used until you choose another rule.");
+      await expect(options).toContainText("It cannot be taken back");
+      await expect(options.getByRole("listitem").nth(1)).toContainText("(in use)");
+    }
+    // Saved as it is shown.
+    await page.getByLabel("Webhook reference").fill("cred:discord/updates");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Saved" })).toBeVisible();
+    await expect(group(page, "Discord").getByRole("radio", { name: "On approval" })).toBeChecked();
+    await expect(group(page, "GitHub").getByRole("radio", { name: "On approval" })).toBeChecked();
+
+    // A choice is a choice: Automatic shows its warning and is what gets saved.
+    await group(page, "Discord").getByRole("radio", { name: "Automatic" }).click();
+    await expect(page.locator(".target-rule-warn")).toContainText("cannot be taken back");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(group(page, "Discord").getByRole("radio", { name: "Automatic" })).toBeChecked();
+    await group(page, "Discord").getByRole("radio", { name: "On approval" }).click();
+    await expect(page.locator(".target-rule-warn")).toHaveCount(0);
+  });
+
+  test("the publishing panel shows the same three rules for each target", async ({ page }) => {
+    await page.goto(DRAFT);
+    for (const target of ["GitHub", "Discord"] as const) {
+      const options = panel(page).getByRole("list", { name: `What each ${target} rule does` });
+      await expect(options.getByRole("listitem")).toHaveCount(3);
+      await expect(options.getByRole("listitem").nth(1)).toContainText("On approval (in use)");
+    }
+    await rule(page, "Discord").getByRole("radio", { name: "Off" }).click();
+    await expect(
+      panel(page)
+        .getByRole("list", { name: "What each Discord rule does" })
+        .getByRole("listitem")
+        .first(),
+    ).toContainText("Off (in use)");
+  });
+});
+
+test.describe("corrections to a published meeting", () => {
+  const region = (page: Page) => page.getByRole("region", { name: "Corrections" });
+  const correction = (page: Page, id: string) =>
+    region(page).getByRole("listitem", { name: `Correction ${id}` });
+
+  async function publishMeeting(page: Page) {
+    await page.goto(DRAFT);
+    await publishConfirmed(page);
+    await expect(panel(page).getByText("Published: everything was sent.")).toBeVisible({
+      timeout: 15_000,
+    });
+  }
+
+  async function addCorrection(page: Page, text: string, about?: string) {
+    await region(page).getByRole("button", { name: "Add correction" }).click();
+    const form = region(page).getByRole("form", { name: "New correction" });
+    await expect(form.getByRole("button", { name: "Add correction" })).toBeDisabled();
+    await form.getByLabel("Correction text").fill(text);
+    if (about) await form.getByLabel("Correction about").selectOption(about);
+    await form.getByRole("button", { name: "Add correction" }).click();
+    await expect(form).toHaveCount(0);
+  }
+
+  test("only a published meeting has a place for them, and the draft stays locked", async ({
+    page,
+  }) => {
+    await page.goto(DRAFT);
+    await expect(region(page)).toHaveCount(0);
+    await publishMeeting(page);
+    await expect(region(page)).toBeVisible();
+    await expect(region(page)).toContainText(
+      "This draft is locked because the meeting was published",
+    );
+    await expect(region(page)).toContainText("GitHub is On approval for this cycle");
+    await expect(panel(page)).toContainText("Draft locked");
+  });
+
+  test("add one, publish it: a new file next to the meeting and a comment on the issue", async ({
+    page,
+  }) => {
+    await publishMeeting(page);
+    // The issue made from a task of the meeting, which the correction is about.
+    const [made] = await hooks(page, (h) =>
+      h.issues().filter((i) => i.meeting === "m5" && i.item !== null),
+    );
+    await addCorrection(page, "The antenna mount drawings moved to next week.", made.item!);
+    const first = correction(page, "c1");
+    await expect(first).toContainText("The antenna mount drawings moved to next week.");
+    await expect(first).toContainText("Only on this computer");
+    await expect(first).toContainText("Not published yet");
+    await expect(first).toContainText("item ");
+    expect(await hooks(page, (h) => h.correctionFiles())).toEqual([]);
+
+    await first.getByRole("button", { name: "Publish correction c1" }).click();
+    await expect(first).toContainText("Published as corrections.md in the meeting folder", {
+      timeout: 15_000,
+    });
+    await expect(first.getByRole("link", { name: "corrections.md" })).toHaveAttribute(
+      "href",
+      /\/meetings\/NOMAD\/.*\/corrections\.md$/,
+    );
+    const files = await hooks(page, (h) => h.correctionFiles());
+    expect(files.map((f) => f.text)).toEqual(["The antenna mount drawings moved to next week."]);
+    // A published correction is part of the record: no Delete.
+    await expect(first.getByRole("button", { name: "Delete correction c1" })).toHaveCount(0);
+    // The comment follows the file, on the issue made from the item.
+    await expect(first).toContainText("and commented on the issue", { timeout: 15_000 });
+    const comments = await hooks(page, (h) =>
+      h
+        .issues()
+        .filter((i) => i.meeting === "m5" && i.item !== null)
+        .map((i) => h.issueComments(i.number).length),
+    );
+    expect(comments.filter((n) => n === 1)).toHaveLength(1);
+
+    // The next meeting is given it, with the text of the item.
+    const next = await hooks(page, (h) => h.nextCorrections("NOMAD"));
+    expect(next).toHaveLength(1);
+    expect(next[0].text).toBe("The antenna mount drawings moved to next week.");
+    expect(next[0].item).not.toBeNull();
+
+    // A second one is a second file, and the draft itself never changed.
+    await addCorrection(page, "Another note.");
+    await correction(page, "c2").getByRole("button", { name: "Publish correction c2" }).click();
+    await expect(correction(page, "c2")).toContainText("Published as corrections-2.md", {
+      timeout: 15_000,
+    });
+    await expect(
+      region(page).getByRole("list", { name: "Corrections of this meeting" }),
+    ).toContainText("c1");
+  });
+
+  test("a note that was not published can be deleted, and Publish all sends the rest", async ({
+    page,
+  }) => {
+    await publishMeeting(page);
+    await addCorrection(page, "First.");
+    await addCorrection(page, "Second.");
+    await addCorrection(page, "Typo.");
+    await correction(page, "c3").getByRole("button", { name: "Delete correction c3" }).click();
+    await expect(correction(page, "c3")).toHaveCount(0);
+    await region(page).getByRole("button", { name: "Publish all 2" }).click();
+    await expect(correction(page, "c1")).toContainText("Published as corrections.md", {
+      timeout: 15_000,
+    });
+    await expect(correction(page, "c2")).toContainText("Published as corrections-2.md", {
+      timeout: 15_000,
+    });
+    expect(await hooks(page, (h) => h.correctionFiles().map((f) => f.text))).toEqual([
+      "First.",
+      "Second.",
+    ]);
+  });
+
+  test("offline it waits and goes out by itself when the network is back", async ({ page }) => {
+    await publishMeeting(page);
+    await addCorrection(page, "Moved.");
+    await hooks(page, (h) => h.setOffline(true));
+    await correction(page, "c1").getByRole("button", { name: "Publish correction c1" }).click();
+    await expect(correction(page, "c1")).toContainText("Waiting", { timeout: 10_000 });
+    await expect(correction(page, "c1")).toContainText("the network is offline");
+    expect(await hooks(page, (h) => h.correctionFiles())).toEqual([]);
+    await hooks(page, (h) => h.setOffline(false));
+    await expect(correction(page, "c1")).toContainText("Published as corrections.md", {
+      timeout: 15_000,
+    });
+    expect(await hooks(page, (h) => h.correctionFiles())).toHaveLength(1);
+  });
+
+  test("Automatic publishes a correction when it is added, Off never does", async ({ page }) => {
+    await publishMeeting(page);
+    await rule(page, "GitHub").getByRole("radio", { name: "Automatic" }).click();
+    await expect(region(page)).toContainText("GitHub is Automatic for this cycle");
+    await addCorrection(page, "Automatic note.");
+    await expect(correction(page, "c1")).toContainText("Published as corrections.md", {
+      timeout: 15_000,
+    });
+
+    await rule(page, "GitHub").getByRole("radio", { name: "Off" }).click();
+    await expect(region(page)).toContainText("GitHub is Off for this cycle");
+    await addCorrection(page, "Off note.");
+    await expect(correction(page, "c2")).toContainText("Kept on this computer: publishing is Off");
+    await expect(
+      correction(page, "c2").getByRole("button", { name: /Publish correction/ }),
+    ).toHaveCount(0);
+    expect(await hooks(page, (h) => h.correctionFiles())).toHaveLength(1);
+    // It still reaches the next meeting.
+    const next = await hooks(page, (h) => h.nextCorrections("NOMAD"));
+    expect(next.map((c) => c.text).sort()).toEqual(["Automatic note.", "Off note."]);
+  });
+
+  test("a repository that became public is confirmed first, also for a correction", async ({
+    page,
+  }) => {
+    await page.goto(DRAFT);
+    await hooks(page, (h) => h.setVisibility("private"));
+    await expect(panel(page).getByRole("button", { name: "Publish", exact: true })).toBeEnabled();
+    await panel(page).getByRole("button", { name: "Publish", exact: true }).click();
+    await expect(panel(page).getByText("Published: everything was sent.")).toBeVisible({
+      timeout: 15_000,
+    });
+    await hooks(page, (h) => h.setVisibility("public"));
+    await addCorrection(page, "Moved.");
+    await correction(page, "c1").getByRole("button", { name: "Publish correction c1" }).click();
+    const dialog = page.getByRole("dialog", { name: "Publish to a public repository?" });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(correction(page, "c1")).toContainText("Only on this computer");
+    expect(await hooks(page, (h) => h.correctionFiles())).toEqual([]);
+
+    await correction(page, "c1").getByRole("button", { name: "Publish correction c1" }).click();
+    await dialog.getByRole("checkbox").check();
+    await dialog.getByRole("button", { name: "Publish to a public repository" }).click();
+    await expect(correction(page, "c1")).toContainText("Published as corrections.md", {
+      timeout: 15_000,
+    });
   });
 });

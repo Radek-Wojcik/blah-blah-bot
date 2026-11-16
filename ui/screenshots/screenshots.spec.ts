@@ -195,6 +195,38 @@ test.describe("static screenshots", () => {
     await panel.screenshot({ path: path.join(OUT, "publishing-plan.png") });
   });
 
+  test("corrections to a published meeting", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 1900 });
+    await page.goto("/?view=main&backend=mock&rate=0&jobms=60&page=draft&meeting=m5");
+    const panel = page.getByRole("region", { name: "Publishing" });
+    await panel.getByRole("button", { name: "Publish", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Publish to a public repository?" });
+    await dialog.getByRole("checkbox").check();
+    await dialog.getByRole("button", { name: "Publish to a public repository" }).click();
+    await expect(panel.getByText("Published: everything was sent.")).toBeVisible({
+      timeout: 20_000,
+    });
+    const corrections = page.getByRole("region", { name: "Corrections" });
+    const add = async (text: string, item?: string) => {
+      await corrections.getByRole("button", { name: "Add correction" }).click();
+      const form = corrections.getByRole("form", { name: "New correction" });
+      await form.getByLabel("Correction text").fill(text);
+      if (item) await form.getByLabel("Correction about").selectOption(item);
+      await form.getByRole("button", { name: "Add correction" }).click();
+    };
+    // The first one is about a task that became an issue and is published; the second waits.
+    await add("The ground station schedule moved from Thursday to Friday.", "i03");
+    await corrections.getByRole("button", { name: "Publish correction c1" }).click();
+    await expect(corrections.getByText("and commented on the issue")).toBeVisible({
+      timeout: 20_000,
+    });
+    await add("The test range is booked for 12 December, not 5 December.");
+    await corrections.getByRole("button", { name: "Add correction" }).click();
+    await corrections.getByLabel("Correction text").fill("The supplier confirmed the delivery.");
+    await settle(page);
+    await corrections.screenshot({ path: path.join(OUT, "corrections.png") });
+  });
+
   test("example report as rendered Markdown", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 1000 });
     await page.goto("/?view=main&backend=mock&rate=0&page=draft&meeting=m5");
