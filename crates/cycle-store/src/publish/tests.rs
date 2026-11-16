@@ -1051,3 +1051,206 @@ fn a_cycle_created_in_the_clone_and_never_committed_is_published_and_the_clone_c
         "only the cycle files that were never committed remain: {after}"
     );
 }
+
+// ----- adding a file to a published meeting -------------------------------------------------------
+
+fn note(root: &Path, name: &str, text: &str) -> PathBuf {
+    let path = root.join(name);
+    write(&path, text);
+    path
+}
+
+fn add_request<'a>(path: &'a Path) -> AddFileRequest<'a> {
+    AddFileRequest {
+        cycle_id: "NOMAD",
+        base_path: "meetings",
+        folder: "2026-11-13",
+        stem: "corrections",
+        ext: "md",
+        path,
+        message: "Add {file} to the meeting",
+        auth: None,
+    }
+}
+
+#[test]
+fn a_file_is_added_next_to_the_meeting_and_nothing_else_changes() {
+    let lab = Lab::new();
+    let repo = lab.clone("clone");
+    let snap = snapshot(lab.tmp.path(), "ab", "A");
+    publish_meeting(&repo, &request(&snap.files, None)).unwrap();
+    let report = lab.show("meetings/NOMAD/2026-11-13/report.md");
+    let count = lab.count();
+
+    // Unfinished work of the user is left alone.
+    write(&repo.root().join("notes.txt"), "mine\n");
+    let file = note(lab.tmp.path(), "c1.md", "first correction\n");
+    let added = add_file(&repo, &add_request(&file)).unwrap();
+    assert_eq!(added.file, "corrections.md");
+    assert_eq!(added.repo_path, "meetings/NOMAD/2026-11-13/corrections.md");
+    assert!(added.pushed && !added.already_published);
+    assert_eq!(added.local, LocalSync::Updated);
+    assert_eq!(lab.count(), count + 1);
+    assert_eq!(added.commit, lab.tip());
+    assert_eq!(
+        lab.show("meetings/NOMAD/2026-11-13/corrections.md"),
+        "first correction"
+    );
+    assert_eq!(
+        lab.show("meetings/NOMAD/2026-11-13/report.md"),
+        report,
+        "the meeting's own files are not touched"
+    );
+    // Only that file is in the commit.
+    assert_eq!(
+        g(&lab.remote, &["diff", "--name-only", "main~1", "main"]),
+        "meetings/NOMAD/2026-11-13/corrections.md"
+    );
+    assert!(repo
+        .root()
+        .join("meetings/NOMAD/2026-11-13/corrections.md")
+        .is_file());
+    assert!(status(&repo).contains("?? notes.txt"));
+    assert_eq!(
+        g(&lab.remote, &["log", "-1", "--format=%s", "main"]),
+        "Add corrections.md to the meeting"
+    );
+}
+
+#[test]
+fn a_taken_name_gets_the_next_number_and_the_old_file_is_never_changed() {
+    let lab = Lab::new();
+    let repo = lab.clone("clone");
+    let snap = snapshot(lab.tmp.path(), "ab", "A");
+    publish_meeting(&repo, &request(&snap.files, None)).unwrap();
+
+    let one = note(lab.tmp.path(), "one.md", "one\n");
+    let two = note(lab.tmp.path(), "two.md", "two\n");
+    let three = note(lab.tmp.path(), "three.md", "three\n");
+    assert_eq!(
+        add_file(&repo, &add_request(&one)).unwrap().file,
+        "corrections.md"
+    );
+    assert_eq!(
+        add_file(&repo, &add_request(&two)).unwrap().file,
+        "corrections-2.md"
+    );
+    assert_eq!(
+        add_file(&repo, &add_request(&three)).unwrap().file,
+        "corrections-3.md"
+    );
+    assert_eq!(lab.show("meetings/NOMAD/2026-11-13/corrections.md"), "one");
+    assert_eq!(
+        lab.show("meetings/NOMAD/2026-11-13/corrections-2.md"),
+        "two"
+    );
+    assert_eq!(
+        lab.show("meetings/NOMAD/2026-11-13/corrections-3.md"),
+        "three"
+    );
+}
+
+#[test]
+fn adding_the_same_file_again_is_idempotent_even_after_a_lost_answer() {
+    let lab = Lab::new();
+    let repo = lab.clone("clone");
+    let snap = snapshot(lab.tmp.path(), "ab", "A");
+    publish_meeting(&repo, &request(&snap.files, None)).unwrap();
+    let before = g(repo.root(), &["rev-parse", "HEAD"]);
+    let file = note(lab.tmp.path(), "c.md", "same\n");
+    let first = add_file(&repo, &add_request(&file)).unwrap();
+    let count = lab.count();
+
+    let again = add_file(&repo, &add_request(&file)).unwrap();
+    assert!(again.already_published);
+    assert_eq!(again.file, first.file);
+    assert_eq!(again.commit, first.commit);
+    assert_eq!(lab.count(), count);
+
+    // This clone never learned that the push happened.
+    g(repo.root(), &["reset", "--hard", "--quiet", &before]);
+    g(
+        repo.root(),
+        &["update-ref", "refs/remotes/origin/main", &before],
+    );
+    let retry = add_file(&repo, &add_request(&file)).unwrap();
+    assert!(retry.already_published);
+    assert_eq!(retry.file, "corrections.md");
+    assert_eq!(retry.commit, first.commit);
+    assert_eq!(lab.count(), count);
+    assert_eq!(retry.local, LocalSync::Updated);
+}
+
+#[test]
+fn a_meeting_that_is_not_in_the_repository_is_refused() {
+    let lab = Lab::new();
+    let repo = lab.clone("clone");
+    let file = note(lab.tmp.path(), "c.md", "x\n");
+    let err = add_file(&repo, &add_request(&file)).unwrap_err();
+    assert!(!err.is_transient(), "{err}");
+    assert!(err.message.contains("not in the repository"), "{err}");
+    assert_eq!(lab.count(), 1);
+
+    for (folder, stem, ext) in [("../x", "corrections", "md"), ("2026-11-13", "a/b", "md")] {
+        let mut req = add_request(&file);
+        req.folder = folder;
+        req.stem = stem;
+        req.ext = ext;
+        let err = add_file(&repo, &req).unwrap_err();
+        assert!(!err.is_transient(), "{err}");
+    }
+    let mut req = add_request(&file);
+    req.base_path = "../outside";
+    assert!(add_file(&repo, &req).is_err());
+    let missing = lab.tmp.path().join("missing.md");
+    assert!(add_file(&repo, &add_request(&missing)).is_err());
+}
+
+#[test]
+fn a_push_refused_because_of_a_colleague_is_rebuilt_and_an_offline_remote_recovers() {
+    let lab = Lab::new();
+    let repo = lab.clone("clone");
+    let snap = snapshot(lab.tmp.path(), "ab", "A");
+    publish_meeting(&repo, &request(&snap.files, None)).unwrap();
+    let file = note(lab.tmp.path(), "c.md", "mine\n");
+    let added = add_file_observed(&repo, &add_request(&file), &mut |attempt| {
+        if attempt == 1 {
+            lab.colleague("x", &[("docs/colleague.md", "hello\n")]);
+        }
+    })
+    .unwrap();
+    assert_eq!(added.attempts, 2);
+    assert_eq!(lab.show("docs/colleague.md"), "hello");
+    assert_eq!(lab.show("meetings/NOMAD/2026-11-13/corrections.md"), "mine");
+
+    // Offline: transient, nothing committed; back online: it works.
+    let other = note(lab.tmp.path(), "d.md", "later\n");
+    let head = g(repo.root(), &["rev-parse", "HEAD"]);
+    let away = lab.tmp.path().join("away.git");
+    fs::rename(&lab.remote, &away).unwrap();
+    let err = add_file(&repo, &add_request(&other)).unwrap_err();
+    assert!(err.is_transient(), "{err}");
+    assert_eq!(g(repo.root(), &["rev-parse", "HEAD"]), head);
+    fs::rename(&away, &lab.remote).unwrap();
+    let ok = add_file(&repo, &add_request(&other)).unwrap();
+    assert_eq!(ok.file, "corrections-2.md");
+    assert_eq!(ok.commit, lab.tip());
+}
+
+#[test]
+fn a_repository_without_a_remote_gets_a_local_commit_for_the_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = Repo::init_local(tmp.path().join("local")).unwrap();
+    set_identity(repo.root());
+    repo.create_cycle(&Cycle::new("NOMAD", "Nomad rover"))
+        .unwrap();
+    g(repo.root(), &["add", "-A"]);
+    g(repo.root(), &["commit", "--quiet", "-m", "start"]);
+    let snap = snapshot(tmp.path(), "ab", "A");
+    publish_meeting(&repo, &request(&snap.files, None)).unwrap();
+    let file = note(tmp.path(), "c.md", "local note\n");
+    let added = add_file(&repo, &add_request(&file)).unwrap();
+    assert!(!added.pushed && added.remote.is_none());
+    assert_eq!(added.local, LocalSync::Updated);
+    assert_eq!(g(repo.root(), &["rev-parse", "HEAD"]), added.commit);
+}

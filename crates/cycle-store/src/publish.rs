@@ -122,6 +122,42 @@ pub struct Published {
     pub local: LocalSync,
 }
 
+/// One new file for a meeting folder that is already in the repository (a correction note).
+/// Only ever adds: a name that is taken by other content gets the next number.
+#[derive(Debug, Clone)]
+pub struct AddFileRequest<'a> {
+    pub cycle_id: &'a str,
+    /// The folder of the meetings (`targets.github.path`), validated like for a meeting.
+    pub base_path: &'a str,
+    /// The folder the meeting was published to (`2026-11-13`, `2026-11-13-2`).
+    pub folder: &'a str,
+    /// The file is named `<stem>.<ext>`, `<stem>-2.<ext>`, ... whichever is free first.
+    pub stem: &'a str,
+    pub ext: &'a str,
+    /// Where the bytes are now.
+    pub path: &'a Path,
+    /// The commit message; `{file}` is replaced by the name that was chosen.
+    pub message: &'a str,
+    pub auth: Option<&'a GitAuth>,
+}
+
+/// What [`add_file`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileAdded {
+    /// The name chosen inside the meeting folder.
+    pub file: String,
+    /// Path of the file in the repository.
+    pub repo_path: String,
+    pub commit: String,
+    pub branch: String,
+    pub remote: Option<String>,
+    pub pushed: bool,
+    /// The tip already had this file with these bytes: nothing was committed.
+    pub already_published: bool,
+    pub attempts: u32,
+    pub local: LocalSync,
+}
+
 /// How an attempt failed, for the outbox: transient failures are tried again later.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PublishErrorKind {
@@ -1022,6 +1058,222 @@ pub fn publish_meeting_observed(
             already_published: existing,
             attempts,
             topics: merged,
+            local,
+        });
+    }
+}
+
+fn valid_part(part: &str) -> bool {
+    !part.is_empty()
+        && part
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+}
+
+fn validate_add(req: &AddFileRequest) -> Result<(), PublishError> {
+    if !is_identifier(req.cycle_id) {
+        return Err(PublishError::permanent("the cycle id is not valid"));
+    }
+    if let Some(problem) = crate::cycle::repo_path_problem(req.base_path) {
+        return Err(PublishError::permanent(format!(
+            "the folder for meeting reports ({:?}) is not usable: {problem}",
+            req.base_path
+        )));
+    }
+    if !valid_part(req.folder) || !valid_part(req.stem) || !valid_part(req.ext) {
+        return Err(PublishError::permanent(
+            "the folder or the file name is not allowed",
+        ));
+    }
+    if !req.path.is_file() {
+        return Err(PublishError::permanent("the file to publish is missing"));
+    }
+    Ok(())
+}
+
+struct BuiltFile {
+    file: String,
+    commit: String,
+    existing: bool,
+}
+
+/// The commit that adds the file to the meeting folder on top of `parent`.
+fn build_file(
+    repo: &Repo,
+    g: &Git,
+    parent: Option<&str>,
+    req: &AddFileRequest,
+) -> Result<BuiltFile, PublishError> {
+    let dir = format!("{}/{}/{}", req.base_path, req.cycle_id, req.folder);
+    let Some(p) = parent else {
+        return Err(PublishError::permanent(
+            "the meeting is not in the repository: it has no commits",
+        ));
+    };
+    let listing = g.ok(&["ls-tree", "--name-only", p, &format!("{dir}/")])?;
+    let names: BTreeSet<String> = listing
+        .lines()
+        .filter_map(|l| l.rsplit('/').next())
+        .map(String::from)
+        .collect();
+    if names.is_empty() {
+        return Err(PublishError::permanent(format!(
+            "the folder {dir} of the meeting is not in the repository (yet): publish the meeting first"
+        )));
+    }
+    let git_dir = repo
+        .git_dir()
+        .map_err(|e| PublishError::permanent(e.to_string()))?;
+    let index = TempIndex::new(&git_dir);
+    let mut env = g.env.clone();
+    env.push((
+        "GIT_INDEX_FILE".into(),
+        index.0.to_string_lossy().into_owned(),
+    ));
+    env.extend(identity_env(g)?);
+    let gi = Git {
+        root: g.root,
+        env,
+        secrets: g.secrets.clone(),
+    };
+    gi.ok(&["read-tree", p])?;
+
+    let name_of = |n: u32| {
+        if n <= 1 {
+            format!("{}.{}", req.stem, req.ext)
+        } else {
+            format!("{}-{n}.{}", req.stem, req.ext)
+        }
+    };
+    let sample_path = format!("{dir}/{}", name_of(1));
+    let path = req.path.to_string_lossy().into_owned();
+    let blob = gi.ok(&["hash-object", "-w", &format!("--path={sample_path}"), &path])?;
+    let mut n = 1;
+    let file = loop {
+        let name = name_of(n);
+        if !names.contains(&name) {
+            break name;
+        }
+        // Taken: by this very file (an earlier run whose answer was lost), or by another.
+        let there = gi.try_ok(&["rev-parse", "--verify", "-q", &format!("{p}:{dir}/{name}")])?;
+        if there.as_deref() == Some(blob.as_str()) {
+            let commit = last_commit_touching(&gi, p, &format!("{dir}/{name}"))?;
+            return Ok(BuiltFile {
+                file: name,
+                commit,
+                existing: true,
+            });
+        }
+        n += 1;
+        if n > 10_000 {
+            return Err(PublishError::permanent("too many files in the folder"));
+        }
+    };
+    let repo_path = format!("{dir}/{file}");
+    gi.ok(&[
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        &format!("100644,{blob},{repo_path}"),
+    ])?;
+    let tree = gi.ok(&["write-tree"])?;
+    let message = req.message.replace("{file}", &file);
+    let commit = gi.ok(&[
+        "-c",
+        "commit.gpgsign=false",
+        "commit-tree",
+        &tree,
+        "-p",
+        p,
+        "-m",
+        &message,
+    ])?;
+    Ok(BuiltFile {
+        file,
+        commit,
+        existing: false,
+    })
+}
+
+/// Adds one new file to a meeting folder that is in the repository: the same off-index commit,
+/// push with rebuild-on-a-new-tip and local fast-forward as [`publish_meeting`], without
+/// touching `topics.yaml`. Idempotent: the tip that holds the file already gives the existing
+/// commit.
+pub fn add_file(repo: &Repo, req: &AddFileRequest) -> Result<FileAdded, PublishError> {
+    add_file_observed(repo, req, &mut |_| {})
+}
+
+/// [`add_file`] that calls `before_push(attempt)` right before each push (a test seam).
+pub fn add_file_observed(
+    repo: &Repo,
+    req: &AddFileRequest,
+    before_push: &mut dyn FnMut(u32),
+) -> Result<FileAdded, PublishError> {
+    validate_add(req)?;
+    if !repo.is_git_repo() {
+        return Err(PublishError::permanent(format!(
+            "{} is not a Git repository",
+            repo.root().display()
+        )));
+    }
+    let secrets: Vec<String> = req.auth.map(|a| vec![a.token.clone()]).unwrap_or_default();
+    let mut g = Git {
+        root: repo.root(),
+        env: Vec::new(),
+        secrets,
+    };
+    let target = target_of(&g)?;
+    if let (Some(auth), Some(remote)) = (req.auth, &target.remote) {
+        let url = g.ok(&["remote", "get-url", remote])?;
+        g.env.extend(auth_env(&url, auth));
+    }
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        let parent = tip(&g, &target)?;
+        let built = build_file(repo, &g, parent.as_deref(), req)?;
+        let mut pushed = false;
+        if let Some(remote) = &target.remote {
+            if built.existing && is_on_remote(&g, remote, &target, &built.commit)? {
+                pushed = true;
+            } else {
+                before_push(attempts);
+                let args = push_args(remote, &built.commit, &target.remote_branch);
+                let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                let out = g.run(&refs)?;
+                if !out.ok {
+                    let text = g.scrubbed(&out.message());
+                    if rejected_by_remote_race(&text) {
+                        if attempts >= MAX_ATTEMPTS {
+                            return Err(PublishError::transient(format!(
+                                "the remote kept changing while publishing ({attempts} attempts); it will be tried again"
+                            )));
+                        }
+                        continue;
+                    }
+                    return Err(g.fail("push", &out));
+                }
+                pushed = true;
+                let _ = g.run(&[
+                    "update-ref",
+                    &format!("refs/remotes/{remote}/{}", target.remote_branch),
+                    &built.commit,
+                ]);
+            }
+        }
+        let local = sync_local(repo, &g, &target, &built.commit, None, req.cycle_id)?;
+        return Ok(FileAdded {
+            repo_path: format!(
+                "{}/{}/{}/{}",
+                req.base_path, req.cycle_id, req.folder, built.file
+            ),
+            file: built.file,
+            commit: built.commit,
+            branch: target.branch.clone(),
+            remote: target.remote.clone(),
+            pushed,
+            already_published: built.existing,
+            attempts,
             local,
         });
     }
