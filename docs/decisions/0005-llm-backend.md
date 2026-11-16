@@ -79,5 +79,5 @@ The same ten synthetic transcripts (4 Polish, 3 English, 3 mixed; about 2,100 wo
 - Text-based assignee and due-date scores are pessimistic where different people have tasks with equal text; the paired metrics in the JSON files are higher (Gemma 4 12B: 99.5% and 98.4%).
 - The data is synthetic and the task phrasing is simple; in mixed meetings the task text is written in the report language. Gemma 4 12B on a 10 hour transcript: see ADR 0007.
 
-**Proposed (Stage 4): keep Gemma 4 12B Q4_K_M as the default.** It is the only candidate with a recorded Stage 4 run that meets all extraction thresholds. This confirmation of the default is a proposal and awaits the owner's confirmation; a model becomes the default only with a recorded run, and the recorded run exists for Gemma 4 12B.
+**Confirmed (Stage 4): Gemma 4 12B Q4_K_M stays the default.** It is the only candidate with a recorded Stage 4 run that meets all extraction thresholds; a model becomes the default only with a recorded run, and the recorded run exists for Gemma 4 12B.
 

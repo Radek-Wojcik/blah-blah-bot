@@ -247,7 +247,7 @@ flowchart LR
 - [x] Recording cannot start without a report mode
 - [x] Report language follows the cycle setting, including `auto`
 - [x] Cloud processing happens only after explicit per-meeting confirmation
-- [ ] Release v0.5.0 published
+- [x] Release v0.5.0 published
 
 **Demo and visuals.** GIF: from transcript to draft, moving an item between sections. Screenshots: cycle settings, draft with source popover, report mode picker.
 

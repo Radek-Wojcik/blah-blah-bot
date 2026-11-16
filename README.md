@@ -243,7 +243,7 @@ Prototype results on the reference machine (RTX 3080 with 12 GB, Windows 10 buil
 - Speaker separation is measured on synthetic meetings only; on 2 to 4 speakers the error rate was above the 15% target in Stage 0 and is to be confirmed on real recordings.
 - Voice recognition is measured on synthetic voices only. Participants of a cycle belong to that cycle; a meeting without a cycle still uses the local list. A meeting processed after its audio was deleted has no sample clips, so voices are named from the transcript.
 - The Python environment is large (about 7.4 GB) and the first model downloads take a while.
-- Stage 4 is implemented but not released. The cloud backend is tested only against a mock server. Open issues of a cycle are read from a cache; fetching them needs a GitHub token that the application cannot configure yet. Edits to cycle files are not committed or pushed until publishing arrives. Extraction quality was measured on synthetic transcripts only (Gemma 4 12B: task recall 86.0%; lower in Polish and mixed meetings, 43.5% to 100% per meeting), and Qwen3 14B misses the extraction thresholds on this set. In mixed-language meetings the task text is written in the report language. The new screens are tested on the mock backend, not yet end to end in the real application.
+- The cloud backend is tested only against a mock server. Open issues of a cycle are read from a cache; fetching them needs a GitHub token that the application cannot configure yet. Edits to cycle files are not committed or pushed until publishing arrives. Extraction quality was measured on synthetic transcripts only (Gemma 4 12B: task recall 86.0%; lower in Polish and mixed meetings, 43.5% to 100% per meeting), and Qwen3 14B misses the extraction thresholds on this set. In mixed-language meetings the task text is written in the report language. The new screens are tested on the mock backend, not yet end to end in the real application.
 
 ## Roadmap
 
@@ -253,7 +253,7 @@ Prototype results on the reference machine (RTX 3080 with 12 GB, Windows 10 buil
 | 1 | Recorder | v0.2.0 | Done; microphone buffer flags in the 10 hour run are open |
 | 2 | Processing pipeline | v0.3.0 | Done |
 | 3 | Speakers and voice profiles | v0.4.0 | Done |
-| 4 | Cycles and reports | not released yet | Implemented, release pending |
+| 4 | Cycles and reports | v0.5.0 | Done |
 | 5 | Publishing | v0.6.0 | Planned |
 | 6 | Convenience | v0.7.0 | Planned |
 | 7 | Integrations | v0.8.0 | Planned |
