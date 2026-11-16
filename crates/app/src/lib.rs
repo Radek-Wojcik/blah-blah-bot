@@ -275,6 +275,7 @@ pub fn run() {
             draft_commands::add_status_proposal,
             draft_commands::render_report,
             overlay::overlay_image,
+            overlay::overlay_ready,
             overlay::overlay_finish,
         ])
         .run(tauri::generate_context!());

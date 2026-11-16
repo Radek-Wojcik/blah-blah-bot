@@ -9,6 +9,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::cycles::ParticipantSync;
 use crate::ipc::{IpcError, IpcResult};
+use crate::overlay::Preview;
 use crate::processing::Processing;
 use crate::publishing::{AppEnv, Publishing};
 use crate::recording::Recorder;
@@ -16,7 +17,9 @@ use crate::settings::{CycleRepoSetting, Settings};
 
 /// A desktop capture waiting for the user to choose a region, with the moment it was taken.
 pub struct PendingShot {
-    pub frame: Frame,
+    pub frame: Arc<Frame>,
+    /// The PNG shown in the overlay, encoded while the overlay opens.
+    pub preview: Arc<Preview>,
     pub offset_ms: f64,
 }
 

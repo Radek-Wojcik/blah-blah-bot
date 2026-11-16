@@ -5,10 +5,21 @@
 //! which keeps the mapping independent of monitor scaling, then the chosen region is
 //! cropped from the frozen capture and saved with the offset of the moment the hotkey was
 //! pressed.
+//!
+//! The window is created hidden and only shown once its page has fetched and decoded the
+//! frozen desktop (`overlay_ready`), so the live desktop stays on screen until the frozen one
+//! can replace it: a covering window shown earlier is a black screen for as long as the
+//! page needs to load. The preview PNG is encoded on another thread while the window and its
+//! page start up.
 
-use recorder::screenshot::{capture_virtual_desktop, encode_png, Rect};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
+
+use recorder::screenshot::{capture_virtual_desktop, encode_png_fast, Frame, Rect};
 use serde::Deserialize;
 use tauri::ipc::Response;
+use tauri::window::Color;
 use tauri::{
     AppHandle, Manager, PhysicalPosition, PhysicalSize, State, WebviewUrl, WebviewWindowBuilder,
 };
@@ -20,6 +31,65 @@ use crate::state::{AppState, PendingShot};
 const LABEL: &str = "overlay";
 /// Selections smaller than this (in pixels) in either direction are treated as a click.
 const MIN_SIDE: u32 = 4;
+/// The overlay is shown after this long even when its page never reports that it is ready, so
+/// a page that failed to load still gets the window with its error hint (and an Escape key).
+const SHOW_TIMEOUT: Duration = Duration::from_secs(4);
+
+/// The preview PNG of a capture. Whoever asks first encodes it, the others wait for the result.
+#[derive(Default)]
+pub struct Preview(OnceLock<Result<Vec<u8>, String>>);
+
+impl Preview {
+    pub fn get_or_encode(&self, frame: &Frame) -> Result<&[u8], &str> {
+        self.0
+            .get_or_init(|| {
+                let started = Instant::now();
+                let png = encode_png_fast(frame).map_err(|e| e.to_string());
+                tracing::debug!(
+                    ms = started.elapsed().as_millis() as u64,
+                    bytes = png.as_ref().map_or(0, Vec::len),
+                    "overlay preview encoded"
+                );
+                png
+            })
+            .as_ref()
+            .map(Vec::as_slice)
+            .map_err(String::as_str)
+    }
+}
+
+/// Decides who may show the overlay window: its page when it is ready, or the timeout, but only
+/// one of them, and the timeout only for the overlay it was started for.
+struct ShowGate {
+    epoch: AtomicU64,
+    shown: AtomicBool,
+}
+
+impl ShowGate {
+    const fn new() -> Self {
+        Self {
+            epoch: AtomicU64::new(0),
+            shown: AtomicBool::new(false),
+        }
+    }
+
+    /// A new overlay starts, hidden. Returns its id.
+    fn arm(&self) -> u64 {
+        self.shown.store(false, Ordering::SeqCst);
+        self.epoch.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    /// Whether the caller may show the window now. `id` is `Some` for the timeout of overlay
+    /// `id`, which has no say once another overlay was started.
+    fn claim(&self, id: Option<u64>) -> bool {
+        if id.is_some_and(|id| id != self.epoch.load(Ordering::SeqCst)) {
+            return false;
+        }
+        !self.shown.swap(true, Ordering::SeqCst)
+    }
+}
+
+static GATE: ShowGate = ShowGate::new();
 
 /// Region chosen by the user, as fractions (0 to 1) of the image shown in the overlay.
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -69,13 +139,26 @@ pub fn begin(app: &AppHandle) -> IpcResult<()> {
         }
     }
     // Capture before any of our own windows appear.
-    let frame = capture_virtual_desktop().map_err(|e| IpcError::new("io", e.to_string()))?;
+    let frame =
+        Arc::new(capture_virtual_desktop().map_err(|e| IpcError::new("io", e.to_string()))?);
     let rect = frame.rect;
+    let preview = Arc::new(Preview::default());
+    {
+        // Encode while the window and its page start up.
+        let (frame, preview) = (frame.clone(), preview.clone());
+        std::thread::spawn(move || {
+            let _ = preview.get_or_encode(&frame);
+        });
+    }
     *state
         .pending_shot
         .lock()
-        .map_err(|_| IpcError::new("internal", "overlay lock poisoned"))? =
-        Some(PendingShot { frame, offset_ms });
+        .map_err(|_| IpcError::new("internal", "overlay lock poisoned"))? = Some(PendingShot {
+        frame,
+        preview,
+        offset_ms,
+    });
+    let id = GATE.arm();
 
     let window = WebviewWindowBuilder::new(
         app,
@@ -87,17 +170,34 @@ pub fn begin(app: &AppHandle) -> IpcResult<()> {
     .always_on_top(true)
     .skip_taskbar(true)
     .shadow(false)
+    .background_color(Color(0, 0, 0, 255))
     .visible(false)
     .build()
     .map_err(|e| IpcError::new("internal", e.to_string()))?;
     let placed = window
         .set_position(PhysicalPosition::new(rect.x, rect.y))
-        .and_then(|()| window.set_size(PhysicalSize::new(rect.width, rect.height)))
-        .and_then(|()| window.show())
-        .and_then(|()| window.set_focus());
+        .and_then(|()| window.set_size(PhysicalSize::new(rect.width, rect.height)));
     if let Err(e) = placed {
         cancel(app);
         return Err(IpcError::new("internal", e.to_string()));
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(SHOW_TIMEOUT);
+        if GATE.claim(Some(id)) {
+            tracing::warn!("overlay page not ready in time, showing the window anyway");
+            if let Err(e) = show(&app) {
+                tracing::warn!(error = %e, "overlay window not shown");
+            }
+        }
+    });
+    Ok(())
+}
+
+fn show(app: &AppHandle) -> tauri::Result<()> {
+    if let Some(w) = app.get_webview_window(LABEL) {
+        w.show()?;
+        w.set_focus()?;
     }
     Ok(())
 }
@@ -114,18 +214,39 @@ pub fn cancel(app: &AppHandle) {
     }
 }
 
-/// The frozen capture as PNG bytes, for the overlay page.
+/// The frozen capture as PNG bytes, for the overlay page. Async so that waiting for the
+/// encoder never blocks the thread that draws the windows.
 #[tauri::command]
-pub fn overlay_image(state: State<'_, AppState>) -> IpcResult<Response> {
-    let pending = state
-        .pending_shot
-        .lock()
-        .map_err(|_| IpcError::new("internal", "overlay lock poisoned"))?;
-    let shot = pending
-        .as_ref()
-        .ok_or_else(|| IpcError::new("internal", "no screenshot in progress"))?;
-    let png = encode_png(&shot.frame).map_err(|e| IpcError::new("io", e.to_string()))?;
+pub async fn overlay_image(state: State<'_, AppState>) -> IpcResult<Response> {
+    let (frame, preview) = {
+        let pending = state
+            .pending_shot
+            .lock()
+            .map_err(|_| IpcError::new("internal", "overlay lock poisoned"))?;
+        let shot = pending
+            .as_ref()
+            .ok_or_else(|| IpcError::new("internal", "no screenshot in progress"))?;
+        (shot.frame.clone(), shot.preview.clone())
+    };
+    let png = tauri::async_runtime::spawn_blocking(move || {
+        preview
+            .get_or_encode(&frame)
+            .map(<[u8]>::to_vec)
+            .map_err(str::to_owned)
+    })
+    .await
+    .map_err(|e| IpcError::new("internal", e.to_string()))?
+    .map_err(|e| IpcError::new("io", e))?;
     Ok(Response::new(png))
+}
+
+/// The overlay page has the frozen desktop decoded (or gave up): show the window.
+#[tauri::command]
+pub fn overlay_ready(app: AppHandle) -> IpcResult<()> {
+    if GATE.claim(None) {
+        show(&app).map_err(|e| IpcError::new("internal", e.to_string()))?;
+    }
+    Ok(())
 }
 
 /// Finish the overlay: save the region, or only close it when `region` is `None` (cancel)
@@ -251,6 +372,53 @@ mod tests {
             .expect("connect-src is set");
         assert!(connect.split(' ').any(|s| s == "ipc:"), "{connect}");
         assert!(connect.contains("http://ipc.localhost"), "{connect}");
+    }
+
+    #[test]
+    fn the_overlay_is_shown_once() {
+        let gate = ShowGate::new();
+        let id = gate.arm();
+        assert!(gate.claim(None), "the page is ready first");
+        assert!(!gate.claim(Some(id)), "the timeout finds it shown");
+        assert!(!gate.claim(None), "a second ready changes nothing");
+    }
+
+    #[test]
+    fn the_timeout_shows_a_page_that_never_got_ready() {
+        let gate = ShowGate::new();
+        let id = gate.arm();
+        assert!(gate.claim(Some(id)));
+        assert!(!gate.claim(None), "a late ready finds it shown");
+    }
+
+    #[test]
+    fn the_timeout_of_an_earlier_overlay_does_nothing() {
+        let gate = ShowGate::new();
+        let first = gate.arm();
+        let second = gate.arm();
+        assert!(!gate.claim(Some(first)));
+        assert!(gate.claim(Some(second)));
+    }
+
+    #[test]
+    fn the_preview_is_encoded_once_and_reused() {
+        let frame = Frame::new(Rect::new(0, 0, 8, 4), vec![200; 8 * 4 * 4]).unwrap();
+        let preview = Preview::default();
+        let first = preview.get_or_encode(&frame).unwrap();
+        assert_eq!(&first[1..4], b"PNG");
+        let again = preview.get_or_encode(&frame).unwrap();
+        assert!(std::ptr::eq(first, again));
+    }
+
+    #[test]
+    fn a_frame_that_cannot_be_encoded_reports_the_error_every_time() {
+        let bad = Frame {
+            rect: Rect::new(0, 0, 2, 2),
+            rgba: vec![0; 3],
+        };
+        let preview = Preview::default();
+        assert!(preview.get_or_encode(&bad).is_err());
+        assert!(preview.get_or_encode(&bad).is_err());
     }
 
     #[test]
