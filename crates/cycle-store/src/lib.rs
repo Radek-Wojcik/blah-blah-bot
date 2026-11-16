@@ -7,10 +7,12 @@
 //! * [`repo`]: the working tree, driven through the `git` command line.
 //! * [`issues`]: open issues with an offline cache.
 //! * [`publish`]: the commit of a meeting folder, built off the index and pushed.
+//! * [`corrections`]: notes written after a meeting was published.
 //! * [`context`](mod@context): `work/context.json`.
 //! * [`draft`], [`mod@render`]: the meeting draft types and the template engine.
 
 pub mod context;
+pub mod corrections;
 pub mod cycle;
 pub mod draft;
 pub mod error;
@@ -26,6 +28,7 @@ pub mod time;
 pub mod topics;
 
 pub use context::{build_context, Context, ContextRequest, DEFAULT_MAX_PREVIOUS_ITEMS};
+pub use corrections::{Correction, CorrectionMarker, CorrectionsFile};
 pub use cycle::repo_path_problem;
 pub use cycle::{
     Cycle, DiscordRef, DiscordTarget, GithubTarget, GlossaryEntry, Languages, NotionTarget,

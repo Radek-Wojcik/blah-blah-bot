@@ -86,6 +86,22 @@
           "issue": { "type": ["string", "null"], "description": "The GitHub issue created for this item, for example #12" }
         }
       }
+    },
+    "corrections": {
+      "type": "array",
+      "description": "Notes written after earlier meetings were published; they replace what the items of those meetings say. Newest first, capped. Optional: absent when there are none.",
+      "items": {
+        "type": "object",
+        "required": ["meeting", "date", "text"],
+        "additionalProperties": false,
+        "properties": {
+          "meeting": { "type": "string", "description": "Date of the meeting that is corrected" },
+          "date": { "type": "string", "description": "The day the correction was written" },
+          "text": { "type": "string" },
+          "item": { "type": ["string", "null"], "description": "Text of the item of that meeting that is corrected, when the note is about one" },
+          "issue": { "type": ["string", "null"], "description": "The issue it is about, for example #12" }
+        }
+      }
     }
   }
 }

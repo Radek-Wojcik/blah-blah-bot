@@ -88,10 +88,10 @@ pub struct IssueLink {
 
 // ----- markers --------------------------------------------------------------------------------
 
-const MARKER_START: &str = "<!-- bbb:v1 ";
-const MARKER_END: &str = " -->";
+pub(crate) const MARKER_START: &str = "<!-- bbb:v1 ";
+pub(crate) const MARKER_END: &str = " -->";
 
-fn marker_value(v: &str) -> bool {
+pub(crate) fn marker_value(v: &str) -> bool {
     !v.is_empty()
         && v.len() <= 64
         && v.chars()
@@ -189,7 +189,7 @@ impl StatusMarker {
 }
 
 /// The tokens of every `<!-- bbb:v1 ... -->` comment in `text`.
-fn markers(text: &str) -> impl Iterator<Item = Vec<&str>> {
+pub(crate) fn markers(text: &str) -> impl Iterator<Item = Vec<&str>> {
     let mut rest = text;
     std::iter::from_fn(move || {
         let start = rest.find(MARKER_START)?;
