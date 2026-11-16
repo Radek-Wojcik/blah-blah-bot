@@ -141,28 +141,44 @@ pub fn overlay_finish(
         .lock()
         .map_err(|_| IpcError::new("internal", "overlay lock poisoned"))?
         .take();
-    // Close the overlay first: cropping and saving the PNG can take a moment, and the frozen
-    // desktop must not stay on screen (or flash black) while it runs.
+    // Close the overlay first and do the heavy work on another thread: this command runs on the
+    // thread that draws the windows, so cropping, encoding and saving here would keep the
+    // frozen desktop (or a black window) on screen until they finish.
+    if let Some(w) = app.get_webview_window(LABEL) {
+        let _ = w.hide();
+    }
     cancel(&app);
-    let result = (|| {
-        let (Some(shot), Some(region)) = (shot, region) else {
-            return Ok(());
-        };
-        let Some(px) = fraction_to_rect(shot.frame.rect, region) else {
-            return Ok(());
-        };
-        let cropped = shot
-            .frame
-            .crop(px)
-            .map_err(|e| IpcError::new("io", e.to_string()))?;
-        let file = state.recorder.save_screenshot(&cropped, shot.offset_ms)?;
-        tracing::info!(file = %file, "screenshot saved");
-        if let Some(s) = state.recorder.tick() {
-            emit_state(&app, &s);
+    let (Some(shot), Some(region)) = (shot, region) else {
+        return Ok(());
+    };
+    std::thread::spawn(move || {
+        let state = app.state::<AppState>();
+        if let Err(e) = save_region(&app, &state, &shot, region) {
+            tracing::warn!(error = %e.message, "screenshot not saved");
         }
-        Ok(())
-    })();
-    result
+    });
+    Ok(())
+}
+
+fn save_region(
+    app: &AppHandle,
+    state: &AppState,
+    shot: &PendingShot,
+    region: FractionRect,
+) -> IpcResult<()> {
+    let Some(px) = fraction_to_rect(shot.frame.rect, region) else {
+        return Ok(());
+    };
+    let cropped = shot
+        .frame
+        .crop(px)
+        .map_err(|e| IpcError::new("io", e.to_string()))?;
+    let file = state.recorder.save_screenshot(&cropped, shot.offset_ms)?;
+    tracing::info!(file = %file, "screenshot saved");
+    if let Some(s) = state.recorder.tick() {
+        emit_state(app, &s);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
