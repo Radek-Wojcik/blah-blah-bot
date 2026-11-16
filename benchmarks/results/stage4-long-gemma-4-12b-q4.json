@@ -1,0 +1,346 @@
+{
+  "prototype": "stage4-long",
+  "name": "gemma-4-12b-q4",
+  "timestamp": "2026-11-16T08:06:28+00:00",
+  "environment": {
+    "os": "Windows-10-10.0.19045-SP0",
+    "os_build": "10.0.19045",
+    "python": "3.11.9",
+    "machine": "AMD64",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 3080",
+      "memory_total_mib": 12288,
+      "memory_used_mib": 526,
+      "driver": "617.42"
+    }
+  },
+  "status": "ok",
+  "config": {
+    "model": "gemma-4-12b-it-Q4_K_M.gguf",
+    "ctx": 16384,
+    "backend": "llama-server (managed)",
+    "mode": "fixed",
+    "output_language": "annotation",
+    "llama_server": "llama-server.exe",
+    "hours": 10.0
+  },
+  "ok": true,
+  "error": "",
+  "words": 83548,
+  "transcript_segments": 12392,
+  "transcript_duration_hours": 10.0,
+  "repeats_of_labeled_meetings": 40,
+  "windows": 43,
+  "windows_skipped": 0,
+  "windows_retried": 1,
+  "attempts": 45,
+  "schema_validity": 1.0,
+  "model_seconds": 3056.9,
+  "prompt_tokens": 415442,
+  "completion_tokens": 210239,
+  "window_seconds_first_half": 71.37,
+  "window_seconds_second_half": 70.82,
+  "extract": {
+    "step": "extract",
+    "ok": true,
+    "seconds": 3065.5,
+    "peak_vram_above_baseline_mib": 9217,
+    "baseline_mib": 526,
+    "progress_events": 46,
+    "last_message": "43 windows, 0 skipped",
+    "error": "",
+    "timeline": [
+      {
+        "t": 0.31,
+        "fraction": 0.0,
+        "message": "started"
+      },
+      {
+        "t": 74.56,
+        "fraction": 0.0233,
+        "message": "window 1/43"
+      },
+      {
+        "t": 133.5,
+        "fraction": 0.0465,
+        "message": "window 2/43"
+      },
+      {
+        "t": 203.61,
+        "fraction": 0.0698,
+        "message": "window 3/43"
+      },
+      {
+        "t": 262.38,
+        "fraction": 0.093,
+        "message": "window 4/43"
+      },
+      {
+        "t": 327.54,
+        "fraction": 0.1163,
+        "message": "window 5/43"
+      },
+      {
+        "t": 412.81,
+        "fraction": 0.1395,
+        "message": "window 6/43"
+      },
+      {
+        "t": 493.74,
+        "fraction": 0.1628,
+        "message": "window 7/43"
+      },
+      {
+        "t": 568.66,
+        "fraction": 0.186,
+        "message": "window 8/43"
+      },
+      {
+        "t": 654.64,
+        "fraction": 0.2093,
+        "message": "window 9/43"
+      },
+      {
+        "t": 736.18,
+        "fraction": 0.2326,
+        "message": "window 10/43"
+      },
+      {
+        "t": 801.61,
+        "fraction": 0.2558,
+        "message": "window 11/43"
+      },
+      {
+        "t": 863.9,
+        "fraction": 0.2791,
+        "message": "window 12/43"
+      },
+      {
+        "t": 916.68,
+        "fraction": 0.3023,
+        "message": "window 13/43"
+      },
+      {
+        "t": 987.2,
+        "fraction": 0.3256,
+        "message": "window 14/43"
+      },
+      {
+        "t": 1052.38,
+        "fraction": 0.3488,
+        "message": "window 15/43"
+      },
+      {
+        "t": 1130.76,
+        "fraction": 0.3721,
+        "message": "window 16/43"
+      },
+      {
+        "t": 1205.72,
+        "fraction": 0.3953,
+        "message": "window 17/43"
+      },
+      {
+        "t": 1276.19,
+        "fraction": 0.4186,
+        "message": "window 18/43"
+      },
+      {
+        "t": 1350.12,
+        "fraction": 0.4419,
+        "message": "window 19/43"
+      },
+      {
+        "t": 1431.99,
+        "fraction": 0.4651,
+        "message": "window 20/43"
+      },
+      {
+        "t": 1504.86,
+        "fraction": 0.4884,
+        "message": "window 21/43"
+      },
+      {
+        "t": 1560.64,
+        "fraction": 0.5116,
+        "message": "window 22/43"
+      },
+      {
+        "t": 1603.7,
+        "fraction": 0.5349,
+        "message": "window 23/43"
+      },
+      {
+        "t": 1668.43,
+        "fraction": 0.5581,
+        "message": "window 24/43"
+      },
+      {
+        "t": 1725.7,
+        "fraction": 0.5814,
+        "message": "window 25/43"
+      },
+      {
+        "t": 1812.4,
+        "fraction": 0.6047,
+        "message": "window 26/43"
+      },
+      {
+        "t": 1879.85,
+        "fraction": 0.6279,
+        "message": "window 27/43"
+      },
+      {
+        "t": 1949.89,
+        "fraction": 0.6512,
+        "message": "window 28/43"
+      },
+      {
+        "t": 2024.78,
+        "fraction": 0.6744,
+        "message": "window 29/43"
+      },
+      {
+        "t": 2103.27,
+        "fraction": 0.6977,
+        "message": "window 30/43"
+      },
+      {
+        "t": 2189.79,
+        "fraction": 0.6977,
+        "message": "window 31 is too long for one answer, splitting it"
+      },
+      {
+        "t": 2288.18,
+        "fraction": 0.7209,
+        "message": "window 31/43"
+      },
+      {
+        "t": 2354.86,
+        "fraction": 0.7442,
+        "message": "window 32/43"
+      },
+      {
+        "t": 2425.53,
+        "fraction": 0.7674,
+        "message": "window 33/43"
+      },
+      {
+        "t": 2468.66,
+        "fraction": 0.7907,
+        "message": "window 34/43"
+      },
+      {
+        "t": 2531.35,
+        "fraction": 0.814,
+        "message": "window 35/43"
+      },
+      {
+        "t": 2601.88,
+        "fraction": 0.8372,
+        "message": "window 36/43"
+      },
+      {
+        "t": 2658.11,
+        "fraction": 0.8605,
+        "message": "window 37/43"
+      },
+      {
+        "t": 2695.38,
+        "fraction": 0.8837,
+        "message": "window 38/43"
+      },
+      {
+        "t": 2770.72,
+        "fraction": 0.907,
+        "message": "window 39/43"
+      },
+      {
+        "t": 2857.11,
+        "fraction": 0.9302,
+        "message": "window 40/43"
+      },
+      {
+        "t": 2938.63,
+        "fraction": 0.9535,
+        "message": "window 41/43"
+      },
+      {
+        "t": 2994.83,
+        "fraction": 0.9767,
+        "message": "window 42/43"
+      },
+      {
+        "t": 3064.62,
+        "fraction": 1.0,
+        "message": "window 43/43"
+      },
+      {
+        "t": 3065.51,
+        "fraction": 1.0,
+        "message": "43 windows, 0 skipped"
+      }
+    ]
+  },
+  "reduce": {
+    "step": "reduce",
+    "ok": true,
+    "seconds": 20.8,
+    "peak_vram_above_baseline_mib": 8869,
+    "baseline_mib": 526,
+    "progress_events": 5,
+    "last_message": "1431 items, fixed sections",
+    "error": "",
+    "timeline": [
+      {
+        "t": 1.11,
+        "fraction": 0.0,
+        "message": "started"
+      },
+      {
+        "t": 1.13,
+        "fraction": 0.05,
+        "message": "43 windows"
+      },
+      {
+        "t": 17.23,
+        "fraction": 0.1227,
+        "message": "summary step 1"
+      },
+      {
+        "t": 20.13,
+        "fraction": 0.1455,
+        "message": "summary step 2"
+      },
+      {
+        "t": 20.77,
+        "fraction": 1.0,
+        "message": "1431 items, fixed sections"
+      }
+    ]
+  },
+  "wall_seconds": 3086.3,
+  "seconds_per_1000_words": 36.94,
+  "minutes_for_2h": 10.3,
+  "hours_for_10h": 0.86,
+  "threshold_minutes_for_2h_full_pipeline": 45,
+  "threshold_hours_for_10h_full_pipeline": 4,
+  "share_of_10h_budget": 0.214,
+  "peak_vram_above_baseline_mib": 9217,
+  "peak_vram_absolute_mib": 9743,
+  "threshold_vram_mib": 11500,
+  "draft_valid": true,
+  "draft_errors": [],
+  "items": 1431,
+  "warnings": 0,
+  "extrapolation": {
+    "available": true,
+    "reference_seconds_per_1000_words": 41.30311346645217,
+    "expected_seconds": 3450.8,
+    "measured_seconds": 3086.3,
+    "ratio": 0.894,
+    "tolerance": 0.25,
+    "ok": true
+  },
+  "passed": true
+}

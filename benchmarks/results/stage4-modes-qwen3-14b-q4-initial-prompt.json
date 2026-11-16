@@ -1,0 +1,127 @@
+{
+  "prototype": "stage4-modes",
+  "name": "qwen3-14b-q4",
+  "timestamp": "2026-11-15T22:05:05+00:00",
+  "environment": {
+    "os": "Windows-10-10.0.19045-SP0",
+    "os_build": "10.0.19045",
+    "python": "3.11.9",
+    "machine": "AMD64",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 3080",
+      "memory_total_mib": 12288,
+      "memory_used_mib": 833,
+      "driver": "617.42"
+    }
+  },
+  "status": "ok",
+  "config": {
+    "model": "Qwen3-14B-Q4_K_M.gguf",
+    "ctx": 16384,
+    "backend": "llama-server (managed)",
+    "mode": "fixed",
+    "output_language": "annotation",
+    "llama_server": "llama-server.exe",
+    "meeting": "en-0"
+  },
+  "modes": [
+    {
+      "mode": "fixed",
+      "ok": true,
+      "error": "",
+      "extract_reused": false,
+      "extract_seconds": 57.6,
+      "reduce_seconds": 5.8,
+      "draft_valid": true,
+      "draft_errors": [],
+      "draft_mode": "fixed",
+      "items": 26,
+      "sections": 0,
+      "section_ids": [],
+      "items_in_sections": 0,
+      "items_with_unknown_section": [],
+      "sections_match_template": null,
+      "warnings": 0,
+      "reduce_note": "26 items, fixed sections",
+      "passed": true
+    },
+    {
+      "mode": "template",
+      "ok": true,
+      "error": "",
+      "extract_reused": false,
+      "extract_seconds": 55.0,
+      "reduce_seconds": 5.5,
+      "draft_valid": true,
+      "draft_errors": [],
+      "draft_mode": "template",
+      "items": 25,
+      "sections": 4,
+      "section_ids": [
+        "decisions",
+        "actions",
+        "budget",
+        "other"
+      ],
+      "items_in_sections": 25,
+      "items_with_unknown_section": [],
+      "sections_match_template": true,
+      "warnings": 0,
+      "reduce_note": "25 items, template sections",
+      "passed": true
+    },
+    {
+      "mode": "auto",
+      "ok": true,
+      "error": "",
+      "extract_reused": true,
+      "extract_seconds": 0.0,
+      "reduce_seconds": 15.8,
+      "draft_valid": true,
+      "draft_errors": [],
+      "draft_mode": "auto",
+      "items": 26,
+      "sections": 6,
+      "section_ids": [
+        "task_orders",
+        "task_scheduling",
+        "task_shopping_list",
+        "task_feedback",
+        "budget_items",
+        "decisions"
+      ],
+      "items_in_sections": 26,
+      "items_with_unknown_section": [],
+      "sections_match_template": null,
+      "warnings": 0,
+      "reduce_note": "26 items, 6 sections proposed",
+      "passed": true
+    },
+    {
+      "mode": "by-type",
+      "ok": true,
+      "error": "",
+      "extract_reused": false,
+      "extract_seconds": 55.1,
+      "reduce_seconds": 5.6,
+      "draft_valid": true,
+      "draft_errors": [],
+      "draft_mode": "by-type",
+      "items": 25,
+      "sections": 4,
+      "section_ids": [
+        "decisions",
+        "actions",
+        "budget",
+        "other"
+      ],
+      "items_in_sections": 25,
+      "items_with_unknown_section": [],
+      "sections_match_template": true,
+      "warnings": 0,
+      "reduce_note": "25 items, template sections",
+      "passed": true
+    }
+  ],
+  "all_modes_valid": true
+}
