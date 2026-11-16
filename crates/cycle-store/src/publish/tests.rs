@@ -168,6 +168,7 @@ fn snapshot(root: &Path, name: &str, marker: &str) -> Snapshot {
 fn request<'a>(files: &'a [PublishFile], topics: Option<&'a [Topic]>) -> PublishRequest<'a> {
     PublishRequest {
         cycle_id: "NOMAD",
+        base_path: "meetings",
         date: "2026-11-13",
         files,
         topics,
@@ -198,7 +199,7 @@ fn only_the_new_files_are_committed_and_the_working_tree_is_left_alone() {
         "{before}"
     );
 
-    let snap = snapshot(lab.tmp.path(), "a", "A");
+    let snap = snapshot(lab.tmp.path(), r"ab", "A");
     let published = publish_meeting(&repo, &request(&snap.files, None)).unwrap();
 
     assert_eq!(published.folder, "2026-11-13");
@@ -313,10 +314,98 @@ fn a_second_meeting_on_the_same_day_gets_a_suffix() {
 }
 
 #[test]
+fn the_meeting_folder_goes_under_the_configured_path() {
+    let lab = Lab::new();
+    let repo = lab.clone("clone");
+    let first = snapshot(lab.tmp.path(), "1", "ONE");
+    let second = snapshot(lab.tmp.path(), "2", "TWO");
+    let mut req = request(&first.files, None);
+    req.base_path = "docs/team-notes";
+    let a = publish_meeting(&repo, &req).unwrap();
+    assert_eq!(a.folder, "2026-11-13");
+    assert_eq!(
+        a.paths,
+        [
+            "docs/team-notes/NOMAD/2026-11-13/meeting.json",
+            "docs/team-notes/NOMAD/2026-11-13/report.md",
+            "docs/team-notes/NOMAD/2026-11-13/transcript.md",
+            "docs/team-notes/NOMAD/2026-11-13/img/shot-1.png",
+        ]
+    );
+    assert_eq!(
+        lab.show("docs/team-notes/NOMAD/2026-11-13/report.md"),
+        "# Report ONE"
+    );
+    assert!(
+        lab.paths().iter().all(|p| !p.starts_with("meetings/")),
+        "nothing went to the default folder: {:?}",
+        lab.paths()
+    );
+    // The suffix is chosen among the folders of that path, and publishing again is idempotent.
+    let mut req2 = request(&second.files, None);
+    req2.base_path = "docs/team-notes";
+    let b = publish_meeting(&repo, &req2).unwrap();
+    assert_eq!(b.folder, "2026-11-13-2");
+    let again = publish_meeting(&repo, &req2).unwrap();
+    assert!(again.already_published, "{again:?}");
+    assert_eq!(again.folder, "2026-11-13-2");
+    // The same day in the default folder does not collide with the other path.
+    let third = snapshot(lab.tmp.path(), "3", "THREE");
+    let c = publish_meeting(&repo, &request(&third.files, None)).unwrap();
+    assert_eq!(c.folder, "2026-11-13");
+    assert_eq!(
+        lab.show("meetings/NOMAD/2026-11-13/report.md"),
+        "# Report THREE"
+    );
+}
+
+#[test]
+fn a_path_that_could_leave_the_repository_is_refused_before_git_is_touched() {
+    let lab = Lab::new();
+    let repo = lab.clone("clone");
+    let snap = snapshot(lab.tmp.path(), r"ab", "A");
+    let tip = lab.tip();
+    for bad in [
+        "",
+        "..",
+        "../outside",
+        "a/../b",
+        "./meetings",
+        "a/./b",
+        "/etc",
+        r"\share",
+        "C:/temp",
+        "c:meetings",
+        r"a\b",
+        "a//b",
+        "meetings/",
+        ".git",
+        "x/.GIT/y",
+        "trailing.",
+        "sp ace",
+        "naïve",
+    ] {
+        let mut req = request(&snap.files, None);
+        req.base_path = bad;
+        let err = publish_meeting(&repo, &req).unwrap_err();
+        assert!(!err.is_transient(), "{bad:?}: {err}");
+        assert!(
+            err.message.contains("not usable"),
+            "{bad:?}: {}",
+            err.message
+        );
+    }
+    for good in ["meetings", "docs/meetings", ".github/notes", "a_b-c/d.e"] {
+        assert_eq!(crate::cycle::repo_path_problem(good), None, "{good}");
+    }
+    assert_eq!(lab.tip(), tip, "the remote was never touched");
+}
+
+#[test]
 fn publishing_twice_is_idempotent_even_after_a_lost_answer() {
     let lab = Lab::new();
     let repo = lab.clone("clone");
-    let snap = snapshot(lab.tmp.path(), "a", "A");
+    let snap = snapshot(lab.tmp.path(), r"ab", "A");
     let start = g(repo.root(), &["rev-parse", "HEAD"]);
     let first = publish_meeting(&repo, &request(&snap.files, None)).unwrap();
     let count = lab.count();
@@ -348,7 +437,7 @@ fn publishing_twice_is_idempotent_even_after_a_lost_answer() {
 fn a_push_refused_because_of_a_concurrent_commit_is_rebuilt_on_the_new_tip() {
     let lab = Lab::new();
     let repo = lab.clone("clone");
-    let snap = snapshot(lab.tmp.path(), "a", "A");
+    let snap = snapshot(lab.tmp.path(), r"ab", "A");
     let mut colleague_commit = String::new();
     let published = publish_meeting_observed(&repo, &request(&snap.files, None), &mut |attempt| {
         if attempt == 1 {
@@ -375,7 +464,7 @@ fn a_push_refused_because_of_a_concurrent_commit_is_rebuilt_on_the_new_tip() {
 fn a_colleague_taking_the_folder_meanwhile_moves_us_to_the_next_suffix() {
     let lab = Lab::new();
     let repo = lab.clone("clone");
-    let snap = snapshot(lab.tmp.path(), "a", "A");
+    let snap = snapshot(lab.tmp.path(), r"ab", "A");
     let published = publish_meeting_observed(&repo, &request(&snap.files, None), &mut |attempt| {
         if attempt == 1 {
             lab.colleague(
@@ -404,7 +493,7 @@ fn a_colleague_taking_the_folder_meanwhile_moves_us_to_the_next_suffix() {
 fn the_push_is_tried_three_times_and_then_left_for_later() {
     let lab = Lab::new();
     let repo = lab.clone("clone");
-    let snap = snapshot(lab.tmp.path(), "a", "A");
+    let snap = snapshot(lab.tmp.path(), r"ab", "A");
     let head = g(repo.root(), &["rev-parse", "HEAD"]);
     let mut calls = 0;
     let err = publish_meeting_observed(&repo, &request(&snap.files, None), &mut |attempt| {
@@ -457,7 +546,7 @@ fn topics_are_merged_per_topic_and_the_dirty_topics_file_still_fast_forwards() {
         g(&dir, &["commit", "--quiet", "-am", "colleague topics"]);
         g(&dir, &["push", "--quiet", "origin", "main"]);
     }
-    let snap = snapshot(lab.tmp.path(), "a", "A");
+    let snap = snapshot(lab.tmp.path(), r"ab", "A");
     let published = publish_meeting(&repo, &request(&snap.files, Some(&ours))).unwrap();
 
     let merge = published.topics.clone().expect("a topic merge");
@@ -496,7 +585,7 @@ fn topics_that_nobody_changed_leave_the_file_out_of_the_commit() {
     let lab = Lab::new();
     let repo = lab.clone("clone");
     let same = repo.load_topics("NOMAD").unwrap();
-    let snap = snapshot(lab.tmp.path(), "a", "A");
+    let snap = snapshot(lab.tmp.path(), r"ab", "A");
     let old_tip = lab.tip();
     let published = publish_meeting(&repo, &request(&snap.files, Some(&same))).unwrap();
     let merge = published.topics.unwrap();
@@ -533,7 +622,7 @@ fn a_repository_without_a_remote_gets_a_local_commit() {
         .unwrap();
     let ours = vec![topic("20261113-1", "Charging", TopicStatus::Open)];
     repo.save_topics("NOMAD", &ours).unwrap();
-    let snap = snapshot(tmp.path(), "a", "A");
+    let snap = snapshot(tmp.path(), r"ab", "A");
 
     let first = publish_meeting(&repo, &request(&snap.files, Some(&ours))).unwrap();
     assert!(!first.pushed && first.remote.is_none());
@@ -586,7 +675,7 @@ fn an_empty_remote_gets_its_first_branch_from_the_local_history() {
         repo.root(),
         &["remote", "add", "origin", remote.to_str().unwrap()],
     );
-    let snap = snapshot(tmp.path(), "a", "A");
+    let snap = snapshot(tmp.path(), r"ab", "A");
     let published = publish_meeting(&repo, &request(&snap.files, None)).unwrap();
     assert!(published.pushed);
     assert_eq!(g(&remote, &["rev-parse", "main"]), published.commit);
@@ -598,7 +687,7 @@ fn an_empty_remote_gets_its_first_branch_from_the_local_history() {
 fn an_unreachable_remote_is_a_transient_error_and_recovery_works() {
     let lab = Lab::new();
     let repo = lab.clone("clone");
-    let snap = snapshot(lab.tmp.path(), "a", "A");
+    let snap = snapshot(lab.tmp.path(), r"ab", "A");
     let head = g(repo.root(), &["rev-parse", "HEAD"]);
     let away = lab.tmp.path().join("away.git");
     fs::rename(&lab.remote, &away).unwrap();
@@ -625,7 +714,7 @@ fn local_commits_that_are_not_pushed_stay_and_the_clone_is_reported_behind() {
     g(repo.root(), &["add", "-A"]);
     g(repo.root(), &["commit", "--quiet", "-m", "local only"]);
     let local_head = g(repo.root(), &["rev-parse", "HEAD"]);
-    let snap = snapshot(lab.tmp.path(), "a", "A");
+    let snap = snapshot(lab.tmp.path(), r"ab", "A");
     let published = publish_meeting(&repo, &request(&snap.files, None)).unwrap();
     assert!(published.pushed);
     assert!(
@@ -657,7 +746,7 @@ fn a_local_edit_in_the_way_keeps_the_branch_and_loses_nothing() {
         &repo.root().join("cycles/NOMAD/templates/default.md"),
         "# my local edit\n",
     );
-    let snap = snapshot(lab.tmp.path(), "a", "A");
+    let snap = snapshot(lab.tmp.path(), r"ab", "A");
     let head = g(repo.root(), &["rev-parse", "HEAD"]);
     let published = publish_meeting(&repo, &request(&snap.files, None)).unwrap();
     assert!(published.pushed);
@@ -682,7 +771,7 @@ fn a_local_edit_in_the_way_keeps_the_branch_and_loses_nothing() {
 fn bad_requests_are_refused_before_git_is_touched() {
     let lab = Lab::new();
     let repo = lab.clone("clone");
-    let snap = snapshot(lab.tmp.path(), "a", "A");
+    let snap = snapshot(lab.tmp.path(), r"ab", "A");
     let tip = lab.tip();
     let refused = |req: &PublishRequest| {
         let err = publish_meeting(&repo, req).unwrap_err();
@@ -741,7 +830,7 @@ fn a_broken_topics_file_on_the_remote_is_a_permanent_error() {
     let lab = Lab::new();
     let repo = lab.clone("clone");
     lab.colleague("t", &[("cycles/NOMAD/topics.yaml", "- id: [\n")]);
-    let snap = snapshot(lab.tmp.path(), "a", "A");
+    let snap = snapshot(lab.tmp.path(), r"ab", "A");
     let ours = vec![topic("n", "New", TopicStatus::Open)];
     let err = publish_meeting(&repo, &request(&snap.files, Some(&ours))).unwrap_err();
     assert!(!err.is_transient());

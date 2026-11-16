@@ -515,6 +515,48 @@ fn a_topic_changed_on_the_remote_and_here_reports_both_versions() {
 }
 
 #[test]
+fn the_configured_folder_holds_the_meeting_and_the_links_point_to_it() {
+    let lab = Lab::new(LabOptions {
+        github_path: Some("docs/team-notes"),
+        ..LabOptions::default()
+    });
+    publish(&lab, &BOTH);
+    lab.run_until_settled(5);
+    assert!(
+        lab.ops().iter().all(|o| o.state == OpState::Done),
+        "{:?}",
+        lab.states()
+    );
+    let paths = lab.remote_paths();
+    for want in [
+        "docs/team-notes/NOMAD/2026-11-13/meeting.json",
+        "docs/team-notes/NOMAD/2026-11-13/report.md",
+        "docs/team-notes/NOMAD/2026-11-13/transcript.md",
+    ] {
+        assert!(paths.contains(&want.to_string()), "{want} in {paths:?}");
+    }
+    assert!(
+        paths.iter().all(|p| !p.starts_with("meetings/")),
+        "nothing in the default folder: {paths:?}"
+    );
+    let result: Value =
+        serde_json::from_str(lab.op(COMMIT_KEY).result.as_deref().unwrap()).unwrap();
+    let url = result["report_url"].as_str().unwrap();
+    assert!(
+        url.ends_with("/blob/main/docs/team-notes/NOMAD/2026-11-13/report.md"),
+        "{url}"
+    );
+    let posts = lab.discord.messages();
+    assert!(
+        posts[0]
+            .content
+            .contains("docs/team-notes/NOMAD/2026-11-13/report.md"),
+        "{}",
+        posts[0].content
+    );
+}
+
+#[test]
 fn a_local_only_repository_commits_without_pushing_or_issues() {
     let lab = Lab::new(LabOptions {
         remote: false,

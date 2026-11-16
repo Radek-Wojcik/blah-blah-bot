@@ -221,6 +221,7 @@ fn a_meeting_is_committed_and_pushed_to_a_new_branch_with_the_token_from_the_env
         &repo,
         &PublishRequest {
             cycle_id: "RCHECK",
+            base_path: "meetings",
             date: "2026-01-01",
             files: &files,
             topics: None,

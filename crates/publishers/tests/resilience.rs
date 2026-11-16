@@ -433,6 +433,7 @@ fn a_crash_while_running_resumes_without_a_second_commit() {
             &ctx.repo,
             &cycle_store::PublishRequest {
                 cycle_id: "NOMAD",
+                base_path: "meetings",
                 date: "2026-11-13",
                 files: &files,
                 topics: None,

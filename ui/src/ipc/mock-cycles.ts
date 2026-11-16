@@ -3,6 +3,7 @@
  * the rules and issue paths of `cycle.schema.json` and `cycle.rs`, templates, the report mode
  * gate and participants. No files and no Git.
  */
+import { githubPathProblem } from "../cycles";
 import { DEFAULT_TEMPLATE_TEXT, PLACEHOLDERS, validateTemplateDto } from "./mock-render";
 import { IDENTIFIER, fail } from "./mock-util";
 import type {
@@ -34,7 +35,6 @@ const PUBLISH = ["auto", "on-approval", "off"];
 const GITHUB_LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]*$/;
 const SNOWFLAKE = /^[0-9]{1,25}$/;
 const CREDENTIAL = /^cred:[A-Za-z0-9][A-Za-z0-9_./-]*$/;
-const GITHUB_PATH = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;
 
 const BAD_ID = "must start with a letter or digit and contain only letters, digits, - and _";
 
@@ -109,8 +109,8 @@ export function validateCycle(c: CycleDto, templates: string[]): CycleIssue[] {
   }
   const t = c.targets;
   if (t.github) {
-    if (!GITHUB_PATH.test(t.github.path))
-      add("targets.github.path", "a relative folder such as meetings (letters, digits, . _ - /)");
+    const pathProblem = githubPathProblem(t.github.path);
+    if (pathProblem) add("targets.github.path", pathProblem);
     if (!PUBLISH.includes(t.github.publish)) add("targets.github.publish", "unknown publish rule");
   }
   if (t.discord) {

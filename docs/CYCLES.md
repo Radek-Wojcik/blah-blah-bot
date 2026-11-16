@@ -14,7 +14,7 @@ cycles/
     templates/
       default.md          # created with the cycle
       budget-review.md
-meetings/
+meetings/                 # `targets.github.path`; `meetings` unless the cycle says otherwise
   NOMAD/
     2026-11-13/
       report.md           # generated report, never parsed back
@@ -77,7 +77,7 @@ Only `id` and `name` are required. Unknown keys are rejected, so a misspelled ke
 | `report.default_template` | template name | `default` | Template used by `template` mode, as the fallback of `by-type`, and for the layout of the other modes. |
 | `report.instruction` | text | empty | Natural-language instruction given to the extraction, for example "Group tasks by person". |
 | `report.by_type` | map | empty | Meeting type (for example `technical`, `budget`, `casual`) to template name. |
-| `targets.github.path` | relative path | `meetings` | Folder for meeting reports. Accepted and validated, but the publisher does not use it yet: reports always go to `meetings/<ID>/<folder>`. |
+| `targets.github.path` | relative path | `meetings` | Folder for meeting reports: a meeting is committed to `<path>/<ID>/<date>/`. Relative to the repository, names separated by `/` and made of letters, digits, `.`, `_` and `-`; no `.` or `..` name, no leading `/`, no drive letter or backslash, no `.git`, no name ending in a dot. Meetings already published under another path stay where they are, and both folders are read for the context of the next meeting. |
 | `targets.github.publish` | `auto`, `on-approval`, `off` | `on-approval` | Whether the report, the issues and the topics are published automatically when the draft is complete, when you press Publish, or not at all. Status changes are never written back automatically. A cycle without `targets.github` still has this target with the default. See [Publishing rules](#publishing-rules). |
 | `targets.github.issues` | `true`, `false` | `true` | Whether task items become GitHub issues and approved status changes are written back to them. With `false` only the report is committed. |
 | `targets.discord.webhook` | `cred:` reference | required | Name of a secret, for example `cred:discord/nomad`. A URL is rejected: the webhook URL never appears in the repository. The webhook is entered in the publishing settings and stored in the Windows Credential Manager under `target:<name>` (`target:discord/nomad`), a namespace of its own, so a reference in a repository cannot reach any other secret of the application. |

@@ -52,15 +52,17 @@ pub fn remote_key(url: &str) -> Option<String> {
     Some(store::repo_key("local", &url.replace('\\', "/")))
 }
 
-/// The address of `report.md` of a published meeting.
+/// The address of `report.md` of a published meeting; `base_path` is the folder of the
+/// meetings in the repository (`targets.github.path`).
 pub fn report_url(
     web_base: &str,
     repo_full_name: &str,
     branch: &str,
+    base_path: &str,
     cycle: &str,
     folder: &str,
 ) -> String {
-    format!("{web_base}/{repo_full_name}/blob/{branch}/meetings/{cycle}/{folder}/report.md")
+    format!("{web_base}/{repo_full_name}/blob/{branch}/{base_path}/{cycle}/{folder}/report.md")
 }
 
 /// The address of `transcript.md` next to a report.
@@ -128,7 +130,14 @@ mod tests {
 
     #[test]
     fn report_and_transcript_addresses() {
-        let r = report_url("https://github.com", "o/r", "main", "NOMAD", "2026-11-13");
+        let r = report_url(
+            "https://github.com",
+            "o/r",
+            "main",
+            "meetings",
+            "NOMAD",
+            "2026-11-13",
+        );
         assert_eq!(
             r,
             "https://github.com/o/r/blob/main/meetings/NOMAD/2026-11-13/report.md"

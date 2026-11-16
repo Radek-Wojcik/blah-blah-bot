@@ -68,6 +68,8 @@ pub struct LabOptions {
     pub remote: bool,
     /// The repository is linked to the GitHub repository (issues).
     pub linked: bool,
+    /// `targets.github.path` of the cycle; `None` leaves the default.
+    pub github_path: Option<&'static str>,
 }
 
 impl Default for LabOptions {
@@ -78,6 +80,7 @@ impl Default for LabOptions {
             discord: Some(PublishMode::OnApproval),
             remote: true,
             linked: true,
+            github_path: None,
         }
     }
 }
@@ -237,8 +240,11 @@ impl Lab {
 
         let seed = Repo::init_local(tmp.path().join("seed")).unwrap();
         let discord_ref = options.discord.map(|mode| (WEBHOOK_REF, mode));
-        seed.create_cycle(&fixture_cycle(Some(options.github), discord_ref))
-            .unwrap();
+        let mut cycle = fixture_cycle(Some(options.github), discord_ref);
+        if let (Some(path), Some(github)) = (options.github_path, cycle.targets.github.as_mut()) {
+            github.path = path.to_string();
+        }
+        seed.create_cycle(&cycle).unwrap();
         seed.save_topics(
             "NOMAD",
             &[topic("t-1", "Wheel size"), topic("t-2", "Battery")],

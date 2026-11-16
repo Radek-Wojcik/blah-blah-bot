@@ -40,7 +40,7 @@ Publishing. Implemented and tested against fake servers and local Git repositori
 
 #### Added
 
-- Publishing to the cycle repository: the report, the transcript with a time anchor per line, the meeting data and the screenshots are committed as new files under `meetings/<ID>/<date>` (a suffix `-2`, `-3` for a second meeting on a date) and pushed. The commit is built from the remote's tip with Git plumbing and a temporary index, so the working copy is never touched; a push refused because of a concurrent commit is built again on the new tip, up to three times per run. `topics.yaml` is merged per topic (last write wins, overridden remote versions are recorded).
+- Publishing to the cycle repository: the report, the transcript with a time anchor per line, the meeting data and the screenshots are committed as new files under `<path>/<ID>/<date>` (`meetings` unless `targets.github.path` says otherwise; a suffix `-2`, `-3` for a second meeting on a date) and pushed. The commit is built from the remote's tip with Git plumbing and a temporary index, so the working copy is never touched; a push refused because of a concurrent commit is built again on the new tip, up to three times per run. `topics.yaml` is merged per topic (last write wins, overridden remote versions are recorded).
 - GitHub issues: one per task with the label `cycle:<id>`, the assignee from the participant's GitHub login, the due date, a link to the report and to the transcript passage, the quote and a hidden marker that keeps a retry from creating a duplicate. The due date goes into the organization issue field "Target date" when there is one, otherwise a `Due:` line in the body.
 - Status proposals: `extract` returns `status_changes` and `reduce` turns them into `status_proposals` of the draft, which you approve, reject or comment on. An approved proposal closes or reopens the issue with a comment (or changes the topic in `topics.yaml`). Nothing is approved automatically.
 - Issue state is read before the briefing and on a manual pull (all states, with the links of issues to items): an item whose issue was closed counts as done, an item with an open issue carries its number in the context.
@@ -63,7 +63,6 @@ Publishing. Implemented and tested against fake servers and local Git repositori
 
 - Nothing has been published to a real repository or Discord channel yet. The organization issue field "Target date", the Discord upload limits for webhooks (a conservative 8 MiB per message is used), whether GitHub resolves the transcript anchors and the quality of status proposals from a real model are unverified.
 - The default rule per target (`on-approval` for both) is a proposal awaiting confirmation.
-- `targets.github.path` is accepted but not used: reports always go to `meetings/<ID>/<folder>`.
 - A meeting cannot be published twice or edited after publishing. A Discord message can be posted twice when a request times out after Discord stored it.
 - The Discord bot and Notion publishers are not part of this stage.
 

@@ -262,7 +262,7 @@ meetings/
         0001-00-12-41.png
 ```
 
-A second meeting on the same day gets the suffix `-2` (then `-3`), chosen against the remote when the commit is built. `meeting.json` is what the next meeting's context is built from; `report.md` is generated from it and is never parsed back. `transcript.md` has an anchor per line (`t-hh-mm-ss`) that issues and the report link to, and leaves out passages the user excluded. The publisher writes only into the meeting folder and merges `topics.yaml`; `targets.github.path` is validated but not yet used for the location.
+A second meeting on the same day gets the suffix `-2` (then `-3`), chosen against the remote when the commit is built. `meeting.json` is what the next meeting's context is built from; `report.md` is generated from it and is never parsed back. `transcript.md` has an anchor per line (`t-hh-mm-ss`) that issues and the report link to, and leaves out passages the user excluded. The publisher writes only into the meeting folder and merges `topics.yaml`; the meeting goes to `<targets.github.path>/<ID>/<folder>` (`meetings` by default), a path the cycle file validates and the publisher checks again before it touches Git.
 
 `cycle.yaml` (abridged):
 

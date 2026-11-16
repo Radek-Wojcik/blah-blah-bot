@@ -273,10 +273,24 @@ impl Repo {
 
     /// `meetings/<ID>`, the folder holding one `<date>/meeting.json` per meeting.
     pub fn meetings_dir(&self, id: &str) -> Result<PathBuf> {
+        self.meetings_dir_at(crate::cycle::DEFAULT_MEETINGS_PATH, id)
+    }
+
+    /// `<base>/<ID>` for a cycle that sets `targets.github.path`. A `base` that is not a safe
+    /// folder inside the repository is refused.
+    pub fn meetings_dir_at(&self, base: &str, id: &str) -> Result<PathBuf> {
         if !is_identifier(id) {
             return Err(CycleError::InvalidName(id.to_string()));
         }
-        Ok(self.root.join("meetings").join(id))
+        if let Some(problem) = crate::cycle::repo_path_problem(base) {
+            return Err(CycleError::Other(format!(
+                "the folder for meeting reports {base:?} is not usable: {problem}"
+            )));
+        }
+        Ok(base
+            .split('/')
+            .fold(self.root.clone(), |dir, name| dir.join(name))
+            .join(id))
     }
 
     // ----- Git -----
@@ -781,6 +795,24 @@ mod tests {
     fn set_identity(dir: &Path) {
         g(dir, &["config", "user.name", "Test User"]);
         g(dir, &["config", "user.email", "test@example.com"]);
+    }
+
+    #[test]
+    fn the_meetings_folder_is_inside_the_repository_or_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repo::init_local(dir.path().join("r")).unwrap();
+        assert_eq!(
+            repo.meetings_dir("NOMAD").unwrap(),
+            repo.root().join("meetings").join("NOMAD")
+        );
+        assert_eq!(
+            repo.meetings_dir_at("docs/team", "NOMAD").unwrap(),
+            repo.root().join("docs").join("team").join("NOMAD")
+        );
+        for bad in ["..", "a/../..", "/abs", "C:/x", ".git"] {
+            assert!(repo.meetings_dir_at(bad, "NOMAD").is_err(), "{bad}");
+        }
+        assert!(repo.meetings_dir_at("docs", "../x").is_err());
     }
 
     fn commit_all(dir: &Path, message: &str) {

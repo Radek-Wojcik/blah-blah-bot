@@ -883,14 +883,35 @@ pub fn sync_repo<S: ParticipantSync + ?Sized>(
     notes
 }
 
-/// The `meetings/<cycle>` folders of the registered repositories that exist: where earlier
+/// The folders of earlier meetings of a cycle inside one repository that exist: the folder
+/// the cycle publishes to (`targets.github.path`) and, when that is another one, the default
+/// `meetings/<cycle>` where meetings published before the change are.
+fn meeting_dirs_in(repo: &Repo, cycle: Option<&Cycle>, cycle_id: &str) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let configured = cycle.map(Cycle::meetings_path);
+    for base in configured
+        .into_iter()
+        .chain([cycle_store::DEFAULT_MEETINGS_PATH])
+    {
+        if let Ok(dir) = repo.meetings_dir_at(base, cycle_id) {
+            if dir.is_dir() && !dirs.contains(&dir) {
+                dirs.push(dir);
+            }
+        }
+    }
+    dirs
+}
+
+/// The meeting folders of a cycle in the registered repositories that exist: where earlier
 /// meetings of a cycle are kept besides the application's own drafts.
 pub fn previous_meeting_dirs(repos: &[CycleRepoSetting], cycle_id: &str) -> Vec<PathBuf> {
     repos
         .iter()
         .filter_map(|setting| Repo::open(&setting.path).ok())
-        .filter_map(|repo| repo.meetings_dir(cycle_id).ok())
-        .filter(|dir| dir.is_dir())
+        .flat_map(|repo| {
+            let cycle = repo.load_cycle(cycle_id).ok();
+            meeting_dirs_in(&repo, cycle.as_ref(), cycle_id)
+        })
         .collect()
 }
 
@@ -1172,12 +1193,7 @@ pub fn load_cycle_data(
         .map(|p| IssueCache::load(&p))
         .unwrap_or_default();
     let closed_issue_ids = cache.closed.iter().map(u64::to_string).collect();
-    let mut previous_dirs = Vec::new();
-    if let Ok(dir) = repo.meetings_dir(cycle_id) {
-        if dir.is_dir() {
-            previous_dirs.push(dir);
-        }
-    }
+    let previous_dirs = meeting_dirs_in(repo, Some(&cycle), cycle_id);
     Ok(Some(CycleData {
         cycle,
         templates,
@@ -2365,6 +2381,35 @@ pub(crate) mod tests {
             data.previous_dirs,
             vec![repo.meetings_dir("NOMAD").unwrap()]
         );
+
+        // A cycle that publishes to another folder reads the meetings from there as well as
+        // from the default one, where the meetings of before the change are.
+        let mut cycle = repo.load_cycle("NOMAD").unwrap();
+        cycle.targets.github = Some(GithubTarget {
+            path: "docs/notes".into(),
+            ..GithubTarget::default()
+        });
+        repo.save_cycle(&cycle).unwrap();
+        let other = repo.meetings_dir_at("docs/notes", "NOMAD").unwrap();
+        assert!(other.ends_with("docs/notes/NOMAD"));
+        assert_eq!(
+            load_cycle_data(lab.repos(), "NOMAD", false)
+                .unwrap()
+                .unwrap()
+                .previous_dirs,
+            vec![repo.meetings_dir("NOMAD").unwrap()],
+            "a folder that does not exist yet is left out"
+        );
+        std::fs::create_dir_all(&other).unwrap();
+        let expected = vec![other, repo.meetings_dir("NOMAD").unwrap()];
+        assert_eq!(
+            load_cycle_data(lab.repos(), "NOMAD", false)
+                .unwrap()
+                .unwrap()
+                .previous_dirs,
+            expected
+        );
+        assert_eq!(previous_meeting_dirs(lab.repos(), "NOMAD"), expected);
 
         // Through the trait, as the runner calls it (a local repository never pulls).
         let repos = lab.settings.cycle_repos.clone();

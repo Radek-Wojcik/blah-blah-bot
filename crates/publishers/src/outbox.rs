@@ -419,8 +419,18 @@ impl Dispatcher {
             })
         });
         let message = format!("Add meeting {}/{{folder}}", p.cycle);
+        // `targets.github.path`; the publisher refuses a value that is not a safe folder.
+        let base_path = ctx
+            .cycle
+            .targets
+            .github
+            .as_ref()
+            .map_or(cycle_store::cycle::DEFAULT_MEETINGS_PATH, |g| {
+                g.path.as_str()
+            });
         let request = PublishRequest {
             cycle_id: &p.cycle,
+            base_path,
             date: &p.date,
             files: &files,
             topics: topics.as_deref(),
@@ -448,6 +458,7 @@ impl Dispatcher {
                 &addr::web_base(&g.api),
                 &g.repo.full_name(),
                 &published.branch,
+                base_path,
                 &p.cycle,
                 &published.folder,
             )),

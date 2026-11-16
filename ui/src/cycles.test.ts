@@ -3,6 +3,7 @@ import {
   cycleIdError,
   duplicateTypes,
   emptyTemplate,
+  githubPathProblem,
   isDirty,
   issueText,
   issuesAt,
@@ -117,5 +118,34 @@ describe("repoState", () => {
     expect(repoState({ kind: "clone", remote: "https://x/y.git", stateAsOf: null })).toBe(
       "Not pulled yet",
     );
+  });
+});
+
+describe("folder for meeting reports", () => {
+  it("accepts a relative folder inside the repository", () => {
+    for (const ok of ["meetings", "docs/meetings", ".github/notes", "a_b-c/d.e"])
+      expect(githubPathProblem(ok), ok).toBeNull();
+  });
+
+  it("refuses everything that could leave the repository or break on Windows", () => {
+    for (const bad of [
+      "",
+      "..",
+      "../outside",
+      "a/../b",
+      "./meetings",
+      "/etc",
+      "\\share",
+      "C:/temp",
+      "c:meetings",
+      "a\\b",
+      "a//b",
+      "meetings/",
+      ".git",
+      "x/.GIT/y",
+      "trailing.",
+      "sp ace",
+    ])
+      expect(githubPathProblem(bad), JSON.stringify(bad)).not.toBeNull();
   });
 });

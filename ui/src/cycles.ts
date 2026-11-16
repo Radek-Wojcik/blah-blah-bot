@@ -27,6 +27,28 @@ export function newCycleError(id: string, name: string): string | null {
   return null;
 }
 
+/**
+ * Why a folder for the meeting reports (`targets.github.path`) cannot be used, or null. The
+ * same rules as the backend's: relative to the repository, `/` between names, no `.` or `..`
+ * name, no drive letter or backslash, no `.git` folder, no name that ends in a dot.
+ */
+export function githubPathProblem(path: string): string | null {
+  if (path === "") return "the folder is empty";
+  if (path.startsWith("/") || path.startsWith("\\"))
+    return "the folder must be relative to the repository, not absolute";
+  if (/^[A-Za-z]:/.test(path)) return "the folder must not start with a drive letter";
+  if (path.includes("\\")) return "use / between folder names, not a backslash";
+  for (const name of path.split("/")) {
+    if (name === "") return "the folder has an empty name (a doubled or trailing /)";
+    if (name === "." || name === "..") return "the folder must not contain . or .. names";
+    if (name.toLowerCase() === ".git") return "the folder must not be inside .git";
+    if (name.endsWith(".")) return "a folder name must not end with a dot";
+    if (!/^[A-Za-z0-9._-]+$/.test(name))
+      return "folder names may only have letters, digits, dots, hyphens and underscores";
+  }
+  return null;
+}
+
 /** Issues whose path is `path` itself or something inside it (`participants[2]` includes `participants[2].id`). */
 export function issuesAt(issues: CycleIssue[], path: string): CycleIssue[] {
   return issues.filter(

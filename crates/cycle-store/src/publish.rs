@@ -75,6 +75,10 @@ impl std::fmt::Debug for GitAuth {
 #[derive(Debug, Clone)]
 pub struct PublishRequest<'a> {
     pub cycle_id: &'a str,
+    /// The folder of the meetings in the repository (`targets.github.path`, `meetings` by
+    /// default): the meeting goes to `<base_path>/<cycle>/<folder>/`. Validated with
+    /// [`crate::cycle::repo_path_problem`] before anything is read or written.
+    pub base_path: &'a str,
     /// The day of the meeting, `YYYY-MM-DD`: the name of the folder unless taken.
     pub date: &'a str,
     pub files: &'a [PublishFile],
@@ -98,7 +102,7 @@ pub enum LocalSync {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Published {
-    /// The folder below `meetings/<ID>/`: `2026-11-13`, `2026-11-13-2`, ...
+    /// The folder below `<base_path>/<ID>/`: `2026-11-13`, `2026-11-13-2`, ...
     pub folder: String,
     /// The commit that holds the meeting.
     pub commit: String,
@@ -462,8 +466,8 @@ fn identity_env(g: &Git) -> Result<Vec<(String, String)>, PublishError> {
         .collect())
 }
 
-fn meeting_path(cycle_id: &str, folder: &str, rel: &str) -> String {
-    format!("meetings/{cycle_id}/{folder}/{rel}")
+fn meeting_path(base: &str, cycle_id: &str, folder: &str, rel: &str) -> String {
+    format!("{base}/{cycle_id}/{folder}/{rel}")
 }
 
 fn topics_path(cycle_id: &str) -> String {
@@ -494,6 +498,12 @@ fn valid_date(date: &str) -> bool {
 fn validate(req: &PublishRequest) -> Result<(), PublishError> {
     if !is_identifier(req.cycle_id) {
         return Err(PublishError::permanent("the cycle id is not valid"));
+    }
+    if let Some(problem) = crate::cycle::repo_path_problem(req.base_path) {
+        return Err(PublishError::permanent(format!(
+            "the folder for meeting reports ({:?}) is not usable: {problem}",
+            req.base_path
+        )));
     }
     if !valid_date(req.date) {
         return Err(PublishError::permanent(
@@ -580,7 +590,7 @@ fn build(
     // The blobs of the files, written to the object database.
     let mut blobs = Vec::with_capacity(req.files.len());
     for file in req.files {
-        let repo_path = meeting_path(req.cycle_id, req.date, &file.rel);
+        let repo_path = meeting_path(req.base_path, req.cycle_id, req.date, &file.rel);
         let path = file.path.to_string_lossy().into_owned();
         let sha = gi.ok(&["hash-object", "-w", &format!("--path={repo_path}"), &path])?;
         blobs.push(sha);
@@ -593,7 +603,7 @@ fn build(
                 "ls-tree",
                 "--name-only",
                 p,
-                &format!("meetings/{}/", req.cycle_id),
+                &format!("{}/{}/", req.base_path, req.cycle_id),
             ])?
             .lines()
             .filter_map(|l| l.rsplit('/').next())
@@ -616,7 +626,10 @@ fn build(
                         "rev-parse",
                         "--verify",
                         "-q",
-                        &format!("{p}:{}", meeting_path(req.cycle_id, &folder, &file.rel)),
+                        &format!(
+                            "{p}:{}",
+                            meeting_path(req.base_path, req.cycle_id, &folder, &file.rel)
+                        ),
                     ])?;
                     if there.as_deref() != Some(blob.as_str()) {
                         all = false;
@@ -629,7 +642,7 @@ fn build(
         };
         if same {
             if let Some(p) = parent {
-                let dir = format!("meetings/{}/{folder}", req.cycle_id);
+                let dir = format!("{}/{}/{folder}", req.base_path, req.cycle_id);
                 let commit = last_commit_touching(&gi, p, &dir)?;
                 return Ok(Built::Existing { folder, commit });
             }
@@ -642,7 +655,7 @@ fn build(
     for (file, blob) in req.files.iter().zip(&blobs) {
         entries.push(format!(
             "100644,{blob},{}",
-            meeting_path(req.cycle_id, &folder, &file.rel)
+            meeting_path(req.base_path, req.cycle_id, &folder, &file.rel)
         ));
     }
 
@@ -947,7 +960,7 @@ pub fn publish_meeting_observed(
     let paths = |folder: &str| -> Vec<String> {
         req.files
             .iter()
-            .map(|f| meeting_path(req.cycle_id, folder, &f.rel))
+            .map(|f| meeting_path(req.base_path, req.cycle_id, folder, &f.rel))
             .collect()
     };
 
