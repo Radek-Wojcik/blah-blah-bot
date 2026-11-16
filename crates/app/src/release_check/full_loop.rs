@@ -8,10 +8,14 @@
 //! folder (a clone of the test repository, a database file, the recordings), so the data of
 //! the user's own installation is not touched.
 //!
-//! What stays behind on the real services: two commits on `main` of the test repository
-//! (the earlier meeting and the demo meeting, in folders of a cycle that only exists for this
-//! run), closed issues labelled `cycle:RC<time>` and two messages in the test channel. The
-//! issues are closed again at the end, also when a step fails.
+//! After the demo meeting is published the check adds a correction to it, as the user does
+//! after a meeting went out: the correction becomes a new file in the meeting's folder and a
+//! comment on the issue of the item, and the next briefing carries it.
+//!
+//! What stays behind on the real services: three commits on `main` of the test repository
+//! (the earlier meeting, the demo meeting and its correction, in folders of a cycle that only
+//! exists for this run), closed issues labelled `cycle:RC<time>` and two messages in the test
+//! channel. The issues are closed again at the end, also when a step fails.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -933,6 +937,94 @@ fn run(world: &World, log: Option<Captured>) {
     assert_eq!(again.queued, 0, "nothing is queued twice");
     assert!(rig.ops_of(DEMO).iter().all(|o| o.state == "done"));
 
+    // ----- a correction after publication: a new file and a comment on the issue --------------
+    let note = "The camera mount moved to the end of the month.";
+    let view = rig
+        .publishing
+        .add_correction(DEMO, note, Some("i1"), None, Some("2026-11-16"))
+        .expect("the correction is written");
+    assert_eq!(view.corrections[0].state, "local", "on approval it waits");
+    assert!(view.in_repository && view.locked);
+    let queued = rig
+        .publishing
+        .publish_corrections(DEMO, &[])
+        .expect("the correction is queued");
+    assert_eq!(queued.queued, 2, "the file and the comment");
+    let ops = rig.settle(DEMO, &close, within);
+    let file = op(&ops, "correction:c1").result.as_ref().unwrap().clone();
+    assert_eq!(file["file"], "corrections.md", "{file}");
+    assert_eq!(file["pushed"], true);
+    assert_eq!(file["local"], "updated", "{file}");
+    let correction_path = format!("{folder_in_repo}/corrections.md");
+    git_with_token(
+        Some(&verify),
+        &base,
+        &world.token,
+        &["fetch", "--quiet", "origin", "main"],
+    );
+    let published = git_with_token(
+        Some(&verify),
+        &base,
+        &world.token,
+        &["show", &format!("origin/main:{correction_path}")],
+    );
+    let read_back = cycle_store::corrections::parse_markdown(&published)
+        .expect("the file is a correction note");
+    assert_eq!(read_back.text, note);
+    assert_eq!(
+        (
+            read_back.marker.cycle.as_str(),
+            read_back.marker.meeting.as_str()
+        ),
+        (cycle_id.as_str(), DEMO)
+    );
+    assert_eq!(read_back.marker.about.as_deref(), Some("i1"));
+    let still = git_with_token(
+        Some(&verify),
+        &base,
+        &world.token,
+        &[
+            "show",
+            &format!("origin/main:{folder_in_repo}/meeting.json"),
+        ],
+    );
+    assert_eq!(
+        Draft::from_json_str(&still).expect("meeting.json validates"),
+        demo,
+        "the published meeting itself is as it was"
+    );
+    let comments = api.get(&format!("/issues/{camera_n}/comments"));
+    let comments = comments.as_array().unwrap();
+    assert_eq!(comments.len(), 1, "one comment on the issue of the item");
+    let text = comments[0]["body"].as_str().unwrap();
+    assert!(text.contains(note), "{text}");
+    assert!(
+        text.contains(&correction_path),
+        "the link to the file: {text}"
+    );
+    assert_eq!(
+        cycle_store::CorrectionMarker::parse(text).map(|m| (m.meeting, m.id)),
+        Some((DEMO.to_string(), "c1".to_string()))
+    );
+    assert_eq!(
+        api.get(&format!("/issues/{camera_n}"))["state"],
+        "open",
+        "a correction does not close an issue"
+    );
+    let view = rig.publishing.list_corrections(DEMO).unwrap();
+    assert_eq!(view.corrections[0].state, "published");
+    assert_eq!(
+        view.corrections[0].file_name.as_deref(),
+        Some("corrections.md")
+    );
+    // Asked again, nothing is queued twice.
+    let again = rig
+        .publishing
+        .publish_corrections(DEMO, &["c1".to_string()])
+        .unwrap();
+    assert_eq!(again.queued, 0);
+    println!("correction c1 is {correction_path}, with a comment on #{camera_n}");
+
     // ----- the next briefing: the closed issue is done ----------------------------------------
     let repo = Repo::open(&rig.clone).unwrap();
     let wanted_open = [camera_n, wheels_n];
@@ -996,6 +1088,15 @@ fn run(world: &World, log: Option<Captured>) {
             "{found:?}"
         );
     }
+    let corrections = context.value["corrections"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the next context has the correction: {}", context.value));
+    assert_eq!(corrections.len(), 1);
+    assert_eq!(corrections[0]["text"], note);
+    assert_eq!(corrections[0]["item"], "Mount the rover camera");
+    assert_eq!(corrections[0]["issue"], format!("#{camera_n}"));
+    assert_eq!(corrections[0]["meeting"], "2026-11-13");
+    assert_eq!(corrections[0]["date"], "2026-11-16");
     let topics_now = context.value["open_topics"].to_string();
     assert!(
         topics_now.contains("Battery supplier for the rover"),
