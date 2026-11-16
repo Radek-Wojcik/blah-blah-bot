@@ -3,7 +3,7 @@
 //!
 //! The defaults are two constants in `cycle-store` (`DEFAULT_GITHUB_PUBLISH`,
 //! `DEFAULT_DISCORD_PUBLISH`), read by the parser of `cycle.yaml` and by these rules alike:
-//! changing one is a change of a constant. They are proposals of ADR 0018, chosen because
+//! changing one is a change of a constant. They are set by ADR 0019, chosen because
 //! what is published cannot be taken back: a pushed transcript stays in the history of the
 //! repository, and an issue assignment or a Discord ping has already notified somebody.
 //!
