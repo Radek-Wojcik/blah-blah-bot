@@ -149,6 +149,17 @@ impl Frame {
 
 /// Encode a frame as an 8-bit RGBA PNG.
 pub fn encode_png(frame: &Frame) -> Result<Vec<u8>> {
+    encode_png_with(frame, png::Compression::default())
+}
+
+/// Encode a frame as a lossless PNG as fast as is sensible, for a preview that is shown at
+/// once: the file is larger than [`encode_png`] makes it, but a desktop-sized frame takes a
+/// fraction of the time.
+pub fn encode_png_fast(frame: &Frame) -> Result<Vec<u8>> {
+    encode_png_with(frame, png::Compression::Fast)
+}
+
+fn encode_png_with(frame: &Frame, compression: png::Compression) -> Result<Vec<u8>> {
     frame.validate()?;
     if frame.rect.is_empty() {
         return Err(RecorderError::InvalidArgument(
@@ -159,6 +170,7 @@ pub fn encode_png(frame: &Frame) -> Result<Vec<u8>> {
     let mut encoder = png::Encoder::new(&mut out, frame.rect.width, frame.rect.height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_compression(compression);
     let mut writer = encoder
         .write_header()
         .map_err(|e| RecorderError::screenshot("write PNG header", e))?;
@@ -648,6 +660,14 @@ mod tests {
         assert_eq!((info.width, info.height), (13, 9));
         assert_eq!(info.color_type, png::ColorType::Rgba);
         assert_eq!(info.bit_depth, png::BitDepth::Eight);
+        assert_eq!(pixels, frame.rgba);
+    }
+
+    #[test]
+    fn fast_png_is_lossless() {
+        let frame = gradient(Rect::new(3, -2, 64, 48));
+        let (info, pixels) = decode(&encode_png_fast(&frame).unwrap());
+        assert_eq!((info.width, info.height), (64, 48));
         assert_eq!(pixels, frame.rgba);
     }
 
