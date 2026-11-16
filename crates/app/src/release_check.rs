@@ -13,6 +13,8 @@
 //! test removes it again), and a closed issue with the label `cycle:RC<time>` (an issue
 //! cannot be deleted through the API).
 
+mod full_loop;
+
 use std::path::Path;
 use std::process::Command;
 

@@ -488,6 +488,13 @@ impl Publishing {
         }
     }
 
+    /// Ends the background thread (its channel is closed). For tests that start the service
+    /// and must not leave it running over files that are about to be removed.
+    #[cfg(test)]
+    pub fn stop(&self) {
+        *lock(&self.tx) = None;
+    }
+
     fn send(&self, command: Command) {
         if let Some(tx) = lock(&self.tx).as_ref() {
             let _ = tx.send(command);

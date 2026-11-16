@@ -61,10 +61,13 @@ Publishing. Implemented and tested against fake servers and local Git repositori
 - The extraction answer must contain `status_changes` (possibly empty); answers without it are retried. Existing `windows.json` files still reduce.
 - Open issues are read through the new HTTP layer (no redirects, redaction) and, with a token, also from private repositories.
 - Publishing commits only the meeting folder and `topics.yaml`; edits of `cycle.yaml` and templates stay in the working tree.
+- An issue whose assignee GitHub refuses with 422 (a login that does not exist) is made without the assignee instead of failing; the outcome says that the assignee was dropped.
+- After a push, the clone catches up when its `topics.yaml` was never committed (a cycle created in the clone) or lacks the topics the meeting added; before, the branch stayed behind and the next briefing did not see the meeting.
 
 #### Known issues
 
-- Nothing has been published to a real repository or Discord channel yet. The organization issue field "Target date", the Discord upload limits for webhooks (a conservative 8 MiB per message is used), whether GitHub resolves the transcript anchors and the quality of status proposals from a real model are unverified.
+- The whole flow was checked once against a private test repository and a test Discord webhook (`full_loop_demo_meeting`, `docs/TESTING.md`): the commit, the issues with assignee, due date and marker, an issue closed by a status change, the post and the next briefing. A public repository, GitHub Enterprise and the rest of this list were not.
+- Still unverified: the organization issue field "Target date", the Discord upload limits for webhooks (a conservative 8 MiB per message is used), whether GitHub scrolls to the transcript anchors and the quality of status proposals from a real model.
 - The default rule per target (`on-approval` for both) is a proposal awaiting confirmation.
 - A meeting cannot be published twice or edited after publishing. A Discord message can be posted twice when a request times out after Discord stored it.
 - The Discord bot and Notion publishers are not part of this stage.
