@@ -102,6 +102,8 @@ There is no threshold policy for status proposals yet. The values below are prop
 | Schema validity (up to two retries) | 100% |
 | Meetings without a finished target that get a proposal | 0% |
 
+After the extraction prompt of the 0.5.0 release was merged with the status lines, both measurements were repeated on the same model (`stage5-status-gemma-4-12b-q4-merged.json`, `stage4-extraction-gemma-4-12b-q4-with-status.json`): proposal precision 100% and recall 85.7% as before, and on the four meetings pl-0, pl-1, en-0 and mixed-0 task recall 94.7% and precision 92.7% (88.3% and 93.3% with the 0.5.0 prompt alone).
+
 **Processing time**
 
 | Measure | Target |
