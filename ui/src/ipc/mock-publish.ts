@@ -34,6 +34,7 @@ import type {
   OutboxState,
   PlanBlock,
   PlanSummary,
+  PlannedTopicView,
   PublicRepoConfirmation,
   PublishPlan,
   PublishResult,
@@ -43,6 +44,8 @@ import type {
   RepoVisibility,
   Topic,
   TopicConflictDetail,
+  TopicDelta,
+  TopicsPlan,
 } from "./types";
 
 type PublishMethods = Pick<
@@ -98,6 +101,8 @@ export interface MockHooks {
   nextContext(cycleId: string): { text: string; issue: string }[];
   /** The `topics.yaml` of the remote, as a colleague left it. */
   remoteTopics(): Topic[];
+  /** The plan cannot compare `topics.yaml` with the remote: it names the topics instead. */
+  setTopicsUnknown(unknown: boolean): void;
 }
 
 export interface MockPublishing {
@@ -211,6 +216,8 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
     nextIssue: 13,
     discord: [] as FakeDiscordPost[],
     remoteTopics: null as Topic[] | null,
+    /** `topics.yaml` cannot be compared (a hook): the plan falls back to the topic names. */
+    topicsUnknown: false,
   };
   world.remoteTopics = demoRemoteTopics(cycles.topics("NOMAD"));
   /** Only whether a token is stored, never the token. */
@@ -357,7 +364,8 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
         .filter((o) => o.kind === "commit_meeting" && o.state === "done" && o.id !== op.id)
         .map((o) => o.result?.folder),
     );
-    const base = `meetings/${snap.cycleId}/${snap.draft.date}`;
+    const path = cycles.cycle(snap.cycleId)?.targets.github?.path ?? "meetings";
+    const base = `${path}/${snap.cycleId}/${snap.draft.date}`;
     let folder = base;
     for (let n = 2; taken.has(folder); n += 1) folder = `${base}-${n}`;
     const merge = mergeTopics(snap);
@@ -379,25 +387,23 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
   /**
    * The `topics.yaml` merge: last write wins per topic. Topics this meeting added or changed
    * replace the remote's; a topic the remote also changed since the last pull is a conflict
-   * (ours is kept, both versions are reported). Topics only the remote touched are kept.
+   * (ours is kept, both versions are reported). Topics only the remote touched are kept. Pure:
+   * nothing is written, so the plan can show it before the commit does it.
    */
-  function mergeTopics(snap: Snapshot): {
-    topics: Topic[];
-    summary: NonNullable<OpResult["topics"]>;
-  } {
-    const local = cycles.topics(snap.cycleId);
+  function topicsMerge(draft: Draft, cycleId: string) {
+    const local = cycles.topics(cycleId);
     const remote = world.remoteTopics ?? local;
     const ours = new Map<string, Topic>();
-    for (const item of snap.draft.items) {
+    for (const item of draft.items) {
       if (item.type === "topic" && item.relatesTo === null)
-        ours.set(`${snap.draft.meetingId}-${item.id}`, {
-          id: `${snap.draft.meetingId}-${item.id}`,
+        ours.set(`${draft.meetingId}-${item.id}`, {
+          id: `${draft.meetingId}-${item.id}`,
           text: item.text,
           status: "open",
-          openedIn: snap.draft.date,
+          openedIn: draft.date,
         });
     }
-    for (const p of snap.draft.statusProposals ?? []) {
+    for (const p of draft.statusProposals ?? []) {
       if (p.decision !== "approved" || p.target.startsWith("#")) continue;
       const base = local.find((t) => t.id === p.target);
       if (!base) continue;
@@ -406,7 +412,7 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
       ours.set(p.target, {
         ...rest,
         status: p.status === "done" ? "closed" : "open",
-        ...(p.status === "done" ? { closedIn: snap.draft.date } : {}),
+        ...(p.status === "done" ? { closedIn: draft.date } : {}),
       });
     }
     const conflicts: TopicConflictDetail[] = [];
@@ -422,28 +428,69 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
         });
       return mine;
     });
-    let added = 0;
+    const added: Topic[] = [];
     for (const [id, t] of ours) {
       if (!remote.some((x) => x.id === id)) {
         merged.push(t);
-        added += 1;
+        added.push(t);
       }
     }
     const changed = merged.filter((t) => {
       const r = remote.find((x) => x.id === t.id);
       return r !== undefined && JSON.stringify(r) !== JSON.stringify(t);
-    }).length;
+    });
+    return { remote, merged, conflicts, added, changed };
+  }
+
+  function mergeTopics(snap: Snapshot): {
+    topics: Topic[];
+    summary: NonNullable<OpResult["topics"]>;
+  } {
+    const m = topicsMerge(snap.draft, snap.cycleId);
     // What the colleague had is now in the local clone too, and the remote has our change.
-    world.remoteTopics = structuredClone(merged);
+    world.remoteTopics = structuredClone(m.merged);
     return {
-      topics: merged,
+      topics: m.merged,
       summary: {
-        added,
-        changed,
+        added: m.added.length,
+        changed: m.changed.length,
         removed: 0,
-        conflicts: conflicts.map((c) => c.id),
-        conflict_details: conflicts,
+        conflicts: m.conflicts.map((c) => c.id),
+        conflict_details: m.conflicts,
       },
+    };
+  }
+
+  /** `topics.yaml` before and after for the plan, per topic. */
+  function topicsPlan(draft: Draft, cycleId: string, remote: boolean): TopicsPlan {
+    const m = topicsMerge(draft, cycleId);
+    const view = (t: Topic): PlannedTopicView => ({
+      text: t.text,
+      status: t.status,
+      openedIn: t.openedIn,
+      closedIn: t.closedIn ?? null,
+    });
+    const overrides = (id: string) => m.conflicts.some((c) => c.id === id);
+    const changes: TopicDelta[] = [
+      ...m.added.map((t): TopicDelta => ({
+        id: t.id,
+        change: "added",
+        before: null,
+        after: view(t),
+        overridesRemote: overrides(t.id),
+      })),
+      ...m.changed.map((t): TopicDelta => ({
+        id: t.id,
+        change: "changed",
+        before: view(m.remote.find((x) => x.id === t.id)!),
+        after: view(t),
+        overridesRemote: overrides(t.id),
+      })),
+    ];
+    return {
+      againstRemote: remote,
+      changes,
+      unchanged: m.merged.length - m.added.length - m.changed.length,
     };
   }
 
@@ -616,12 +663,24 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
         );
       }
       for (const item of draft.items) {
-        if (item.type === "topic" && item.relatesTo === null)
-          summary.topicsAdded.push(`${draft.meetingId}-${item.id}`);
+        if (item.type === "topic" && item.relatesTo === null) summary.topicsAdded.push(item.text);
       }
       for (const p of draft.statusProposals ?? []) {
         if (p.decision === "approved" && !p.target.startsWith("#"))
           summary.topicsSet.push({ id: p.target, open: p.status === "open" });
+      }
+      if (summary.topicsAdded.length > 0 || summary.topicsSet.length > 0) {
+        if (world.topicsUnknown) {
+          notes.push(
+            "topics.yaml could not be compared with the repository: the topics are listed by name only",
+          );
+        } else {
+          summary.topics = topicsPlan(draft, cycleId, info.repo.remote !== null);
+          if (info.repo.remote === null)
+            notes.push(
+              "topics.yaml is compared with this clone only: the repository has no remote.",
+            );
+        }
       }
       summary.proposalsPending = (draft.statusProposals ?? []).filter(
         (p) => p.decision === "proposed",
@@ -1022,6 +1081,7 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
         .map((i) => ({ text: i.title, issue: `#${i.number}` }));
     },
     remoteTopics: () => structuredClone(world.remoteTopics ?? []),
+    setTopicsUnknown: (unknown) => void (world.topicsUnknown = unknown),
   };
 
   return { methods, hooks, isLocked, refreshIssues };

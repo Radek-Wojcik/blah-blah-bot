@@ -849,6 +849,11 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       if (result.saved) emitCycles();
       return result;
     },
+    setTargetRule: async (cycleId, target, mode) => {
+      const targets = cycles.setTargetRule(cycleId, target, mode);
+      emitCycles();
+      return targets;
+    },
     listTemplates: async (cycleId) => cycles.listTemplates(cycleId),
     getTemplate: async (cycleId, name) => cycles.getTemplate(cycleId, name),
     saveTemplate: async (cycleId, template) => {

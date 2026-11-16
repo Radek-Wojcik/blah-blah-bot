@@ -10,11 +10,15 @@ interface Hooks {
   setVisibility(v: "public" | "private"): void;
   discordPosts(): { content: string }[];
   nextContext(cycleId: string): { text: string; issue: string }[];
+  setTopicsUnknown(unknown: boolean): void;
 }
 const hooks = <T>(page: Page, run: (h: Hooks) => T): Promise<T> =>
   page.evaluate(`(${run.toString()})(window.__bbbMock)`) as Promise<T>;
 
 const panel = (page: Page) => page.getByRole("region", { name: "Publishing" });
+/** The switch of a target in the panel: Off, On approval, Automatic. */
+const rule = (page: Page, target: "GitHub" | "Discord") =>
+  panel(page).getByRole("radiogroup", { name: `${target} publishing rule` });
 const statuses = (page: Page) => page.getByRole("region", { name: "Status changes" });
 
 async function approveAll(page: Page) {
@@ -224,13 +228,20 @@ test.describe("publishing on the mock backend", () => {
     await page.goto(DRAFT);
     const discord = panel(page).getByRole("checkbox", { name: /Publish to Discord/ });
     await expect(discord).toBeChecked();
-    await panel(page).getByLabel("Discord publishing rule").selectOption("off");
+    await expect(rule(page, "Discord").getByRole("radio")).toHaveText([
+      "Off",
+      "On approval",
+      "Automatic",
+    ]);
+    await expect(rule(page, "Discord").getByRole("radio", { name: "On approval" })).toBeChecked();
+    await rule(page, "Discord").getByRole("radio", { name: "Off" }).click();
+    await expect(rule(page, "Discord").getByRole("radio", { name: "Off" })).toBeChecked();
     await expect(discord).toBeDisabled();
     await expect(discord).not.toBeChecked();
     await expect(panel(page).getByRole("list", { name: "What will happen" })).not.toContainText(
       "Discord",
     );
-    await panel(page).getByLabel("Discord publishing rule").selectOption("on-approval");
+    await rule(page, "Discord").getByRole("radio", { name: "On approval" }).click();
     await expect(discord).toBeEnabled();
     await expect(panel(page).getByRole("list", { name: "What will happen" })).toContainText(
       "Post the summary to Discord",
@@ -239,6 +250,94 @@ test.describe("publishing on the mock backend", () => {
     await page.getByRole("button", { name: "Cycles", exact: true }).click();
     await page.getByRole("button", { name: "Edit NOMAD" }).click();
     await expect(page.getByLabel("Discord publish")).toHaveValue("on-approval");
+  });
+
+  test("Automatic is a position of the switch with its warning, and status changes stay manual", async ({
+    page,
+  }) => {
+    await page.goto(DRAFT);
+    const auto = rule(page, "GitHub").getByRole("radio", { name: "Automatic" });
+    await auto.click();
+    await expect(auto).toBeChecked();
+    await expect(panel(page)).toContainText("Automatic: the report, the transcript");
+    await expect(panel(page)).toContainText("cannot be taken back");
+    // What no rule changes is said next to the switch, and holds: nothing is approved by itself.
+    await expect(panel(page)).toContainText(
+      "Status changes are never written back automatically, with any rule",
+    );
+    await expect(panel(page)).toContainText("3 status changes are not approved");
+    await expect(panel(page).getByRole("list", { name: "What will happen" })).not.toContainText(
+      "Close issue",
+    );
+    // The choice reaches cycle.yaml: the cycle editor shows it.
+    await page.getByRole("button", { name: "Cycles", exact: true }).click();
+    await page.getByRole("button", { name: "Edit NOMAD" }).click();
+    await expect(page.getByLabel("GitHub publish")).toHaveValue("auto");
+  });
+
+  test("the public repository check still holds under Automatic", async ({ page }) => {
+    await page.goto(DRAFT);
+    await rule(page, "GitHub").getByRole("radio", { name: "Automatic" }).click();
+    await expect(panel(page)).toContainText(
+      "is public: everybody can read what is published to it",
+    );
+    await panel(page).getByRole("button", { name: "Publish", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Publish to a public repository?" });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toHaveCount(0);
+    // Nothing was queued, and Off makes the target unavailable, also for a click.
+    await expect(panel(page).getByRole("list", { name: "Outbox" })).toHaveCount(0);
+    await rule(page, "GitHub").getByRole("radio", { name: "Off" }).click();
+    await expect(panel(page).getByRole("checkbox", { name: /Publish to GitHub/ })).toBeDisabled();
+  });
+
+  test("topics.yaml is shown before and after, per topic, before publishing", async ({ page }) => {
+    await page.goto(DRAFT);
+    const diff = panel(page).getByRole("list", { name: "Planned topic changes" });
+    // Only the new topic is planned until the closing of t-1 is approved.
+    await expect(diff.getByRole("listitem")).toHaveCount(1);
+    await expect(diff.getByRole("listitem", { name: "Topic m5-i07 added" })).toContainText(
+      "+ [open] Confirm the delivery date of the antenna array",
+    );
+    await statuses(page).getByRole("button", { name: "Approve t-1" }).click();
+    const changed = diff.getByRole("listitem", { name: "Topic t-1 changed" });
+    await expect(changed).toContainText("− [open] Decide the rover wheel size and the tyre type");
+    await expect(changed).toContainText("+ [closed] Decide the rover wheel size");
+    await expect(changed).toContainText("text differs");
+    await expect(changed).toContainText("Someone else changed this topic since your last pull");
+    await expect(panel(page)).toContainText("Compared with the remote as of the last time");
+    // Looking changes nothing: no operation exists.
+    await expect(panel(page).getByRole("list", { name: "Outbox" })).toHaveCount(0);
+  });
+
+  test("when topics.yaml cannot be compared the plan names the topics and says so", async ({
+    page,
+  }) => {
+    await page.goto(DRAFT);
+    await hooks(page, (h) => h.setTopicsUnknown(true));
+    await statuses(page).getByRole("button", { name: "Approve t-1" }).click();
+    await expect(panel(page)).toContainText("listed by name only");
+    await expect(panel(page).getByRole("list", { name: "Planned topic changes" })).toHaveCount(0);
+    const plan = panel(page).getByRole("list", { name: "What will happen" });
+    await expect(plan).toContainText("Add the topic");
+    await expect(plan).toContainText("Close the topic t-1");
+  });
+
+  test("the rule of every cycle is set in the settings as well", async ({ page }) => {
+    await page.goto(MAIN + "&page=settings");
+    const github = page.getByRole("radiogroup", {
+      name: "GitHub, cycle Nomad rover publishing rule",
+    });
+    await expect(github.getByRole("radio", { name: "On approval" })).toBeChecked();
+    await github.getByRole("radio", { name: "Automatic" }).click();
+    await expect(github.getByRole("radio", { name: "Automatic" })).toBeChecked();
+    await expect(
+      page.getByText("Status changes are never written back automatically"),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Meetings", exact: true }).click();
+    await page.getByRole("button", { name: /^Open the draft of ORBIT weekly sync/ }).click();
+    await expect(rule(page, "GitHub").getByRole("radio", { name: "Automatic" })).toBeChecked();
   });
 
   test("a missing webhook blocks the Discord post and the settings fix it", async ({ page }) => {

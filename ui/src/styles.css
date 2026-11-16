@@ -2749,3 +2749,34 @@ textarea {
 .md-discord .md-ref {
   color: #00a8fc;
 }
+.rule-switch {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.field-label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 0.75em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.target-rule-warn {
+  flex: 1 1 100%;
+  margin: 0;
+  padding: 4px 8px;
+  border-left: 2px solid var(--yellow);
+  color: var(--text);
+  font-size: 0.8em;
+}
+.conflict-plain {
+  border-left-color: var(--line);
+}
+.rule-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 6px 16px;
+  margin-bottom: 12px;
+}

@@ -1,8 +1,23 @@
 import { useCallback, useEffect, useId, useState } from "react";
 import { useBackend } from "../backend-context";
 import { errorMessage, useCycles } from "../hooks";
-import type { CycleListItem, CycleRepoView, PublishingSecrets } from "../ipc/types";
-import { parseWebhook, tokenProblem } from "../publish";
+import type {
+  CycleListItem,
+  CycleRepoView,
+  CycleTargets,
+  PublishMode,
+  PublishTargetName,
+  PublishingSecrets,
+} from "../ipc/types";
+import {
+  DEFAULT_PUBLISH_RULE,
+  RULE_HELP,
+  STATUS_WRITE_BACK_NOTE,
+  autoWarning,
+  parseWebhook,
+  tokenProblem,
+} from "../publish";
+import { RuleSwitch } from "./RuleSwitch";
 
 /** What a check of a stored secret answered. */
 interface Check {
@@ -214,6 +229,86 @@ function RepoLink(props: {
 }
 
 /**
+ * The rule of each target of one cycle. A change is saved to `cycle.yaml` at once, with nothing
+ * else in the file touched. Discord is only there when the cycle has a Discord target.
+ */
+function CycleRules(props: { cycle: CycleListItem; version: unknown }) {
+  const { cycle } = props;
+  const backend = useBackend();
+  const [targets, setTargets] = useState<CycleTargets | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    backend
+      .getCycle(cycle.id)
+      .then((d) => {
+        if (!cancelled) setTargets(d.cycle.targets);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(errorMessage(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [backend, cycle.id, props.version]);
+
+  const change = (target: PublishTargetName, mode: PublishMode) => {
+    setError(null);
+    setBusy(true);
+    backend
+      .setTargetRule(cycle.id, target, mode)
+      .then(setTargets)
+      .catch((e) => setError(errorMessage(e)))
+      .finally(() => setBusy(false));
+  };
+
+  if (!targets) return error ? <p className="error">{error}</p> : null;
+  const github = targets.github?.publish ?? DEFAULT_PUBLISH_RULE.github;
+  const discord = targets.discord?.publish ?? null;
+  const row = (target: PublishTargetName, label: string, mode: PublishMode) => (
+    <div className="rule-row">
+      <div className="inline-field">
+        <span className="field-label">{label}</span>
+        <RuleSwitch
+          name={`${label}, cycle ${cycle.name}`}
+          value={mode}
+          disabled={busy}
+          onChange={(m) => change(target, m)}
+        />
+      </div>
+      <span className="target-rule-help">{RULE_HELP[mode]}</span>
+      {autoWarning(target, mode) && (
+        <span className="target-rule-warn">{autoWarning(target, mode)}</span>
+      )}
+    </div>
+  );
+  return (
+    <div className="panel quiet" style={{ maxWidth: 620 }}>
+      <div className="panel-body">
+        <p className="token-state">
+          {cycle.name} <span className="person-meta">{cycle.id}</span>
+        </p>
+        {row("github", "GitHub", github)}
+        {discord !== null ? (
+          row("discord", "Discord", discord)
+        ) : (
+          <p className="target-rule-help">
+            No Discord target: add one in the settings of the cycle to choose a rule for it.
+          </p>
+        )}
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
  * Where the tokens and webhooks for publishing are typed: a GitHub token per host, the GitHub
  * repository of each cycle repository, and a webhook per Discord target. Values are masked,
  * stored in the system credential store and never shown again.
@@ -348,6 +443,23 @@ export function PublishingSettingsView() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      <h3 className="sub-head">When to publish</h3>
+      <p className="section-hint">
+        Per cycle and target: Off never publishes, On approval waits for you to press Publish in the
+        draft, Automatic publishes as soon as the draft is complete. {STATUS_WRITE_BACK_NOTE}
+      </p>
+      {(cycles ?? []).filter((c) => c.valid).length === 0 ? (
+        <p className="empty">No usable cycle yet. Create one on the Cycles page.</p>
+      ) : (
+        <div className="secret-list">
+          {(cycles ?? [])
+            .filter((c) => c.valid)
+            .map((c) => (
+              <CycleRules key={c.id} cycle={c} version={cycles} />
+            ))}
         </div>
       )}
     </section>

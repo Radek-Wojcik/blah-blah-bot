@@ -206,7 +206,9 @@ describe("plan and the public repository gate", () => {
     expect(plan.summary.issues.map((i) => i.itemId)).toEqual(["i03", "i04", "i09", "i11"]);
     expect(plan.summary.issues[0]).toMatchObject({ assignee: "jan-demo", due: "2026-11-19" });
     expect(plan.summary.statuses.map((s) => s.target)).toEqual(["#12", "#11"]);
-    expect(plan.summary.topicsAdded).toEqual(["m5-i07"]);
+    expect(plan.summary.topicsAdded).toEqual([
+      "Confirm the delivery date of the antenna array; the mount is already on site.",
+    ]);
     expect(plan.summary.topicsSet).toEqual([{ id: "t-1", open: false }]);
     expect(plan.summary.proposalsPending).toBe(0);
     expect(plan.summary.discord).toBe(true);
@@ -543,5 +545,164 @@ describe("offline, retry, cancel", () => {
     expect(again.queued).toBeGreaterThan(0);
     const done = await settled(b);
     expect(done.ops.filter((o) => o.state === "done").length).toBeGreaterThan(0);
+  });
+});
+
+describe("the plan of topics.yaml", () => {
+  it("lists each topic with its version on the remote and the one the commit writes", async () => {
+    const b = fresh();
+    await approveAll(b);
+    const topics = (await b.publishPlan("m5")).summary.topics!;
+    expect(topics.againstRemote).toBe(true);
+    expect(topics.unchanged).toBe(2);
+    expect(topics.changes.map((c) => [c.id, c.change, c.overridesRemote])).toEqual([
+      ["m5-i07", "added", false],
+      ["t-1", "changed", true],
+    ]);
+    const closed = topics.changes[1];
+    // Before is what the colleague left on the remote, after is this meeting's version.
+    expect(closed.before).toMatchObject({
+      text: "Decide the rover wheel size and the tyre type",
+      status: "open",
+    });
+    expect(closed.after).toMatchObject({
+      text: "Decide the rover wheel size",
+      status: "closed",
+      closedIn: "2026-11-13",
+    });
+  });
+
+  it("is not made when the meeting changes no topic, and looking changes nothing", async () => {
+    const b = fresh();
+    const plan = await b.publishPlan("m5");
+    // Not approved: only the new topic is planned, and the closing of t-1 is not.
+    expect(plan.summary.topics?.changes.map((c) => c.id)).toEqual(["m5-i07"]);
+    expect(
+      hooks()
+        .remoteTopics()
+        .map((t) => t.id),
+    ).toEqual(["t-1", "t-2", "t-3"]);
+    await b.publishPlan("m5");
+    expect(
+      hooks()
+        .remoteTopics()
+        .map((t) => t.id),
+    ).toEqual(["t-1", "t-2", "t-3"]);
+  });
+
+  it("falls back to the topic names, with a note, when the comparison is not possible", async () => {
+    const b = fresh();
+    await approveAll(b);
+    hooks().setTopicsUnknown(true);
+    const plan = await b.publishPlan("m5");
+    expect(plan.summary.topics ?? null).toBeNull();
+    expect(plan.summary.topicsAdded).toHaveLength(1);
+    expect(plan.summary.topicsSet).toEqual([{ id: "t-1", open: false }]);
+    expect(plan.notes.join(" ")).toContain("listed by name only");
+  });
+
+  it("shows nothing to compare after the commit, because the clone has the merged file", async () => {
+    const b = fresh();
+    await approveAll(b);
+    await publishAll(b);
+    await settled(b);
+    const plan = await b.publishPlan("m5");
+    expect(plan.summary.topics?.changes ?? []).toEqual([]);
+  });
+});
+
+describe("the publishing rule of a target", () => {
+  it("sets only the rule and keeps the rest of the target", async () => {
+    const b = fresh();
+    let changes = 0;
+    await b.onCyclesChanged(() => void (changes += 1));
+    const targets = await b.setTargetRule("NOMAD", "discord", "auto");
+    expect(targets.discord).toMatchObject({ webhook: "cred:discord/nomad", publish: "auto" });
+    expect(targets.github).toMatchObject({ publish: "on-approval", path: "meetings" });
+    expect(changes).toBe(1);
+    const saved = (await b.getCycle("NOMAD")).cycle;
+    expect(saved.targets.discord?.publish).toBe("auto");
+    expect(saved.targets.discord?.webhook).toBe("cred:discord/nomad");
+    const plan = await b.publishPlan("m5");
+    expect(plan.targets.map((t) => [t.target, t.mode, t.available])).toEqual([
+      ["github", "on-approval", true],
+      ["discord", "auto", true],
+    ]);
+  });
+
+  it("creates the GitHub target with its defaults for a cycle that has none", async () => {
+    const b = fresh();
+    await b.createCycle("PLAIN", "Plain");
+    expect((await b.getCycle("PLAIN")).cycle.targets.github ?? null).toBeNull();
+    const targets = await b.setTargetRule("PLAIN", "github", "auto");
+    expect(targets.github).toEqual({ path: "meetings", publish: "auto" });
+    // Discord needs a webhook reference that only the cycle editor adds.
+    expect(await codeOf(b.setTargetRule("PLAIN", "discord", "auto"))).toBe("no_target");
+    expect(await codeOf(b.setTargetRule("PLAIN", "notion" as never, "auto"))).toBe("invalid");
+    expect(await codeOf(b.setTargetRule("PLAIN", "github", "sometimes" as never))).toBe("invalid");
+    expect(await codeOf(b.setTargetRule("GHOST", "github", "auto"))).toBe("not_found");
+  });
+
+  it("never lets the public-repository check go, whatever the rule", async () => {
+    const b = fresh();
+    for (const mode of ["on-approval", "auto"] as const) {
+      await b.setTargetRule("NOMAD", "github", mode);
+      const plan = await b.publishPlan("m5", ["github"]);
+      expect(
+        plan.blocks.map((x) => x.code),
+        mode,
+      ).toEqual(["public_repo_unconfirmed"]);
+      expect(await codeOf(b.publishMeeting("m5", ["github"])), mode).toBe(
+        "public_repo_unconfirmed",
+      );
+    }
+    expect((await b.outboxState()).ops).toEqual([]);
+  });
+
+  it("makes Off absolute, also for an explicit publication", async () => {
+    const b = fresh();
+    await b.setTargetRule("NOMAD", "github", "off");
+    await b.setTargetRule("NOMAD", "discord", "off");
+    const plan = await b.publishPlan("m5");
+    expect(plan.targets.every((t) => t.mode === "off" && !t.available)).toBe(true);
+    expect(await codeOf(b.publishMeeting("m5", ["github", "discord"]))).toBe("nothing_to_publish");
+  });
+
+  it("does not write a status change back by itself under Automatic", async () => {
+    const b = fresh();
+    await b.setTargetRule("NOMAD", "github", "auto");
+    const view = await b.getDraft("m5");
+    // Nothing is approved by the application: every proposal still waits for the user.
+    expect((view.draft.statusProposals ?? []).every((p) => p.decision === "proposed")).toBe(true);
+    const plan = await b.publishPlan("m5");
+    expect(plan.summary.statuses).toEqual([]);
+    expect(plan.summary.proposalsPending).toBe(3);
+  });
+});
+
+describe("the folder for meeting reports", () => {
+  it("is where the meeting goes, and an unsafe path is refused by the cycle", async () => {
+    const b = fresh();
+    const cycle = (await b.getCycle("NOMAD")).cycle;
+    const bad = await b.saveCycle({
+      ...cycle,
+      targets: { ...cycle.targets, github: { ...cycle.targets.github!, path: "../outside" } },
+    });
+    expect(bad.saved).toBe(false);
+    expect(bad.issues.map((i) => i.path)).toEqual(["targets.github.path"]);
+
+    const ok = await b.saveCycle({
+      ...cycle,
+      targets: { ...cycle.targets, github: { ...cycle.targets.github!, path: "docs/notes" } },
+    });
+    expect(ok.saved).toBe(true);
+    await approveAll(b);
+    await publishAll(b);
+    const state = await settled(b);
+    const commit = state.ops.find((o) => o.kind === "commit_meeting")!;
+    expect(commit.result?.folder).toBe("docs/notes/NOMAD/2026-11-13");
+    expect(commit.result?.report_url).toBe(
+      "https://github.com/demo-org/nomad-cycles/blob/main/docs/notes/NOMAD/2026-11-13/report.md",
+    );
   });
 });

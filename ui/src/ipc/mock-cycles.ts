@@ -14,7 +14,9 @@ import type {
   CycleListItem,
   CycleParticipant,
   CycleRepoView,
+  CycleTargets,
   LastReport,
+  PublishMode,
   PullResult,
   ReportChoice,
   ReportDefaults,
@@ -294,6 +296,11 @@ export interface CycleStore {
   setTopics(cycleId: string, topics: Topic[]): void;
   /** The registered repository a cycle lives in. */
   repoOf(cycleId: string): CycleRepoView;
+  /**
+   * Sets `targets.<target>.publish` and nothing else, as `set_target_rule` does: a cycle without
+   * a GitHub target gets one with the default folder; Discord needs a target with a webhook.
+   */
+  setTargetRule(cycleId: string, target: string, mode: PublishMode): CycleTargets;
   /** Links a repository to a GitHub repository (`owner/name`) and API address; empty clears. */
   setGithubRepo(repoId: string, githubRepo?: string, githubApi?: string): CycleRepoView;
 }
@@ -652,6 +659,24 @@ export function createCycleStore(): CycleStore {
       e.cycle.participants = e.cycle.participants.filter((p) => p.id !== id);
     },
     topics: (cycleId) => structuredClone(entryOf(cycleId).topics),
+    setTargetRule: (cycleId, target, mode) => {
+      const e = entryOf(cycleId);
+      if (!PUBLISH.includes(mode)) fail("invalid", `${String(mode)} is not a publish rule`);
+      if (target === "github") {
+        e.cycle.targets.github = { path: "meetings", ...e.cycle.targets.github, publish: mode };
+      } else if (target === "discord") {
+        const discord = e.cycle.targets.discord;
+        if (!discord)
+          fail(
+            "no_target",
+            "this cycle has no Discord target: add one in the cycle settings first",
+          );
+        else discord.publish = mode;
+      } else {
+        fail("invalid", `${target} is not a target with a publishing rule (github or discord)`);
+      }
+      return structuredClone(e.cycle.targets);
+    },
     setTopics: (cycleId, topics) => void (entryOf(cycleId).topics = structuredClone(topics)),
     repoOf: (cycleId) => ({ ...repoOf(entryOf(cycleId).repoId) }),
     setGithubRepo: (repoId, githubRepo, githubApi) => {

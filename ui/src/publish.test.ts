@@ -9,8 +9,11 @@ import type {
   Topic,
 } from "./ipc/types";
 import {
+  RULE_ORDER,
+  STATUS_WRITE_BACK_NOTE,
   addableTargets,
   apiHost,
+  autoWarning,
   blockOf,
   canCancel,
   canRetry,
@@ -28,6 +31,8 @@ import {
   opLink,
   opStatusLine,
   opsOf,
+  planTopicsSummary,
+  plannedTopicLine,
   otherBlocks,
   outboxHeadline,
   parseWebhook,
@@ -321,7 +326,7 @@ describe("plan", () => {
       "Commit and push 4 files to demo-org/nomad-cycles: meeting.json, report.md, 2 screenshots.",
       'Create the issue "Update the schedule", assigned to jan-demo, due 2026-11-19.',
       "Close issue #12 (approved status change s1).",
-      "Add the topic m5-i07 to topics.yaml.",
+      'Add the topic "m5-i07" to topics.yaml.',
       "Close the topic t-1 (Decide the rover wheel size) in topics.yaml.",
     ]);
   });
@@ -521,5 +526,64 @@ describe("tasks", () => {
     expect(taskCounts(null)).toBe("");
     expect(tasksAsOf(tasks)).toBe("As of 2026-11-13.");
     expect(tasksAsOf({ ...tasks, asOf: null })).toMatch(/never read/);
+  });
+});
+
+describe("rules and the topics of the plan", () => {
+  it("orders the switch from the safest position and says what no rule changes", () => {
+    expect(RULE_ORDER).toEqual(["off", "on-approval", "auto"]);
+    expect(STATUS_WRITE_BACK_NOTE).toMatch(/never written back automatically/);
+    expect(STATUS_WRITE_BACK_NOTE).toMatch(/you approved/);
+  });
+
+  it("warns under Automatic only, and says it cannot be taken back", () => {
+    expect(autoWarning("github", "off")).toBeNull();
+    expect(autoWarning("discord", "on-approval")).toBeNull();
+    expect(autoWarning("github", "auto")).toMatch(/cannot be taken back/);
+    expect(autoWarning("discord", "auto")).toMatch(/mentions/);
+  });
+
+  const view = (text: string, status: "open" | "closed") => ({
+    text,
+    status,
+    openedIn: "2026-11-06",
+    closedIn: status === "closed" ? "2026-11-13" : null,
+  });
+
+  it("describes the topic changes of a plan in a few words and each topic as a line", () => {
+    const topics = {
+      againstRemote: true,
+      unchanged: 2,
+      changes: [
+        {
+          id: "m5-i07",
+          change: "added" as const,
+          before: null,
+          after: view("Battery supplier", "open"),
+          overridesRemote: false,
+        },
+        {
+          id: "t-1",
+          change: "changed" as const,
+          before: view("Wheel size and tyres", "open"),
+          after: view("Wheel size", "closed"),
+          overridesRemote: true,
+        },
+      ],
+    };
+    expect(planTopicsSummary(topics)).toBe("1 added, 1 changed");
+    expect(planTopicsSummary({ ...topics, changes: [] })).toBeNull();
+    expect(plannedTopicLine(topics.changes[1].before)).toBe("[open] Wheel size and tyres");
+    expect(plannedTopicLine(null)).toBe("(not there)");
+    // The names stay in the list with or without the difference, which is the fallback alone.
+    const p = plan();
+    const names = (q: PublishPlan) => planLines(q).filter((l) => l.includes("topics.yaml"));
+    expect(names(plan({ summary: { ...p.summary, topics } }))).toEqual(
+      names(plan({ summary: { ...p.summary, topics: null } })),
+    );
+    expect(names(p)).toEqual([
+      'Add the topic "m5-i07" to topics.yaml.',
+      "Close the topic t-1 in topics.yaml.",
+    ]);
   });
 });

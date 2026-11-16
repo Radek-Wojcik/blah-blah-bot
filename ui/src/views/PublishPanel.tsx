@@ -10,14 +10,15 @@ import type {
   PublishTargetName,
   PublishTargetView,
   Topic,
+  TopicsPlan,
 } from "../ipc/types";
 import {
   OP_STATE_LABELS,
   OP_TARGET_LABELS,
-  PUBLISH_RULES,
   RULE_HELP,
-  RULE_LABELS,
+  STATUS_WRITE_BACK_NOTE,
   TARGET_LABELS,
+  autoWarning,
   canCancel,
   canRetry,
   chosenTargets,
@@ -33,6 +34,8 @@ import {
   outboxHeadline,
   pendingStatusNote,
   planLines,
+  plannedTopicLine,
+  planTopicsSummary,
   publicRepoBlock,
   repoWarning,
   targetsSent,
@@ -41,6 +44,7 @@ import {
   topicsSummary,
 } from "../publish";
 import { Modal } from "./Modal";
+import { RuleSwitch } from "./RuleSwitch";
 
 /**
  * Publishing a meeting: where it goes and by which rule, what exactly will happen, the Publish
@@ -69,6 +73,7 @@ export function PublishPanel(props: {
     discord: true,
   });
   const [confirming, setConfirming] = useState(false);
+  const [ruleBusy, setRuleBusy] = useState(false);
 
   const ops = useMemo(() => opsOf(outbox, meetingId), [outbox, meetingId]);
   const locked = lockedByOps(ops);
@@ -126,22 +131,14 @@ export function PublishPanel(props: {
     work.then(() => loadPlan()).catch((e) => setError(errorMessage(e)));
   };
 
-  const setRule = (target: PublishTargetName, publish: PublishMode) => {
+  const setRule = (target: PublishTargetName, mode: PublishMode) => {
     setError(null);
+    setRuleBusy(true);
     backend
-      .getCycle(cycleId)
-      .then((d) => {
-        const cycle = structuredClone(d.cycle);
-        if (target === "github")
-          cycle.targets.github = { path: "meetings", ...cycle.targets.github, publish };
-        else if (cycle.targets.discord) cycle.targets.discord.publish = publish;
-        return backend.saveCycle(cycle);
-      })
-      .then((r) => {
-        if (!r.saved) setError(r.issues.map((i) => i.message).join(" "));
-        else return loadPlan();
-      })
-      .catch((e) => setError(errorMessage(e)));
+      .setTargetRule(cycleId, target, mode)
+      .then(() => loadPlan())
+      .catch((e) => setError(errorMessage(e)))
+      .finally(() => setRuleBusy(false));
   };
 
   // The topics change when the commit is done.
@@ -212,6 +209,7 @@ export function PublishPanel(props: {
                 ticked={ticked[t.target]}
                 onTick={(v) => setTicked({ ...ticked, [t.target]: v })}
                 onRule={(rule) => setRule(t.target, rule)}
+                ruleBusy={ruleBusy}
               />
             ))}
           </ul>
@@ -234,6 +232,7 @@ export function PublishPanel(props: {
                 ))}
               </ul>
             )}
+            <TopicsPlanView plan={plan.summary.topics ?? null} />
             {pending && <p className="section-hint">{pending}</p>}
             {plan.notes.map((n, i) => (
               <p key={i} className="notice">
@@ -296,9 +295,11 @@ function TargetRow(props: {
   ticked: boolean;
   onTick: (v: boolean) => void;
   onRule: (rule: PublishMode) => void;
+  ruleBusy: boolean;
 }) {
   const { view } = props;
   const name = view.target === "github" ? "GitHub" : "Discord";
+  const warning = view.mode === null ? null : autoWarning(view.target, view.mode);
   return (
     <li className="target-row">
       <label className="check">
@@ -320,21 +321,20 @@ function TargetRow(props: {
         </p>
       ) : (
         <>
-          <label className="inline-field">
-            Rule
-            <select
-              aria-label={`${name} publishing rule`}
+          <div className="inline-field">
+            <span className="field-label">Publish</span>
+            <RuleSwitch
+              name={name}
               value={view.mode}
-              onChange={(e) => props.onRule(e.target.value as PublishMode)}
-            >
-              {PUBLISH_RULES.map((r) => (
-                <option key={r} value={r}>
-                  {RULE_LABELS[r]}
-                </option>
-              ))}
-            </select>
-          </label>
+              disabled={props.ruleBusy}
+              onChange={props.onRule}
+            />
+          </div>
           <span className="target-rule-help">{RULE_HELP[view.mode]}</span>
+          {warning && <span className="target-rule-warn">{warning}</span>}
+          {view.target === "github" && (
+            <span className="target-rule-help">{STATUS_WRITE_BACK_NOTE}</span>
+          )}
         </>
       )}
     </li>
@@ -427,6 +427,73 @@ function OpRow(props: {
         </div>
       )}
     </li>
+  );
+}
+
+/**
+ * `topics.yaml` before and after the commit, per topic, before anything is published: what the
+ * remote has (as of the last fetch) against what the commit will write. A topic the remote
+ * changed since the last pull and this meeting changes too is marked: the last write wins, so
+ * the remote's version is replaced.
+ */
+function TopicsPlanView(props: { plan: TopicsPlan | null }) {
+  const { plan } = props;
+  if (!plan || plan.changes.length === 0) return null;
+  const others =
+    plan.unchanged === 0
+      ? ""
+      : `; ${plan.unchanged === 1 ? "1 other topic stays" : `${plan.unchanged} other topics stay`} as it is`;
+  return (
+    <div className="topics-diff topics-plan">
+      <h4 className="sub-head tight">topics.yaml: before and after</h4>
+      <p className="section-hint">
+        {planTopicsSummary(plan)}
+        {others}.{" "}
+        {plan.againstRemote
+          ? "Compared with the remote as of the last time it was fetched."
+          : "Compared with this clone only."}
+      </p>
+      <ul className="conflicts" aria-label="Planned topic changes">
+        {plan.changes.map((c) => (
+          <li
+            key={c.id}
+            className={c.overridesRemote ? "conflict" : "conflict conflict-plain"}
+            aria-label={`Topic ${c.id} ${c.change}`}
+          >
+            <p className="conflict-id">
+              Topic {c.id}
+              <span className="badge badge-job-queued">{c.change}</span>
+              {c.change === "changed" &&
+                topicDifference(c.before, c.after).map((d) => (
+                  <span key={d} className="badge badge-job-queued">
+                    {d} differs
+                  </span>
+                ))}
+            </p>
+            {c.before && (
+              <p className="diff diff-del">
+                <span className="diff-label">On the remote</span>
+                {"− "}
+                {plannedTopicLine(c.before)}
+              </p>
+            )}
+            {c.after && (
+              <p className="diff diff-add">
+                <span className="diff-label">After the commit</span>
+                {"+ "}
+                {plannedTopicLine(c.after)}
+              </p>
+            )}
+            {c.overridesRemote && (
+              <p className="notice notice-warn" role="status">
+                Someone else changed this topic since your last pull. The last write wins: the
+                remote version above is replaced.
+              </p>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

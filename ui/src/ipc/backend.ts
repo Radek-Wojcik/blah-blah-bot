@@ -4,6 +4,7 @@ import type {
   CycleDetails,
   CycleDto,
   CycleListItem,
+  CycleTargets,
   CycleTasks,
   CycleRepoView,
   DraftItemPatch,
@@ -18,8 +19,10 @@ import type {
   ProcessingSettings,
   ProposedStatus,
   PublicRepoConfirmation,
+  PublishMode,
   PublishPlan,
   PublishResult,
+  PublishTargetName,
   PublishingSecrets,
   OutboxState,
   PullResult,
@@ -220,6 +223,18 @@ export interface Backend {
   /** Asks Discord whether the stored webhook exists. Nothing is posted. */
   testDiscordWebhook(reference: string): Promise<WebhookCheck>;
 
+  /**
+   * Sets when a target of a cycle is published (`targets.<target>.publish` of `cycle.yaml`) and
+   * nothing else; returns the cycle's targets as saved. `github` covers the report, the issues
+   * and the write-back of approved status changes, `discord` needs a Discord target
+   * (`no_target`). No value writes a status change back without approval and an explicit
+   * publication, and the public-repository check applies to every value.
+   */
+  setTargetRule(
+    cycleId: string,
+    target: PublishTargetName,
+    mode: PublishMode,
+  ): Promise<CycleTargets>;
   /** What publishing to `targets` (all of the cycle's when absent) would do. Changes nothing. */
   publishPlan(meetingId: string, targets?: string[]): Promise<PublishPlan>;
   /**

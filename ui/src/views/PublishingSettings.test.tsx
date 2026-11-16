@@ -185,3 +185,81 @@ describe("token setup", () => {
     ).toBe("Connected to demo-org/nomad-cycles as demo-bot");
   });
 });
+
+describe("when to publish", () => {
+  function group(label: string): HTMLElement {
+    const g = host.querySelector<HTMLElement>(`[role="radiogroup"][aria-label="${label}"]`);
+    if (!g) throw new Error(`no switch ${label}`);
+    return g;
+  }
+  const checked = (g: HTMLElement) =>
+    [...g.querySelectorAll('[role="radio"]')]
+      .filter((r) => r.getAttribute("aria-checked") === "true")
+      .map((r) => r.textContent);
+  const radio = (g: HTMLElement, name: string) =>
+    [...g.querySelectorAll<HTMLElement>('[role="radio"]')].find((r) => r.textContent === name)!;
+
+  it("shows the rule of each target of each usable cycle as a switch and says what no rule changes", async () => {
+    await mount(createMockBackend({ clockRate: 0 }));
+    expect(host.textContent).toContain("When to publish");
+    expect(host.textContent).toContain("never written back automatically");
+    const github = group("GitHub, cycle Nomad rover publishing rule");
+    expect([...github.querySelectorAll('[role="radio"]')].map((r) => r.textContent)).toEqual([
+      "Off",
+      "On approval",
+      "Automatic",
+    ]);
+    expect(checked(github)).toEqual(["On approval"]);
+    expect(checked(group("Discord, cycle Nomad rover publishing rule"))).toEqual(["On approval"]);
+  });
+
+  it("saves a change at once through the rule command and warns under Automatic", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    const set = vi.spyOn(backend, "setTargetRule");
+    await mount(backend);
+    const github = () => group("GitHub, cycle Nomad rover publishing rule");
+    expect(host.textContent).not.toContain("cannot be taken back");
+    await click(radio(github(), "Automatic"));
+    expect(set).toHaveBeenCalledWith("NOMAD", "github", "auto");
+    expect(checked(github())).toEqual(["Automatic"]);
+    expect(host.textContent).toContain("cannot be taken back");
+    expect((await backend.getCycle("NOMAD")).cycle.targets.github?.publish).toBe("auto");
+    await click(radio(github(), "Off"));
+    expect(checked(github())).toEqual(["Off"]);
+    expect(host.textContent).not.toContain("cannot be taken back");
+  });
+
+  it("moves with the arrow keys like a radio group", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    await mount(backend);
+    const github = () => group("GitHub, cycle Nomad rover publishing rule");
+    await act(async () => {
+      radio(github(), "On approval").dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
+      );
+    });
+    await flush();
+    expect(checked(github())).toEqual(["Automatic"]);
+    expect(radio(github(), "Automatic").tabIndex).toBe(0);
+    expect(radio(github(), "Off").tabIndex).toBe(-1);
+    // It wraps around.
+    await act(async () => {
+      radio(github(), "Automatic").dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
+      );
+    });
+    await flush();
+    expect(checked(github())).toEqual(["Off"]);
+  });
+
+  it("offers no Discord switch for a cycle without a Discord target", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    await backend.createCycle("PLAIN", "Plain cycle");
+    await mount(backend);
+    expect(
+      host.querySelector('[aria-label="Discord, cycle Plain cycle publishing rule"]'),
+    ).toBeNull();
+    expect(host.textContent).toContain("No Discord target");
+    expect(checked(group("GitHub, cycle Plain cycle publishing rule"))).toEqual(["On approval"]);
+  });
+});

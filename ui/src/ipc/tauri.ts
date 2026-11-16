@@ -104,6 +104,7 @@ export function createTauriBackend(): Backend {
     setTargetSecret: (reference, value) => invoke("set_target_secret", { reference, value }),
     clearTargetSecret: (reference) => invoke("clear_target_secret", { reference }),
     testDiscordWebhook: (reference) => invoke("test_discord_webhook", { reference }),
+    setTargetRule: (cycleId, target, mode) => invoke("set_target_rule", { cycleId, target, mode }),
     publishPlan: (meetingId, targets) => invoke("publish_plan", { meetingId, targets }),
     publishMeeting: (meetingId, targets) => invoke("publish_meeting", { meetingId, targets }),
     confirmPublicRepo: (cycleId) => invoke("confirm_public_repo", { cycleId }),

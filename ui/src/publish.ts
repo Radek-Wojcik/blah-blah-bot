@@ -8,6 +8,7 @@ import type {
   PlanBlock,
   PlanBlockCode,
   PlanSummary,
+  PlannedTopicView,
   ProposedStatus,
   PublishMode,
   PublishPlan,
@@ -16,6 +17,7 @@ import type {
   Topic,
   TopicConflictDetail,
   TopicVersion,
+  TopicsPlan,
 } from "./ipc/types";
 
 // ----- labels -------------------------------------------------------------------------------
@@ -25,19 +27,45 @@ export const TARGET_LABELS: Record<PublishTargetName, string> = {
   discord: "Discord (summary)",
 };
 
-export const RULE_LABELS: Record<PublishMode, string> = {
-  "on-approval": "After approval (when I press Publish)",
-  auto: "Automatically (when the draft is complete)",
-  off: "Never",
+/** The positions of the rule switch, from the safest. */
+export const RULE_ORDER: PublishMode[] = ["off", "on-approval", "auto"];
+
+/**
+ * The rule a cycle gets for a target it does not state (ADR 0019). The backend decides it, in
+ * `DEFAULT_GITHUB_PUBLISH` and `DEFAULT_DISCORD_PUBLISH`; this is only what is shown before the
+ * first choice.
+ */
+export const DEFAULT_PUBLISH_RULE: Record<PublishTargetName, PublishMode> = {
+  github: "on-approval",
+  discord: "on-approval",
+};
+
+export const RULE_SHORT: Record<PublishMode, string> = {
+  off: "Off",
+  "on-approval": "On approval",
+  auto: "Automatic",
 };
 
 export const RULE_HELP: Record<PublishMode, string> = {
+  off: "Never published, not even when you press Publish.",
   "on-approval": "Nothing leaves this computer until you press Publish.",
-  auto: "Queued as soon as the draft is complete. Status changes are never written back by it.",
-  off: "Not published, not even when you press Publish.",
+  auto: "Queued as soon as the draft is complete, without a click. A public or unconfirmed repository still waits for your confirmation.",
 };
 
-export const PUBLISH_RULES: PublishMode[] = ["on-approval", "auto", "off"];
+/**
+ * What no rule changes: status changes are written back to issues and topics only when you
+ * approved them and press Publish.
+ */
+export const STATUS_WRITE_BACK_NOTE =
+  "Status changes are never written back automatically, with any rule: only those you approved, and only when you press Publish.";
+
+/** Extra warning under a target set to Automatic, or null for the other rules. */
+export function autoWarning(target: PublishTargetName, mode: PublishMode): string | null {
+  if (mode !== "auto") return null;
+  return target === "github"
+    ? "Automatic: the report, the transcript, the screenshots and the issues are pushed and created as soon as the draft is complete. They cannot be taken back, and assignees are notified."
+    : "Automatic: the message is posted as soon as the draft is complete. It cannot be taken back, and the people it mentions are notified.";
+}
 
 export const OP_STATE_LABELS: Record<OpState, string> = {
   queued: "Waiting",
@@ -295,7 +323,9 @@ export function planLines(plan: PublishPlan, topics: Topic[] = []): string[] {
       `${st.open ? "Reopen" : "Close"} issue ${st.target} (approved status change ${st.proposalId}).`,
     );
   }
-  for (const id of s.topicsAdded) lines.push(`Add the topic ${id} to topics.yaml.`);
+  // The names of the topics; with the difference worked out, the panel also shows each topic
+  // before and after under this list.
+  for (const text of s.topicsAdded) lines.push(`Add the topic "${text}" to topics.yaml.`);
   for (const t of s.topicsSet) {
     const text = topics.find((x) => x.id === t.id)?.text;
     lines.push(
@@ -448,6 +478,21 @@ export function topicDifference(theirs: TopicVersion | null, ours: TopicVersion 
   if (theirs.text !== ours.text) out.push("text");
   if (theirs.status !== ours.status) out.push("status");
   return out;
+}
+
+/** What the plan changes in `topics.yaml`, in words (`1 added, 1 changed`), or null when nothing. */
+export function planTopicsSummary(plan: TopicsPlan): string | null {
+  const count = (kind: TopicsPlan["changes"][number]["change"]) =>
+    plan.changes.filter((c) => c.change === kind).length;
+  const parts: string[] = [];
+  for (const kind of ["added", "changed", "removed"] as const)
+    if (count(kind) > 0) parts.push(`${count(kind)} ${kind}`);
+  return parts.length === 0 ? null : parts.join(", ");
+}
+
+/** One planned topic version as a line, `[closed] Decide the rover wheel size`, or `(not there)`. */
+export function plannedTopicLine(v: PlannedTopicView | null): string {
+  return topicLine(v);
 }
 
 /** The topic changes the commit made, in words (`1 added, 1 changed`), or null when none. */

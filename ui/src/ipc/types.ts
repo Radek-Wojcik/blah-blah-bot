@@ -122,7 +122,9 @@ export type IpcErrorCode =
   /** A newer draft waits for a decision. */
   | "new_draft_pending"
   /** The value is not a Discord webhook; the message never repeats it. */
-  | "invalid_webhook";
+  | "invalid_webhook"
+  /** The cycle has no such target (a Discord target needs a webhook reference). */
+  | "no_target";
 
 export interface IpcError {
   code: IpcErrorCode;
@@ -768,6 +770,36 @@ export interface PlannedTopicSet {
   open: boolean;
 }
 
+/** A topic as the publish plan shows it. */
+export interface PlannedTopicView extends TopicVersion {
+  openedIn: string;
+  closedIn: string | null;
+}
+
+/** One topic that publishing changes in `topics.yaml`. */
+export interface TopicDelta {
+  id: string;
+  change: "added" | "changed" | "removed";
+  /** What the remote has; null for a topic that is added. */
+  before: PlannedTopicView | null;
+  /** What the commit writes; null for a topic that is removed. */
+  after: PlannedTopicView | null;
+  /**
+   * Somebody changed the topic on the remote since the last pull: the last write wins, so `after`
+   * replaces `before`.
+   */
+  overridesRemote: boolean;
+}
+
+/** `topics.yaml` before and after the commit, per topic, as far as the clone can tell. */
+export interface TopicsPlan {
+  /** Compared with the remote branch as last fetched. False: only with this clone's own branch. */
+  againstRemote: boolean;
+  changes: TopicDelta[];
+  /** Topics the commit leaves as they are. */
+  unchanged: number;
+}
+
 export interface PlanSummary {
   commit: boolean;
   pushes: boolean;
@@ -776,6 +808,12 @@ export interface PlanSummary {
   statuses: PlannedStatus[];
   topicsAdded: string[];
   topicsSet: PlannedTopicSet[];
+  /**
+   * `topics.yaml` before and after, per topic. Null or absent when the commit leaves the file
+   * alone or the comparison is not possible (the plan says so in its notes); `topicsAdded` and
+   * `topicsSet` then name the topics.
+   */
+  topics?: TopicsPlan | null;
   discord: boolean;
   /** Status changes that were not approved: they are not written back. */
   proposalsPending: number;
