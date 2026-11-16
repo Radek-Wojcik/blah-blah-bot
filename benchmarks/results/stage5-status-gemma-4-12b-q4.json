@@ -1,0 +1,642 @@
+{
+  "prototype": "stage5-status",
+  "name": "gemma-4-12b-q4",
+  "timestamp": "2026-11-16T08:12:47+00:00",
+  "environment": {
+    "os": "Windows-10-10.0.19045-SP0",
+    "os_build": "10.0.19045",
+    "python": "3.11.9",
+    "machine": "AMD64",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 3080",
+      "memory_total_mib": 12288,
+      "memory_used_mib": 526,
+      "driver": "617.42"
+    }
+  },
+  "status": "ok",
+  "config": {
+    "model": "gemma-4-12b-it-Q4_K_M.gguf",
+    "ctx": 16384,
+    "backend": "llama-server (managed)",
+    "mode": "fixed",
+    "output_language": "annotation",
+    "llama_server": "llama-server.exe",
+    "scenarios": 12
+  },
+  "metric_notes": {
+    "scores": "micro-averaged over the proposals of the draft (status_proposals after reduce); only 'done' is a status the model may propose, so a proposal for a blocked, reopened, in progress, not mentioned or unlisted target is a false positive",
+    "evidence_verified_share": "share of proposals whose quote the worker found in the transcript (source.verified)",
+    "evidence_quote_validity": "the extraction quote_validity metric over the proposals",
+    "evidence_on_expected_turn": "share of the expected proposals whose quote sits on the turn that says the work is done",
+    "raw_unknown_target_rate": "share of the model's raw status changes whose target is not on any list of the context (reduce drops them)",
+    "schema_validity": "share of windows with a valid answer within the retries",
+    "proposed_thresholds": "proposed for this measurement and not gated; there is no threshold policy for status proposals yet"
+  },
+  "proposed_thresholds": {
+    "proposal_precision": 0.9,
+    "proposal_recall": 0.8,
+    "evidence_verified_share": 0.95,
+    "schema_validity": 1.0,
+    "negative_meeting_false_positive_rate": 0.0
+  },
+  "meetings": [
+    {
+      "ok": true,
+      "error": "",
+      "labels": {
+        "#21": "done",
+        "#22": "in_progress",
+        "#23": "in_progress",
+        "#24": "in_progress"
+      },
+      "seconds": 9.2,
+      "windows": 1,
+      "windows_skipped": 0,
+      "windows_retried": 0,
+      "draft_valid": true,
+      "draft_errors": [],
+      "evidence_expected": 1,
+      "scenario": "en-s1",
+      "lang": "en",
+      "negative": false,
+      "expected": [
+        "#21"
+      ],
+      "proposed": [
+        "#21"
+      ],
+      "true_positives": [
+        "#21"
+      ],
+      "false_positives": [],
+      "false_negatives": [],
+      "raw_changes": 1,
+      "raw_unknown_targets": [],
+      "proposals": [
+        {
+          "target": "#21",
+          "reason": "The staging database is up and smoke tests pass.",
+          "quote": "The staging database is up. I finished the migration over the weekend and the smoke tests pass, so issue 21 is done.",
+          "verified": true
+        }
+      ],
+      "evidence_sourced": 1,
+      "evidence_verified": 1,
+      "evidence_valid": 1,
+      "evidence_on_expected_turn": 1
+    },
+    {
+      "ok": true,
+      "error": "",
+      "labels": {
+        "#31": "done",
+        "#32": "blocked",
+        "#33": "blocked",
+        "#34": "in_progress"
+      },
+      "seconds": 9.1,
+      "windows": 1,
+      "windows_skipped": 0,
+      "windows_retried": 0,
+      "draft_valid": true,
+      "draft_errors": [],
+      "evidence_expected": 1,
+      "scenario": "en-s2",
+      "lang": "en",
+      "negative": false,
+      "expected": [
+        "#31"
+      ],
+      "proposed": [
+        "#31"
+      ],
+      "true_positives": [
+        "#31"
+      ],
+      "false_positives": [],
+      "false_negatives": [],
+      "raw_changes": 1,
+      "raw_unknown_targets": [],
+      "proposals": [
+        {
+          "target": "#31",
+          "reason": "The CSV export is merged and shipped to production.",
+          "quote": "The CSV export is merged and shipped to production since Friday, nothing is left to do there.",
+          "verified": true
+        }
+      ],
+      "evidence_sourced": 1,
+      "evidence_verified": 1,
+      "evidence_valid": 1,
+      "evidence_on_expected_turn": 1
+    },
+    {
+      "ok": true,
+      "error": "",
+      "labels": {
+        "#41": "reopened",
+        "#42": "done",
+        "#43": "untouched"
+      },
+      "seconds": 9.2,
+      "windows": 1,
+      "windows_skipped": 0,
+      "windows_retried": 0,
+      "draft_valid": true,
+      "draft_errors": [],
+      "evidence_expected": 1,
+      "scenario": "en-s3",
+      "lang": "en",
+      "negative": false,
+      "expected": [
+        "#42"
+      ],
+      "proposed": [
+        "#42"
+      ],
+      "true_positives": [
+        "#42"
+      ],
+      "false_positives": [],
+      "false_negatives": [],
+      "raw_changes": 1,
+      "raw_unknown_targets": [],
+      "proposals": [
+        {
+          "target": "#42",
+          "reason": "The API documentation is published and the site is live.",
+          "quote": "The API documentation is published, the site is live and the links in the readme point to it. I am calling issue 42 resolved.",
+          "verified": true
+        }
+      ],
+      "evidence_sourced": 1,
+      "evidence_verified": 1,
+      "evidence_valid": 1,
+      "evidence_on_expected_turn": 1
+    },
+    {
+      "ok": true,
+      "error": "",
+      "labels": {
+        "#51": "in_progress",
+        "#52": "untouched",
+        "#53": "in_progress"
+      },
+      "seconds": 7.9,
+      "windows": 1,
+      "windows_skipped": 0,
+      "windows_retried": 0,
+      "draft_valid": true,
+      "draft_errors": [],
+      "evidence_expected": 0,
+      "scenario": "en-s4",
+      "lang": "en",
+      "negative": true,
+      "expected": [],
+      "proposed": [],
+      "true_positives": [],
+      "false_positives": [],
+      "false_negatives": [],
+      "raw_changes": 0,
+      "raw_unknown_targets": [],
+      "proposals": [],
+      "evidence_sourced": 0,
+      "evidence_verified": 0,
+      "evidence_valid": 0,
+      "evidence_on_expected_turn": 0
+    },
+    {
+      "ok": true,
+      "error": "",
+      "labels": {
+        "#61": "done",
+        "#62": "done",
+        "#63": "blocked",
+        "t4": "done"
+      },
+      "seconds": 9.8,
+      "windows": 1,
+      "windows_skipped": 0,
+      "windows_retried": 0,
+      "draft_valid": true,
+      "draft_errors": [],
+      "evidence_expected": 3,
+      "scenario": "en-s5",
+      "lang": "en",
+      "negative": false,
+      "expected": [
+        "#61",
+        "#62",
+        "t4"
+      ],
+      "proposed": [
+        "#61",
+        "#62"
+      ],
+      "true_positives": [
+        "#61",
+        "#62"
+      ],
+      "false_positives": [],
+      "false_negatives": [
+        "t4"
+      ],
+      "raw_changes": 2,
+      "raw_unknown_targets": [],
+      "proposals": [
+        {
+          "target": "#61",
+          "reason": "Mia renewed the domain for three years.",
+          "quote": "Yes, I renewed it for another three years yesterday and I have the receipt.",
+          "verified": true
+        },
+        {
+          "target": "#62",
+          "reason": "Raj fixed and deployed the typo.",
+          "quote": "Fixed and deployed this morning.",
+          "verified": true
+        }
+      ],
+      "evidence_sourced": 2,
+      "evidence_verified": 2,
+      "evidence_valid": 2,
+      "evidence_on_expected_turn": 2
+    },
+    {
+      "ok": true,
+      "error": "",
+      "labels": {
+        "#74": "done",
+        "#71": "untouched",
+        "#72": "in_progress",
+        "#73": "in_progress"
+      },
+      "seconds": 10.9,
+      "windows": 1,
+      "windows_skipped": 0,
+      "windows_retried": 0,
+      "draft_valid": true,
+      "draft_errors": [],
+      "evidence_expected": 1,
+      "scenario": "en-s6",
+      "lang": "en",
+      "negative": false,
+      "expected": [
+        "#74"
+      ],
+      "proposed": [
+        "#74"
+      ],
+      "true_positives": [
+        "#74"
+      ],
+      "false_positives": [],
+      "false_negatives": [],
+      "raw_changes": 1,
+      "raw_unknown_targets": [],
+      "proposals": [
+        {
+          "target": "#74",
+          "reason": "The monitoring alerts are finished and firing correctly in the test environment.",
+          "quote": "Issue 74, the monitoring alerts. I finished that on Tuesday, the alerts fire correctly in the test environment.",
+          "verified": true
+        }
+      ],
+      "evidence_sourced": 1,
+      "evidence_verified": 1,
+      "evidence_valid": 1,
+      "evidence_on_expected_turn": 1
+    },
+    {
+      "ok": true,
+      "error": "",
+      "labels": {
+        "#81": "done",
+        "#82": "in_progress",
+        "#83": "in_progress",
+        "#84": "in_progress"
+      },
+      "seconds": 9.9,
+      "windows": 1,
+      "windows_skipped": 0,
+      "windows_retried": 0,
+      "draft_valid": true,
+      "draft_errors": [],
+      "evidence_expected": 1,
+      "scenario": "pl-s1",
+      "lang": "pl",
+      "negative": false,
+      "expected": [
+        "#81"
+      ],
+      "proposed": [
+        "#81"
+      ],
+      "true_positives": [
+        "#81"
+      ],
+      "false_positives": [],
+      "false_negatives": [],
+      "raw_changes": 1,
+      "raw_unknown_targets": [],
+      "proposals": [
+        {
+          "target": "#81",
+          "reason": "Środowisko testowe zostało skonfigurowane i testy przechodzą.",
+          "quote": "Środowisko testowe jest gotowe, skończyłem konfigurację w piątek i wszystkie testy przechodzą, więc zgłoszenie 81 mogę zamknąć.",
+          "verified": true
+        }
+      ],
+      "evidence_sourced": 1,
+      "evidence_verified": 1,
+      "evidence_valid": 1,
+      "evidence_on_expected_turn": 1
+    },
+    {
+      "ok": true,
+      "error": "",
+      "labels": {
+        "#91": "done",
+        "#92": "blocked",
+        "#93": "blocked",
+        "#94": "in_progress"
+      },
+      "seconds": 9.8,
+      "windows": 1,
+      "windows_skipped": 0,
+      "windows_retried": 0,
+      "draft_valid": true,
+      "draft_errors": [],
+      "evidence_expected": 1,
+      "scenario": "pl-s2",
+      "lang": "pl",
+      "negative": false,
+      "expected": [
+        "#91"
+      ],
+      "proposed": [
+        "#91"
+      ],
+      "true_positives": [
+        "#91"
+      ],
+      "false_positives": [],
+      "false_negatives": [],
+      "raw_changes": 1,
+      "raw_unknown_targets": [],
+      "proposals": [
+        {
+          "target": "#91",
+          "reason": "Filtr dat został wdrożony na produkcję.",
+          "quote": "Filtr dat na liście zamówień jest wdrożony na produkcję od piątku, nic tu już nie zostało do zrobienia.",
+          "verified": true
+        }
+      ],
+      "evidence_sourced": 1,
+      "evidence_verified": 1,
+      "evidence_valid": 1,
+      "evidence_on_expected_turn": 1
+    },
+    {
+      "ok": true,
+      "error": "",
+      "labels": {
+        "#101": "reopened",
+        "#102": "done",
+        "#103": "untouched"
+      },
+      "seconds": 11.8,
+      "windows": 1,
+      "windows_skipped": 0,
+      "windows_retried": 0,
+      "draft_valid": true,
+      "draft_errors": [],
+      "evidence_expected": 1,
+      "scenario": "pl-s3",
+      "lang": "pl",
+      "negative": false,
+      "expected": [
+        "#102"
+      ],
+      "proposed": [
+        "#102"
+      ],
+      "true_positives": [
+        "#102"
+      ],
+      "false_positives": [],
+      "false_negatives": [],
+      "raw_changes": 1,
+      "raw_unknown_targets": [],
+      "proposals": [
+        {
+          "target": "#102",
+          "reason": "Dokumentacja API została opublikowana i odnośniki zaktualizowane.",
+          "quote": "Dokumentacja API jest opublikowana, strona działa, a odnośniki w pliku readme prowadzą już na nią. Uznaję zgłoszenie 102 za rozwiązane.",
+          "verified": true
+        }
+      ],
+      "evidence_sourced": 1,
+      "evidence_verified": 1,
+      "evidence_valid": 1,
+      "evidence_on_expected_turn": 1
+    },
+    {
+      "ok": true,
+      "error": "",
+      "labels": {
+        "#111": "in_progress",
+        "#112": "untouched",
+        "#113": "in_progress"
+      },
+      "seconds": 9.7,
+      "windows": 1,
+      "windows_skipped": 0,
+      "windows_retried": 0,
+      "draft_valid": true,
+      "draft_errors": [],
+      "evidence_expected": 0,
+      "scenario": "pl-s4",
+      "lang": "pl",
+      "negative": true,
+      "expected": [],
+      "proposed": [],
+      "true_positives": [],
+      "false_positives": [],
+      "false_negatives": [],
+      "raw_changes": 0,
+      "raw_unknown_targets": [],
+      "proposals": [],
+      "evidence_sourced": 0,
+      "evidence_verified": 0,
+      "evidence_valid": 0,
+      "evidence_on_expected_turn": 0
+    },
+    {
+      "ok": true,
+      "error": "",
+      "labels": {
+        "#121": "done",
+        "#122": "done",
+        "#123": "blocked",
+        "t4": "done"
+      },
+      "seconds": 10.2,
+      "windows": 1,
+      "windows_skipped": 0,
+      "windows_retried": 0,
+      "draft_valid": true,
+      "draft_errors": [],
+      "evidence_expected": 3,
+      "scenario": "pl-s5",
+      "lang": "pl",
+      "negative": false,
+      "expected": [
+        "#121",
+        "#122",
+        "t4"
+      ],
+      "proposed": [
+        "#121",
+        "#122"
+      ],
+      "true_positives": [
+        "#121",
+        "#122"
+      ],
+      "false_positives": [],
+      "false_negatives": [
+        "t4"
+      ],
+      "raw_changes": 2,
+      "raw_unknown_targets": [],
+      "proposals": [
+        {
+          "target": "#121",
+          "reason": "Domena została przedłużona na trzy lata.",
+          "quote": "Tak, przedłużyłam ją wczoraj na kolejne trzy lata i mam potwierdzenie.",
+          "verified": true
+        },
+        {
+          "target": "#122",
+          "reason": "Literówka została poprawiona i wdrożona.",
+          "quote": "Poprawiona i wdrożona dziś rano.",
+          "verified": true
+        }
+      ],
+      "evidence_sourced": 2,
+      "evidence_verified": 2,
+      "evidence_valid": 2,
+      "evidence_on_expected_turn": 2
+    },
+    {
+      "ok": true,
+      "error": "",
+      "labels": {
+        "#134": "done",
+        "#131": "untouched",
+        "#132": "in_progress",
+        "#133": "in_progress"
+      },
+      "seconds": 13.5,
+      "windows": 1,
+      "windows_skipped": 0,
+      "windows_retried": 0,
+      "draft_valid": true,
+      "draft_errors": [],
+      "evidence_expected": 1,
+      "scenario": "pl-s6",
+      "lang": "pl",
+      "negative": false,
+      "expected": [
+        "#134"
+      ],
+      "proposed": [
+        "#134"
+      ],
+      "true_positives": [
+        "#134"
+      ],
+      "false_positives": [],
+      "false_negatives": [],
+      "raw_changes": 1,
+      "raw_unknown_targets": [],
+      "proposals": [
+        {
+          "target": "#134",
+          "reason": "Alerty monitoringu zostały skonfigurowane i działają w środowisku testowym.",
+          "quote": "Skończyłam je we wtorek, alerty odpalają się poprawnie w środowisku testowym.",
+          "verified": true
+        }
+      ],
+      "evidence_sourced": 1,
+      "evidence_verified": 1,
+      "evidence_valid": 1,
+      "evidence_on_expected_turn": 1
+    }
+  ],
+  "meetings_ok": 12,
+  "meetings_failed": 0,
+  "targets_done": 14,
+  "targets_not_done": 30,
+  "true_positives": 12,
+  "false_positives": 0,
+  "false_negatives": 2,
+  "proposal_precision": 1.0,
+  "proposal_recall": 0.8571428571428571,
+  "proposal_f1": 0.923076923076923,
+  "false_positive_rate_per_open_target": 0.0,
+  "negative_meetings": 2,
+  "negative_meeting_false_positive_rate": 0.0,
+  "false_positives_by_kind": {
+    "blocked": {
+      "targets": 6,
+      "proposed_as_done": 0
+    },
+    "reopened": {
+      "targets": 2,
+      "proposed_as_done": 0
+    },
+    "in_progress": {
+      "targets": 16,
+      "proposed_as_done": 0
+    },
+    "untouched": {
+      "targets": 6,
+      "proposed_as_done": 0
+    }
+  },
+  "proposals": 12,
+  "evidence_verified_share": 1.0,
+  "evidence_quote_validity": 1.0,
+  "evidence_on_expected_turn": 0.8571428571428571,
+  "raw_changes": 12,
+  "raw_unknown_target_rate": 0.0,
+  "schema_validity": 1.0,
+  "drafts_schema_valid": 1.0,
+  "windows_retried": 0,
+  "by_language": {
+    "en": {
+      "proposal_precision": 1.0,
+      "proposal_recall": 0.8571428571428571,
+      "true_positives": 6,
+      "false_positives": 0,
+      "false_negatives": 1
+    },
+    "pl": {
+      "proposal_precision": 1.0,
+      "proposal_recall": 0.8571428571428571,
+      "true_positives": 6,
+      "false_positives": 0,
+      "false_negatives": 1
+    }
+  },
+  "meets_proposed_thresholds": {
+    "proposal_precision": true,
+    "proposal_recall": true,
+    "evidence_verified_share": true,
+    "schema_validity": true,
+    "negative_meeting_false_positive_rate": true
+  }
+}
