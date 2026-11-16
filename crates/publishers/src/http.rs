@@ -290,6 +290,30 @@ fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
         .map(|(_, v)| v.as_str())
 }
 
+/// The TLS setup of every request: the system library (Schannel on Windows) with the
+/// system's own root certificates. ureq's default roots (WebPki) are not compiled in with
+/// `native-tls`, and the connector panics on the first `https` request without this.
+pub fn tls_config() -> ureq::tls::TlsConfig {
+    ureq::tls::TlsConfig::builder()
+        .provider(ureq::tls::TlsProvider::NativeTls)
+        .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+        .build()
+}
+
+/// The agent as production builds it. Statuses are classified by the caller, and a redirect
+/// is an answer, not a detour.
+fn build_agent(connect: Duration, total: Duration) -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_connect(Some(connect))
+        .timeout_global(Some(total))
+        .http_status_as_error(false)
+        .max_redirects(0)
+        .max_redirects_will_error(false)
+        .tls_config(tls_config())
+        .build()
+        .into()
+}
+
 // ----- the client ------------------------------------------------------------------------
 
 /// Sends requests. Cheap to create; holds the secrets that must be scrubbed from errors.
@@ -311,22 +335,8 @@ impl HttpClient {
     }
 
     pub fn with_timeouts(connect: Duration, total: Duration) -> Self {
-        let agent = ureq::Agent::config_builder()
-            .timeout_connect(Some(connect))
-            .timeout_global(Some(total))
-            // Statuses are classified here, and a redirect is an answer, not a detour.
-            .http_status_as_error(false)
-            .max_redirects(0)
-            .max_redirects_will_error(false)
-            .tls_config(
-                ureq::tls::TlsConfig::builder()
-                    .provider(ureq::tls::TlsProvider::NativeTls)
-                    .build(),
-            )
-            .build()
-            .into();
         Self {
-            agent,
+            agent: build_agent(connect, total),
             secrets: Vec::new(),
             now_ms: system_now_ms,
         }
@@ -763,6 +773,36 @@ mod tests {
     const TRANSIENT: Failure = Failure::Transient {
         retry_after_ms: None,
     };
+
+    // ----- TLS -----
+
+    #[test]
+    fn production_agent_uses_the_platform_verifier() {
+        let agent = build_agent(Duration::from_secs(1), Duration::from_secs(2));
+        let tls = agent.config().tls_config();
+        assert_eq!(tls.provider(), ureq::tls::TlsProvider::NativeTls);
+        assert!(matches!(
+            tls.root_certs(),
+            ureq::tls::RootCerts::PlatformVerifier
+        ));
+        assert_eq!(agent.config().max_redirects(), 0);
+    }
+
+    /// A real TLS handshake with the production agent: an unauthenticated HEAD of two public
+    /// home pages. It reaches the Internet, so it is not run in CI (docs/TESTING.md, section
+    /// 14).
+    #[test]
+    #[ignore = "reaches the Internet: cargo test -p publishers https_handshake -- --ignored"]
+    fn https_handshake_with_the_production_agent() {
+        let agent = build_agent(Duration::from_secs(10), Duration::from_secs(30));
+        for url in ["https://github.com", "https://discord.com"] {
+            let response = agent
+                .head(url)
+                .call()
+                .unwrap_or_else(|e| panic!("{url}: {e}"));
+            assert!(response.status().as_u16() < 500, "{url}");
+        }
+    }
 
     // ----- addresses -----
 

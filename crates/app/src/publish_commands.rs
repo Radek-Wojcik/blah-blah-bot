@@ -16,7 +16,7 @@ use cycle_store::PublishMode;
 use publishers::http::HttpClient;
 
 fn join_error(e: impl std::fmt::Display) -> IpcError {
-    IpcError::new("internal", format!("the background task failed: {e}"))
+    crate::ipc::background_task_error(&e)
 }
 
 /// Which GitHub tokens and target secrets are set (never their values), with the GitHub API

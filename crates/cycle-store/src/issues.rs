@@ -427,6 +427,8 @@ fn agent() -> ureq::Agent {
         .tls_config(
             ureq::tls::TlsConfig::builder()
                 .provider(ureq::tls::TlsProvider::NativeTls)
+                // Without roots ureq's native-tls connector panics on the first https request.
+                .root_certs(ureq::tls::RootCerts::PlatformVerifier)
                 .build(),
         )
         .build()
@@ -591,6 +593,26 @@ mod tests {
     use super::mock::MockServer;
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn agent_uses_the_platform_verifier() {
+        let agent = agent();
+        let tls = agent.config().tls_config();
+        assert_eq!(tls.provider(), ureq::tls::TlsProvider::NativeTls);
+        assert!(matches!(
+            tls.root_certs(),
+            ureq::tls::RootCerts::PlatformVerifier
+        ));
+    }
+
+    /// A real TLS handshake with this agent (an unauthenticated HEAD of a public page);
+    /// reaches the Internet, so it is not run in CI (docs/TESTING.md, section 14).
+    #[test]
+    #[ignore = "reaches the Internet: cargo test -p cycle-store https_handshake -- --ignored"]
+    fn https_handshake_with_the_issues_agent() {
+        let response = agent().head("https://github.com").call().expect("https");
+        assert!(response.status().as_u16() < 500);
+    }
 
     fn issue_json(n: u64, title: &str, assignee: Option<&str>, pr: bool) -> Value {
         let mut v = json!({

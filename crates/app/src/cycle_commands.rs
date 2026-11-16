@@ -126,7 +126,7 @@ pub struct AddRepoRequest {
 }
 
 fn join_error(e: impl std::fmt::Display) -> IpcError {
-    IpcError::new("internal", format!("the background task failed: {e}"))
+    crate::ipc::background_task_error(&e)
 }
 
 /// Registers a repository: an existing folder (`local`) or a clone of a remote one

@@ -24,6 +24,18 @@ impl IpcError {
     }
 }
 
+/// The error of a background task that panicked or was cancelled. The text of a panic can
+/// hold anything the task was handling (a webhook, a token, a path), so neither the UI nor
+/// the log gets it: the UI gets a fixed message, the log the fact only.
+pub fn background_task_error(e: &impl std::fmt::Display) -> IpcError {
+    let _ = e;
+    tracing::error!("a background task failed (panic text withheld)");
+    IpcError::new(
+        "internal",
+        "an internal error stopped this step; try again, and report it if it keeps happening",
+    )
+}
+
 impl std::fmt::Display for IpcError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: {}", self.code, self.message)
@@ -166,5 +178,20 @@ impl From<store::MeetingDetails> for MeetingDetails {
                 })
                 .collect(),
         }
+    }
+}
+
+#[cfg(test)]
+mod background_error_tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_background_task_never_shows_its_panic_text() {
+        let err = background_task_error(
+            &"task 1 panicked with message \"https://discord.com/api/webhooks/1/SECRET\"",
+        );
+        assert_eq!(err.code, "internal");
+        assert!(!err.message.contains("SECRET"));
+        assert!(!err.message.contains("panicked"));
     }
 }
