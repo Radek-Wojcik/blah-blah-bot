@@ -115,7 +115,11 @@ The defaults are `on-approval` for both targets (proposed in [ADR 0019](decision
 * A repository that is public, or whose visibility cannot be read, needs your confirmation once before anything is published to it, also under `auto`.
 * After a meeting is published (or while any of its operations is queued) its draft is read-only.
 
+In the application the rule is a switch of three positions, **Off**, **On approval** and **Automatic**, in the publishing panel of a draft and in **Settings**, **Publishing**, **When to publish**. A change goes through the `set_target_rule` command, which writes `targets.<name>.publish` and nothing else of `cycle.yaml` (a cycle without `targets.github` gets one with the default folder; Discord needs a target with a webhook reference, which the cycle editor adds). The panel says next to the switch that status changes are never written back automatically.
+
 `github` covers the commit with the report, the transcript, the screenshots and `topics.yaml`, the issues, and the write-back of approved status changes. With `targets.github.issues: false` only the commit is made. Without a remote the commit stays in the local repository and no issues are created.
+
+Before anything is published the panel shows `topics.yaml` before and after, topic by topic: the remote's version as last fetched (no network is used to look) against the version the commit writes, with the topics where the remote changed the same topic since your last pull marked, because your version replaces theirs. When the file cannot be compared, for example because the remote's `topics.yaml` is not readable, the topics are named instead and a note says so. The commit itself starts from a fresh fetch, so what a colleague pushed in the meantime shows up in the result.
 
 ### What is written to the repository
 

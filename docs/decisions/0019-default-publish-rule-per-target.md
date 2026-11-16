@@ -40,6 +40,7 @@ Rules that hold for every value:
 
 Nothing here is code that a user has to touch:
 
+- **In the application:** the switch **Off / On approval / Automatic** of each target, in the publishing panel of a draft and in **Settings**, **Publishing**, **When to publish**. It writes only `targets.<name>.publish` (the `set_target_rule` command) and the panel repeats that status changes are never written back automatically.
 - **Per cycle:** set `publish` under the target in `cycle.yaml`, in the cycle editor or by hand:
 
   ```yaml

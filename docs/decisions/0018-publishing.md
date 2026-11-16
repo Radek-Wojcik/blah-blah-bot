@@ -116,6 +116,8 @@ Tests never contact a real host. `publishers` provides, behind the `test-support
 - A secret has no path to a file, a log, the database or the repository.
 - Publishing happens at most once per meeting: the draft is read-only afterwards and there is no edit-and-republish.
 - Committing other cycle edits (`cycle.yaml`, templates) is left to the user.
+- The publish plan shows `topics.yaml` before and after per topic, from the clone and the remote branch as last fetched (`preview_topics`, no network), and falls back to the topic names with a note when it cannot compare.
+- The rule of a target is changed with `set_target_rule`, which writes `targets.<name>.publish` only.
 - `targets.github.path` sets the folder of the meetings in the repository (`meetings` by default). It is validated when the cycle is saved and again by the publisher, and meetings published under an earlier path stay there.
 - The only thing that decides what is published without a click is the rule of each target; its default is proposed in ADR 0019.
 
