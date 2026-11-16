@@ -7,8 +7,12 @@
 //!   `<!-- bbb:v1 cycle=.. meeting=.. item=.. t=.. -->` that ties it to its item.
 //! * **No duplicates.** A request that was sent but whose answer was lost may have created
 //!   the issue. A retry therefore looks for the marker among the cycle's issues first
-//!   (`scan_first`) and reuses what it finds. The list can lag behind a write by a moment,
-//!   so a duplicate remains possible in that window.
+//!   (`scan_first`) and reuses what it finds. GitHub's lists trail a write by a few seconds
+//!   (measured against the real service, filtered or not), so a scan right after a creation
+//!   can miss the new issue. Two things keep that from making a duplicate: the number of a
+//!   created issue is handed to the caller at once (`publish_issue_tracked`) and a retry
+//!   that knows it fetches that issue directly, which is consistent; and a retry after a
+//!   lost answer comes after the outbox's back-off, which is longer than the lag.
 //! * **Due date.** For a repository of an organisation that has an issue field named
 //!   [`DUE_FIELD_NAME`] of type `date` the date is written to that field. Everything else
 //!   (a personal repository, no such field, any error) gets a `Due: YYYY-MM-DD` line in the
@@ -269,7 +273,7 @@ impl Github {
     }
 
     /// The issue made from this item, found by its marker among the most recent issues of
-    /// the cycle.
+    /// the cycle. A list can miss an issue that was created seconds ago.
     pub fn find_issue_by_marker(
         &self,
         repo: &RepoRef,
@@ -284,6 +288,27 @@ impl Github {
                 })
             });
         Ok(found)
+    }
+
+    /// The issue with this number, when it carries the marker of this item; `None` when it
+    /// is gone or is something else. A direct fetch has no listing lag.
+    fn find_known_issue(
+        &self,
+        repo: &RepoRef,
+        number: u64,
+        marker: &ItemMarker,
+    ) -> Result<Option<IssueRecord>, HttpError> {
+        let url = format!("{}/issues/{number}", self.repo_path(repo));
+        let value = match self.send_json(Request::get(url)) {
+            Ok(v) => v,
+            Err(e) if matches!(e.status, Some(404 | 410)) => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        Ok(parse_issue_record(&value).filter(|r| {
+            r.marker.as_ref().is_some_and(|m| {
+                m.cycle == marker.cycle && m.meeting == marker.meeting && m.item == marker.item
+            })
+        }))
     }
 
     // ----- the due date field ------------------------------------------------------------------
@@ -347,22 +372,46 @@ impl Github {
         spec: &IssueSpec,
         scan_first: bool,
     ) -> Result<IssueOutcome, HttpError> {
+        self.publish_issue_tracked(repo, spec, scan_first, None, &mut |_| {})
+    }
+
+    /// [`Github::publish_issue`] for a caller that keeps a record of its own.
+    ///
+    /// `known` is the number an earlier attempt handed to `on_created`: that issue is
+    /// fetched directly (no list is involved, so no listing lag) and reused when it carries
+    /// this item's marker. `on_created` is called with the number as soon as GitHub has
+    /// answered the creation, before anything else is written to the issue, so that a crash
+    /// from then on cannot lead to a second issue.
+    pub fn publish_issue_tracked(
+        &self,
+        repo: &RepoRef,
+        spec: &IssueSpec,
+        scan_first: bool,
+        known: Option<u64>,
+        on_created: &mut dyn FnMut(u64),
+    ) -> Result<IssueOutcome, HttpError> {
         let label = label_of(&spec.cycle_id)?;
         let title = one_line(&defuse_mentions(&spec.title), TITLE_CHARS);
         if title.is_empty() {
             return Err(invalid("the issue has no title"));
         }
-        if scan_first {
-            if let Some(found) = self.find_issue_by_marker(repo, &spec.marker())? {
-                return Ok(IssueOutcome {
-                    number: found.number,
-                    url: found.url.unwrap_or_default(),
-                    created: false,
-                    assigned: found.assignee,
-                    assignee_dropped: false,
-                    due: DueOutcome::Existing,
-                });
-            }
+        let marker = spec.marker();
+        let mut existing = match known {
+            Some(number) => self.find_known_issue(repo, number, &marker)?,
+            None => None,
+        };
+        if existing.is_none() && scan_first {
+            existing = self.find_issue_by_marker(repo, &marker)?;
+        }
+        if let Some(found) = existing {
+            return Ok(IssueOutcome {
+                number: found.number,
+                url: found.url.unwrap_or_default(),
+                created: false,
+                assigned: found.assignee,
+                assignee_dropped: false,
+                due: DueOutcome::Existing,
+            });
         }
         // Where the due date goes: the field when the organisation has one, else the body.
         let field = spec.due.as_ref().and_then(|_| self.due_field(repo));
@@ -383,6 +432,7 @@ impl Github {
             .get("number")
             .and_then(Value::as_u64)
             .ok_or_else(|| invalid("the answer of GitHub has no issue number"))?;
+        on_created(number);
         let url = created
             .get("html_url")
             .and_then(Value::as_str)

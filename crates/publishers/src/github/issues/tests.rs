@@ -396,6 +396,67 @@ fn a_closed_issue_is_found_by_the_scan_as_well() {
 }
 
 #[test]
+fn a_scan_during_the_listing_lag_misses_the_issue_and_one_after_it_finds_it() {
+    let gh = fake();
+    // github.com lists a new issue only seconds after it was made.
+    gh.lag_lists(REPO, 1);
+    let github = api(&gh);
+    let first = github.publish_issue(&repo(), &spec("i3"), false).unwrap();
+    assert!(
+        github
+            .list_cycle_issues(&repo(), "NOMAD", 1)
+            .unwrap()
+            .is_empty(),
+        "the lag is in effect: the list does not show the issue yet"
+    );
+    // Once the lag is over, a retry finds it by the marker.
+    let found = github
+        .find_issue_by_marker(&repo(), &spec("i3").marker())
+        .unwrap();
+    assert_eq!(found.map(|r| r.number), Some(first.number));
+    let retry = github.publish_issue(&repo(), &spec("i3"), true).unwrap();
+    assert!(!retry.created);
+    assert_eq!(gh.issues(REPO).len(), 1, "no duplicate");
+}
+
+#[test]
+fn the_number_of_a_created_issue_is_reported_at_once_and_found_again_without_a_list() {
+    let gh = fake();
+    // The lists show nothing new for a long while.
+    gh.lag_lists(REPO, 1000);
+    let github = api(&gh);
+    let mut seen = Vec::new();
+    let first = github
+        .publish_issue_tracked(&repo(), &spec("i3"), true, None, &mut |n| seen.push(n))
+        .unwrap();
+    assert!(first.created);
+    assert_eq!(seen, vec![first.number]);
+
+    // A retry that knows the number fetches that issue: one request, no list, no duplicate.
+    let before = gh.requests().len();
+    let retry = github
+        .publish_issue_tracked(&repo(), &spec("i3"), true, Some(first.number), &mut |_| {
+            panic!("nothing is created")
+        })
+        .unwrap();
+    assert!(!retry.created && retry.number == first.number);
+    assert_eq!(retry.due, DueOutcome::Existing);
+    assert_eq!(gh.requests().len() - before, 1, "one direct request");
+
+    // A number that belongs to another item, or to nothing, is not trusted.
+    let other = github.publish_issue(&repo(), &spec("i4"), false).unwrap();
+    let made = github
+        .publish_issue_tracked(&repo(), &spec("i5"), false, Some(other.number), &mut |_| {})
+        .unwrap();
+    assert!(made.created, "issue {} is not the item i5", other.number);
+    let gone = github
+        .publish_issue_tracked(&repo(), &spec("i6"), false, Some(999), &mut |_| {})
+        .unwrap();
+    assert!(gone.created);
+    assert_eq!(gh.issues(REPO).len(), 4, "i3, i4, i5 and i6, no duplicate");
+}
+
+#[test]
 fn rate_limits_and_refusals_are_classified() {
     let gh = fake();
     let github = api(&gh);

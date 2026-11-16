@@ -551,8 +551,24 @@ impl Dispatcher {
             time_ms: p.time_ms,
             quote: p.quote.clone(),
         };
-        // Always look for the marker first: a crash or a lost answer may have created it.
-        let outcome = github.publish_issue(&identity.repo, &spec, true)?;
+        // Always look for the issue first: a crash or a lost answer may have created it. The
+        // number of a created issue is kept as progress at once, so a retry fetches that issue
+        // instead of relying on a list, which can trail the creation by seconds.
+        let known = op
+            .result
+            .as_deref()
+            .and_then(|r| serde_json::from_str::<Value>(r).ok())
+            .and_then(|v| v.get("issue_number").and_then(Value::as_u64));
+        let store = &self.store;
+        let env = &self.env;
+        let mut on_created = |number: u64| {
+            let progress = json!({ "issue_number": number }).to_string();
+            if let Err(e) = lock(store).set_op_progress(op.id, &progress, env.now_ms()) {
+                tracing::warn!(error = %e, "the number of a created issue was not stored");
+            }
+        };
+        let outcome =
+            github.publish_issue_tracked(&identity.repo, &spec, true, known, &mut on_created)?;
         if outcome.created {
             self.env.sleep(WRITE_PACING);
         }

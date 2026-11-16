@@ -303,6 +303,75 @@ fn a_crash_after_the_issue_was_created_does_not_duplicate_it_either() {
 }
 
 #[test]
+fn a_restart_right_after_the_issue_was_created_reuses_it_while_the_lists_lag() {
+    let lab = Lab::new(LabOptions::default());
+    publish(&lab, &GITHUB);
+    // The first operation (the commit) is done; the one of the first issue is running.
+    {
+        let store = lab.store.lock().unwrap();
+        let commit = store.claim_next_op(lab.env.now_ms(), &[]).unwrap().unwrap();
+        store
+            .complete_op(commit.id, "{}", lab.env.now_ms())
+            .unwrap();
+    }
+    let issue = lab
+        .store
+        .lock()
+        .unwrap()
+        .claim_next_op(lab.env.now_ms(), &[])
+        .unwrap()
+        .unwrap();
+    assert_eq!(issue.op_key, "issue:i1");
+    // GitHub made the issue, the number was recorded, then the process died. After the
+    // restart the lists do not show the issue yet (a scan alone would create a second).
+    lab.github.lag_lists(REPO, 1000);
+    let api = Github::with_client(lab.env.client(), &lab.github.api_base(), TOKEN).unwrap();
+    let spec = IssueSpec {
+        cycle_id: "NOMAD".into(),
+        meeting_id: MEETING.into(),
+        item_id: "i1".into(),
+        title: "Design the mount".into(),
+        assignee: None,
+        due: None,
+        meeting_date: "2026-11-13".into(),
+        report_url: None,
+        transcript_url: None,
+        transcript_anchor: None,
+        time_ms: None,
+        quote: None,
+    };
+    let made = api
+        .publish_issue(&RepoRef::parse(REPO).unwrap(), &spec, false)
+        .unwrap();
+    lab.store
+        .lock()
+        .unwrap()
+        .set_op_progress(
+            issue.id,
+            &format!(r#"{{"issue_number":{}}}"#, made.number),
+            lab.env.now_ms(),
+        )
+        .unwrap();
+    lab.dispatcher.recover().unwrap();
+    lab.run_until_settled(4);
+
+    let issues = lab.github.issues(REPO);
+    assert_eq!(
+        issues
+            .iter()
+            .filter(|i| i.title == "Design the mount")
+            .count(),
+        1,
+        "no duplicate: {:?}",
+        issues.iter().map(|i| &i.title).collect::<Vec<_>>()
+    );
+    let result: Value =
+        serde_json::from_str(lab.op("issue:i1").result.as_deref().unwrap()).unwrap();
+    assert_eq!(result["created"], false);
+    assert_eq!(result["number"], made.number);
+}
+
+#[test]
 fn a_status_change_is_written_once_even_when_answers_are_lost() {
     let lab = Lab::new(LabOptions::default());
     let number = lab

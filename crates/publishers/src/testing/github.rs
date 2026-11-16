@@ -78,6 +78,8 @@ pub struct StoredIssue {
     pub comments: Vec<StoredComment>,
     created: u64,
     updated: u64,
+    /// How many more issue lists still leave this issue out (listing lag).
+    hidden_from_lists: u32,
 }
 
 struct Repo {
@@ -95,6 +97,9 @@ struct Repo {
     labels: Vec<String>,
     next_number: u64,
     next_comment_id: u64,
+    /// Issues made through the API stay out of the issue lists for this many list requests,
+    /// as on github.com where the lists trail a write by a few seconds.
+    list_lag: u32,
 }
 
 struct State {
@@ -196,6 +201,7 @@ impl FakeGithub {
                 labels: Vec::new(),
                 next_number: 1,
                 next_comment_id: 1,
+                list_lag: 0,
             },
         );
     }
@@ -258,6 +264,13 @@ impl FakeGithub {
         self.with_repo(full_name, |r| {
             r.assignable = Some(logins.iter().map(|s| (*s).to_string()).collect());
         });
+    }
+
+    /// Issues created through the API stay out of the next `calls` list requests (`GET
+    /// /issues/{n}` shows them at once). This is how github.com behaves for a few seconds
+    /// after a write: measured, the filtered and the unfiltered list alike.
+    pub fn lag_lists(&self, full_name: &str, calls: u32) {
+        self.with_repo(full_name, |r| r.list_lag = calls);
     }
 
     /// An issue that exists before the bot acts, as created by a person.
@@ -631,6 +644,7 @@ fn new_issue(
         comments: Vec::new(),
         created: at,
         updated: at,
+        hidden_from_lists: 0,
     });
     number
 }
@@ -665,6 +679,7 @@ fn create_issue(repo: &mut Repo, req: &Recorded, base: &str, at: u64) -> Reply {
     let number = new_issue(repo, title, text, &labels, &assignees, false, at);
     let i = repo.issues.len() - 1;
     debug_assert_eq!(repo.issues[i].number, number);
+    repo.issues[i].hidden_from_lists = repo.list_lag;
     Reply::json(201, &issue_json(repo, &repo.issues[i], base))
 }
 
@@ -766,7 +781,7 @@ fn post_comment(repo: &mut Repo, number: &str, req: &Recorded, base: &str, at: u
     )
 }
 
-fn list_issues(repo: &Repo, req: &Recorded, base: &str) -> Reply {
+fn list_issues(repo: &mut Repo, req: &Recorded, base: &str) -> Reply {
     let state = req.query_param("state").unwrap_or("open");
     if !matches!(state, "open" | "closed" | "all") {
         return validation_failed("state", "invalid");
@@ -803,6 +818,7 @@ fn list_issues(repo: &Repo, req: &Recorded, base: &str) -> Reply {
             _ => true,
         })
         .filter(|i| wanted.iter().all(|l| i.labels.contains(l)))
+        .filter(|i| i.hidden_from_lists == 0)
         .collect();
     matching.sort_by_key(|i| if by_update { i.updated } else { i.created });
     if !ascending {
@@ -828,6 +844,9 @@ fn list_issues(repo: &Repo, req: &Recorded, base: &str) -> Reply {
             "Link",
             &format!("<{base}{}?{}>; rel=\"next\"", req.path, query.join("&")),
         );
+    }
+    for issue in &mut repo.issues {
+        issue.hidden_from_lists = issue.hidden_from_lists.saturating_sub(1);
     }
     reply
 }

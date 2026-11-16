@@ -130,7 +130,44 @@ fn an_issue_is_created_once_closed_with_a_comment_and_read_back() {
     };
     let first = gh.publish_issue(&t.repo, &spec, false).expect("create");
     assert!(first.created);
-    // A retry finds it by its marker instead of making another.
+    // GitHub's lists trail a write by a few seconds. A retry that knows the number fetches
+    // the issue directly and does not depend on a list at all.
+    let direct = gh
+        .publish_issue_tracked(&t.repo, &spec, true, Some(first.number), &mut |_| {
+            panic!("a second issue was created")
+        })
+        .expect("known number");
+    assert!(!direct.created);
+    assert_eq!(direct.number, first.number);
+    // A retry without the number finds it by its marker once the list shows it.
+    let started = std::time::Instant::now();
+    let mut found = None;
+    for _ in 0..30 {
+        found = gh
+            .find_issue_by_marker(
+                &t.repo,
+                &cycle_store::issues::ItemMarker {
+                    cycle: spec.cycle_id.clone(),
+                    meeting: spec.meeting_id.clone(),
+                    item: spec.item_id.clone(),
+                    t_ms: spec.time_ms,
+                },
+            )
+            .expect("scan");
+        if found.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+    println!(
+        "the list showed the new issue after {:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        found.map(|r| r.number),
+        Some(first.number),
+        "listed within 30 s"
+    );
     let again = gh.publish_issue(&t.repo, &spec, true).expect("scan");
     assert!(!again.created);
     assert_eq!(again.number, first.number);
@@ -159,11 +196,17 @@ fn an_issue_is_created_once_closed_with_a_comment_and_read_back() {
         "writing back twice changes nothing"
     );
 
-    let listed = gh.list_cycle_issues(&t.repo, &cycle, 1).expect("list");
-    let found = listed
-        .iter()
-        .find(|r| r.number == first.number)
-        .expect("the issue is listed with its label");
+    // The label filtered list trails a write by a few seconds on github.com.
+    let mut found = None;
+    for _ in 0..30 {
+        let listed = gh.list_cycle_issues(&t.repo, &cycle, 1).expect("list");
+        found = listed.into_iter().find(|r| r.number == first.number);
+        if found.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+    let found = found.expect("the issue is listed with its label within 30 s");
     assert!(!found.open);
     assert!(found.marker.is_some(), "the marker survived");
 }
