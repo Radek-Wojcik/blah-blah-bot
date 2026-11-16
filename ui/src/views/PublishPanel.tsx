@@ -232,7 +232,8 @@ export function PublishPanel(props: {
                 ))}
               </ul>
             )}
-            <TopicsPlanView plan={plan.summary.topics ?? null} />
+            {/* Once the commit is done the result below shows what it changed. */}
+            {!committedOp(ops) && <TopicsPlanView plan={plan.summary.topics ?? null} />}
             {pending && <p className="section-hint">{pending}</p>}
             {plan.notes.map((n, i) => (
               <p key={i} className="notice">

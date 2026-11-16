@@ -85,6 +85,12 @@ test.describe("publishing on the mock backend", () => {
     expect(posts).toHaveLength(1);
     expect(posts[0].content).toContain("Issues: #13, #14, #15, #16");
 
+    // The plan of topics.yaml gives way to the result of the commit.
+    await expect(panel(page).getByRole("list", { name: "Planned topic changes" })).toHaveCount(0);
+    await expect(
+      panel(page).getByRole("heading", { name: "topics.yaml", exact: true }),
+    ).toBeVisible();
+
     // Everything chosen was sent: there is nothing left to publish.
     await expect(panel(page).getByRole("button", { name: "Publish", exact: true })).toBeDisabled();
     await expect(panel(page).getByRole("list", { name: "What was published" })).toBeVisible();

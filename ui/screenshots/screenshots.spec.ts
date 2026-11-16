@@ -178,6 +178,23 @@ test.describe("static screenshots", () => {
     await panel.screenshot({ path: path.join(OUT, "publishing-panel.png") });
   });
 
+  test("publishing plan before publishing", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 1700 });
+    await page.goto("/?view=main&backend=mock&rate=0&jobms=60&page=draft&meeting=m5");
+    const changes = page.getByRole("region", { name: "Status changes" });
+    for (const target of ["#12", "#11", "t-1"])
+      await changes.getByRole("button", { name: `Approve ${target}` }).click();
+    const panel = page.getByRole("region", { name: "Publishing" });
+    // The Discord message goes out on its own once the draft is complete; GitHub waits.
+    await panel
+      .getByRole("radiogroup", { name: "Discord publishing rule" })
+      .getByRole("radio", { name: "Automatic" })
+      .click();
+    await expect(panel.getByRole("listitem", { name: "Topic t-1 changed" })).toBeVisible();
+    await settle(page);
+    await panel.screenshot({ path: path.join(OUT, "publishing-plan.png") });
+  });
+
   test("example report as rendered Markdown", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 1000 });
     await page.goto("/?view=main&backend=mock&rate=0&page=draft&meeting=m5");
@@ -202,7 +219,8 @@ test.describe("static screenshots", () => {
   });
 
   test("token setup", async ({ page }) => {
-    await page.setViewportSize({ width: 1280, height: 1700 });
+    // Tall enough for the whole page: an element taller than the window is stitched badly.
+    await page.setViewportSize({ width: 1280, height: 2300 });
     await page.goto("/?view=main&backend=mock&rate=0&page=settings");
     const publishing = page.getByRole("region", { name: "Publishing" });
     // The GitHub token is stored; the webhook is typed (masked) and not stored yet.
@@ -426,6 +444,9 @@ test("approve statuses and publish GIF", async ({ page }) => {
   const panel = page.getByRole("region", { name: "Publishing" });
   await top(panel.getByRole("heading", { name: "Publishing" }));
   await shot();
+  // Before it is published the plan shows each topic of topics.yaml, before and after.
+  await top(panel.getByRole("heading", { name: "topics.yaml: before and after" }));
+  await shot();
   await panel.getByRole("button", { name: "Publish", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Publish to a public repository?" });
   await expect(dialog).toBeVisible();
@@ -440,7 +461,7 @@ test("approve statuses and publish GIF", async ({ page }) => {
     timeout: 30_000,
   });
   await shot(600);
-  await top(panel.getByRole("heading", { name: "topics.yaml" }));
+  await top(panel.getByRole("heading", { name: "topics.yaml", exact: true }));
   await shot(600);
   fs.mkdirSync(OUT, { recursive: true });
   execFileSync("python", [

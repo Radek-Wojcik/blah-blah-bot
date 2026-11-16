@@ -2753,6 +2753,7 @@ textarea {
   display: inline-flex;
   flex-wrap: wrap;
   gap: 4px;
+  margin: 0;
 }
 .field-label {
   display: block;
