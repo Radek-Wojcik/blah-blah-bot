@@ -189,6 +189,40 @@ pub(crate) const MIGRATIONS: &[&str] = &[
         confirmed_unix_ms INTEGER NOT NULL
     );
     ",
+    // Version 6: corrections to a published meeting. Two more kinds of outbox operation (a
+    // correction note added to the meeting folder in the repository, a comment on the related
+    // issue). A CHECK constraint cannot be altered, so the table is rebuilt with its rows,
+    // ids and links kept.
+    "
+    CREATE TABLE outbox_v6 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        target TEXT NOT NULL CHECK (target IN ('github','issues','discord')),
+        kind TEXT NOT NULL
+            CHECK (kind IN ('commit_meeting','create_issue','set_issue_state','post_discord',
+                            'commit_correction','comment_correction')),
+        op_key TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}',
+        state TEXT NOT NULL CHECK (state IN ('queued','running','done','failed','cancelled')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_unix_ms INTEGER,
+        last_error TEXT,
+        result TEXT,
+        after_id INTEGER REFERENCES outbox(id) ON DELETE SET NULL,
+        created_unix_ms INTEGER NOT NULL,
+        updated_unix_ms INTEGER NOT NULL,
+        UNIQUE (meeting_id, op_key)
+    );
+    INSERT INTO outbox_v6 (id, meeting_id, target, kind, op_key, payload, state, attempts,
+                           next_attempt_unix_ms, last_error, result, after_id,
+                           created_unix_ms, updated_unix_ms)
+        SELECT id, meeting_id, target, kind, op_key, payload, state, attempts,
+               next_attempt_unix_ms, last_error, result, after_id,
+               created_unix_ms, updated_unix_ms FROM outbox;
+    DROP TABLE outbox;
+    ALTER TABLE outbox_v6 RENAME TO outbox;
+    CREATE INDEX idx_outbox_due ON outbox(state, next_attempt_unix_ms);
+    ",
 ];
 
 /// Schema version after all migrations have run.
@@ -280,8 +314,8 @@ mod tests {
     #[test]
     fn migrating_a_version_4_database_adds_the_publishing_tables_and_keeps_the_data() {
         let s = Store::init(v4_database()).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 5);
-        assert_eq!(LATEST, 5);
+        assert_eq!(s.schema_version().unwrap(), LATEST);
+        assert_eq!(LATEST, 6);
 
         // Existing data is untouched.
         let m = s.get_meeting("20261113-140501").unwrap().unwrap().meeting;
@@ -344,6 +378,83 @@ mod tests {
         insert("github", "a").unwrap();
         assert!(insert("github", "a").is_err());
         // Deleting the meeting removes everything that belongs to it.
+        s.delete_meeting("20261113-140501").unwrap();
+        assert_eq!(count(&s, "outbox"), 0);
+    }
+
+    #[test]
+    fn migrating_a_version_5_database_keeps_the_outbox_and_accepts_the_new_kinds() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        for sql in &MIGRATIONS[..5] {
+            conn.execute_batch(sql).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 5).unwrap();
+        conn.execute_batch(
+            r#"INSERT INTO meetings (id, title, started_unix_ms, state, dir)
+                 VALUES ('20261113-140501', 'Weekly', 5, 'stopped', 'm1');
+               INSERT INTO outbox (id, meeting_id, target, kind, op_key, payload, state, attempts,
+                                   last_error, result, after_id, created_unix_ms, updated_unix_ms)
+                 VALUES (7, '20261113-140501', 'github', 'commit_meeting', 'commit', '{"a":1}',
+                         'done', 2, NULL, '{"folder":"2026-11-13"}', NULL, 10, 11),
+                        (9, '20261113-140501', 'issues', 'create_issue', 'issue:i1', '{}',
+                         'failed', 8, 'boom', NULL, 7, 12, 13);
+               INSERT INTO publications (meeting_id, cycle_id, folder, snapshot_dir)
+                 VALUES ('20261113-140501', 'NOMAD', '2026-11-13', 'm1/work/publish/1');"#,
+        )
+        .unwrap();
+        let s = Store::init(conn).unwrap();
+        assert_eq!(s.schema_version().unwrap(), LATEST);
+
+        let ops = s.list_ops(Some("20261113-140501")).unwrap();
+        assert_eq!(ops.len(), 2);
+        assert_eq!((ops[0].id, ops[0].attempts, ops[0].after_id), (7, 2, None));
+        assert_eq!(ops[0].result.as_deref(), Some(r#"{"folder":"2026-11-13"}"#));
+        assert_eq!((ops[1].id, ops[1].after_id), (9, Some(7)));
+        assert_eq!(ops[1].last_error.as_deref(), Some("boom"));
+        assert!(s.get_publication("20261113-140501").unwrap().is_some());
+
+        // New rows continue after the old ids, can follow an old row and take the new kinds.
+        let new_op = |kind, key: &str, after: &str| crate::NewOp {
+            meeting_id: "20261113-140501".into(),
+            target: crate::OutboxTarget::Github,
+            kind,
+            op_key: key.into(),
+            payload: "{}".into(),
+            after_op_key: Some(after.into()),
+        };
+        let (op, created) = s
+            .enqueue_op(
+                &new_op(
+                    crate::OutboxKind::CommitCorrection,
+                    "correction:c1",
+                    "commit",
+                ),
+                20,
+            )
+            .unwrap();
+        assert!(created && op.id > 9 && op.after_id == Some(7), "{op:?}");
+        let (op, _) = s
+            .enqueue_op(
+                &new_op(
+                    crate::OutboxKind::CommentCorrection,
+                    "correction-issue:c1",
+                    "correction:c1",
+                ),
+                21,
+            )
+            .unwrap();
+        assert_eq!(op.kind, crate::OutboxKind::CommentCorrection);
+        // The index of due operations survived the rebuild, and deleting the meeting cascades.
+        let index: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'idx_outbox_due'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(index, 1);
         s.delete_meeting("20261113-140501").unwrap();
         assert_eq!(count(&s, "outbox"), 0);
     }

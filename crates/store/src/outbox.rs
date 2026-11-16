@@ -65,6 +65,10 @@ pub enum OutboxKind {
     CreateIssue,
     SetIssueState,
     PostDiscord,
+    /// A correction note added to the folder of a published meeting.
+    CommitCorrection,
+    /// A comment with a correction on the issue of an item.
+    CommentCorrection,
 }
 
 impl OutboxKind {
@@ -74,6 +78,8 @@ impl OutboxKind {
             Self::CreateIssue => "create_issue",
             Self::SetIssueState => "set_issue_state",
             Self::PostDiscord => "post_discord",
+            Self::CommitCorrection => "commit_correction",
+            Self::CommentCorrection => "comment_correction",
         }
     }
 
@@ -83,6 +89,8 @@ impl OutboxKind {
             "create_issue" => Ok(Self::CreateIssue),
             "set_issue_state" => Ok(Self::SetIssueState),
             "post_discord" => Ok(Self::PostDiscord),
+            "commit_correction" => Ok(Self::CommitCorrection),
+            "comment_correction" => Ok(Self::CommentCorrection),
             other => Err(StoreError::UnknownState(other.to_string())),
         }
     }
