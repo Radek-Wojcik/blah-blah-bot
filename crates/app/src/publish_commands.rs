@@ -9,7 +9,10 @@ use crate::cycle_commands::EVENT_CYCLES;
 use crate::cycles::{self, RepoDto, TargetsDto};
 use crate::ipc::{IpcError, IpcResult};
 use crate::publish_secrets::{self, GithubAccessDto, PublishingSecretsDto, WebhookCheckDto};
-use crate::publishing::{ConfirmDto, CycleTasksDto, OutboxStateDto, PlanDto, PublishResultDto};
+use crate::publishing::{
+    ConfirmDto, CorrectionsDto, CycleTasksDto, OutboxStateDto, PlanDto, PublishCorrectionsDto,
+    PublishResultDto,
+};
 use crate::secrets::Credentials;
 use crate::state::AppState;
 use cycle_store::PublishMode;
@@ -191,4 +194,68 @@ pub fn cancel_outbox_op(state: State<'_, AppState>, id: i64) -> IpcResult<Outbox
 #[tauri::command]
 pub fn cycle_tasks(state: State<'_, AppState>, cycle_id: String) -> IpcResult<CycleTasksDto> {
     state.publishing().cycle_tasks(&cycle_id)
+}
+
+// ----- corrections to a published meeting -------------------------------------------------
+
+/// The corrections written for a meeting after it was published, and where each stands.
+#[tauri::command]
+pub fn list_corrections(
+    state: State<'_, AppState>,
+    meeting_id: String,
+) -> IpcResult<CorrectionsDto> {
+    state.publishing().list_corrections(&meeting_id)
+}
+
+/// Writes a correction note for a published meeting (text, optional item and issue, and the
+/// day it was written, today by default). Under an `auto` rule of the `github` target it is
+/// queued at once.
+#[tauri::command]
+pub async fn add_correction(
+    state: State<'_, AppState>,
+    meeting_id: String,
+    text: String,
+    item: Option<String>,
+    issue: Option<String>,
+    date: Option<String>,
+) -> IpcResult<CorrectionsDto> {
+    let publishing = state.publishing().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        publishing.add_correction(
+            &meeting_id,
+            &text,
+            item.as_deref(),
+            issue.as_deref(),
+            date.as_deref(),
+        )
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// Queues corrections for publishing: a new file in the meeting's folder of the repository,
+/// and a comment on the issue it is about. The same rule and the same public-repository
+/// check as for the meeting. Without ids, every correction that is not queued yet.
+#[tauri::command]
+pub async fn publish_corrections(
+    state: State<'_, AppState>,
+    meeting_id: String,
+    ids: Option<Vec<String>>,
+) -> IpcResult<PublishCorrectionsDto> {
+    let publishing = state.publishing().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        publishing.publish_corrections(&meeting_id, &ids.unwrap_or_default())
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// Deletes a correction that was never queued.
+#[tauri::command]
+pub fn delete_correction(
+    state: State<'_, AppState>,
+    meeting_id: String,
+    id: String,
+) -> IpcResult<CorrectionsDto> {
+    state.publishing().delete_correction(&meeting_id, &id)
 }

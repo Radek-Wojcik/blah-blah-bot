@@ -3,6 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use cycle_store::corrections::CorrectionsFile;
 use cycle_store::issues::{IssueCache, IssueLink, OpenIssue};
 use cycle_store::{Cycle, Decision, Draft, ItemType, ProposedStatus, PublishMode, Repo};
 use publishers::testing::fixtures::{
@@ -570,4 +571,272 @@ fn a_private_repository_needs_no_confirmation() {
         2
     );
     let _ = Repo::open(&lab.clone_dir).unwrap();
+}
+
+// ----- corrections to a published meeting ---------------------------------------------------------
+
+/// A published meeting in a private repository: the commit and the issue are done.
+fn published_rig() -> (Rig, PublishLab) {
+    let (rig, lab) = gated(Visibility::Private);
+    rig.save_draft(&draft());
+    rig.publishing.publish(MEETING, &github_only()).unwrap();
+    assert_eq!(rig.tick().done, 2);
+    (rig, lab)
+}
+
+fn remote_paths(lab: &PublishLab) -> String {
+    git(&lab.remote, &["ls-tree", "-r", "--name-only", "main"])
+}
+
+#[test]
+fn a_correction_needs_a_published_meeting_and_a_sensible_note() {
+    let (rig, _lab) = gated(Visibility::Private);
+    rig.save_draft(&draft());
+    let err = rig
+        .publishing
+        .add_correction(MEETING, "Moved.", None, None, None)
+        .unwrap_err();
+    assert_eq!(err.code, "not_published");
+    assert!(!rig.meeting_dir().join("work/corrections.json").exists());
+
+    rig.publishing.publish(MEETING, &github_only()).unwrap();
+    let add = |text: &str, item: Option<&str>, issue: Option<&str>, date: Option<&str>| {
+        rig.publishing
+            .add_correction(MEETING, text, item, issue, date)
+    };
+    assert_eq!(add("   ", None, None, None).unwrap_err().code, "invalid");
+    assert_eq!(
+        add("x", Some("i9"), None, None).unwrap_err().code,
+        "not_found"
+    );
+    assert_eq!(
+        add("x", None, Some("twelve"), None).unwrap_err().code,
+        "invalid"
+    );
+    assert_eq!(
+        add("x", None, Some("#0"), None).unwrap_err().code,
+        "invalid"
+    );
+    assert_eq!(
+        add("x", None, None, Some("16.11.2026")).unwrap_err().code,
+        "invalid"
+    );
+    let too_long = "x".repeat(2001);
+    assert_eq!(
+        add(&too_long, None, None, None).unwrap_err().code,
+        "invalid"
+    );
+    assert!(
+        !rig.meeting_dir().join("work/corrections.json").exists(),
+        "nothing was written for a refused note"
+    );
+
+    // 12 and #12 are the same issue, the date can be given, and ids count up.
+    let view = add("First.", Some("i1"), Some("12"), Some("2026-11-15")).unwrap();
+    assert_eq!(view.corrections[0].id, "c1");
+    assert_eq!(view.corrections[0].issue.as_deref(), Some("#12"));
+    assert_eq!(view.corrections[0].date, "2026-11-15");
+    let view = add("Second.", None, None, None).unwrap();
+    assert_eq!(view.corrections[1].id, "c2");
+    assert_eq!(view.corrections[1].date.len(), 10);
+    assert!(view.locked && view.in_repository);
+    assert_eq!(view.rule, "on-approval");
+    // The draft itself is untouched and still locked.
+    assert!(ensure_draft_unlocked(&rig.store.lock().unwrap(), MEETING).is_err());
+}
+
+#[test]
+fn a_correction_waits_for_the_user_then_goes_out_as_a_file_and_an_issue_comment() {
+    let (rig, lab) = published_rig();
+    let view = rig
+        .publishing
+        .add_correction(MEETING, "The mount is redesigned.", Some("i1"), None, None)
+        .unwrap();
+    // On approval: written, not queued.
+    assert_eq!(view.corrections[0].state, "local");
+    assert!(view.corrections[0].can_delete);
+    assert_eq!(rig.ops().len(), 2, "only the meeting's own operations");
+
+    let result = rig.publishing.publish_corrections(MEETING, &[]).unwrap();
+    assert_eq!(result.queued, 2);
+    let state = rig.publishing.state().unwrap();
+    let labels: Vec<_> = state.ops.iter().map(|o| o.label.as_str()).collect();
+    assert!(
+        labels.contains(&"Add the correction c1 to the repository"),
+        "{labels:?}"
+    );
+    assert!(labels.contains(&"Comment the correction on its issue"));
+    assert_eq!(result.corrections.corrections[0].state, "queued");
+    assert!(!result.corrections.corrections[0].can_delete);
+
+    assert_eq!(
+        rig.tick().done,
+        2,
+        "{:?}",
+        rig.publishing.state().unwrap().ops
+    );
+    let view = rig.publishing.list_corrections(MEETING).unwrap();
+    let c = &view.corrections[0];
+    assert_eq!(c.state, "published");
+    assert_eq!(c.file_name.as_deref(), Some("corrections.md"));
+    assert!(c
+        .url
+        .as_deref()
+        .unwrap()
+        .ends_with("meetings/NOMAD/2026-11-13/corrections.md"));
+    assert_eq!(c.comment.as_ref().unwrap().state, "done");
+    assert!(remote_paths(&lab).contains("meetings/NOMAD/2026-11-13/corrections.md"));
+    assert_eq!(lab.github.issues(REPO)[0].comments.len(), 1);
+
+    // Part of the record now: it cannot be deleted, and publishing again queues nothing.
+    assert_eq!(
+        rig.publishing
+            .delete_correction(MEETING, "c1")
+            .unwrap_err()
+            .code,
+        "correction_queued"
+    );
+    let again = rig
+        .publishing
+        .publish_corrections(MEETING, &["c1".into()])
+        .unwrap();
+    assert_eq!(again.queued, 0);
+    assert_eq!(
+        rig.publishing
+            .publish_corrections(MEETING, &[])
+            .unwrap_err()
+            .code,
+        "nothing_to_publish"
+    );
+
+    // A second one is a second file; a note that was never queued can still be deleted.
+    rig.publishing
+        .add_correction(MEETING, "Another.", None, None, None)
+        .unwrap();
+    rig.publishing.publish_corrections(MEETING, &[]).unwrap();
+    assert_eq!(rig.tick().done, 1, "no issue, so no comment");
+    assert!(remote_paths(&lab).contains("meetings/NOMAD/2026-11-13/corrections-2.md"));
+    rig.publishing
+        .add_correction(MEETING, "Never mind.", None, None, None)
+        .unwrap();
+    let view = rig.publishing.delete_correction(MEETING, "c3").unwrap();
+    assert_eq!(view.corrections.len(), 2);
+    assert_eq!(
+        rig.publishing
+            .delete_correction(MEETING, "c3")
+            .unwrap_err()
+            .code,
+        "not_found"
+    );
+    // The file on disk follows.
+    let file = CorrectionsFile::read(&rig.meeting_dir().join("work/corrections.json"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(file.corrections.len(), 2);
+}
+
+#[test]
+fn the_rule_decides_whether_a_correction_is_queued_when_it_is_written() {
+    let (rig, lab) = published_rig();
+    let repos = rig.repos.lock().unwrap().clone();
+    crate::cycles::set_target_rule(&repos, "NOMAD", "github", PublishMode::Auto).unwrap();
+    let view = rig
+        .publishing
+        .add_correction(MEETING, "Automatic.", Some("i1"), None, None)
+        .unwrap();
+    assert_eq!(view.rule, "auto");
+    assert_eq!(view.corrections[0].state, "queued");
+    assert_eq!(rig.tick().done, 2);
+    assert!(remote_paths(&lab).contains("corrections.md"));
+
+    // Off: written and kept, never published, not even when asked.
+    crate::cycles::set_target_rule(&repos, "NOMAD", "github", PublishMode::Off).unwrap();
+    let view = rig
+        .publishing
+        .add_correction(MEETING, "Off.", None, None, None)
+        .unwrap();
+    assert_eq!(view.corrections[1].state, "local");
+    let err = rig
+        .publishing
+        .publish_corrections(MEETING, &[])
+        .unwrap_err();
+    assert_eq!(err.code, "nothing_to_publish");
+    assert_eq!(
+        rig.ops()
+            .iter()
+            .filter(|o| o.op_key.starts_with("correction"))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn a_correction_for_a_repository_that_became_public_waits_for_the_confirmation() {
+    let (rig, lab) = published_rig();
+    lab.github.set_visibility(REPO, Visibility::Public);
+    rig.publishing
+        .add_correction(MEETING, "Moved.", None, None, None)
+        .unwrap();
+    let err = rig
+        .publishing
+        .publish_corrections(MEETING, &[])
+        .unwrap_err();
+    assert_eq!(err.code, "public_repo_unconfirmed");
+    let view = rig.publishing.list_corrections(MEETING).unwrap();
+    assert_eq!(view.corrections[0].state, "local");
+
+    // Automatic does not get around it: the note is written, nothing is queued.
+    let repos = rig.repos.lock().unwrap().clone();
+    crate::cycles::set_target_rule(&repos, "NOMAD", "github", PublishMode::Auto).unwrap();
+    let view = rig
+        .publishing
+        .add_correction(MEETING, "Auto.", None, None, None)
+        .unwrap();
+    assert!(view.corrections.iter().all(|c| c.state == "local"));
+    assert!(!rig.ops().iter().any(|o| o.op_key.starts_with("correction")));
+
+    rig.publishing.confirm_public_repo("NOMAD").unwrap();
+    let result = rig.publishing.publish_corrections(MEETING, &[]).unwrap();
+    assert_eq!(result.queued, 2, "both notes, a file each");
+}
+
+#[test]
+fn a_discord_only_publication_has_no_repository_for_corrections() {
+    let (rig, _lab) = Rig::local(Some(fixture_cycle(
+        Some(PublishMode::OnApproval),
+        Some(("cred:discord/nomad", PublishMode::OnApproval)),
+    )));
+    rig.save_draft(&draft());
+    rig.secrets
+        .set(
+            &crate::secrets::target_entry("cred:discord/nomad").unwrap(),
+            "http://127.0.0.1:9/api/webhooks/123456789012345678/abcDEF_123-xyz",
+        )
+        .unwrap();
+    rig.publishing
+        .publish(MEETING, &["discord".to_string()])
+        .unwrap();
+    let view = rig
+        .publishing
+        .add_correction(MEETING, "Moved.", None, None, None)
+        .unwrap();
+    assert!(view.locked && !view.in_repository);
+    let err = rig
+        .publishing
+        .publish_corrections(MEETING, &[])
+        .unwrap_err();
+    assert_eq!(err.code, "not_in_repository");
+}
+
+#[test]
+fn the_corrections_the_interface_gets_hold_no_secret() {
+    let (rig, _lab) = published_rig();
+    rig.publishing
+        .add_correction(MEETING, "Moved.", Some("i1"), None, None)
+        .unwrap();
+    rig.publishing.publish_corrections(MEETING, &[]).unwrap();
+    rig.tick();
+    let view = serde_json::to_string(&rig.publishing.list_corrections(MEETING).unwrap()).unwrap();
+    assert!(!view.contains(TOKEN), "{view}");
+    assert!(view.contains("\"canDelete\":false"));
 }

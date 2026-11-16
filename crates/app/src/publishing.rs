@@ -296,6 +296,14 @@ fn label_of(op: &OutboxOp) -> String {
             format!("{verb} issue #{number}")
         }
         OutboxKind::PostDiscord => "Post the summary to Discord".to_string(),
+        OutboxKind::CommitCorrection => {
+            let id = payload
+                .pointer("/correction/id")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            format!("Add the correction {id} to the repository")
+        }
+        OutboxKind::CommentCorrection => "Comment the correction on its issue".to_string(),
     }
 }
 
@@ -373,6 +381,7 @@ fn start_error(e: StartError) -> IpcError {
                     gate::PUBLIC_REPO_CODE
                 }
                 Some(publishers::plan::Block::DiscordWebhookMissing) => "discord_webhook_missing",
+                Some(publishers::plan::Block::MeetingNotInRepository) => "not_in_repository",
                 _ => "nothing_to_publish",
             };
             IpcError::new(code, first.map(|b| b.message()).unwrap_or_default())
@@ -416,6 +425,8 @@ pub struct Publishing {
     env: Arc<AppEnv>,
     dispatcher: Dispatcher,
     tx: Mutex<Option<Sender<Command>>>,
+    /// Serialises reading and writing the corrections file of a meeting.
+    corrections_lock: Mutex<()>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -430,6 +441,7 @@ impl Publishing {
             env,
             dispatcher,
             tx: Mutex::new(None),
+            corrections_lock: Mutex::new(()),
         })
     }
 
@@ -934,6 +946,9 @@ pub fn tasks_of(located: &Located, cycle_id: &str) -> IpcResult<CycleTasksDto> {
         done,
     })
 }
+
+mod corrections;
+pub use corrections::{CorrectionsDto, PublishCorrectionsDto};
 
 #[cfg(test)]
 mod tests;
