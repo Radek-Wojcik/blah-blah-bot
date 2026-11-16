@@ -603,12 +603,27 @@ fn the_preview_shows_the_merge_without_changing_anything() {
     ours[0].status = TopicStatus::Closed;
     ours[0].closed_in = Some("2026-11-13".into());
     let before = g(repo.root(), &["rev-parse", "HEAD"]);
-    let merge = preview_topics(&repo, "NOMAD", &ours).unwrap();
+    let preview = preview_topics(&repo, "NOMAD", &ours).unwrap();
+    assert!(
+        preview.against_remote,
+        "a clone has a remote-tracking branch"
+    );
+    let merge = preview.merge;
     assert_eq!(merge.diff.added.len(), 1);
     assert_eq!(merge.diff.changed.len(), 1);
     assert!(merge.conflicts.is_empty());
     assert_eq!(g(repo.root(), &["rev-parse", "HEAD"]), before);
     assert!(preview_topics(&repo, "../x", &ours).is_err());
+
+    // A remote that was never fetched into this clone: the comparison is with the clone's own
+    // branch, and the preview says so.
+    g(
+        repo.root(),
+        &["update-ref", "-d", "refs/remotes/origin/main"],
+    );
+    let preview = preview_topics(&repo, "NOMAD", &ours).unwrap();
+    assert!(!preview.against_remote);
+    assert_eq!(preview.merge.diff.added.len(), 1);
 }
 
 // ----- other repositories --------------------------------------------------------------------

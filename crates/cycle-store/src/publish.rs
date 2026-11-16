@@ -1035,14 +1035,25 @@ fn is_on_remote(
         .ok)
 }
 
+/// What [`preview_topics`] found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TopicsPreview {
+    pub merge: TopicsMerge,
+    /// `topics.yaml` was compared with the remote-tracking branch as last fetched. False when
+    /// there is none (no remote, or nothing fetched yet): the comparison is then with this
+    /// clone's own branch, and the remote may differ.
+    pub against_remote: bool,
+}
+
 /// What publishing would do to `topics.yaml`, for the screen that asks before it commits.
 /// Reads what is here (the remote-tracking branch as last fetched, no network) and changes
-/// nothing.
+/// nothing. The real commit starts from a fresh fetch, so what a colleague pushed since
+/// shows up only then.
 pub fn preview_topics(
     repo: &Repo,
     cycle_id: &str,
     ours: &[Topic],
-) -> Result<TopicsMerge, PublishError> {
+) -> Result<TopicsPreview, PublishError> {
     if !is_identifier(cycle_id) {
         return Err(PublishError::permanent("the cycle id is not valid"));
     }
@@ -1052,19 +1063,25 @@ pub fn preview_topics(
         secrets: Vec::new(),
     };
     if !repo.is_git_repo() {
-        return Ok(topics::merge(&[], &[], ours));
+        return Ok(TopicsPreview {
+            merge: topics::merge(&[], &[], ours),
+            against_remote: false,
+        });
     }
     let target = target_of(&g)?;
     let path = topics_path(cycle_id);
-    let upstream_ref = match &target.remote {
-        Some(remote) => g
-            .try_ok(&[
-                "rev-parse",
-                "--verify",
-                "-q",
-                &format!("refs/remotes/{remote}/{}", target.remote_branch),
-            ])?
-            .or(head_of(&g)?),
+    let tracking = match &target.remote {
+        Some(remote) => g.try_ok(&[
+            "rev-parse",
+            "--verify",
+            "-q",
+            &format!("refs/remotes/{remote}/{}", target.remote_branch),
+        ])?,
+        None => None,
+    };
+    let against_remote = tracking.is_some();
+    let upstream_ref = match tracking {
+        Some(sha) => Some(sha),
         None => head_of(&g)?,
     };
     let text_at = |rev: Option<&str>| -> Result<Vec<Topic>, PublishError> {
@@ -1078,7 +1095,10 @@ pub fn preview_topics(
     };
     let upstream = text_at(upstream_ref.as_deref())?;
     let base = text_at(head_of(&g)?.as_deref())?;
-    Ok(topics::merge(&upstream, &base, ours))
+    Ok(TopicsPreview {
+        merge: topics::merge(&upstream, &base, ours),
+        against_remote,
+    })
 }
 
 #[cfg(test)]

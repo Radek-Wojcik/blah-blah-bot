@@ -43,8 +43,8 @@ pub use issues::{
     IssueRecord, ItemMarker, OpenIssue, StatusMarker,
 };
 pub use publish::{
-    publish_meeting, LocalSync, PublishError, PublishErrorKind, PublishFile, PublishRequest,
-    Published,
+    preview_topics, publish_meeting, LocalSync, PublishError, PublishErrorKind, PublishFile,
+    PublishRequest, Published, TopicsPreview,
 };
 pub use render::{
     defuse_discord_mentions, is_discord_id, item_line, item_line_with, neutralise_mentions, render,

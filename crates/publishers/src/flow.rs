@@ -20,13 +20,13 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use cycle_store::Draft;
+use cycle_store::{Draft, Topic};
 use store::{OpState, OutboxOp, Publication, Store, StoreError};
 
 use crate::gate::{self, RepoVisibility};
 use crate::github::Github;
 use crate::outbox::{Env, RepoContext};
-use crate::plan::{self, Block, PlanInput, PublishPlan, RepoFacts, SnapshotRef};
+use crate::plan::{self, Block, PlanInput, PublishPlan, RepoFacts, SnapshotRef, TopicsPlan};
 use crate::rules::{PublishTarget, Trigger};
 
 /// Folder of the snapshots below the meeting folder.
@@ -284,6 +284,35 @@ fn plan_input<'a>(
     }
 }
 
+/// Adds to the plan what the commit does to `topics.yaml`, topic by topic, from the clone and
+/// the remote branch as last fetched. When that cannot be told the plan says so and the screen
+/// has only the topics' names (`topics_added`, `topics_set`).
+fn attach_topics(p: &Prepared<'_>, local: &[Topic], plan: &mut PublishPlan) {
+    let Some(commit) = plan.commit_payload() else {
+        return;
+    };
+    // Without a topic of the meeting the commit leaves the file alone.
+    if commit.topics_add.is_empty() && commit.topics_set.is_empty() {
+        return;
+    }
+    let ours = plan::apply_topics(local, &commit.topics_add, &commit.topics_set, &commit.date);
+    match cycle_store::preview_topics(&p.ctx.repo, &p.ctx.cycle.id, &ours) {
+        Ok(preview) => {
+            if p.ctx.has_remote && !preview.against_remote {
+                plan.notes.push(
+                    "topics.yaml is compared with this clone only, because nothing was fetched from the remote yet: what others changed there shows up when you publish"
+                        .into(),
+                );
+            }
+            plan.summary.topics = Some(TopicsPlan::of(&preview.merge, preview.against_remote));
+        }
+        Err(_) => plan.notes.push(
+            "topics.yaml could not be compared with the repository: the topics are listed by name only"
+                .into(),
+        ),
+    }
+}
+
 /// What publishing would do, without freezing or queueing anything (the screen that asks
 /// before it does). Asks GitHub for the visibility of the repository.
 pub fn preview(store: &Store, p: &Prepared<'_>) -> Result<PublishPlan, StoreError> {
@@ -291,9 +320,9 @@ pub fn preview(store: &Store, p: &Prepared<'_>) -> Result<PublishPlan, StoreErro
     let existing = store.list_ops(Some(p.meeting_id))?;
     let topics = p.ctx.repo.load_topics(&p.ctx.cycle.id).unwrap_or_default();
     let snapshot = SnapshotRef::default();
-    Ok(plan::build(&plan_input(
-        p, &facts, &snapshot, &existing, &topics,
-    )))
+    let mut plan = plan::build(&plan_input(p, &facts, &snapshot, &existing, &topics));
+    attach_topics(p, &topics, &mut plan);
+    Ok(plan)
 }
 
 /// What a started publication did.
@@ -351,7 +380,8 @@ pub fn publish(store: &Store, p: &Prepared<'_>) -> Result<Outcome, StartError> {
     };
     let facts = repo_facts(p.env, store, p.ctx)?;
     let topics = p.ctx.repo.load_topics(&p.ctx.cycle.id).unwrap_or_default();
-    let plan = plan::build(&plan_input(p, &facts, &snapshot, &existing, &topics));
+    let mut plan = plan::build(&plan_input(p, &facts, &snapshot, &existing, &topics));
+    attach_topics(p, &topics, &mut plan);
     let started = start(
         store,
         &Start {

@@ -21,7 +21,7 @@ use crate::flow::{self, Outcome, Prepared, StartError};
 use crate::github::RepoRef;
 use crate::http::{redact, HttpClient};
 use crate::outbox::{Dispatcher, Env, RepoContext};
-use crate::plan::GithubIdentity;
+use crate::plan::{GithubIdentity, PublishPlan};
 use crate::rules::{PublishTarget, Trigger};
 use crate::testing::fixtures::cycle as fixture_cycle;
 use crate::testing::{FakeDiscord, FakeGithub, Visibility};
@@ -334,14 +334,15 @@ impl Lab {
         self.repo().load_cycle("NOMAD").unwrap()
     }
 
-    /// Queues the publication of `draft` the way the application does.
-    pub fn publish(
+    /// Runs `f` with what the application hands to the publishing flow for `draft`.
+    fn with_prepared<R>(
         &self,
         draft: &Draft,
         trigger: Trigger,
         targets: &[PublishTarget],
         anchors: &BTreeMap<String, String>,
-    ) -> Result<Outcome, StartError> {
+        f: impl FnOnce(&Store, &Prepared<'_>) -> R,
+    ) -> R {
         let ctx = self.env.context("NOMAD").unwrap();
         let participants = ctx.cycle.participants.clone();
         let report = render(
@@ -360,7 +361,7 @@ impl Lab {
             self.env.root.join(MEETING).join("img/0001-00-12-41.png"),
         )];
         let store = self.store.lock().unwrap();
-        flow::publish(
+        f(
             &store,
             &Prepared {
                 env: self.env.as_ref(),
@@ -378,6 +379,32 @@ impl Lab {
                 targets,
             },
         )
+    }
+
+    /// Queues the publication of `draft` the way the application does.
+    pub fn publish(
+        &self,
+        draft: &Draft,
+        trigger: Trigger,
+        targets: &[PublishTarget],
+        anchors: &BTreeMap<String, String>,
+    ) -> Result<Outcome, StartError> {
+        self.with_prepared(draft, trigger, targets, anchors, |store, prepared| {
+            flow::publish(store, prepared)
+        })
+    }
+
+    /// The plan of publishing `draft`, as the screen shows it before the user presses Publish.
+    pub fn preview(
+        &self,
+        draft: &Draft,
+        trigger: Trigger,
+        targets: &[PublishTarget],
+        anchors: &BTreeMap<String, String>,
+    ) -> PublishPlan {
+        self.with_prepared(draft, trigger, targets, anchors, |store, prepared| {
+            flow::preview(store, prepared).expect("preview")
+        })
     }
 
     pub fn tick(&self) -> crate::outbox::TickReport {

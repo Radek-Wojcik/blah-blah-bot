@@ -209,3 +209,138 @@ fn a_publication_in_progress_keeps_its_snapshot() {
         "m/work/publish/1"
     );
 }
+
+// ----- the plan of topics.yaml -------------------------------------------------------------------
+
+mod topics_plan {
+    use super::*;
+    use crate::testing::fixtures::{item, proposal};
+    use crate::testing::lab::{git, lab_draft, Lab, LabOptions, MEETING as LAB_MEETING};
+    use cycle_store::{Decision, ItemType, ProposedStatus};
+
+    const GITHUB: [PublishTarget; 1] = [PublishTarget::Github];
+
+    /// A new topic and the closing of `t-2`, approved.
+    fn draft_with_topics() -> Draft {
+        lab_draft(
+            vec![item("i4", ItemType::Topic, "Battery supplier")],
+            vec![proposal(
+                "s1",
+                "t-2",
+                ProposedStatus::Done,
+                Decision::Approved,
+            )],
+        )
+    }
+
+    fn preview(lab: &Lab, draft: &Draft) -> plan::PublishPlan {
+        lab.preview(draft, Trigger::Explicit, &GITHUB, &BTreeMap::new())
+    }
+
+    fn fetch(lab: &Lab) {
+        git(&lab.clone_dir, &["fetch", "--quiet", "origin"]);
+    }
+
+    #[test]
+    fn the_plan_lists_each_topic_with_its_version_before_and_after() {
+        let lab = Lab::new(LabOptions::default());
+        let plan = preview(&lab, &draft_with_topics());
+        let topics = plan.summary.topics.expect("topics are compared");
+        assert!(topics.against_remote);
+        assert_eq!(topics.unchanged, 1, "t-1 stays as it is");
+        let rows: Vec<_> = topics
+            .changes
+            .iter()
+            .map(|c| (c.id.as_str(), c.change, c.overrides_remote))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (format!("{LAB_MEETING}-i4").as_str(), "added", false),
+                ("t-2", "changed", false)
+            ]
+        );
+        let added = &topics.changes[0];
+        assert!(added.before.is_none());
+        assert_eq!(added.after.as_ref().unwrap().text, "Battery supplier");
+        assert_eq!(added.after.as_ref().unwrap().status, "open");
+        let closed = &topics.changes[1];
+        assert_eq!(closed.before.as_ref().unwrap().status, "open");
+        let after = closed.after.as_ref().unwrap();
+        assert_eq!(
+            (after.status, after.closed_in.as_deref()),
+            ("closed", Some("2026-11-13"))
+        );
+        // The names stay available for a screen that cannot show the difference.
+        assert_eq!(plan.summary.topics_added, ["Battery supplier"]);
+        assert!(plan.notes.is_empty(), "{:?}", plan.notes);
+        // Nothing was written or fetched by looking.
+        assert!(!lab
+            .remote_paths()
+            .iter()
+            .any(|p| p.starts_with("meetings/")));
+    }
+
+    #[test]
+    fn what_a_colleague_changed_and_was_fetched_is_the_before_and_is_marked_when_replaced() {
+        let lab = Lab::new(LabOptions::default());
+        // A colleague renames t-2 on the remote and the clone fetched it, but did not pull.
+        lab.colleagues_push_topics(
+            "- id: t-1\n  text: Wheel size\n  status: open\n  opened_in: '2026-11-06'\n- id: t-2\n  text: Battery pack\n  status: open\n  opened_in: '2026-11-06'\n",
+        );
+        fetch(&lab);
+        let plan = preview(&lab, &draft_with_topics());
+        let topics = plan.summary.topics.unwrap();
+        let t2 = topics.changes.iter().find(|c| c.id == "t-2").unwrap();
+        assert_eq!(
+            t2.before.as_ref().unwrap().text,
+            "Battery pack",
+            "before is what the remote has"
+        );
+        // The remote changed it and so do we: the last write wins per topic, so the whole
+        // topic is ours (its text included) and the screen says what it replaces.
+        assert_eq!(t2.after.as_ref().unwrap().text, "Battery");
+        assert_eq!(t2.after.as_ref().unwrap().status, "closed");
+        assert!(t2.overrides_remote);
+    }
+
+    #[test]
+    fn a_remote_that_was_never_fetched_is_said_so_and_a_broken_file_falls_back_to_names() {
+        let lab = Lab::new(LabOptions::default());
+        git(
+            &lab.clone_dir,
+            &["update-ref", "-d", "refs/remotes/origin/main"],
+        );
+        let plan = preview(&lab, &draft_with_topics());
+        let topics = plan.summary.topics.unwrap();
+        assert!(!topics.against_remote);
+        assert_eq!(topics.changes.len(), 2);
+        assert!(
+            plan.notes[0].contains("this clone only"),
+            "{:?}",
+            plan.notes
+        );
+
+        let broken = Lab::new(LabOptions::default());
+        broken.colleagues_push_topics("this: [is not\n");
+        fetch(&broken);
+        let plan = preview(&broken, &draft_with_topics());
+        assert!(plan.summary.topics.is_none());
+        assert!(
+            plan.notes.iter().any(|n| n.contains("listed by name only")),
+            "{:?}",
+            plan.notes
+        );
+        assert_eq!(plan.summary.topics_added, ["Battery supplier"]);
+    }
+
+    #[test]
+    fn a_meeting_without_topic_changes_leaves_the_file_alone() {
+        let lab = Lab::new(LabOptions::default());
+        let d = lab_draft(vec![task("i1", "Design the mount", None, None)], vec![]);
+        let plan = preview(&lab, &d);
+        assert!(plan.summary.commit);
+        assert!(plan.summary.topics.is_none());
+        assert!(plan.notes.is_empty());
+    }
+}

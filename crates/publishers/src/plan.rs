@@ -21,6 +21,7 @@
 
 use std::collections::BTreeMap;
 
+use cycle_store::topics::TopicsMerge;
 use cycle_store::{
     Cycle, Decision, Draft, ItemType, ProposedStatus, PublishMode, Topic, TopicStatus,
 };
@@ -184,6 +185,104 @@ pub struct PlannedStatus {
     pub open: bool,
 }
 
+/// A topic as the screen shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicView {
+    pub text: String,
+    /// `open` or `closed`.
+    pub status: &'static str,
+    pub opened_in: String,
+    pub closed_in: Option<String>,
+}
+
+impl From<&Topic> for TopicView {
+    fn from(t: &Topic) -> Self {
+        Self {
+            text: t.text.clone(),
+            status: match t.status {
+                TopicStatus::Open => "open",
+                TopicStatus::Closed => "closed",
+            },
+            opened_in: t.opened_in.clone(),
+            closed_in: t.closed_in.clone(),
+        }
+    }
+}
+
+/// One topic that publishing changes in `topics.yaml`. `before` is what the remote has
+/// (`None` for a topic that is added), `after` what the commit writes (`None` for one that
+/// is removed).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicDelta {
+    pub id: String,
+    /// `added`, `changed` or `removed`.
+    pub change: &'static str,
+    pub before: Option<TopicView>,
+    pub after: Option<TopicView>,
+    /// Somebody changed this topic on the remote since this clone last pulled, and the last
+    /// write wins: `after` replaces `before`, which is what the remote has now.
+    pub overrides_remote: bool,
+}
+
+/// `topics.yaml` before and after the commit, per topic, as far as it can be known without
+/// the network: the clone against the remote branch as last fetched.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicsPlan {
+    /// Compared with the remote branch as last fetched. False: there is none here, the
+    /// comparison is with this clone's own branch and the remote may differ.
+    pub against_remote: bool,
+    pub changes: Vec<TopicDelta>,
+    /// Topics the commit leaves as they are.
+    pub unchanged: usize,
+}
+
+impl TopicsPlan {
+    /// The deltas of a merge, ordered added, changed, removed.
+    pub fn of(merge: &TopicsMerge, against_remote: bool) -> Self {
+        let overrides = |id: &str| merge.conflicts.iter().any(|c| c.id == id);
+        let mut changes = Vec::new();
+        for t in &merge.diff.added {
+            changes.push(TopicDelta {
+                id: t.id.clone(),
+                change: "added",
+                before: None,
+                after: Some(t.into()),
+                overrides_remote: overrides(&t.id),
+            });
+        }
+        for c in &merge.diff.changed {
+            changes.push(TopicDelta {
+                id: c.id.clone(),
+                change: "changed",
+                before: Some((&c.before).into()),
+                after: Some((&c.after).into()),
+                overrides_remote: overrides(&c.id),
+            });
+        }
+        for t in &merge.diff.removed {
+            changes.push(TopicDelta {
+                id: t.id.clone(),
+                change: "removed",
+                before: Some(t.into()),
+                after: None,
+                overrides_remote: overrides(&t.id),
+            });
+        }
+        let unchanged = merge
+            .topics
+            .len()
+            .saturating_sub(merge.diff.added.len() + merge.diff.changed.len());
+        Self {
+            against_remote,
+            changes,
+            unchanged,
+        }
+    }
+}
+
 /// What publishing would do, for the screen that asks before it does.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -197,6 +296,10 @@ pub struct PlanSummary {
     pub statuses: Vec<PlannedStatus>,
     pub topics_added: Vec<String>,
     pub topics_set: Vec<TopicSet>,
+    /// `topics.yaml` before and after, per topic. `None` when the commit leaves the file alone
+    /// or the comparison is not possible (the plan then says so in its notes and the screen
+    /// falls back to `topics_added` and `topics_set`).
+    pub topics: Option<TopicsPlan>,
     pub discord: bool,
     /// Status changes that were not approved: they are not written back.
     pub proposals_pending: usize,
@@ -252,6 +355,15 @@ pub struct PublishPlan {
 impl PublishPlan {
     pub fn is_blocked(&self) -> bool {
         !self.blocks.is_empty()
+    }
+
+    /// The commit operation's payload: what the commit does to the topics. `None` when the
+    /// plan has no commit.
+    pub fn commit_payload(&self) -> Option<CommitPayload> {
+        self.ops
+            .iter()
+            .find(|o| o.op_key == COMMIT_KEY)
+            .and_then(|o| serde_json::from_str(&o.payload).ok())
     }
 }
 
