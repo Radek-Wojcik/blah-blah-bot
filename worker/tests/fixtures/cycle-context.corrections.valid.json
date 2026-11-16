@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "cycle": "TEAM",
+  "name": "Team meetings",
+  "meeting_date": "2026-11-16",
+  "participants": [
+    {
+      "id": "alex",
+      "name": "Alex Kowalski"
+    },
+    {
+      "id": "sam",
+      "name": "Sam"
+    }
+  ],
+  "glossary": [
+    {
+      "term": "Zephyr",
+      "hint": "the code name of the monitor mount"
+    },
+    {
+      "term": "BOM"
+    }
+  ],
+  "instruction": "Prefer short task titles.",
+  "output_language": "auto",
+  "mode": "template",
+  "template": "technical",
+  "meeting_type": "technical",
+  "sections": [
+    {
+      "id": "hardware",
+      "title": "Hardware",
+      "description": "Mounts and parts"
+    }
+  ],
+  "open_topics": [
+    {
+      "id": "t1",
+      "text": "Supplier choice"
+    }
+  ],
+  "open_issues": [
+    {
+      "id": "#12",
+      "title": "Mount prototype",
+      "assignee": "alex"
+    },
+    {
+      "id": "#13",
+      "title": "Order profiles",
+      "assignee": null
+    }
+  ],
+  "previous_items": [
+    {
+      "meeting": "2026-11-09",
+      "type": "task",
+      "text": "Order aluminium profiles",
+      "assignee": "sam",
+      "due": "2026-11-13",
+      "issue": "#14"
+    },
+    {
+      "meeting": "2026-11-02",
+      "type": "note",
+      "text": "The mount is called Zephyr",
+      "assignee": null,
+      "due": null,
+      "issue": null
+    }
+  ],
+  "corrections": [
+    {
+      "meeting": "2026-11-13",
+      "date": "2026-11-15",
+      "text": "The mount prototype moved to the end of the month.",
+      "item": "Mount prototype",
+      "issue": "#12"
+    },
+    {
+      "meeting": "2026-11-06",
+      "date": "2026-11-10",
+      "text": "Supplier choice was settled by e-mail: ACME.",
+      "item": null,
+      "issue": null
+    }
+  ]
+}

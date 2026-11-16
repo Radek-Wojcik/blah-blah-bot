@@ -240,7 +240,8 @@ fn parse<T: serde::de::DeserializeOwned>(value: &str, what: &str) -> Result<T, R
 /// Copies the finished drafts of the cycle's other meetings from this application's
 /// meetings folder into `target`, one `<meeting id>/meeting.json` each, which is the shape
 /// [`cycle_store::build_context`] reads. `target` is emptied first. Meetings without a
-/// `work/draft.json` are left out. Returns the number of drafts copied.
+/// `work/draft.json` are left out; a meeting's `work/corrections.json` goes along as
+/// `corrections.json`. Returns the number of drafts copied.
 pub fn stage_local_drafts(
     store: &Store,
     cycle_id: &str,
@@ -268,6 +269,18 @@ pub fn stage_local_drafts(
         let folder = target.join(&meeting.id);
         fs::create_dir_all(&folder).map_err(err)?;
         fs::copy(&draft, folder.join("meeting.json")).map_err(err)?;
+        // The corrections written after the meeting was published (published or not yet).
+        let corrections = meeting_root
+            .join(&meeting.dir)
+            .join("work")
+            .join(cycle_store::corrections::CORRECTIONS_FILE);
+        if corrections.is_file() {
+            fs::copy(
+                &corrections,
+                folder.join(cycle_store::corrections::CORRECTIONS_FILE),
+            )
+            .map_err(err)?;
+        }
         copied += 1;
     }
     Ok(copied)
@@ -548,6 +561,49 @@ mod tests {
         assert_eq!(n, 1);
         assert!(!target.join("stale").exists());
         assert!(target.join("old/meeting.json").is_file());
+    }
+
+    #[test]
+    fn the_corrections_of_an_earlier_meeting_reach_the_context() {
+        let lab = lab();
+        lab.meeting("old", NOON - 86_400_000, Some("TEAM"));
+        lab.meeting("now", NOON, Some("TEAM"));
+        let mut earlier = Draft::from_json_str(DRAFT).unwrap();
+        earlier.date = "2026-11-06".into();
+        fs::write(
+            lab.work("old").join("draft.json"),
+            serde_json::to_vec(&earlier.to_value()).unwrap(),
+        )
+        .unwrap();
+        let mut file = cycle_store::CorrectionsFile::new(&earlier.meeting_id);
+        file.corrections.push(cycle_store::Correction {
+            id: "c1".into(),
+            date: "2026-11-09".into(),
+            text: "The mount design moved to next week.".into(),
+            item: None,
+            issue: None,
+        });
+        file.write(
+            &lab.work("old")
+                .join(cycle_store::corrections::CORRECTIONS_FILE),
+        )
+        .unwrap();
+        let outcome = prepare_context(&lab.store, &source(), &lab.env(), "now").unwrap();
+        let ctx = read(&lab.work("now").join(CONTEXT_FILE));
+        assert_eq!(
+            ctx["corrections"][0]["text"], "The mount design moved to next week.",
+            "{outcome:?}"
+        );
+        assert_eq!(ctx["corrections"][0]["meeting"], "2026-11-06");
+        // Without the file the key is absent.
+        fs::remove_file(
+            lab.work("old")
+                .join(cycle_store::corrections::CORRECTIONS_FILE),
+        )
+        .unwrap();
+        prepare_context(&lab.store, &source(), &lab.env(), "now").unwrap();
+        let ctx = read(&lab.work("now").join(CONTEXT_FILE));
+        assert!(ctx.get("corrections").is_none());
     }
 
     #[test]

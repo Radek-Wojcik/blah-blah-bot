@@ -104,6 +104,7 @@ STAGE5 = (
     ("extraction", "extraction.status.valid.json"),
     ("meeting", "meeting.proposals.valid.json"),
     ("cycle-context", "cycle-context.issue.valid.json"),
+    ("cycle-context", "cycle-context.corrections.valid.json"),
 )
 
 
@@ -117,6 +118,7 @@ def test_stage4_documents_have_none_of_the_new_fields():
     # (The model answer is the exception: `status_changes` is required in it, see below.)
     assert "status_proposals" not in fixture("meeting.valid.json")
     assert all("issue" not in p for p in fixture("cycle-context.valid.json")["previous_items"])
+    assert "corrections" not in fixture("cycle-context.valid.json")
 
 
 STATUS_CHANGE_BREAKS = [
@@ -143,10 +145,19 @@ ISSUE_BREAKS = [
     lambda d: d["previous_items"][0].update(extra="x"),
 ]
 
+CORRECTION_BREAKS = [
+    lambda d: d["corrections"][0].pop("text"),
+    lambda d: d["corrections"][0].pop("date"),
+    lambda d: d["corrections"][0].update(issue=12),
+    lambda d: d["corrections"][0].update(extra="x"),
+    lambda d: d.update(corrections={"text": "x"}),
+]
+
 STAGE5_VIOLATIONS = [
     *[("extraction", "extraction.status.valid.json", m) for m in STATUS_CHANGE_BREAKS],
     *[("meeting", "meeting.proposals.valid.json", m) for m in PROPOSAL_BREAKS],
     *[("cycle-context", "cycle-context.issue.valid.json", m) for m in ISSUE_BREAKS],
+    *[("cycle-context", "cycle-context.corrections.valid.json", m) for m in CORRECTION_BREAKS],
 ]
 
 

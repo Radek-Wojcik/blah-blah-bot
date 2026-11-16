@@ -18,6 +18,8 @@ const MEETING_PROPOSALS: &str =
     include_str!("../../../worker/tests/fixtures/meeting.proposals.valid.json");
 const CONTEXT_ISSUE: &str =
     include_str!("../../../worker/tests/fixtures/cycle-context.issue.valid.json");
+const CONTEXT_CORRECTIONS: &str =
+    include_str!("../../../worker/tests/fixtures/cycle-context.corrections.valid.json");
 const MEETING_VALID: &str = include_str!("../../../worker/tests/fixtures/meeting.valid.json");
 const MEETING_INVALID: &str = include_str!("../../../worker/tests/fixtures/meeting.invalid.json");
 const CONTEXT_VALID: &str = include_str!("../../../worker/tests/fixtures/cycle-context.valid.json");
@@ -248,6 +250,59 @@ fn the_context_schema_accepts_the_issue_of_a_previous_item() {
     let mut bad = doc;
     bad["previous_items"][0]["unknown"] = json!("x");
     assert!(!schema::validate(Schema::Context, &bad).is_empty());
+}
+
+#[test]
+fn the_context_schema_accepts_corrections_and_the_stage_4_context_has_none() {
+    assert!(json_of(CONTEXT_VALID).get("corrections").is_none());
+    let doc = json_of(CONTEXT_CORRECTIONS);
+    assert!(schema::validate(Schema::Context, &doc).is_empty());
+    let mut bad = doc.clone();
+    bad["corrections"][0]["issue"] = json!(12);
+    assert!(!schema::validate(Schema::Context, &bad).is_empty());
+    let mut bad = doc.clone();
+    bad["corrections"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("text");
+    assert!(!schema::validate(Schema::Context, &bad).is_empty());
+    let mut bad = doc;
+    bad["corrections"][0]["unknown"] = json!("x");
+    assert!(!schema::validate(Schema::Context, &bad).is_empty());
+}
+
+// ----- the corrections file ---------------------------------------------------------------
+
+#[test]
+fn the_corrections_file_validates_against_its_schema() {
+    let good = json!({
+        "version": 1,
+        "meeting_id": "20261113-140501",
+        "corrections": [
+            {"id": "c1", "date": "2026-11-16", "text": "Moved.", "item": "i1", "issue": "#12"},
+            {"id": "c2", "date": "2026-11-17", "text": "Dropped.", "item": null, "issue": null}
+        ]
+    });
+    assert!(schema::validate(Schema::Corrections, &good).is_empty());
+    for mutate in [
+        |d: &mut serde_json::Value| d["corrections"][0]["id"] = json!("x1"),
+        |d: &mut serde_json::Value| d["corrections"][0]["date"] = json!("16.11.2026"),
+        |d: &mut serde_json::Value| d["corrections"][0]["text"] = json!(""),
+        |d: &mut serde_json::Value| d["corrections"][0]["item"] = json!("3"),
+        |d: &mut serde_json::Value| d["corrections"][0]["issue"] = json!("12"),
+        |d: &mut serde_json::Value| d["corrections"][0]["extra"] = json!(true),
+        |d: &mut serde_json::Value| d["version"] = json!(2),
+        |d: &mut serde_json::Value| {
+            d.as_object_mut().unwrap().remove("meeting_id");
+        },
+    ] {
+        let mut bad = good.clone();
+        mutate(&mut bad);
+        assert!(
+            !schema::validate(Schema::Corrections, &bad).is_empty(),
+            "{bad}"
+        );
+    }
 }
 
 // ----- the job manifest ------------------------------------------------------------------
