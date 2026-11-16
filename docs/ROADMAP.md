@@ -297,11 +297,11 @@ flowchart LR
 - [ ] The organization issue field "Target date" verified on a real organization
 - [ ] Release v0.6.0 published
 
-**Status.** Tasks 1 to 8 are implemented in the backend and covered by tests against fakes (TESTING section 14, [ADR 0018](decisions/0018-publishing.md)). Nothing has been written to a real repository or channel: the first real write, the verification of GitHub and Discord with real services, the "Target date" field on a real organization, the screenshots and the GIF, the confirmation of the default rule per target and the v0.6.0 release are open. `targets.github.path` is not yet used by the publisher.
+**Status.** Tasks 1 to 8 are implemented in the backend and covered by tests against fakes (TESTING section 14, [ADR 0018](decisions/0018-publishing.md)). Nothing has been written to a real repository or channel: the first real write, the verification of GitHub and Discord with real services, the "Target date" field on a real organization, the confirmation of the default rule per target and the v0.6.0 release are open. `targets.github.path` is not yet used by the publisher.
 
-**Demo and visuals.** GIF: approve statuses and publish. Screenshots: publishing panel, example report rendered on GitHub, example Discord message (demo data).
+**Demo and visuals.** GIF: approve statuses and publish. Screenshots: publishing panel, example report rendered on GitHub, example Discord message (demo data). Done: taken on the mock backend with fake services (`docs/img`), not from real GitHub or Discord.
 
-**Docs and release.** README: publishing setup guides. CHANGELOG. Tag `v0.6.0`.
+**Docs and release.** README: publishing setup guides and CHANGELOG are written; the tag `v0.6.0` is open.
 
 **Risks.** Token scopes and rate limits; issue fields available only for organizations; attachment size limits.
 

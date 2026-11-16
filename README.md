@@ -40,7 +40,7 @@ Local meeting recorder for Windows that turns calls into GitHub issues and Disco
 
 ## Screenshots
 
-Taken from demo mode with fictional data.
+Taken from demo mode with fictional data. The publishing images (the last five here and the token setup below) show the mock backend with fake GitHub and Discord servers: no real repository or channel was involved.
 
 | | |
 |---|---|
@@ -51,7 +51,9 @@ Taken from demo mode with fictional data.
 | ![Labeling screen with a recognized, a suggested and two unknown voices, each with sample clips](docs/img/speakers-label.png) | ![Animated naming of voices: play a clip, create a participant, accept a suggestion, pick a name](docs/img/naming-voices.gif) |
 | ![Voice profile management: participants, reset, delete and the matching thresholds](docs/img/speakers-profiles.png) | ![Cycle settings: participants, glossary, report defaults and publishing targets](docs/img/cycle-settings.png) |
 | ![Report mode gate before recording: cycle, report mode, template and report language](docs/img/report-mode-gate.png) | ![Draft editor with the source of an item opened: quote, time and a jump to the transcript](docs/img/draft-source-popover.png) |
-| ![Animated draft editing: open the source of an item, change the report mode and move an item to another section](docs/img/draft-editing.gif) | |
+| ![Animated draft editing: open the source of an item, change the report mode and move an item to another section](docs/img/draft-editing.gif) | ![Status changes: one approved with a comment, one rejected, one waiting, and the count of decisions](docs/img/status-approval.png) |
+| ![Publishing panel after a publication: rules per target, what was published, the outbox with links, and a topic changed by someone else shown as a difference](docs/img/publishing-panel.png) | ![Animated flow: approve a status change, press Publish, confirm the public repository and watch the outbox finish](docs/img/approve-and-publish.gif) |
+| ![The rendered report as GitHub shows it, with unchecked task checkboxes and a link to the full transcript](docs/img/report-rendered.png) | ![The summary as Discord shows it: sections with tasks and their assignees, and a link to the full transcript](docs/img/discord-message.png) |
 
 ## Requirements and getting started
 
@@ -86,33 +88,44 @@ Templates are Markdown with placeholders. The common ones are `{title}`, `{date}
 
 ## Publishing setup
 
-Publishing has been tested against fake GitHub and Discord servers and local Git repositories only. It has not yet been run against a real repository or channel; that check is the next step before the release, so treat the first real publication with care (use a private test repository and a test channel first).
+Publishing has been tested against fake GitHub and Discord servers and local Git repositories only. It has not yet been run against a real repository or channel; that check is the next step before the release, so treat the first real publication with care (use a private test repository and a test channel first). Everything below describes what the application does against those fakes; how real GitHub and Discord react is unverified.
 
 **1. GitHub token (for issues, and for pushing over https).**
 
 1. On GitHub, open Settings, Developer settings, Personal access tokens, Fine-grained tokens, and generate a token.
 2. Resource owner: the user or organization that owns the cycle repository (an organization may have to approve the token). Repository access: only the cycle repository.
 3. Repository permissions: **Contents: Read and write** (the commit and push), **Issues: Read and write** (create, close, comment, label, assign) and **Metadata: Read** (added automatically). Nothing else is needed.
-4. Enter the token in the application, in the publishing settings; use the access test there to check the token, the repository, its visibility and the push permission. The token is stored in the Windows Credential Manager, bound to the GitHub API host it was entered for, and is never shown again, written to a file or logged. It is handed to Git through its environment, never on the command line.
+4. In the application open **Settings** and scroll to **Publishing**. Under **GitHub token**, type the token into the masked field **GitHub token for api.github.com** and press **Store**; the card then reads **Token stored**. **Clear** removes it, and typing a new value replaces it. The token is stored in the Windows Credential Manager, bound to the GitHub API host it was entered for, and is never shown again, written to a file or logged. It is handed to Git through its environment, never on the command line.
+5. Under **GitHub repository of a cycle repository**, each cycle repository has the fields **GitHub repository of `<id>`** (`owner/name`) and **API address of `<id>`**. Leave both empty when the address of the repository is on github.com: it is taken from there. Fill them for a GitHub Enterprise Server repository, a remote that is not on github.com, or to link a local repository, and press **Save link**. **Test access** checks the token, the repository, its visibility and the push permission.
 
-Without a token the application still pushes with the credentials of your Git credential manager, and reads the issues of a public repository anonymously; creating issues needs the token. A repository whose remote is on github.com is recognized automatically. A GitHub Enterprise Server repository, or a remote that is not on github.com, has to be linked to its GitHub repository and API address in the publishing settings; a repository without a remote only gets a local commit.
+![Settings, Publishing: a stored GitHub token, the repository links of two cycle repositories and an empty, masked Discord webhook field](docs/img/token-setup.png)
+
+Without a token the application still pushes with the credentials of your Git credential manager, and reads the issues of a public repository anonymously; creating issues needs the token. A repository without a remote only gets a local commit.
 
 The organization issue field "Target date" is used for due dates in organization repositories when it exists. That path has not been verified against a real organization; whenever it does not work, the due date is written as a `Due: YYYY-MM-DD` line in the issue body.
 
 **2. Discord webhook.**
 
-1. In Discord, open the channel's settings, Integrations, Webhooks, create a webhook for the channel and copy its URL.
-2. In `cycle.yaml` give the target a reference, never the URL: `discord: { webhook: cred:discord/nomad, publish: on-approval }`.
-3. Enter the webhook URL in the publishing settings under that reference. Only `https://discord.com/api/webhooks/<id>/<token>` (and the `discordapp.com`, `canary.discord.com` and `ptb.discord.com` hosts) is accepted. The test there only checks that the webhook exists; it posts nothing.
-4. To mention people, add their ids to the participants of the cycle, in quotes: `discord: { user_id: "123456789012345678" }` or `{ role_id: "..." }` (turn on Developer Mode in Discord and copy the id).
+1. In Discord, open the channel settings, Integrations, Webhooks, create a webhook for the channel and copy its URL.
+2. On the **Cycles** page press **Edit** on the cycle, and in the **Targets** section tick **Post a summary to a channel** under Discord. Give it a **Webhook reference**, never the URL, for example `cred:discord/nomad`. In `cycle.yaml` this is `discord: { webhook: cred:discord/nomad, publish: on-approval }`.
+3. In **Settings**, **Publishing**, **Discord webhook**, paste the URL into **Webhook for cred:discord/nomad** and press **Store**; the card then reads **Webhook stored** with the address masked. Only `https://discord.com/api/webhooks/<id>/<token>` (and the `discordapp.com`, `canary.discord.com` and `ptb.discord.com` hosts) is accepted. **Test webhook** only checks that the webhook exists; it posts nothing.
+4. To mention people, give the participants of the cycle a **Discord id** with its kind (user or role); in `cycle.yaml` that is `discord: { user_id: "123456789012345678" }` or `{ role_id: "..." }` in quotes (turn on Developer Mode in Discord and copy the id).
 
-**3. Rules per target.** In `cycle.yaml`, `targets.github.publish` and `targets.discord.publish` take `auto` (published when the draft is complete), `on-approval` (published when you press Publish) or `off` (never). The default is `on-approval` for both, so a new cycle publishes nothing until you have looked at the draft; this default is a proposal that awaits confirmation ([ADR 0019](docs/decisions/0019-default-publish-rule-per-target.md)). Status changes are never written back automatically, with any rule: only a proposal you approved is, and only when you press Publish. `targets.github.issues: false` makes the GitHub target commit the report only.
+**3. Rules per target.** Each target has a rule: **After approval** (published when you press Publish), **Automatically** (published when the draft is complete) or **Never**. In the **Targets** section of the cycle the field is **Publish** (**GitHub publish**, **Discord publish**), in `cycle.yaml` it is `targets.github.publish` and `targets.discord.publish` with `on-approval`, `auto` or `off`; in the publishing panel of a draft it is the **Rule** menu of each target. The default is `on-approval` for both, so a new cycle publishes nothing until you have looked at the draft; this default is a proposal that awaits confirmation ([ADR 0019](docs/decisions/0019-default-publish-rule-per-target.md)). Status changes are never written back automatically, with any rule: only a decision you approved is, and only when you press Publish. Unticking **Create issues for tasks and write back approved status changes** (`targets.github.issues: false`) makes the GitHub target commit the report only.
 
-**4. Public repositories.** A transcript contains personal data and cannot be taken back from a Git history. If the repository is public, or its visibility cannot be read, nothing is published to it until you confirm that repository once, also under `auto`. The check is repeated right before anything is sent, so an operation queued earlier cannot slip into a repository that has since become public.
+**4. Approve status changes and publish.**
 
-**5. Offline and retries.** Publishing never blocks on the network. Operations wait in a queue stored in the local database and are retried with a growing delay (or the delay a service asks for); a dead Discord does not hold back the report. Failures that need you (a wrong token, a missing permission, a repository that does not exist) stop with a message that contains no secret, and you retry or cancel them. Closing the application does not lose them. While operations of a meeting are queued, and after it is published, its draft cannot be edited. Publishing a meeting a second time is not supported.
+1. From the **Queue** press **Open draft** on a processed meeting. Edit the draft as usual; **Rendered report** shows the report, with a **Format** menu (GitHub Markdown or Chat for Discord and Notion) and a **Preview** toggle that renders it the way GitHub or Discord would.
+2. In **Status changes** each place where an open issue or topic was said to be done comes with its quote and a jump to the transcript. Press **Approve** or **Reject**; the button then reads **Approved** or **Rejected**, and pressing it again takes the decision back. A comment is posted with the change. **+ Add a status change** adds one by hand for an issue or topic that the model did not find. Nothing is written back before you approve it.
+3. In **Publishing**, tick **Publish to GitHub** and **Publish to Discord** as wanted. **What will happen** lists every operation: the files of the commit, each issue with its assignee and due date, each close and the Discord post. Press **Publish**.
+4. If the repository is public, or its visibility cannot be read, the dialog **Publish to a public repository?** asks once; tick **I understand that `<repo>` is public and I want to publish to it** and press **Publish to a public repository**, or **Cancel** to publish nothing.
+5. The **Outbox** shows each operation as **Waiting**, **Running**, **Done** or failed, with links to the commit and the issues. **Retry now** and **Cancel** act on one operation, **Retry all now** on all that wait. When everything is sent the list reads **What was published** and the draft is marked **Draft locked**. **topics.yaml** shows, per topic, what was changed and, when a colleague changed the same topic meanwhile, both versions: the last write wins and the other stays visible.
 
-**Limits.** A Discord message holds 2000 characters, so a long summary is split; screenshots go in separate messages of at most 10 files and 8 MiB (a conservative choice), at most three of them, and the rest is left to the report. A pushed commit, an issue assignment and a Discord mention cannot be recalled by the application. The publisher always writes to `meetings/<cycle>/<date>`; `targets.github.path` is not used yet.
+**5. Public repositories.** A transcript contains personal data and cannot be taken back from a Git history. If the repository is public, or its visibility cannot be read, nothing is published to it until you confirm that repository once, also under **Automatically**. The check is repeated right before anything is sent, so an operation queued earlier cannot slip into a repository that has since become public.
+
+**6. Offline and retries.** Publishing never blocks on the network. Operations wait in a queue stored in the local database and are retried with a growing delay (or the delay a service asks for); a dead Discord does not hold back the report. Failures that need you (a wrong token, a missing permission, a repository that does not exist) stop with a message that contains no secret, and you retry or cancel them. Closing the application does not lose them. While operations of a meeting are queued, and after it is published, its draft cannot be edited. Publishing a meeting a second time is not supported.
+
+**Limits.** A Discord message holds 2000 characters, so a long summary is split; screenshots go in separate messages of at most 10 files and 8 MiB (a conservative choice), at most three of them, and the rest is left to the report. A pushed commit, an issue assignment and a Discord mention cannot be recalled by the application. The publisher always writes to `meetings/<cycle>/<date>`: the field **Folder for meeting reports** (`targets.github.path`) is accepted but not used yet.
 
 ## Configuration reference
 
