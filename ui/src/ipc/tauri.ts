@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Backend } from "./backend";
+import { type IpcBytes, bytesToBlob } from "./bytes";
 import type { IpcError } from "./types";
 
 /** Command names are snake_case and mirror the `#[tauri::command]` functions in `crates/app`. */
@@ -18,8 +19,8 @@ export function createTauriBackend(): Backend {
     removeSource: (sourceId) => invoke("remove_source", { sourceId }),
     takeScreenshot: () => invoke("take_screenshot"),
     overlayImage: async () => {
-      const bytes = await invoke<ArrayBuffer>("overlay_image");
-      return URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
+      const bytes = await invoke<IpcBytes>("overlay_image");
+      return URL.createObjectURL(bytesToBlob(bytes, "image/png"));
     },
     overlayFinish: (region) => invoke("overlay_finish", { region }),
     processMeeting: (id, options) => invoke("process_meeting", { id, options: options ?? null }),
@@ -29,9 +30,8 @@ export function createTauriBackend(): Backend {
     getTranscript: (id) => invoke("get_transcript", { id }),
     editSegment: (id, segmentId, edit) => invoke("edit_segment", { id, segmentId, edit }),
     meetingImage: async (id, file) => {
-      const bytes = await invoke<ArrayBuffer | number[]>("meeting_image", { id, file });
-      const data = bytes instanceof ArrayBuffer ? bytes : new Uint8Array(bytes);
-      return URL.createObjectURL(new Blob([data], { type: "image/png" }));
+      const bytes = await invoke<IpcBytes>("meeting_image", { id, file });
+      return URL.createObjectURL(bytesToBlob(bytes, "image/png"));
     },
     getMeetingVoices: (id) => invoke("get_meeting_voices", { id }),
     assignVoice: (id, voiceId, participantId) =>
@@ -40,9 +40,8 @@ export function createTauriBackend(): Backend {
     mergeVoices: (id, voiceId, into) => invoke("merge_voices", { id, voiceId, into }),
     confirmMatches: (id) => invoke("confirm_matches", { id }),
     voiceClip: async (id, voiceId, idx) => {
-      const bytes = await invoke<ArrayBuffer | number[]>("voice_clip", { id, voiceId, idx });
-      const data = bytes instanceof ArrayBuffer ? bytes : new Uint8Array(bytes);
-      return URL.createObjectURL(new Blob([data], { type: "audio/wav" }));
+      const bytes = await invoke<IpcBytes>("voice_clip", { id, voiceId, idx });
+      return URL.createObjectURL(bytesToBlob(bytes, "audio/wav"));
     },
     listParticipants: (cycleId, meetingId) => invoke("list_participants", { cycleId, meetingId }),
     createParticipant: (name, cycleId) => invoke("create_participant", { name, cycleId }),

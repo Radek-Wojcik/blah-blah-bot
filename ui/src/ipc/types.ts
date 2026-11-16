@@ -98,6 +98,8 @@ export type IpcErrorCode =
   | "busy"
   | "invalid_state"
   | "secrets"
+  /** The desktop capture of the screenshot overlay is black or fully transparent. */
+  | "blank_capture"
   // Stage 4: cycles, report modes, language-model backends and drafts.
   /** A recording needs a valid cycle and report mode (also for a bad template or type). */
   | "report_mode_required"

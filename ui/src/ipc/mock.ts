@@ -89,6 +89,12 @@ export interface MockOptions {
   jobStepMs?: number;
   /** Start with a newer draft next to the edited one of the demo meeting (the banner). */
   newDraft?: boolean;
+  /**
+   * Make the screenshot overlay fail the way a bad capture would: `blank` refuses the image
+   * like the real backend does, `black` serves an all-black picture, `broken` serves bytes that
+   * are no image.
+   */
+  overlayFault?: "blank" | "black" | "broken";
 }
 
 /** In-memory backend that serves the fictional demo cycle. No audio devices, files or network. */
@@ -488,6 +494,15 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       emit();
     },
     overlayImage: async () => {
+      if (opts.overlayFault === "blank") {
+        fail("blank_capture", "The screen capture came back empty (all black).");
+      }
+      if (opts.overlayFault === "black") {
+        const black =
+          '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900"><rect width="1600" height="900" fill="#000"/></svg>';
+        return `data:image/svg+xml;utf8,${encodeURIComponent(black)}`;
+      }
+      if (opts.overlayFault === "broken") return "data:image/png;base64,MTIzLDgwLDc4";
       const svg =
         '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#101a33"/><stop offset="1" stop-color="#3a1030"/></linearGradient></defs><rect width="1600" height="900" fill="url(#g)"/><g fill="#00f0ff" opacity=".5"><rect x="120" y="120" width="560" height="320"/><rect x="760" y="200" width="680" height="480"/></g></svg>';
       return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;

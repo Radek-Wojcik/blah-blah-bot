@@ -14,11 +14,16 @@ export function selectBackend(search: string = window.location.search): Backend 
   const rate = params.get("rate");
   // `jobms=N` sets how long a processing stage takes in the mock (tests use a short time).
   const jobms = params.get("jobms");
+  // `overlayfault=blank|black|broken` makes the screenshot overlay receive a bad capture.
+  const fault = params.get("overlayfault");
   return createMockBackend({
     recording: params.get("state") === "recording",
     // `newdraft=1` starts with a newer draft next to the edited one of the demo meeting.
     newDraft: params.get("newdraft") === "1",
     ...(rate === null ? {} : { clockRate: Number(rate) }),
     ...(jobms === null ? {} : { jobStepMs: Number(jobms) }),
+    ...(fault === "blank" || fault === "black" || fault === "broken"
+      ? { overlayFault: fault }
+      : {}),
   });
 }

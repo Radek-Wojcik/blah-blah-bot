@@ -6,7 +6,9 @@
 //! cropped from the frozen capture and saved with the offset of the moment the hotkey was
 //! pressed.
 
-use recorder::screenshot::{capture_virtual_desktop, encode_png, Rect};
+use recorder::screenshot::{
+    capture_virtual_desktop, encode_png_preview, overlay_window_rect, Rect,
+};
 use serde::Deserialize;
 use tauri::ipc::Response;
 use tauri::{
@@ -70,7 +72,7 @@ pub fn begin(app: &AppHandle) -> IpcResult<()> {
     }
     // Capture before any of our own windows appear.
     let frame = capture_virtual_desktop().map_err(|e| IpcError::new("io", e.to_string()))?;
-    let rect = frame.rect;
+    let rect = overlay_window_rect(frame.rect);
     *state
         .pending_shot
         .lock()
@@ -90,16 +92,41 @@ pub fn begin(app: &AppHandle) -> IpcResult<()> {
     .visible(false)
     .build()
     .map_err(|e| IpcError::new("internal", e.to_string()))?;
-    let placed = window
-        .set_position(PhysicalPosition::new(rect.x, rect.y))
-        .and_then(|()| window.set_size(PhysicalSize::new(rect.width, rect.height)))
-        .and_then(|()| window.show())
-        .and_then(|()| window.set_focus());
+    let placed = place(&window, rect);
     if let Err(e) = placed {
         cancel(app);
         return Err(IpcError::new("internal", e.to_string()));
     }
     Ok(())
+}
+
+/// Cover `rect` (physical virtual-desktop pixels) with the window and bring it to the front.
+///
+/// The window is created on the primary monitor and moved afterwards; with monitors of
+/// different scale factors Windows may adjust the size while the window changes monitor, so the
+/// result is read back and applied once more when it differs.
+fn place(window: &tauri::WebviewWindow, rect: Rect) -> tauri::Result<()> {
+    let apply = || -> tauri::Result<()> {
+        window.set_position(PhysicalPosition::new(rect.x, rect.y))?;
+        window.set_size(PhysicalSize::new(rect.width, rect.height))
+    };
+    apply()?;
+    window.show()?;
+    let placed = |w: &tauri::WebviewWindow| -> tauri::Result<bool> {
+        let (pos, size) = (w.outer_position()?, w.outer_size()?);
+        Ok((pos.x, pos.y, size.width, size.height) == (rect.x, rect.y, rect.width, rect.height))
+    };
+    if !placed(window)? {
+        tracing::warn!(
+            ?rect,
+            "overlay window was moved or resized by the system; placing it again"
+        );
+        apply()?;
+        if !placed(window)? {
+            tracing::warn!(?rect, "overlay window does not cover the desktop exactly");
+        }
+    }
+    window.set_focus()
 }
 
 /// Close the overlay and drop the frozen capture.
@@ -115,16 +142,32 @@ pub fn cancel(app: &AppHandle) {
 }
 
 /// The frozen capture as PNG bytes, for the overlay page.
+///
+/// Async on purpose: a synchronous command runs on the main thread, and encoding the pixels of
+/// several monitors takes long enough to freeze every window. A capture without any visible
+/// content (all black or fully transparent) is refused with the code `blank_capture` so the
+/// overlay can say so instead of presenting a black screen.
 #[tauri::command]
-pub fn overlay_image(state: State<'_, AppState>) -> IpcResult<Response> {
-    let pending = state
-        .pending_shot
-        .lock()
-        .map_err(|_| IpcError::new("internal", "overlay lock poisoned"))?;
-    let shot = pending
-        .as_ref()
-        .ok_or_else(|| IpcError::new("internal", "no screenshot in progress"))?;
-    let png = encode_png(&shot.frame).map_err(|e| IpcError::new("io", e.to_string()))?;
+pub async fn overlay_image(state: State<'_, AppState>) -> IpcResult<Response> {
+    let png = {
+        let pending = state
+            .pending_shot
+            .lock()
+            .map_err(|_| IpcError::new("internal", "overlay lock poisoned"))?;
+        let shot = pending
+            .as_ref()
+            .ok_or_else(|| IpcError::new("internal", "no screenshot in progress"))?;
+        let stats = shot.frame.stats();
+        if stats.is_blank() {
+            tracing::warn!(?stats, rect = ?shot.frame.rect, "the desktop capture is blank");
+            return Err(IpcError::new(
+                "blank_capture",
+                "The screen capture came back empty (all black). The screenshot was cancelled.",
+            ));
+        }
+        tracing::debug!(?stats, rect = ?shot.frame.rect, "desktop captured for the overlay");
+        encode_png_preview(&shot.frame).map_err(|e| IpcError::new("io", e.to_string()))?
+    };
     Ok(Response::new(png))
 }
 

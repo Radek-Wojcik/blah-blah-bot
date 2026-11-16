@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Region screenshot (Ctrl+Alt+S) showed a black screen over every monitor. The desktop was captured correctly; the cause was in the display path. The content security policy did not allow the page to reach the IPC protocol, so Tauri fell back to the postMessage interface, which returns binary results as an array of numbers; the overlay built its image from that array as if it were bytes, the PNG could not be decoded and the black page background was all that was left. The policy now allows the IPC protocol, binary results are converted correctly in both modes, and the frozen desktop is encoded with fast compression off the main thread.
+- The overlay no longer stays as a black sheet when something goes wrong: a capture that is all black, cannot be decoded or does not arrive within 20 seconds is reported in a message and the overlay closes itself. Escape, a click and a right click close it in every state.
+- The overlay window is read back after it is placed over the monitors and placed again when the system changed its position or size.
+
 ## [0.5.0] - 2026-11-16
 
 ### Added

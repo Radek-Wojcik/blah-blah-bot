@@ -1032,6 +1032,34 @@ body.overlay-body::after {
   pointer-events: none;
 }
 
+.shot-problem {
+  position: absolute;
+  left: 50%;
+  top: 30%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: min(560px, 80vw);
+  padding: 20px 28px;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+  background: rgba(5, 6, 11, 0.95);
+  border: 1px solid var(--magenta);
+  box-shadow: 0 0 24px rgba(255, 42, 109, 0.35);
+  pointer-events: none;
+}
+.shot-problem strong {
+  color: var(--magenta);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.shot-problem small {
+  opacity: 0.7;
+}
+
 /* ---------- Processing: queue, transcript, settings, dialog ---------- */
 .badge-job-queued,
 .badge-job-waiting {
