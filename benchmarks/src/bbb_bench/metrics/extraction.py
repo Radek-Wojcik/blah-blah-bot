@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Sequence
 from difflib import SequenceMatcher
 from typing import Any
@@ -30,13 +31,25 @@ def _similarity(a: str, b: str) -> float:
     return 2 * p * r / (p + r)
 
 
+def _agrees(r: Item, p: Item) -> bool:
+    return r.get("assignee") == p.get("assignee") and r.get("due") == p.get("due")
+
+
 def _match(
-    reference: Sequence[Item], predicted: Sequence[Item], threshold: float
+    reference: Sequence[Item],
+    predicted: Sequence[Item],
+    threshold: float,
+    prefer_agreement: bool = False,
 ) -> list[tuple[int, int]]:
-    """Greedy one-to-one matching by descending text similarity."""
+    """Greedy one-to-one matching by descending text similarity.
+
+    With `prefer_agreement`, pairs of equal similarity are ordered so that those that agree on
+    assignee and due date are taken first. The default order of equal pairs is arbitrary (it
+    follows the item order), which matters when a meeting repeats one task for several people.
+    """
     pairs = sorted(
         (
-            (_similarity(r["text"], p["text"]), i, j)
+            (_similarity(r["text"], p["text"]), prefer_agreement and _agrees(r, p), i, j)
             for i, r in enumerate(reference)
             for j, p in enumerate(predicted)
         ),
@@ -45,7 +58,7 @@ def _match(
     used_r: set[int] = set()
     used_p: set[int] = set()
     matches = []
-    for score, i, j in pairs:
+    for score, _agree, i, j in pairs:
         if score < threshold:
             break
         if i in used_r or j in used_p:
@@ -54,6 +67,16 @@ def _match(
         used_p.add(j)
         matches.append((i, j))
     return matches
+
+
+def _field_accuracy(
+    reference: Sequence[Item],
+    predicted: Sequence[Item],
+    matches: Sequence[tuple[int, int]],
+    field: str,
+) -> float:
+    ok = sum(1 for i, j in matches if reference[i].get(field) == predicted[j].get(field))
+    return ok / len(matches) if matches else 0.0
 
 
 def score_extraction(
@@ -65,23 +88,57 @@ def score_extraction(
     reaches `threshold`; matching is one-to-one. Assignee and due-date accuracy
     are computed over matched pairs only. Items need `text`, optional
     `assignee` and `due`.
+
+    Also reported, next to the figures above and never replacing them:
+    `assignee_accuracy_paired` and `due_accuracy_paired`. Meetings repeat one task for several
+    people ("order the module" for Ann and for Bob), and among such equal texts the plain
+    matching pairs a predicted task with an arbitrary reference task, so a correct list of
+    (task, assignee, due) triples can score low. The paired variant breaks ties of equal text
+    similarity in favour of the pair that agrees on assignee and due date. The same
+    threshold applies; recall and precision are those of the plain matching.
     """
     matches = _match(reference, predicted, threshold)
+    paired = _match(reference, predicted, threshold, prefer_agreement=True)
     tp = len(matches)
     recall = tp / len(reference) if reference else 1.0
     precision = tp / len(predicted) if predicted else (1.0 if not reference else 0.0)
-    assignee_ok = sum(
-        1 for i, j in matches if reference[i].get("assignee") == predicted[j].get("assignee")
-    )
-    due_ok = sum(1 for i, j in matches if reference[i].get("due") == predicted[j].get("due"))
     return {
         "recall": recall,
         "precision": precision,
-        "assignee_accuracy": assignee_ok / tp if tp else 0.0,
-        "due_accuracy": due_ok / tp if tp else 0.0,
+        "assignee_accuracy": _field_accuracy(reference, predicted, matches, "assignee"),
+        "due_accuracy": _field_accuracy(reference, predicted, matches, "due"),
+        "assignee_accuracy_paired": _field_accuracy(reference, predicted, paired, "assignee"),
+        "due_accuracy_paired": _field_accuracy(reference, predicted, paired, "due"),
         "matched": tp,
         "reference": len(reference),
         "predicted": len(predicted),
+    }
+
+
+def score_by_owner_due(
+    reference: Sequence[Item], predicted: Sequence[Item]
+) -> dict[str, float | int]:
+    """Recall and precision of tasks identified by who does them and by when, not by wording.
+
+    A report in one language may phrase a task differently from the reference (another
+    inflection, a translation of a sentence spoken in the other language), which the token
+    overlap of `score_extraction` counts as a miss. Here a predicted task matches a reference
+    task when both have the same `assignee` and `due`; matching is one-to-one, so a task
+    repeated for the same person and day must be predicted as often as it is annotated. This is
+    a diagnostic next to `score_extraction`, never a replacement: it is blind to the task text
+    and so more lenient than the text-based figures.
+    """
+    pool = Counter((r.get("assignee"), r.get("due")) for r in reference)
+    tp = 0
+    for p in predicted:
+        key = (p.get("assignee"), p.get("due"))
+        if pool[key] > 0:
+            pool[key] -= 1
+            tp += 1
+    return {
+        "recall": tp / len(reference) if reference else 1.0,
+        "precision": tp / len(predicted) if predicted else (1.0 if not reference else 0.0),
+        "matched": tp,
     }
 
 

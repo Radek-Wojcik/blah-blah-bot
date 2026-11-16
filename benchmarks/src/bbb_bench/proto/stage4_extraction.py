@@ -12,7 +12,13 @@ Quality and speed over the labeled sets (docs/TESTING.md, section 7):
         --model path/to/model.gguf --name gemma-4-12b-q4 --meetings data/extraction/* \
         --llama-server path/to/llama-server.exe
 
-writes `results/stage4-extraction-<name>.json`. Timing on a transcript of N hours made of the
+writes `results/stage4-extraction-<name>.json`. `meets_targets` is computed on the text-based
+task scores (`task_recall`, `task_precision`, `assignee_accuracy`, `due_accuracy`). Next to them
+the file reports informative scores that never enter `meets_targets` (`METRIC_NOTES`):
+`assignee_accuracy_paired` / `due_accuracy_paired` pair tasks of equal text by agreement instead
+of by list order, `task_recall_by_owner_due` / `task_precision_by_owner_due` match tasks by
+assignee and due date alone, so differently phrased (inflected, translated) tasks still count.
+Timing on a transcript of N hours made of the
 labeled transcripts repeated with time offsets (one extract and one reduce run):
 
     ... --hours 10 --name gemma-4-12b-q4         -> results/stage4-long-<name>.json
@@ -47,7 +53,7 @@ import jsonschema
 
 from .. import harness
 from ..datasets.generator import WORDS_PER_MINUTE
-from ..metrics import quote_validity, score_extraction
+from ..metrics import quote_validity, score_by_owner_due, score_extraction
 
 PROTOTYPE = "stage4-extraction"
 PROTOTYPE_LONG = "stage4-long"
@@ -86,7 +92,26 @@ MEAN_KEYS = (
     "budget_precision",
     "quote_validity",
     "quote_verified_share",
+    "assignee_accuracy_paired",
+    "due_accuracy_paired",
+    "task_recall_by_owner_due",
+    "task_precision_by_owner_due",
 )
+
+# Written into the result file next to the scores, so that nobody reads them as targets.
+METRIC_NOTES: dict[str, str] = {
+    "meets_targets": "computed on the text-based task scores and the other TARGETS only",
+    "assignee_accuracy_paired": (
+        "assignee accuracy over matched tasks; equal-text tasks of different people are paired "
+        "by agreement on assignee and due date, not by list order (informative)"
+    ),
+    "due_accuracy_paired": "the same for the due date (informative)",
+    "task_recall_by_owner_due": (
+        "recall with tasks matched by assignee and due date alone, blind to the wording: "
+        "an upper view that ignores inflection and translation of the text (informative)"
+    ),
+    "task_precision_by_owner_due": "the same for precision (informative)",
+}
 
 # The four sections used for the template and by-type modes of `--modes`.
 TEMPLATE_SECTIONS: list[dict[str, str]] = [
@@ -610,9 +635,17 @@ def score_draft(
     annotation, so reference and draft are matched on text plus quote (the planted line).
     Quote validity is the existing metric on the quotes and the times the worker stored.
     `entries` are transcript segments with `t_start_ms`, `t_end_ms` and `text`.
+
+    `assignee_accuracy_paired` and `due_accuracy_paired` are reported next to the task scores
+    that `meets_targets` checks (see `score_extraction`): they pair equal-text tasks of
+    different people by agreement instead of by list order. `task_recall_by_owner_due` and
+    `task_precision_by_owner_due` match tasks by assignee and due date alone, so a task that
+    was phrased differently (inflection, a sentence translated into the report language) is
+    still counted (see `score_by_owner_due`). All four are informative only.
     """
     items = draft["items"]
     tasks = score_extraction(annotation["tasks"], _of_type(items, "task"))
+    by_owner = score_by_owner_due(annotation["tasks"], _of_type(items, "task"))
     decisions = score_extraction(
         [_text_with_quote(d["text"], d.get("quote")) for d in annotation["decisions"]],
         [
@@ -648,6 +681,10 @@ def score_draft(
         "task_precision": tasks["precision"],
         "assignee_accuracy": tasks["assignee_accuracy"],
         "due_accuracy": tasks["due_accuracy"],
+        "assignee_accuracy_paired": tasks["assignee_accuracy_paired"],
+        "due_accuracy_paired": tasks["due_accuracy_paired"],
+        "task_recall_by_owner_due": by_owner["recall"],
+        "task_precision_by_owner_due": by_owner["precision"],
         "tasks_matched": tasks["matched"],
         "tasks_reference": tasks["reference"],
         "tasks_predicted": tasks["predicted"],
@@ -806,6 +843,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     total_words = sum(m["words"] for m in per_meeting if m["ok"])
     return {
         "config": config_of(args, llm),
+        "metric_notes": METRIC_NOTES,
         "meetings": per_meeting,
         **aggregate(per_meeting, total_words),
     }

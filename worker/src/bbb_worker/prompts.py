@@ -17,6 +17,7 @@ SUMMARY_GROUP = 8
 SUMMARY_MAX_DIRECT = 12
 SECTION_BATCH = 120
 ITEM_TEXT_CHARS = 100
+WEEKDAYS_PL = ("poniedziałek", "wtorek", "środa", "czwartek", "piątek", "sobota", "niedziela")
 
 EXTRACT_SYSTEM = """\
 You extract structured items from one window of a meeting transcript. Return JSON only.
@@ -36,7 +37,10 @@ over, the assignee is the person who finally accepts it.
 - `assignee` is the id of a participant from the participant list, or null when the owner is \
 not clear. Never invent an id. Lines are written with participant names; map them to ids.
 - `due` is an ISO date (YYYY-MM-DD) or null. Resolve relative dates ("next Friday", "by the \
-end of the week", "jutro") against the meeting date with the calendar below.
+end of the week", "jutro") against the meeting date with the calendar below. A weekday name alone ("do czwartku", \
+"by Thursday") is the first such day after the meeting date, and the due date is that day itself, not the \
+day after it ("do wtorku" is the Tuesday in the calendar): copy its date from the calendar, \
+do not count days yourself.
 - `certainty.assignee` and `certainty.due`: "stated" only if it was said literally in the \
 line, "inferred" if you deduced it from context, "unknown" when the value is null.
 - `section` is one of the allowed section ids, or null when there are none or none fits.
@@ -52,7 +56,16 @@ the participants really agreed or committed to, in the schema above.
 names, and do not treat them as something a person said.
 - Be compact. One item per commitment or decision: never report the same agreed item twice \
 and do not split one commitment into several items. Keep `text` short (one sentence, at most \
-20 words, verb and object for tasks) and do not restate the quote in it.
+20 words) and do not restate the quote in it.
+- A commitment is one person taking one action. Every time someone accepts or takes a task, \
+that is a commitment, even when the same action was already reported for another person or \
+with another due date earlier in the meeting: report each one as a separate item with its own \
+assignee and due date, and do not skip the later ones.
+- The `text` of a task is a verb in the infinitive followed by its object, taken from the \
+speech: "zamówić moduł GNSS", "send the report to the client". Never use a noun form \
+("zamówienie modułu"), a full sentence or the name of the person. Leave the assignee and the \
+date out of `text`; they have their own fields. When the line only accepts ("Tak, zrobię to \
+do wtorku"), name the action from the request just before it, never "do it".
 - Write `text` and `summary` in {language}.
 - `summary` is two to four sentences about this window.
 - If the window contains no items, return an empty list and still write the summary.
@@ -78,11 +91,13 @@ def language_name(code: str) -> str:
 
 
 def calendar_text(meeting_date: str, days: int = CALENDAR_DAYS) -> str:
+    """The next `days` days as "Thursday (czwartek) 2026-11-19": the weekday is given in both
+    supported languages, so "do czwartku" needs no translation to find its date."""
     start = date.fromisoformat(meeting_date)
     parts = []
     for i in range(1, days + 1):
         d = start + timedelta(days=i)
-        parts.append(f"{d.strftime('%A')} {d.isoformat()}")
+        parts.append(f"{d.strftime('%A')} ({WEEKDAYS_PL[d.weekday()]}) {d.isoformat()}")
     return ", ".join(parts)
 
 

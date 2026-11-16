@@ -115,7 +115,9 @@ def test_prompt_has_context_and_nothing_excluded(tmp_path):
     assert "Zephyr: the code name of the monitor mount" in sent
     assert "- alex: Alex Kowalski" in sent
     assert "Meeting date: 2026-11-16 (Monday)" in sent
-    assert "Tuesday 2026-11-17" in sent and "Monday 2026-12-14" in sent  # 28 days
+    assert (
+        "Tuesday (wtorek) 2026-11-17" in sent and "Monday (poniedziałek) 2026-12-14" in sent
+    )  # 28 days
     assert "Tuesday 2026-12-15" not in sent
     assert "t1: Supplier choice" in sent and "#12: Mount prototype" in sent
     assert "Prefer short task titles." in sent
@@ -279,7 +281,9 @@ def test_output_language_is_resolved_from_a_polish_transcript(tmp_path):
 
 def test_calendar_text():
     text = prompts.calendar_text("2026-11-16")
-    assert text.startswith("Tuesday 2026-11-17") and text.endswith("Monday 2026-12-14")
+    assert text.startswith("Tuesday (wtorek) 2026-11-17") and text.endswith(
+        "Monday (poniedziałek) 2026-12-14"
+    )
     assert text.count(",") == 27
 
 
@@ -534,3 +538,13 @@ def test_request_uses_the_budget_from_the_configured_context(tmp_path):
 def test_prompt_asks_for_compact_output():
     system = prompts.extract_system("en")
     assert "never report the same agreed item twice" in system and "Keep `text` short" in system
+
+
+def test_prompt_asks_for_the_infinitive_form_of_a_task():
+    system = prompts.extract_system("pl")
+    assert "verb in the infinitive followed by its object" in system
+    assert "zamówić moduł GNSS" in system and "Never use a noun form" in system
+    assert "Leave the assignee and the date out of `text`" in system
+    assert "A commitment is one person taking one action" in system
+    assert "copy its date from the calendar" in system and "that day itself" in system
+    assert "name the action from the request just before it" in system
