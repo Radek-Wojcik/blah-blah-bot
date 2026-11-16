@@ -218,6 +218,23 @@ mod tests {
         assert_eq!(r.y + r.height as i32, 1080);
     }
 
+    /// Without `connect-src` the CSP falls back to `default-src 'self'` and blocks the IPC
+    /// custom protocol. Tauri then answers over `postMessage`, which turns the raw PNG bytes of
+    /// `overlay_image` into a plain array of numbers; the overlay then showed a black screen.
+    #[test]
+    fn csp_lets_the_web_view_reach_the_ipc_protocol() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let csp = conf["app"]["security"]["csp"].as_str().unwrap();
+        let connect = csp
+            .split(';')
+            .map(str::trim)
+            .find(|d| d.starts_with("connect-src"))
+            .expect("connect-src is set");
+        assert!(connect.split(' ').any(|s| s == "ipc:"), "{connect}");
+        assert!(connect.contains("http://ipc.localhost"), "{connect}");
+    }
+
     #[test]
     fn tiny_selection_counts_as_a_click() {
         let f = FractionRect {

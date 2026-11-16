@@ -29,16 +29,23 @@ export function Overlay() {
   const backend = useBackend();
   const stage = useRef<HTMLDivElement>(null);
   const [src, setSrc] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
   const [drag, setDrag] = useState<{ from: Point; to: Point } | null>(null);
 
   useEffect(() => {
     document.body.classList.add("overlay-body");
     let url: string | null = null;
     let cancelled = false;
-    void backend.overlayImage().then((u) => {
-      url = u;
-      if (!cancelled) setSrc(u);
-    });
+    backend
+      .overlayImage()
+      .then((u) => {
+        url = u;
+        if (!cancelled) setSrc(u);
+      })
+      .catch(() => {
+        // Say so instead of leaving a black screen.
+        if (!cancelled) setFailed(true);
+      });
     return () => {
       cancelled = true;
       document.body.classList.remove("overlay-body");
@@ -99,7 +106,13 @@ export function Overlay() {
           </span>
         </div>
       )}
-      {!drag && <p className="shot-hint">Drag to capture a region · Esc to cancel</p>}
+      {!drag && (
+        <p className="shot-hint">
+          {failed
+            ? "The screenshot could not be shown · Esc to cancel"
+            : "Drag to capture a region · Esc to cancel"}
+        </p>
+      )}
     </div>
   );
 }
