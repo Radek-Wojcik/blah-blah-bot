@@ -492,6 +492,13 @@ impl Rig {
                 .iter()
                 .map(|o| format!("{}={} ({} tries)", o.op_key, o.state, o.attempts))
                 .collect();
+            // An operation that gave up holds back the ones that follow it: say why at once.
+            if let Some(op) = ops.iter().find(|o| o.state == "failed") {
+                panic!(
+                    "{} failed for good after {} tries: {:?} (the others: {states:?})",
+                    op.op_key, op.attempts, op.last_error
+                );
+            }
             let finished = !ops.is_empty()
                 && ops
                     .iter()
