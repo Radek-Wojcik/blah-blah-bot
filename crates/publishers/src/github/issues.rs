@@ -424,10 +424,19 @@ impl Github {
         if let Some(login) = &spec.assignee {
             body["assignees"] = json!([login]);
         }
-        let created = self.send_json(Request::post_json(
-            format!("{}/issues", self.repo_path(repo)),
-            &body,
-        ))?;
+        let url = format!("{}/issues", self.repo_path(repo));
+        let created = match self.send_json(Request::post_json(url.clone(), &body)) {
+            // A login that does not exist is refused with 422 (one that exists but cannot be
+            // assigned is dropped silently): the issue is worth more than its assignee, so
+            // it is made without one and the outcome says so.
+            Err(e) if e.status == Some(422) && spec.assignee.is_some() => {
+                if let Some(fields) = body.as_object_mut() {
+                    fields.remove("assignees");
+                }
+                self.send_json(Request::post_json(url, &body))?
+            }
+            other => other?,
+        };
         let number = created
             .get("number")
             .and_then(Value::as_u64)

@@ -186,6 +186,63 @@ fn an_assignee_github_does_not_take_is_reported() {
 }
 
 #[test]
+fn an_assignee_that_does_not_exist_gets_the_issue_made_without_one() {
+    let gh = fake();
+    gh.unknown_users(REPO, &["alex-example"]);
+    let out = api(&gh).publish_issue(&repo(), &spec("i3"), false).unwrap();
+    assert!(out.created && out.assignee_dropped);
+    assert_eq!(out.assigned, None);
+    assert_eq!(
+        out.due,
+        DueOutcome::Line,
+        "the rest of the issue is as asked"
+    );
+    let issue = gh.issue(REPO, out.number).unwrap();
+    assert!(issue.assignees.is_empty());
+    assert!(
+        issue.body.starts_with(
+            "Due: 2026-11-20
+"
+        ),
+        "{}",
+        issue.body
+    );
+    assert_eq!(gh.issues(REPO).len(), 1, "one issue, not two");
+    let sent = gh.requests_to("POST", "/repos/owner/rover/issues");
+    assert_eq!(
+        sent.len(),
+        2,
+        "refused once, then made without the assignee"
+    );
+    assert!(sent[0].body_text().contains("assignees"));
+    assert!(!sent[1].body_text().contains("assignees"));
+}
+
+#[test]
+fn a_422_without_an_assignee_is_not_tried_again() {
+    let gh = fake();
+    gh.inject_for(
+        "POST",
+        "/repos/owner/rover/issues",
+        Fault::Reply(Reply::json(
+            422,
+            &serde_json::json!({"message": "Validation Failed"}),
+        )),
+        2,
+    );
+    let mut s = spec("i3");
+    s.assignee = None;
+    let err = api(&gh).publish_issue(&repo(), &s, false).unwrap_err();
+    assert_eq!(err.status, Some(422));
+    assert_eq!(err.failure(), store::Failure::Permanent);
+    assert_eq!(
+        gh.requests_to("POST", "/repos/owner/rover/issues").len(),
+        1,
+        "there was no assignee to leave out"
+    );
+}
+
+#[test]
 fn title_and_quote_are_cleaned_and_defused() {
     let gh = fake();
     let mut s = spec("i3");

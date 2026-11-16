@@ -91,6 +91,8 @@ struct Repo {
     push_allowed: bool,
     /// `None`: everybody can be assigned.
     assignable: Option<Vec<String>>,
+    /// Logins that do not exist on this GitHub: creating an issue for one is a 422.
+    unknown_users: Vec<String>,
     issues: Vec<StoredIssue>,
     /// Field values by issue number: `(field id, value)`.
     field_values: BTreeMap<u64, Vec<(u64, Value)>>,
@@ -196,6 +198,7 @@ impl FakeGithub {
                 issues_enabled: true,
                 push_allowed: true,
                 assignable: None,
+                unknown_users: Vec::new(),
                 issues: Vec::new(),
                 field_values: BTreeMap::new(),
                 labels: Vec::new(),
@@ -263,6 +266,15 @@ impl FakeGithub {
     pub fn restrict_assignees(&self, full_name: &str, logins: &[&str]) {
         self.with_repo(full_name, |r| {
             r.assignable = Some(logins.iter().map(|s| (*s).to_string()).collect());
+        });
+    }
+
+    /// These logins do not exist: an issue created with one of them as assignee is refused
+    /// with 422 (`assignees` invalid), as github.com does. A user that exists but cannot be
+    /// assigned is dropped silently instead, see [`FakeGithub::restrict_assignees`].
+    pub fn unknown_users(&self, full_name: &str, logins: &[&str]) {
+        self.with_repo(full_name, |r| {
+            r.unknown_users = logins.iter().map(|s| (*s).to_string()).collect();
         });
     }
 
@@ -674,6 +686,9 @@ fn create_issue(repo: &mut Repo, req: &Recorded, base: &str, at: u64) -> Reply {
     let mut assignees = names(&body["assignees"]);
     if let Some(one) = body.get("assignee").and_then(Value::as_str) {
         assignees.push(one.to_string());
+    }
+    if assignees.iter().any(|a| repo.unknown_users.contains(a)) {
+        return validation_failed("assignees", "invalid");
     }
     let assignees = keep_assignable(repo, assignees);
     let number = new_issue(repo, title, text, &labels, &assignees, false, at);

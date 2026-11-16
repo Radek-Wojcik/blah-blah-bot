@@ -443,7 +443,8 @@ fn a_github_rate_limit_pauses_only_that_operation_and_a_permanent_error_stops_at
             422,
             &serde_json::json!({"message": "Validation Failed"}),
         )),
-        1,
+        // Twice: the first refusal makes the issue be tried again without its assignee.
+        2,
     );
     let report = lab.tick();
     assert_eq!(
