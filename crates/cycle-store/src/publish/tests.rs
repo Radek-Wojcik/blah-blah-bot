@@ -989,3 +989,65 @@ fn failures_are_classified_from_git_text() {
         "remote: error: GH006: Protected branch update failed"
     ));
 }
+
+// ----- a cycle that was only ever created in the clone ----------------------------------------
+
+#[test]
+fn a_cycle_created_in_the_clone_and_never_committed_is_published_and_the_clone_catches_up() {
+    let tmp = tempfile::tempdir().unwrap();
+    let remote = tmp.path().join("remote.git");
+    fs::create_dir_all(&remote).unwrap();
+    g(
+        &remote,
+        &["init", "--bare", "--quiet", "--initial-branch=main"],
+    );
+    // A repository that has a README and no cycle at all, as a fresh test repository.
+    let seed = Repo::init_local(tmp.path().join("seed")).unwrap();
+    set_identity(seed.root());
+    write(&seed.root().join("README.md"), "# test\n");
+    g(seed.root(), &["add", "-A"]);
+    g(seed.root(), &["commit", "--quiet", "-m", "init"]);
+    g(
+        seed.root(),
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    g(seed.root(), &["push", "--quiet", "origin", "main"]);
+
+    let repo = Repo::clone(remote.to_str().unwrap(), tmp.path().join("clone")).unwrap();
+    set_identity(repo.root());
+    // The cycle exists only here: cycle.yaml, an empty topics.yaml and the template.
+    repo.create_cycle(&Cycle::new("NOMAD", "Nomad rover"))
+        .unwrap();
+    assert!(status(&repo).contains("?? cycles/"), "{}", status(&repo));
+
+    // The first meeting adds no topic: topics.yaml stays out of the commit.
+    let first = snapshot(tmp.path(), "first", "A");
+    let mut req = request(&first.files, None);
+    req.date = "2026-11-10";
+    let one = publish_meeting(&repo, &req).unwrap();
+    assert_eq!(one.local, LocalSync::Updated, "{one:?}");
+    assert!(repo
+        .root()
+        .join("meetings/NOMAD/2026-11-10/report.md")
+        .is_file());
+
+    // The second one adds a topic: the file is committed and the clone still catches up.
+    // The file here still has none of it: the application writes the topics only through
+    // the commit.
+    let ours = vec![topic("20261113-1", "Charging", TopicStatus::Open)];
+    assert!(repo.load_topics("NOMAD").unwrap().is_empty());
+    let second = snapshot(tmp.path(), "second", "B");
+    let two = publish_meeting(&repo, &request(&second.files, Some(&ours))).unwrap();
+    assert_eq!(two.local, LocalSync::Updated, "{two:?}");
+    assert_eq!(g(repo.root(), &["rev-parse", "HEAD"]), two.commit);
+    assert!(repo
+        .root()
+        .join("meetings/NOMAD/2026-11-13/report.md")
+        .is_file());
+    assert_eq!(repo.load_topics("NOMAD").unwrap(), ours);
+    let after = status(&repo);
+    assert!(
+        after.lines().all(|l| l.starts_with("??")) && !after.contains("topics.yaml"),
+        "only the cycle files that were never committed remain: {after}"
+    );
+}

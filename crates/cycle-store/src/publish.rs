@@ -819,9 +819,10 @@ fn head_of(g: &Git) -> Result<Option<String>, PublishError> {
 
 /// Moves the local branch to `commit` and checks out what came with it, leaving unrelated
 /// uncommitted work alone. Files the commit also contains that the user has locally (the
-/// meeting files, or `topics.yaml` with exactly the edits that went into the merge) are
-/// replaced by the committed version; anything else that is in the way keeps the branch
-/// where it is.
+/// meeting files, or `topics.yaml` with the edits that went into the merge) are
+/// replaced by the committed version (`topics.yaml` when every topic of the file is in the
+/// merge: it may be untracked, in a cycle that was never committed, and it lacks what the
+/// meeting added); anything else that is in the way keeps the branch where it is.
 fn sync_local(
     repo: &Repo,
     g: &Git,
@@ -842,7 +843,10 @@ fn sync_local(
                 fs::read_to_string(g.root.join(path))
                     .ok()
                     .and_then(|t| topics::parse_topics(&t).ok())
-                    .is_some_and(|disk| disk == ours)
+                    // Everything on disk went into the merge (`ours` is the file as it was
+                    // read plus what the meeting adds or closes), so the committed file
+                    // replaces it without losing a topic.
+                    .is_some_and(|disk| disk.iter().all(|d| ours.iter().any(|o| o.id == d.id)))
             })
     };
     let on_disk = |path: &str| g.root.join(path).is_file();
