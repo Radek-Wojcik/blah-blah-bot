@@ -679,12 +679,14 @@ impl Dispatcher {
             cycle_store::Language::En => "Meeting",
         };
         let title = format!("{word} {} {}", draft.cycle, draft.date);
-        let mut text = discord::render_text(&discord::TextSpec {
+        let links = self.issue_links(&op.meeting_id)?;
+        let text = discord::render_text(&discord::TextSpec {
             draft: &draft,
             participants: &ctx.cycle.participants,
             template_body: template.as_deref(),
             title: &title,
             report_link: &report_link,
+            issue_links: &links,
         })
         .map_err(|issues| {
             OpError::permanent(format!(
@@ -692,10 +694,6 @@ impl Dispatcher {
                 issues.first().map_or_else(String::new, ToString::to_string)
             ))
         })?;
-        let links = self.issue_links(&op.meeting_id)?;
-        if !links.is_empty() {
-            text = format!("{}\n\n{links}", text.trim_end());
-        }
         let mut files = Vec::new();
         for rel in &p.files {
             if let Ok(bytes) = std::fs::read(snapshot.join(rel)) {

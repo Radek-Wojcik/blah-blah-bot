@@ -70,9 +70,24 @@ pub struct TextSpec<'a> {
     pub title: &'a str,
     /// Address of the published report, for `{report_link}`.
     pub report_link: &'a str,
+    /// Lines that link the issues made from the meeting (`Issues:` and a list), already safe
+    /// to post; empty when there are none. They follow the template.
+    pub issue_links: &'a str,
 }
 
+/// Shown where the short message was cut.
+const SHORTENED_NOTE: &str = "_(shortened, the rest is in the full report)_";
+/// Starts the paragraph of the built-in template that links the report.
+const REPORT_LINK_PARAGRAPH: &str = "[Full report](";
+
 /// The text of the message, before it is split.
+///
+/// The built-in short template is meant to be **one short message**: the summary, the
+/// decisions and tasks, the link to the full report (and the issue links). When a long meeting
+/// makes that more than one message holds, the lists are cut at a line, a note says so, and
+/// the link and as many issue links as fit stay at the end: the full report is on GitHub. A
+/// template of the cycle is the cycle's own choice and is not cut here; it is split into
+/// messages instead (see [`build_plan`]).
 pub fn render_text(spec: &TextSpec<'_>) -> Result<String, Vec<ValidationIssue>> {
     let opts = RenderOptions {
         title: spec.title.to_string(),
@@ -81,12 +96,83 @@ pub fn render_text(spec: &TextSpec<'_>) -> Result<String, Vec<ValidationIssue>> 
         discord_mentions: true,
         ..RenderOptions::default()
     };
-    render(
+    let rendered = render(
         spec.draft,
         spec.participants,
         spec.template_body.unwrap_or(SHORT_TEMPLATE_TEXT),
         &opts,
-    )
+    )?;
+    let mut text = rendered;
+    let links = spec.issue_links.trim();
+    if !links.is_empty() {
+        text = format!("{}\n\n{links}", text.trim_end());
+    }
+    if spec.template_body.is_none() {
+        text = fit_in_one_message(&text, MAX_CONTENT_UNITS);
+    }
+    Ok(text)
+}
+
+/// `text` cut to one message of at most `limit` units: see [`render_text`]. Text that fits,
+/// or that has no report link paragraph to keep, is returned as it is.
+pub fn fit_in_one_message(text: &str, limit: usize) -> String {
+    if content_units(text) <= limit {
+        return text.to_string();
+    }
+    let Some(at) = text.rfind(&format!("\n\n{REPORT_LINK_PARAGRAPH}")) else {
+        return text.to_string();
+    };
+    let head = &text[..at];
+    let tail = &text[at + 2..];
+    // The link is kept; the issue links take at most half of the message, a line at a time.
+    let half = limit / 2;
+    let mut tail_lines = tail.lines();
+    let link = tail_lines.next().unwrap_or_default();
+    if content_units(link) > half {
+        return text.to_string();
+    }
+    let mut kept_tail = link.to_string();
+    let rest: Vec<&str> = tail_lines.collect();
+    let mut taken = 0;
+    for line in &rest {
+        // A line, its break and room for the "and N more" line that may follow.
+        if content_units(&kept_tail) + 1 + content_units(line) + 40 > half {
+            break;
+        }
+        kept_tail.push('\n');
+        kept_tail.push_str(line);
+        taken += 1;
+    }
+    if taken < rest.len() {
+        let more = rest
+            .iter()
+            .skip(taken)
+            .filter(|l| l.starts_with("- "))
+            .count();
+        kept_tail.push_str(&format!("\n- and {more} more in the full report"));
+    }
+    let budget = limit
+        .saturating_sub(content_units(&kept_tail))
+        .saturating_sub(content_units(SHORTENED_NOTE))
+        .saturating_sub(4);
+    let mut cut = split_content(head, budget.max(2))
+        .into_iter()
+        .next()
+        .unwrap_or_default();
+    // A heading without the lines under it says nothing.
+    while let Some((before, last)) = cut.rsplit_once('\n') {
+        if last.trim().is_empty() || last.starts_with('#') {
+            cut = before.trim_end().to_string();
+        } else {
+            break;
+        }
+    }
+    let fitted = format!("{cut}\n{SHORTENED_NOTE}\n\n{kept_tail}");
+    if content_units(&fitted) <= limit {
+        fitted
+    } else {
+        text.to_string()
+    }
 }
 
 /// Length of `text` as Discord could count it: UTF-16 units.

@@ -474,6 +474,25 @@ impl Write for Captured {
     }
 }
 
+/// The log of this test binary. The subscriber is installed once for the whole process: one
+/// that is scoped to a thread loses events when other tests, running at the same time, have
+/// already told a call site that nobody listens. What other tests log is in it too, and it
+/// must not hold a secret either.
+fn captured_log() -> Captured {
+    static LOG: std::sync::OnceLock<Captured> = std::sync::OnceLock::new();
+    LOG.get_or_init(|| {
+        let log = Captured::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(log.clone())
+            .with_max_level(tracing::Level::TRACE)
+            .with_ansi(false)
+            .finish();
+        tracing::subscriber::set_global_default(subscriber).expect("no other subscriber");
+        log
+    })
+    .clone()
+}
+
 impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
     type Writer = Captured;
     fn make_writer(&'a self) -> Captured {
@@ -512,13 +531,8 @@ fn no_secret_ends_up_in_a_file_a_log_or_the_database() {
         webhook_token.clone(),
     ];
 
-    let log = Captured::default();
-    let subscriber = tracing_subscriber::fmt()
-        .with_writer(log.clone())
-        .with_max_level(tracing::Level::TRACE)
-        .with_ansi(false)
-        .finish();
-    tracing::subscriber::with_default(subscriber, || {
+    let log = captured_log();
+    {
         publish(&lab, &BOTH);
         // Failures of every kind that can carry a secret in their text.
         *lab.env.token.lock().unwrap() = Some(wrong.to_string());
@@ -541,7 +555,7 @@ fn no_secret_ends_up_in_a_file_a_log_or_the_database() {
             .retry_all_ops(lab.env.now_ms())
             .unwrap();
         lab.run_until_settled(6);
-    });
+    }
 
     let errors: Vec<String> = lab.ops().into_iter().filter_map(|o| o.last_error).collect();
     assert!(

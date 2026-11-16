@@ -76,6 +76,7 @@ fn spec<'a>(d: &'a Draft, people: &'a [Participant], report_link: &'a str) -> Te
         template_body: None,
         title: "Weekly sync",
         report_link,
+        issue_links: "",
     }
 }
 
@@ -619,24 +620,46 @@ fn a_meeting_is_posted_as_messages_with_files_and_mentions() {
     assert!(posts.iter().all(|r| r.query_param("wait") == Some("true")));
 }
 
-#[test]
-fn a_long_report_is_split_into_messages_the_fake_accepts() {
-    let dc = FakeDiscord::start();
-    let items: Vec<Value> = (0..60)
+/// A long meeting: many decisions and tasks, some assigned to people who can be mentioned.
+fn long_draft(decisions: usize, tasks: usize, filler: &str) -> Draft {
+    let mut items: Vec<Value> = (0..decisions)
         .map(|i| {
             item(
-                &format!("i{i}"),
+                &format!("d{i}"),
                 "decision",
-                &format!("Decision number {i} {}", "word ".repeat(30)),
+                &format!("Decision number {i} {}", filler.repeat(30)),
                 None,
             )
         })
         .collect();
-    let d = draft(json!(items), "Summary");
+    items.extend((0..tasks).map(|i| {
+        let who = ["alex", "sam", "kim"][i % 3];
+        item(
+            &format!("t{i}"),
+            "task",
+            &format!("Task number {i} {}", filler.repeat(20)),
+            Some(who),
+        )
+    }));
+    draft(json!(items), "We settled the wheels and the mount.")
+}
+
+#[test]
+fn a_long_report_with_a_cycle_template_is_split_into_messages_the_fake_accepts() {
+    let dc = FakeDiscord::start();
+    let d = long_draft(60, 0, "word ");
     let people = people();
-    let text = render_text(&spec(&d, &people, "https://example.test/r")).unwrap();
+    // The cycle's own template is not cut: it is split.
+    let mut s = spec(&d, &people, "https://example.test/r");
+    s.template_body =
+        Some("{summary}\n\n## Decisions\n{decisions}\n\n[Full report]({report_link})\n");
+    let text = render_text(&s).unwrap();
     let plan = build_plan(&text, vec![], vec![], &people);
     assert!(plan.messages.len() > 1);
+    assert!(plan
+        .messages
+        .iter()
+        .all(|m| units(&m.content) <= MAX_CONTENT_UNITS));
     let report = run(&dc, &plan.messages, 0, &Pacing::default()).unwrap();
     assert_eq!(report.sent, plan.messages.len());
     assert_eq!(dc.messages().len(), plan.messages.len());
@@ -648,6 +671,114 @@ fn a_long_report_is_split_into_messages_the_fake_accepts() {
         .join("\n");
     assert!(joined.contains("Decision number 59"));
     assert!(joined.contains("[Full report](https://example.test/r)"));
+}
+
+#[test]
+fn the_default_template_stays_one_short_message_however_long_the_report() {
+    let dc = FakeDiscord::start();
+    let d = long_draft(60, 45, "word ");
+    let people = people();
+    let link = "https://github.com/o/r/blob/main/meetings/NOMAD/2026-11-13/report.md";
+    let issues: String = std::iter::once("Issues:".to_string())
+        .chain((1..=40).map(|n| {
+            format!(
+                "- [#{n} {}](https://github.com/o/r/issues/{n})",
+                "title ".repeat(10)
+            )
+        }))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut s = spec(&d, &people, link);
+    s.issue_links = &issues;
+    let text = render_text(&s).unwrap();
+
+    assert!(units(&text) <= MAX_CONTENT_UNITS, "{} units", units(&text));
+    // The summary leads, the link to the whole report ends the message, and the cut says so.
+    assert!(
+        text.starts_with(
+            "**Weekly sync** \u{b7} 2026-11-13\n\nWe settled the wheels and the mount."
+        ),
+        "{text}"
+    );
+    assert!(text.contains(&format!("[Full report]({link})")), "{text}");
+    assert!(text.contains(SHORTENED_NOTE), "{text}");
+    assert!(text.contains("Decision number 0 "), "the lists start");
+    assert!(!text.contains("Decision number 59 "), "and are cut");
+    assert!(
+        text.contains("more in the full report"),
+        "issue links are cut too: {text}"
+    );
+    // The link paragraph is after the cut, and no heading is left without its lines.
+    let before_note = text.split(SHORTENED_NOTE).next().unwrap().trim_end();
+    assert!(
+        !before_note.lines().last().unwrap().starts_with('#'),
+        "{before_note}"
+    );
+    // No mention is cut in two, and only the ones the message holds are allowed.
+    assert_eq!(
+        text.matches("<@").count(),
+        text.matches('>').count().min(text.matches("<@").count())
+    );
+    let plan = build_plan(&text, vec![], vec![], &people);
+    assert_eq!(plan.messages.len(), 1, "one message, not a series");
+    let allowed = &plan.messages[0].allowed_mentions;
+    assert_eq!(allowed["parse"], json!([]));
+    for id in [USER, ROLE] {
+        assert_eq!(
+            allowed["users"].to_string().contains(id) || allowed["roles"].to_string().contains(id),
+            text.contains(id),
+            "{id}"
+        );
+    }
+    let report = run(&dc, &plan.messages, 0, &Pacing::default()).unwrap();
+    assert_eq!(report.sent, 1);
+    assert_eq!(dc.messages().len(), 1);
+}
+
+#[test]
+fn the_default_template_never_exceeds_the_limit_whatever_the_size_or_the_characters() {
+    let people = people();
+    let link = "https://example.test/report.md";
+    for filler in ["w ", "x", "\u{1F600} ", "z\u{142}\u{f3}\u{107} "] {
+        for (decisions, tasks) in [(0, 0), (1, 1), (3, 40), (80, 0), (80, 80), (500, 500)] {
+            let d = long_draft(decisions, tasks, filler);
+            let text = render_text(&spec(&d, &people, link)).unwrap();
+            assert!(
+                units(&text) <= MAX_CONTENT_UNITS,
+                "{decisions}/{tasks} {filler:?}: {} units",
+                units(&text)
+            );
+            assert!(text.contains(&format!("[Full report]({link})")));
+            let plan = build_plan(&text, vec![], vec![], &people);
+            assert_eq!(plan.messages.len(), 1, "{decisions}/{tasks} {filler:?}");
+            assert!(plan
+                .messages
+                .iter()
+                .all(|m| units(&m.content) <= MAX_CONTENT_UNITS));
+        }
+    }
+}
+
+#[test]
+fn a_short_meeting_is_not_touched_and_a_link_that_cannot_fit_falls_back_to_splitting() {
+    let d = long_draft(2, 2, "word ");
+    let people = people();
+    let text = render_text(&spec(&d, &people, "https://example.test/r")).unwrap();
+    assert!(!text.contains(SHORTENED_NOTE));
+    assert_eq!(fit_in_one_message(&text, MAX_CONTENT_UNITS), text);
+
+    // A report address longer than half a message cannot be kept next to a cut: the text is
+    // left whole, and the splitting of the plan still keeps every message within the limit.
+    let long_link = format!("https://example.test/{}", "a".repeat(1500));
+    let big = long_draft(60, 20, "word ");
+    let text = render_text(&spec(&big, &people, &long_link)).unwrap();
+    assert!(units(&text) > MAX_CONTENT_UNITS);
+    let plan = build_plan(&text, vec![], vec![], &people);
+    assert!(plan.messages.len() > 1);
+    assert!(plan
+        .messages
+        .iter()
+        .all(|m| units(&m.content) <= MAX_CONTENT_UNITS));
 }
 
 #[test]

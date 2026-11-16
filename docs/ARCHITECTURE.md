@@ -481,7 +481,7 @@ See [ADR 0005](decisions/0005-llm-backend.md).
 | Rate limit (429, or 403 with a wait) | The wait the server names is honoured; a short Discord wait is slept through, a longer one goes to the outbox |
 | Permanent error (bad token, no permission, missing repository) | The operation is `failed` with a message without secrets and waits for a retry or a cancel |
 | Application closed while an operation runs | The operation is queued again at the next start |
-| Discord limit exceeded | Message split at 2000 characters; screenshots in batches of 10 files and 8 MiB, at most three such messages |
+| Discord limit exceeded | The built-in short message is cut to one message of 2000 characters that ends with the link to the report; a template of the cycle is split at 2000 characters; screenshots in batches of 10 files and 8 MiB, at most three such messages |
 
 ## 12. Third-party components and licenses
 
