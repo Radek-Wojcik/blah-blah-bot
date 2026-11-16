@@ -54,7 +54,7 @@ Taken from demo mode with fictional data.
 |---|---|
 | OS | Windows 10 version 2004 or newer (verified on build 19045); Windows 11 not tested yet |
 | Build tools | Rust 1.85 or newer, Node.js 22 or newer |
-| GPU | NVIDIA with 12 GB VRAM (reference: RTX 3080); peak use measured at 8.5 GB |
+| GPU | NVIDIA with 12 GB VRAM (reference: RTX 3080); peak use measured at 8.5 GB in Stage 2 and 9.7 GB (absolute) during extraction of a 10 hour transcript |
 | Cycle repositories | The `git` command line on the PATH (the application runs it for clone and pull); credentials come from the Git credential manager |
 | Processing tools | [uv](https://docs.astral.sh/uv/) on the PATH; about 7.4 GB for the Python environment (created on first use); models downloaded on first use; a Hugging Face token and accepted terms for the speaker model |
 | Disk | about 115 MB per track per recorded hour |
@@ -107,6 +107,51 @@ Every key is described in [docs/CYCLES.md](docs/CYCLES.md); the schema is `schem
 Keys are stored in the Windows Credential Manager and are never shown again or written to a file.
 
 **Environment switches** (development and tests): `BBB_DEMO` runs the interface on generated data without audio devices, `BBB_DATA_DIR` keeps all application data in one folder, `BBB_LOG` sets the log filter, `BBB_WORKER_DIR` points to the Python worker folder.
+
+## Stage 4 measurements
+
+Ten synthetic meetings (4 Polish, 3 English, 3 mixed; five speakers, 15 minutes and about 2,100 words each) with planted tasks, decisions and budgets, run through the production `extract` and `reduce` steps with a managed `llama-server` (Q4_K_M, context 16384) on the reference machine (RTX 3080, Windows 10 build 19045). Raw data: `benchmarks/results/stage4-extraction-*.json`, `stage4-long-gemma-4-12b-q4.json` and `stage4-modes-*.json`.
+
+| Measure | Gemma 4 12B | Qwen3 14B | Target |
+|---|---|---|---|
+| Schema validity | 100% (met) | 100% (met) | 100% |
+| Task recall | 86.0% (met) | 71.7% (missed) | 80% or more |
+| Task precision | 89.3% (met) | 94.1% (met) | 80% or more |
+| Assignee accuracy | 92.8% (met) | 65.5% (missed) | 85% or more |
+| Due-date accuracy | 92.2% (met) | 60.2% (missed) | 85% or more |
+| Decision recall / precision | 49.9% / 90.5% | 40.4% / 77.8% | none |
+| Budget recall / precision | 54.3% / 80.0% | 55.3% / 100% | none |
+| Quote validity | 100% (met) | 99.4% (met) | 95% or more |
+| Seconds per 1000 words (extract and reduce) | 41.3 | 46.3 | none |
+| Peak VRAM above baseline | 8,867 MiB (met) | 11,129 MiB (met) | 11.5 GB or less (11,776 MiB) |
+
+Gemma 4 12B meets every extraction threshold; Qwen3 14B misses task recall, assignee accuracy and due-date accuracy. Both models returned a valid schema on all ten meetings, and both stay below the VRAM limit.
+
+**Per language.** English meetings are near 100% with Gemma 4 12B (task recall 100% on all three; Qwen3 14B 78.9% to 85.0%). Polish and mixed meetings are lower: per-meeting task recall is 43.5% to 100% for Gemma 4 12B and 43.5% to 86.4% for Qwen3 14B.
+
+**Prompt change.** The first run used an earlier prompt and missed the task thresholds for both models (Gemma 4 12B: recall 58.6%, precision 60.8%, assignee 82.1%, due date 78.1%; Qwen3 14B: recall 58.4%, precision 73.7%, assignee 62.5%, due date 54.0%). The final prompt asks for the task text as an infinitive phrase and takes weekday dates from the calendar; its numbers are in the table. The initial runs are kept as `*-initial-prompt.json`.
+
+**10 hours.** A transcript of 10 hours (83,548 words, 12,392 segments, the labeled meetings repeated 40 times) was processed by `extract` and `reduce` with Gemma 4 12B.
+
+| Measure | Result | Target |
+|---|---|---|
+| Windows | 43, none skipped, 1 retried (45 attempts) | n/a |
+| Wall time, extraction and reduce | 51.4 minutes (3,086 s: 3,066 s extraction, 21 s reduce) | n/a |
+| Share of the 4 hour budget | 21.4% (with transcription and speaker separation, see below) | 4 hours or less in total |
+| Peak VRAM above baseline | 9,217 MiB (9,743 MiB absolute) | 11.5 GB or less |
+| Draft | valid, 1,431 items | n/a |
+
+Transcription (22.5 minutes) and speaker separation (12.1 minutes) were measured in Stage 0 on a separate 10 hour file and were not repeated here, so the sum of about 86 minutes for the three stages is an estimate. Vision, publishing and model loading are not included. The transcript repeats synthetic meetings, so this run tests time and memory, not accuracy. The measured time was within 11% of the extrapolation from the per-meeting speed (41.3 s per 1000 words).
+
+**Report modes.** On one meeting (`en-0`) all four modes (`fixed`, `template`, `auto`, `by-type`) produced a valid draft with every item placed in a section, with both models (Gemma 4 12B: 41 items; Qwen3 14B: 22 to 24 items).
+
+**What these numbers do not show.**
+
+- The meetings are synthetic and the task phrasing is simple and explicit; real meetings will be harder.
+- In mixed meetings the model writes task text in the report language, so English tasks are translated; this lowers the text-based scores on those meetings.
+- Decision and budget recall (about 50% for Gemma 4 12B) is not a target metric, but it is lower than task recall: part of the planted decisions and budget lines are not extracted.
+- Tasks of different people can have equal text, which makes the text-based assignee and due-date accuracy pessimistic. The paired metrics in the JSON files are informative: for Gemma 4 12B assignee 99.5% and due date 98.4%, and recall and precision matched by assignee and due date alone 91.9% and 96.1% (Qwen3 14B: 96.1%, 90.9%, 68.3% and 89.2%). The thresholds are checked on the text-based scores.
+- Quality on real recordings with recognition errors in the transcript is not measured.
 
 ## Stage 3 measurements
 
@@ -188,7 +233,7 @@ Prototype results on the reference machine (RTX 3080 with 12 GB, Windows 10 buil
 | Speaker recognition, 4 enrolled voices | 100% accuracy, unknown voice rejected | 90% |
 | Task extraction, Gemma 4 12B | recall 89%, precision 95%, assignee 91%, due date 88%, all quotes verified | 80%, 80%, 85%, 85% |
 | Slide description, Qwen3-VL 8B | 100% of key facts, 1.5 s per image | not set |
-| 10 hours of audio, all stages | about 58 minutes (extraction extrapolated) | 4 hours |
+| 10 hours of audio, all stages | about 58 minutes (extraction extrapolated); Stage 4 measured extraction and reduce at 51.4 minutes, so about 86 minutes as an estimate | 4 hours |
 | Browser tab capture | idle machine: no lost frames, longest gap 47 ms in 31 minutes; with the machine in use: gaps of 218 to 667 ms | gaps of 100 ms or less (met only when idle) |
 | Python environment from lock file | 70 s and 7.4 GB for speech and diarization groups | unattended |
 
@@ -198,7 +243,7 @@ Prototype results on the reference machine (RTX 3080 with 12 GB, Windows 10 buil
 - Speaker separation is measured on synthetic meetings only; on 2 to 4 speakers the error rate was above the 15% target in Stage 0 and is to be confirmed on real recordings.
 - Voice recognition is measured on synthetic voices only. Participants of a cycle belong to that cycle; a meeting without a cycle still uses the local list. A meeting processed after its audio was deleted has no sample clips, so voices are named from the transcript.
 - The Python environment is large (about 7.4 GB) and the first model downloads take a while.
-- Stage 4 is implemented but not released. The cloud backend is tested only against a mock server. Open issues of a cycle are read from a cache; fetching them needs a GitHub token that the application cannot configure yet. Edits to cycle files are not committed or pushed until publishing arrives. Extraction quality in Polish depends on the model and has been checked on synthetic transcripts only. The new screens are tested on the mock backend, not yet end to end in the real application.
+- Stage 4 is implemented but not released. The cloud backend is tested only against a mock server. Open issues of a cycle are read from a cache; fetching them needs a GitHub token that the application cannot configure yet. Edits to cycle files are not committed or pushed until publishing arrives. Extraction quality was measured on synthetic transcripts only (Gemma 4 12B: task recall 86.0%; lower in Polish and mixed meetings, 43.5% to 100% per meeting), and Qwen3 14B misses the extraction thresholds on this set. In mixed-language meetings the task text is written in the report language. The new screens are tested on the mock backend, not yet end to end in the real application.
 
 ## Roadmap
 

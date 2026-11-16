@@ -241,12 +241,12 @@ flowchart LR
 - *Measurements:* extraction metrics and quote validity (TESTING section 5); time for a 10-hour transcript.
 
 **Definition of done**
-- [ ] All four report modes produce a draft
-- [ ] Every task, decision and topic shows a verifiable quote and timestamp
-- [ ] Inferred fields and unverified quotes are marked in the draft
-- [ ] Recording cannot start without a report mode
-- [ ] Report language follows the cycle setting, including `auto`
-- [ ] Cloud processing happens only after explicit per-meeting confirmation
+- [x] All four report modes produce a draft
+- [x] Every task, decision and topic shows a verifiable quote and timestamp
+- [x] Inferred fields and unverified quotes are marked in the draft
+- [x] Recording cannot start without a report mode
+- [x] Report language follows the cycle setting, including `auto`
+- [x] Cloud processing happens only after explicit per-meeting confirmation
 - [ ] Release v0.5.0 published
 
 **Demo and visuals.** GIF: from transcript to draft, moving an item between sections. Screenshots: cycle settings, draft with source popover, report mode picker.
