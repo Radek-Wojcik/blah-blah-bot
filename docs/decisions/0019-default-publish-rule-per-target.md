@@ -1,6 +1,6 @@
 # 0019. Default publish rule per target
 
-**Status:** Proposed (awaiting confirmation at the Stage 5 stop-and-ask point "default rule per target"). The mechanism is described in [0018](0018-publishing.md) and is not affected by this decision: only the defaults are.
+**Status:** Accepted (Stage 5). The mechanism is described in [0018](0018-publishing.md); this record decides the defaults, how the rule is chosen, and what happens to a draft after it was published.
 
 ## Context
 
@@ -21,7 +21,15 @@ A rule that a cycle does not state needs a default, and `auto` is the only value
 
 ## Decision
 
-Proposed defaults, one constant each (`DEFAULT_GITHUB_PUBLISH` and `DEFAULT_DISCORD_PUBLISH` in `crates/cycle-store/src/cycle.rs`), read by the parser of `cycle.yaml` and by the publish rules alike:
+Three decisions, confirmed for Stage 5:
+
+1. **The defaults stay `on-approval`** for both targets, one constant each (below).
+2. **The rule is chosen explicitly, per cycle and per target.** Nothing is ever published automatically because of a default or a guess: the interface shows the three rules, each with its consequences in plain words, wherever a target is switched on, and `on-approval` is what is used (and shown, and saved) until the user picks another.
+3. **A published draft stays locked, and what changes afterwards is written as a correction.** The draft is the record of what was approved, so it is never edited or republished. A correction is a dated note, local to the meeting, that can be published as a new file next to the meeting and as a comment on the issue it is about, and that the following meetings are given as current information.
+
+### The defaults
+
+One constant each (`DEFAULT_GITHUB_PUBLISH` and `DEFAULT_DISCORD_PUBLISH` in `crates/cycle-store/src/cycle.rs`), read by the parser of `cycle.yaml` and by the publish rules alike:
 
 | Target | Covers | Default | Cycle without the key |
 |---|---|---|---|
@@ -33,14 +41,39 @@ Rules that hold for every value:
 
 1. **Status proposals are never approved by the application.** A model's statement that a task is finished is not enough to close an issue of other people. With `auto`, a meeting still publishes its commit, issues and Discord message, and the status changes wait for an explicit publication.
 2. **The public-repository gate applies to `auto`.** A repository that is public, or whose visibility is unknown, blocks an automatic publication until the user has confirmed that repository once.
-3. **`off` is absolute.** An explicit Publish does not override it; the publish plan notes that the target was left out.
+3. **`off` is absolute.** An explicit Publish does not override it, for a meeting or for a correction; the publish plan notes that the target was left out.
 4. **A target that is not in the cycle does not exist.** The only implicit target is the report of the cycle's own repository.
 
-### How to change it
+### Choosing the rule
+
+The three rules are shown, with what each means for the user, in the same words wherever they appear:
+
+| Rule | What the interface says |
+|---|---|
+| Off | Nothing is ever published to this target, not even when you press Publish. |
+| On approval | Nothing leaves this computer until you have looked at the draft and press Publish. This is what is used until you choose another rule. |
+| Automatic | Published as soon as the draft is complete, without a click. It cannot be taken back, and the people it names are notified. A public or unconfirmed repository still waits for your confirmation. |
+
+- **Where.** In the **Targets** section of the cycle editor, where a GitHub or Discord target is switched on (the switch shows **On approval** from the first moment and the cycle is saved with that value unless another is picked), in the **Publishing** panel of a draft, and in **Settings**, **Publishing**, **When to publish**. Under Automatic a warning says that it cannot be taken back.
+- **Defaults are not choices.** A cycle file without `publish` behaves as `on-approval`, and so does a target that was just added. A rule is Automatic only when somebody set it.
+- **Status changes** are never written back automatically, with any rule (rule 1 above).
+
+### Corrections after publication
+
+A published meeting is locked, in the state the user approved (ADR 0018). Real life moves on: a task is done, a date shifts, a decision is reversed. Editing the published draft would make the repository disagree with itself, republishing would rewrite history, and ignoring the change would give the next meeting wrong information. A **correction** keeps all three honest.
+
+- **What it is.** A text, a date (the day it was written, today by default), and optionally the item of the meeting and/or the issue it is about. Stored in the meeting folder of the application as `work/corrections.json` (`schemas/corrections.schema.json`), outside the draft, so the draft and `draft.base.sha256` never change.
+- **When it can be added.** Only to a meeting that is published or queued (its draft is locked); for any other meeting the draft is simply edited.
+- **Publishing.** Through the same outbox, with the same rules and checks as the meeting, and under the rule of the `github` target: `auto` queues a correction when it is added, `on-approval` when the user presses Publish next to it, `off` never (it stays on the computer and still counts for the next meeting). The public-repository check applies as for the meeting (also under `auto`, in the plan, in the command and in the dispatcher), and the meeting has to be in the repository, or its commit queued.
+- **What is written.** Only a **new file** in the meeting's folder: `corrections.md`, then `corrections-2.md`, `corrections-3.md`, ... A name that is taken by other content gets the next number; a file that is identical to one already there is reported as published and nothing is committed. `meeting.json`, `report.md` and every other file stay as they were. The file starts with a hidden marker (`<!-- bbb:v1 correction cycle=.. meeting=.. id=.. date=.. about=.. issue=.. -->`) and holds the text as a block quote, so a colleague's clone and the next briefing can read it back.
+- **The issue.** A correction about an item, or naming an issue, is also posted as a comment on that issue (the issue made from the item when only the item is given), once: the comment ends with its own marker, so a retry does not repeat it. A comment never changes the state of an issue.
+- **The record.** A correction that was queued is part of the record and cannot be changed or deleted by the application; one that was never queued can be deleted.
+- **The next meeting.** The cycle context gains an optional `corrections` list (newest first, at most 30, absent when empty): the local notes of earlier meetings (published or not) and the `corrections*.md` files in their repository folders, one entry per correction id. The extraction prompt shows them under the items of earlier meetings as information that replaces them, only when there are some, so the prompt of a cycle without corrections is unchanged.
+
 
 Nothing here is code that a user has to touch:
 
-- **In the application:** the switch **Off / On approval / Automatic** of each target, in the publishing panel of a draft and in **Settings**, **Publishing**, **When to publish**. It writes only `targets.<name>.publish` (the `set_target_rule` command) and the panel repeats that status changes are never written back automatically.
+- **In the application:** the switch **Off / On approval / Automatic** of each target, in the cycle editor, in the publishing panel of a draft and in **Settings**, **Publishing**, **When to publish**, always with the three rules explained. Outside the cycle editor it writes only `targets.<name>.publish` (the `set_target_rule` command) and the panel repeats that status changes are never written back automatically.
 - **Per cycle:** set `publish` under the target in `cycle.yaml`, in the cycle editor or by hand:
 
   ```yaml
@@ -55,6 +88,8 @@ Nothing here is code that a user has to touch:
 ## Consequences
 
 - A new cycle publishes nothing until the user looks at the draft and presses Publish. The price is one click per meeting and target.
+- A correction is one more click per note under `on-approval`, and none under `automatic`; with `off` it never leaves the computer.
+- What was published is never rewritten. A mistake in a published meeting is fixed by a correction next to it, which costs a file and a comment and keeps the history honest.
 - A team that has used the application for a while and trusts the extraction can switch one target to `auto` in one line, per cycle, and can switch back.
 - The behaviour is the same as the one the parser of `cycle.yaml` already had for a missing `publish` since Stage 4, so existing cycle files are not changed by this decision.
 
@@ -65,3 +100,7 @@ Nothing here is code that a user has to touch:
 - **`auto` everywhere with a delay (an undo window):** the outbox could hold operations for a few minutes. It is more machinery for something a click does, and an application that is closed during the window would either publish late or not at all.
 - **No default (the key is required):** a cycle file would be longer and an existing file would stop validating.
 - **Status changes written back under `auto`:** rejected, see rule 1.
+- **Unlocking the draft for edits and republishing:** a second commit that changes `meeting.json` and `report.md` breaks "only new files are added", rewrites what colleagues have pulled and what issues link to, and needs a merge of two versions of one meeting. Rejected.
+- **A correction as an edited `meeting.json`:** the same reasons; a separate file is also what makes the correction visible as such.
+- **One file with all the corrections of a meeting:** it would have to be changed every time. One file per correction is only ever added.
+- **A default that depends on the repository (`auto` for private ones):** the visibility can change, and the rule would then change under the user. The user chooses; the gate for public repositories stays separate.

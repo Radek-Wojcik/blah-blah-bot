@@ -78,7 +78,7 @@ Only `id` and `name` are required. Unknown keys are rejected, so a misspelled ke
 | `report.instruction` | text | empty | Natural-language instruction given to the extraction, for example "Group tasks by person". |
 | `report.by_type` | map | empty | Meeting type (for example `technical`, `budget`, `casual`) to template name. |
 | `targets.github.path` | relative path | `meetings` | Folder for meeting reports: a meeting is committed to `<path>/<ID>/<date>/`. Relative to the repository, names separated by `/` and made of letters, digits, `.`, `_` and `-`; no `.` or `..` name, no leading `/`, no drive letter or backslash, no `.git`, no name ending in a dot. Meetings already published under another path stay where they are, and both folders are read for the context of the next meeting. |
-| `targets.github.publish` | `auto`, `on-approval`, `off` | `on-approval` | Whether the report, the issues and the topics are published automatically when the draft is complete, when you press Publish, or not at all. Status changes are never written back automatically. A cycle without `targets.github` still has this target with the default. See [Publishing rules](#publishing-rules). |
+| `targets.github.publish` | `auto`, `on-approval`, `off` | `on-approval` | Whether the report, the issues and the topics (and the corrections to a published meeting) are published automatically when the draft is complete, when you press Publish, or not at all. You choose it; until you do, `on-approval` is used. Status changes are never written back automatically. A cycle without `targets.github` still has this target with the default. See [Publishing rules](#publishing-rules). |
 | `targets.github.issues` | `true`, `false` | `true` | Whether task items become GitHub issues and approved status changes are written back to them. With `false` only the report is committed. |
 | `targets.discord.webhook` | `cred:` reference | required | Name of a secret, for example `cred:discord/nomad`. A URL is rejected: the webhook URL never appears in the repository. The webhook is entered in the publishing settings and stored in the Windows Credential Manager under `target:<name>` (`target:discord/nomad`), a namespace of its own, so a reference in a repository cannot reach any other secret of the application. |
 | `targets.discord.publish` | as above | `on-approval` | A cycle without `targets.discord` has no Discord target: nothing is posted. |
@@ -109,13 +109,13 @@ The application writes `cycle.yaml` only after validation. Keys are written in t
 | `on-approval` | Published when you press Publish for that target in the draft view. |
 | `off` | Never, even when you press Publish. |
 
-The defaults are `on-approval` for both targets (proposed in [ADR 0019](decisions/0019-default-publish-rule-per-target.md)) and are constants in `crates/cycle-store/src/cycle.rs`, not part of `cycle.yaml`. Three things hold for every value:
+The defaults are `on-approval` for both targets ([ADR 0019](decisions/0019-default-publish-rule-per-target.md), accepted) and are constants in `crates/cycle-store/src/cycle.rs`, not part of `cycle.yaml`. A default is not a choice: a target that was just switched on, or a file without `publish`, behaves as `on-approval`, and a rule is `auto` only when somebody set it. Three things hold for every value:
 
 * Status changes proposed from the transcript (an issue or topic reported as finished) are written back only when you approved that proposal and pressed Publish. `auto` does not publish them.
 * A repository that is public, or whose visibility cannot be read, needs your confirmation once before anything is published to it, also under `auto`.
 * After a meeting is published (or while any of its operations is queued) its draft is read-only.
 
-In the application the rule is a switch of three positions, **Off**, **On approval** and **Automatic**, in the publishing panel of a draft and in **Settings**, **Publishing**, **When to publish**. A change goes through the `set_target_rule` command, which writes `targets.<name>.publish` and nothing else of `cycle.yaml` (a cycle without `targets.github` gets one with the default folder; Discord needs a target with a webhook reference, which the cycle editor adds). The panel says next to the switch that status changes are never written back automatically.
+In the application the rule is a switch of three positions, **Off**, **On approval** and **Automatic**, in the **Targets** section of the cycle editor (where a GitHub or Discord target is switched on it shows **On approval** and is saved so unless you pick another), in the publishing panel of a draft and in **Settings**, **Publishing**, **When to publish**. Under the switch each rule is explained by what it does to you (Off: nothing is ever published, not even when you press Publish; On approval: nothing leaves the computer until you press Publish; Automatic: published as soon as the draft is complete, cannot be taken back, the people named are notified). A change goes through the `set_target_rule` command, which writes `targets.<name>.publish` and nothing else of `cycle.yaml` (a cycle without `targets.github` gets one with the default folder; Discord needs a target with a webhook reference, which the cycle editor adds). The panel says next to the switch that status changes are never written back automatically.
 
 `github` covers the commit with the report, the transcript, the screenshots and `topics.yaml`, the issues, and the write-back of approved status changes. With `targets.github.issues: false` only the commit is made. Without a remote the commit stays in the local repository and no issues are created.
 
@@ -134,6 +134,38 @@ One issue per task item, labeled `cycle:<ID>`, assigned to the participant's `gi
 ```
 
 The marker links the issue to its item and keeps a retry from creating a second issue; do not delete it. A status change is written back as a close (reason completed) or reopen plus a comment that carries its own marker (`<!-- bbb:v1 status meeting=... proposal=s2 -->`). Closing an issue on GitHub makes its item count as done in the next briefing.
+
+### Corrections to a published meeting
+
+A published draft is locked. When something changed afterwards, press **Add correction** under the draft: a text, the item and/or issue it is about (optional) and the day (today by default). The note is kept in `work/corrections.json` of the meeting in the application (`schemas/corrections.schema.json`), counts for the next meeting at once, and is published through the same outbox, under the rule of the `github` target:
+
+| Rule | A correction is published |
+|---|---|
+| `auto` | When you add it. |
+| `on-approval` | When you press **Publish** next to it (or **Publish all**). |
+| `off` | Never; it stays on the computer and still reaches the next meeting. |
+
+The public-repository confirmation applies as for the meeting, and the meeting has to be in the repository (a Discord-only publication has no folder to add to). Publishing adds one **new file** to the folder of the meeting, next to `meeting.json`: `corrections.md`, then `corrections-2.md`, `corrections-3.md`, and so on. Existing files are never changed:
+
+```
+meetings/NOMAD/2026-11-13/
+  report.md  transcript.md  meeting.json  img/
+  corrections.md          <- first correction
+  corrections-2.md        <- second
+```
+
+```markdown
+<!-- bbb:v1 correction cycle=NOMAD meeting=20261113-140501 id=c1 date=2026-11-16 about=i3 issue=12 -->
+# Correction to the meeting of 2026-11-13
+
+Written on 2026-11-16. Refers to item i3 and issue #12.
+
+> The mount is redesigned, the new drawing is attached to the issue.
+```
+
+When the note is about an item that became an issue, or names an issue, the same text is also posted as a comment on that issue (once, by its own marker; the issue stays open or closed as it was). A correction that was queued cannot be edited or deleted; one that was never queued can be deleted.
+
+For the next meeting the context gets an optional `corrections` list (`schemas/cycle-context.schema.json`): `meeting` (its date), `date`, `text`, the text of the `item` and the `issue`, newest first, at most 30, taken from the `corrections*.md` files of the earlier meetings in the repository and from the local notes (not yet published ones too). The extraction prompt shows them as information that replaces what the items of those meetings say; a cycle without corrections gets the context and the prompt it always had.
 
 ## `cycles/<ID>/topics.yaml`
 
@@ -272,7 +304,7 @@ The mode can be changed after recording while the draft is not published: the re
 
 ## Meetings: `meetings/<ID>/<folder>/meeting.json`
 
-The structured result of one meeting, described by `schemas/meeting.schema.json`, published as the draft with your decisions. It may contain `status_proposals`: proposed changes of the status of an open issue or topic, each with the model's reason and quote and your decision (`proposed`, `approved` or `rejected`). The extraction context of the next meeting is built from the `meeting.json` files of earlier meetings of the cycle: newest first, at most 80 items, without items that relate to a closed topic or issue and without topics whose text equals a closed topic's. A file that does not validate is skipped with a warning and never stops the briefing.
+The structured result of one meeting, described by `schemas/meeting.schema.json`, published as the draft with your decisions. It may contain `status_proposals`: proposed changes of the status of an open issue or topic, each with the model's reason and quote and your decision (`proposed`, `approved` or `rejected`). The extraction context of the next meeting is built from the `meeting.json` files of earlier meetings of the cycle: newest first, at most 80 items, without items that relate to a closed topic or issue and without topics whose text equals a closed topic's. A file that does not validate is skipped with a warning and never stops the briefing. The `corrections*.md` files next to a `meeting.json` (and the local notes of that meeting) are read with it, see [Corrections](#corrections-to-a-published-meeting).
 
 ## Offline behaviour
 
@@ -288,7 +320,7 @@ The structured result of one meeting, described by `schemas/meeting.schema.json`
 | In the repository | Not in the repository |
 |---|---|
 | `cycle.yaml`, `topics.yaml`, templates | Voice profiles and embeddings |
-| Reports, transcripts, `meeting.json`, screenshots (written by the publishers) | Audio, work files (`work/draft.json`, `work/context.json`, the frozen snapshot in `work/publish/`) |
+| Reports, transcripts, `meeting.json`, screenshots, `corrections*.md` (written by the publishers) | Audio, work files (`work/draft.json`, `work/context.json`, `work/corrections.json`, the frozen snapshot in `work/publish/`) |
 | | Secrets: Discord webhook URLs, API tokens, keys (only `cred:` references appear) |
 | | The pull state and the issue cache (inside `.git`, never in the working tree) |
 

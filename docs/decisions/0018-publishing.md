@@ -1,6 +1,6 @@
 # 0018. Publishing: commit, issues, Discord and the outbox
 
-**Status:** Accepted (Stage 5). The default rule per target is a separate record, [0019](0019-default-publish-rule-per-target.md), which is *Proposed*.
+**Status:** Accepted (Stage 5). The default rule per target, how it is chosen, and the corrections that follow a published meeting are a separate record, [0019](0019-default-publish-rule-per-target.md), also *Accepted*.
 
 ## Context
 
@@ -87,8 +87,19 @@ Publishing a meeting creates rows in the `outbox` table of the local database; a
 - **Offline.** A request that gets no answer pauses the other operations of that target until the next tick (every 30 s or when something is queued), so a dead network costs one timeout per tick, not one per operation. The interface shows which targets are paused. Operations of the other targets continue: a dead Discord does not hold back the report.
 - **Idempotency of every operation.** The commit finds its folder in the tip; an issue is found by its marker; a status change reads the issue state and the comment markers; a Discord post resumes after the messages that are out.
 - **Snapshot.** When publishing starts, the draft (with the decisions), `report.md`, `transcript.md` and the screenshots outside excluded passages are copied to `work/publish/<n>/` of the meeting. Every operation reads from there, so a retry days later publishes what the user approved. The files of the draft itself are not touched.
-- **Lock.** From the first non-cancelled operation of a meeting until all are cancelled, the draft is read-only: edits, mode changes, decisions on status changes, reprocessing and `retry_job` are refused with the code `published`, and the pipeline does not replace the draft. Cancelling every operation and publishing again freezes a new snapshot. Publishing again after a successful publication is not supported.
+- **Lock.** From the first non-cancelled operation of a meeting until all are cancelled, the draft is read-only: edits, mode changes, decisions on status changes, reprocessing and `retry_job` are refused with the code `published`, and the pipeline does not replace the draft. Cancelling every operation and publishing again freezes a new snapshot. Publishing again after a successful publication is not supported; what changes afterwards is a **correction** (below).
 - **Automatic rule.** After `reduce` completes a draft, the publishing thread applies the `auto` rules of the cycle; it skips a meeting while a newer draft (`draft.new.json`) waits for a decision.
+
+### Corrections to a published meeting
+
+A published draft is locked for good, so what changed afterwards is written as a correction (the decision and its reasons are in [0019](0019-default-publish-rule-per-target.md)). The mechanics:
+
+- **Local file.** `work/corrections.json` of the meeting (`schemas/corrections.schema.json`: `version`, `meeting_id`, and per correction `id` `c1`.., `date`, `text`, `item`, `issue`), validated on every read and written atomically. It is outside the draft, so `draft.base.sha256` and the published `meeting.json` never change.
+- **Operations.** Two more outbox kinds (schema version 6 rebuilds the table with the wider check, keeping rows, ids and links): `commit_correction` (`op_key` `correction:<id>`, target `github`) and `comment_correction` (`correction-issue:<id>`, target `issues`, after the file). The file operation follows the commit of the meeting when that is still queued. The payload carries the text, so a retry publishes what was written when it was queued.
+- **The file.** `cycle_store::add_file`: the same off-index commit, push and rebuild-on-a-new-tip as the meeting, for one new file in the folder the meeting went to. The name is `corrections.md`, or the first free `corrections-<n>.md`; an identical file already on the tip is reported as published (idempotent after a lost answer); the meeting's own files and `topics.yaml` are not touched. A remote that does not yet show the folder of a meeting that this clone has is a transient failure (a lagging remote), a folder that is nowhere is permanent.
+- **The comment.** Posted on the issue the correction names or, for an item, the issue made from it (found in the result of the `issue:<item>` operation; one still being created is waited for, one that does not exist is skipped with a note). Once, by marker (`<!-- bbb:v1 correction cycle=.. meeting=.. id=.. -->`), with `@name` defused; it links the meeting and the file and never changes the issue's state.
+- **Rules and checks.** The `github` rule decides when (`auto` when the note is added, `on-approval` when the user presses Publish, `off` never); the public-repository check runs in the plan, in the command and in the dispatcher; the `not_in_repository` block applies to a meeting that has no commit.
+- **Context.** `build_context` reads, for each earlier meeting, `corrections*.md` from its repository folder and the staged `corrections.json` of the local copy and lists them under `corrections` (optional, newest first, at most 30, one per id); a file whose marker names another cycle or meeting is skipped with a warning.
 
 ### Public-repository gate
 
@@ -103,7 +114,7 @@ A report, a transcript and issues in a public repository are public. The reposit
 
 ### Schema and migration
 
-Database schema version 5 adds three tables, with the migration of existing data like the earlier versions: `outbox` (state machine above, `UNIQUE (meeting_id, op_key)`, foreign key to `meetings` with cascade), `publications` (where a meeting went: folder, commit, report address, snapshot) and `repo_confirmations`. File schemas gain optional parts only and keep `version` 1: `meeting.schema.json` `status_proposals`, `cycle-context.schema.json` `previous_items[].issue`, `cycle.schema.json` `targets.github.issues`, and `extraction.schema.json` `status_changes`, which is required in the model answer (answers without it are retried; `windows.json` files written earlier still reduce).
+Database schema version 5 adds three tables, with the migration of existing data like the earlier versions: `outbox` (state machine above, `UNIQUE (meeting_id, op_key)`, foreign key to `meetings` with cascade), `publications` (where a meeting went: folder, commit, report address, snapshot) and `repo_confirmations`. Version 6 rebuilds `outbox` with the two correction kinds. File schemas gain optional parts only and keep `version` 1: `meeting.schema.json` `status_proposals`, `cycle-context.schema.json` `previous_items[].issue` and `corrections`, `cycle.schema.json` `targets.github.issues`, and `extraction.schema.json` `status_changes`, which is required in the model answer (answers without it are retried; `windows.json` files written earlier still reduce). `corrections.schema.json` is new and describes `work/corrections.json`.
 
 ### Fake servers
 
@@ -114,12 +125,12 @@ Tests never contact a real host. `publishers` provides, behind the `test-support
 - A meeting can be published, interrupted at any point and published again without a duplicate commit, issue, comment or (in the normal case) message.
 - Publishing never touches the user's working tree, and a concurrent push by a colleague is absorbed.
 - A secret has no path to a file, a log, the database or the repository.
-- Publishing happens at most once per meeting: the draft is read-only afterwards and there is no edit-and-republish.
+- Publishing happens at most once per meeting: the draft is read-only afterwards and there is no edit-and-republish. A later change is a correction: a new file next to the meeting and a comment, never a rewrite.
 - Committing other cycle edits (`cycle.yaml`, templates) is left to the user.
 - The publish plan shows `topics.yaml` before and after per topic, from the clone and the remote branch as last fetched (`preview_topics`, no network), and falls back to the topic names with a note when it cannot compare.
 - The rule of a target is changed with `set_target_rule`, which writes `targets.<name>.publish` only.
 - `targets.github.path` sets the folder of the meetings in the repository (`meetings` by default). It is validated when the cycle is saved and again by the publisher, and meetings published under an earlier path stay there.
-- The only thing that decides what is published without a click is the rule of each target; its default is proposed in ADR 0019.
+- The only thing that decides what is published without a click is the rule of each target, which the user chooses explicitly (the default, `on-approval`, is accepted in ADR 0019); it covers the corrections as well.
 
 ## Alternatives
 
@@ -130,7 +141,8 @@ Tests never contact a real host. `publishers` provides, behind the `test-support
 - **Linking issues and meetings by editing `meeting.json` afterwards:** breaks the rule that a commit only adds new files and needs a second commit; the hidden marker needs neither.
 - **One webhook message with embeds:** embeds have their own length limits and cannot carry mentions that notify.
 - **Retrying only in memory:** a restart or a closed laptop would lose the publication; the outbox survives both.
+- **Editing the published draft and committing the difference:** see 0019; a correction is a new file, which keeps "only new files" true.
 
 ## Verification status
 
-Everything above is covered by tests against fake servers and local bare repositories (see TESTING.md section 14). Not yet verified against the real services, and left open in the roadmap: the first write to a real repository and channel, the organization "Target date" field, the Discord upload limits for webhooks, whether GitHub resolves the transcript anchors (`#t-hh-mm-ss`) in the rendered Markdown, and the quality of status proposals from a real model. The release check (`crates/app/src/release_check.rs`) is written for a test repository and a test webhook and has not been run.
+Everything above is covered by tests against fake servers and local bare repositories (see TESTING.md section 14); the corrections are also part of the release check against the real test repository. Not yet verified against the real services, and left open in the roadmap: the first write to a real repository and channel, the organization "Target date" field, the Discord upload limits for webhooks, whether GitHub resolves the transcript anchors (`#t-hh-mm-ss`) in the rendered Markdown, and the quality of status proposals from a real model. The release check (`crates/app/src/release_check.rs`) is written for a test repository and a test webhook and has not been run.

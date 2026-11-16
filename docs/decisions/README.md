@@ -22,4 +22,4 @@ Each record states the context, the decision, its consequences and the alternati
 | [0016](0016-speaker-recognition.md) | Speaker recognition: embeddings, thresholds, profiles and sample clips | Accepted |
 | [0017](0017-cycles-extraction-and-drafts.md) | Cycles, extraction, report modes and drafts | Accepted |
 | [0018](0018-publishing.md) | Publishing: commit, issues, Discord and the outbox | Accepted |
-| [0019](0019-default-publish-rule-per-target.md) | Default publish rule per target | Proposed |
+| [0019](0019-default-publish-rule-per-target.md) | Default publish rule per target, explicit choice, corrections after publication | Accepted |
