@@ -1,6 +1,7 @@
 import type {
   AddRepoRequest,
   CloudPreview,
+  Corrections,
   CycleDetails,
   CycleDto,
   CycleListItem,
@@ -20,6 +21,7 @@ import type {
   ProposedStatus,
   PublicRepoConfirmation,
   PublishMode,
+  PublishedCorrections,
   PublishPlan,
   PublishResult,
   PublishTargetName,
@@ -257,6 +259,30 @@ export interface Backend {
   cancelOutboxOp(id: number): Promise<OutboxState>;
   /** Open and done tasks of a cycle as the last read of its GitHub issues has them. */
   cycleTasks(cycleId: string): Promise<CycleTasks>;
+
+  /** The corrections written for a meeting after it was published, and where each stands. */
+  listCorrections(meetingId: string): Promise<Corrections>;
+  /**
+   * Write a correction note for a published meeting: text, the item and/or issue it is about, and
+   * the day (today by default). Rejects with `not_published` for a meeting that is not locked.
+   * Under an Automatic rule of the `github` target it is queued at once.
+   */
+  addCorrection(
+    meetingId: string,
+    text: string,
+    item?: string,
+    issue?: string,
+    date?: string,
+  ): Promise<Corrections>;
+  /**
+   * Queue corrections (all that are not queued when `ids` is absent): a new file in the meeting's
+   * folder of the repository and a comment on the issue they are about. Same rule and checks as
+   * the meeting: rejects with `public_repo_unconfirmed`, `not_in_repository` and
+   * `nothing_to_publish` (Off).
+   */
+  publishCorrections(meetingId: string, ids?: string[]): Promise<PublishedCorrections>;
+  /** Deletes a correction that was never queued (`correction_queued` otherwise). */
+  deleteCorrection(meetingId: string, id: string): Promise<Corrections>;
 
   onRecordingState(cb: (state: RecordingState) => void): Promise<Unsubscribe>;
   onMeetingsChanged(cb: () => void): Promise<Unsubscribe>;

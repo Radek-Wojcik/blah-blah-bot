@@ -15,15 +15,14 @@ import type {
 import {
   OP_STATE_LABELS,
   OP_TARGET_LABELS,
-  RULE_HELP,
   STATUS_WRITE_BACK_NOTE,
   TARGET_LABELS,
-  autoWarning,
   canCancel,
   canRetry,
   chosenTargets,
   committedOp,
   conflictRows,
+  isCorrectionOp,
   lockedByOps,
   offlineText,
   opBadgeClass,
@@ -44,7 +43,7 @@ import {
   topicsSummary,
 } from "../publish";
 import { Modal } from "./Modal";
-import { RuleSwitch } from "./RuleSwitch";
+import { RuleChoice } from "./RuleChoice";
 
 /**
  * Publishing a meeting: where it goes and by which rule, what exactly will happen, the Publish
@@ -75,8 +74,10 @@ export function PublishPanel(props: {
   const [confirming, setConfirming] = useState(false);
   const [ruleBusy, setRuleBusy] = useState(false);
 
-  const ops = useMemo(() => opsOf(outbox, meetingId), [outbox, meetingId]);
-  const locked = lockedByOps(ops);
+  const allOps = useMemo(() => opsOf(outbox, meetingId), [outbox, meetingId]);
+  // The operations of corrections have their own panel; here is the publication of the meeting.
+  const ops = useMemo(() => allOps.filter((o) => !isCorrectionOp(o)), [allOps]);
+  const locked = lockedByOps(allOps);
 
   const loadPlan = useCallback(() => {
     return backend
@@ -300,7 +301,6 @@ function TargetRow(props: {
 }) {
   const { view } = props;
   const name = view.target === "github" ? "GitHub" : "Discord";
-  const warning = view.mode === null ? null : autoWarning(view.target, view.mode);
   return (
     <li className="target-row">
       <label className="check">
@@ -322,17 +322,13 @@ function TargetRow(props: {
         </p>
       ) : (
         <>
-          <div className="inline-field">
-            <span className="field-label">Publish</span>
-            <RuleSwitch
-              name={name}
-              value={view.mode}
-              disabled={props.ruleBusy}
-              onChange={props.onRule}
-            />
-          </div>
-          <span className="target-rule-help">{RULE_HELP[view.mode]}</span>
-          {warning && <span className="target-rule-warn">{warning}</span>}
+          <RuleChoice
+            name={name}
+            target={view.target}
+            value={view.mode}
+            disabled={props.ruleBusy}
+            onChange={props.onRule}
+          />
           {view.target === "github" && (
             <span className="target-rule-help">{STATUS_WRITE_BACK_NOTE}</span>
           )}
@@ -559,7 +555,7 @@ function TopicsDiff(props: { ops: OutboxOp[]; topics: Topic[] }) {
 }
 
 /** The warning before the first publication to a public repository. It has to be confirmed. */
-function PublicRepoDialog(props: {
+export function PublicRepoDialog(props: {
   visibility: string;
   repo: string | null;
   busy: boolean;

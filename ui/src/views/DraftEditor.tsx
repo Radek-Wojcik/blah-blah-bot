@@ -36,6 +36,7 @@ import { lockedByOps, opsOf } from "../publish";
 import { MODE_HELP, MODE_NAMES, REPORT_MODES } from "../report-gate";
 import { MarkdownView } from "./MarkdownView";
 import { BuildDraftDialog } from "./ProcessDialogs";
+import { CorrectionsPanel } from "./CorrectionsPanel";
 import { PublishPanel } from "./PublishPanel";
 import { StatusProposals } from "./StatusProposals";
 
@@ -484,6 +485,10 @@ export function DraftEditor(props: {
         draftVersion={view}
         hasNewDraft={view.hasNewDraft}
       />
+
+      {locked && (
+        <CorrectionsPanel meetingId={meetingId} cycleId={draft.cycle} items={draft.items} />
+      )}
     </>
   );
 }

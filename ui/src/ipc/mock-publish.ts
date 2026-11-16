@@ -14,6 +14,7 @@ import type { MockDrafts } from "./mock-drafts";
 import { fail } from "./mock-util";
 import {
   apiHost,
+  correctionProblem,
   hasControlChars,
   issueUrl,
   maskWebhook,
@@ -22,6 +23,10 @@ import {
   webBase,
 } from "../publish";
 import type {
+  Correction,
+  CorrectionState,
+  CorrectionStep,
+  Corrections,
   CycleTask,
   CycleTasks,
   Draft,
@@ -38,6 +43,7 @@ import type {
   PublicRepoConfirmation,
   PublishPlan,
   PublishResult,
+  PublishedCorrections,
   PublishTargetName,
   PublishTargetView,
   PublishingSecrets,
@@ -65,6 +71,10 @@ type PublishMethods = Pick<
   | "retryOutboxOp"
   | "cancelOutboxOp"
   | "cycleTasks"
+  | "listCorrections"
+  | "addCorrection"
+  | "publishCorrections"
+  | "deleteCorrection"
   | "onOutboxChanged"
 >;
 
@@ -103,6 +113,17 @@ export interface MockHooks {
   remoteTopics(): Topic[];
   /** The plan cannot compare `topics.yaml` with the remote: it names the topics instead. */
   setTopicsUnknown(unknown: boolean): void;
+  /** The comments the fake GitHub holds on an issue. */
+  issueComments(number: number): string[];
+  /** The correction files the fake repository holds, in the order they were added. */
+  correctionFiles(): { path: string; text: string }[];
+  /**
+   * The corrections the next processing of the cycle would be given (written or published),
+   * newest first, with the text of the item they are about.
+   */
+  nextCorrections(
+    cycleId: string,
+  ): { text: string; item: string | null; issue: string | null; date: string }[];
 }
 
 export interface MockPublishing {
@@ -178,8 +199,18 @@ interface IssueCache {
   issues: FakeIssue[];
 }
 
+/** A correction as the mock keeps it (what `work/corrections.json` holds). */
+interface StoredCorrection {
+  id: string;
+  date: string;
+  text: string;
+  item: string | null;
+  issue: string | null;
+}
+
 type Payload =
   | { kind: "commit" }
+  | { kind: "correction"; correction: StoredCorrection; meetingDate: string }
   | {
       kind: "issue";
       itemId: string;
@@ -215,6 +246,8 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
     issues: demoIssues(),
     nextIssue: 13,
     discord: [] as FakeDiscordPost[],
+    comments: [] as { issue: number; text: string }[],
+    correctionFiles: [] as { meeting: string; path: string; text: string }[],
     remoteTopics: null as Topic[] | null,
     /** `topics.yaml` cannot be compared (a hook): the plan falls back to the topic names. */
     topicsUnknown: false,
@@ -227,6 +260,8 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
     ["cred:discord/nomad", maskWebhook({ host: "discord.com", id: "000000000000000007" })],
   ]);
   const confirmed = new Set<string>();
+  /** The corrections of each meeting, as `work/corrections.json` has them. */
+  const corrections = new Map<string, { cycleId: string; list: StoredCorrection[] }>();
   const caches = new Map<string, IssueCache>([
     ["team-cycles", { asOf: "2026-11-12", issues: structuredClone(world.issues) }],
   ]);
@@ -262,6 +297,16 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
     if (op.nextAttemptUnixMs !== null && op.nextAttemptUnixMs > now) return false;
     if (offlineGroups.has(group(op.target))) return false;
     if (op.afterId !== null && ops.find((o) => o.id === op.afterId)?.state !== "done") return false;
+    // A comment on the issue of an item waits until that issue exists.
+    if (op.kind === "comment_correction") {
+      const payload = payloads.get(op.id);
+      if (payload?.kind === "correction" && payload.correction.item !== null) {
+        const made = ops.find(
+          (o) => o.meetingId === op.meetingId && o.opKey === `issue:${payload.correction.item}`,
+        );
+        if (made && (made.state === "queued" || made.state === "running")) return false;
+      }
+    }
     // The message links the issues, so it waits for the issue operations of its meeting.
     if (
       op.kind === "post_discord" &&
@@ -350,6 +395,10 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
         return setIssueState(snap, payload);
       case "discord":
         return post(op, snap, payload.reference);
+      case "correction":
+        return op.kind === "commit_correction"
+          ? correctionFile(op, snap, payload)
+          : correctionComment(op, snap, payload);
     }
   }
 
@@ -549,6 +598,70 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
     return { sent_chunks: 1 };
   }
 
+  function correctionFile(
+    op: OutboxOp,
+    snap: Snapshot,
+    p: Extract<Payload, { kind: "correction" }>,
+  ): OpResult {
+    const commitOp = ops.find(
+      (o) => o.meetingId === op.meetingId && o.kind === "commit_meeting" && o.state === "done",
+    );
+    const folder = commitOp?.result?.folder;
+    if (!folder)
+      return refuse("The meeting is not in the repository yet: publish it first, then retry.");
+    const done = ops.filter(
+      (o) =>
+        o.meetingId === op.meetingId &&
+        o.kind === "commit_correction" &&
+        o.state === "done" &&
+        o.id !== op.id,
+    ).length;
+    const file = done === 0 ? "corrections.md" : `corrections-${done + 1}.md`;
+    const path = `${folder}/${file}`;
+    world.correctionFiles.push({ meeting: op.meetingId, path, text: p.correction.text });
+    const pushed = cycles.repoOf(snap.cycleId).remote !== null;
+    return {
+      file,
+      path,
+      commit: fakeSha(`${op.meetingId}:${path}`),
+      branch: "main",
+      pushed,
+      already_published: false,
+      local: "updated",
+      local_note: null,
+      url:
+        pushed && snap.github ? `${webBase(snap.api)}/${snap.github}/blob/main/${path}` : undefined,
+    };
+  }
+
+  function correctionComment(
+    op: OutboxOp,
+    snap: Snapshot,
+    p: Extract<Payload, { kind: "correction" }>,
+  ): OpResult {
+    if (!tokens.has(apiHost(snap.api ?? DEFAULT_API) ?? ""))
+      return refuse(
+        `No GitHub token is stored for ${apiHost(snap.api ?? DEFAULT_API)}: add it in the publishing settings, then retry.`,
+      );
+    let number: number | null = p.correction.issue ? Number(p.correction.issue.slice(1)) : null;
+    if (number === null && p.correction.item !== null) {
+      const made = ops.find(
+        (o) =>
+          o.meetingId === op.meetingId &&
+          o.opKey === `issue:${p.correction.item}` &&
+          o.state === "done",
+      );
+      number = made?.result?.number ?? null;
+    }
+    if (number === null) return { skipped: "no issue was made for this item" };
+    const issue = world.issues.find((i) => i.number === number);
+    if (!issue) return refuse(`Issue #${number} was not found in ${snap.github}.`);
+    const marker = `correction ${op.meetingId} ${p.correction.id}`;
+    const already = world.comments.some((c) => c.issue === number && c.text.includes(marker));
+    if (!already) world.comments.push({ issue: number, text: `${p.correction.text}\n${marker}` });
+    return { number, commented: !already };
+  }
+
   // ----- the issues as the clone knows them -----
   function refreshIssues(repoId: string) {
     if (world.offline) return;
@@ -728,6 +841,209 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
       newDraftPending: view.hasNewDraft,
       ops: structuredClone(opsOfMeeting(meetingId)),
     };
+  }
+
+  // ----- corrections -----
+  const githubRule = (cycleId: string) =>
+    cycles.cycle(cycleId)?.targets.github?.publish ?? "on-approval";
+
+  function correctionsView(meetingId: string): Corrections {
+    const entry = corrections.get(meetingId);
+    const cycleId = entry?.cycleId ?? "";
+    const mine = opsOfMeeting(meetingId);
+    const find = (key: string) => mine.find((o) => o.opKey === key && o.state !== "cancelled");
+    const step = (o: OutboxOp | undefined): CorrectionStep | null =>
+      o
+        ? {
+            opId: o.id,
+            state: o.state === "cancelled" ? "queued" : o.state,
+            attempts: o.attempts,
+            nextAttemptUnixMs: o.nextAttemptUnixMs,
+            lastError: o.lastError,
+            result: o.result,
+          }
+        : null;
+    const list = (entry?.list ?? []).map((c): Correction => {
+      const file = find(`correction:${c.id}`);
+      const comment = find(`correction-issue:${c.id}`);
+      const state: CorrectionState = !file
+        ? "local"
+        : file.state === "done"
+          ? "published"
+          : file.state === "failed"
+            ? "failed"
+            : file.state === "running"
+              ? "running"
+              : "queued";
+      return {
+        ...c,
+        state,
+        file: step(file),
+        comment: step(comment),
+        fileName: state === "published" ? (file?.result?.file ?? null) : null,
+        url: state === "published" ? (file?.result?.url ?? null) : null,
+        canDelete: !file && !comment,
+      };
+    });
+    return {
+      meetingId,
+      cycleId,
+      locked: isLocked(meetingId),
+      inRepository: mine.some((o) => o.kind === "commit_meeting" && o.state !== "cancelled"),
+      rule: githubRule(cycleId),
+      corrections: list,
+    };
+  }
+
+  async function listCorrections(meetingId: string): Promise<Corrections> {
+    const view = await drafts.methods.getDraft(meetingId);
+    if (!corrections.has(meetingId))
+      corrections.set(meetingId, { cycleId: view.draft.cycle, list: [] });
+    return correctionsView(meetingId);
+  }
+
+  /** Plans and queues one correction, with the checks of the real backend. */
+  function queueCorrection(meetingId: string, c: StoredCorrection, explicit: boolean): number {
+    const entry = corrections.get(meetingId)!;
+    const cycleId = entry.cycleId;
+    const rule = githubRule(cycleId);
+    if (rule === "off") {
+      if (explicit)
+        fail("nothing_to_publish", "There is nothing to publish with the rules of this cycle.");
+      return 0;
+    }
+    if (!explicit && rule !== "auto") return 0;
+    const mine = opsOfMeeting(meetingId);
+    const commit = mine.find((o) => o.kind === "commit_meeting" && o.state !== "cancelled");
+    if (!commit)
+      fail(
+        "not_in_repository",
+        "The meeting is not in the repository: publish it to GitHub first, then its corrections can follow.",
+      );
+    const info = repoInfo(cycleId);
+    if (info.repo.remote !== null && !info.confirmed && info.visibility !== "private")
+      fail(
+        "public_repo_unconfirmed",
+        `The repository is ${info.visibility}, so what is published is visible to everybody: confirm publishing to it first.`,
+      );
+    const snap = snapshots.get(meetingId)!;
+    const payload: Payload = { kind: "correction", correction: c, meetingDate: snap.draft.date };
+    let queued = 0;
+    const count = (r: { created: boolean }) => void (r.created && (queued += 1));
+    const file = queue(
+      meetingId,
+      "commit_correction",
+      "github",
+      `correction:${c.id}`,
+      `Add the correction ${c.id} to the repository`,
+      payload,
+      commit.id,
+    );
+    count(file);
+    const about = c.issue ?? c.item;
+    if (about && info.github && cycles.cycle(cycleId)?.targets.github?.issues !== false)
+      count(
+        queue(
+          meetingId,
+          "comment_correction",
+          "issues",
+          `correction-issue:${c.id}`,
+          "Comment the correction on its issue",
+          payload,
+          file.op.id,
+        ),
+      );
+    if (queued > 0) {
+      pump();
+      emit();
+    }
+    return queued;
+  }
+
+  async function addCorrection(
+    meetingId: string,
+    text: string,
+    item?: string,
+    issue?: string,
+    date?: string,
+  ): Promise<Corrections> {
+    const view = await drafts.methods.getDraft(meetingId);
+    if (!isLocked(meetingId))
+      fail(
+        "not_published",
+        "Only a published meeting has corrections: edit the draft of this one instead.",
+      );
+    const entry =
+      corrections.get(meetingId) ??
+      (() => {
+        const e = { cycleId: view.draft.cycle, list: [] as StoredCorrection[] };
+        corrections.set(meetingId, e);
+        return e;
+      })();
+    const itemId = item?.trim() || null;
+    if (itemId !== null && !view.draft.items.some((i) => i.id === itemId))
+      fail("not_found", `The meeting has no item ${itemId}.`);
+    const issueText = issue?.trim().replace(/^#/, "") ?? "";
+    if (issueText !== "" && !/^[1-9]\d*$/.test(issueText))
+      fail("invalid", `${issue} is not an issue number (use #12).`);
+    const day = date?.trim() || MOCK_TODAY;
+    const problem = correctionProblem(text, day);
+    if (problem) fail("invalid", problem);
+    const highest = Math.max(0, ...entry.list.map((c) => Number(c.id.slice(1))));
+    const correction: StoredCorrection = {
+      id: `c${highest + 1}`,
+      date: day,
+      text: text.trim(),
+      item: itemId,
+      issue: issueText === "" ? null : `#${issueText}`,
+    };
+    entry.list.push(correction);
+    if (githubRule(entry.cycleId) === "auto") {
+      try {
+        queueCorrection(meetingId, correction, false);
+      } catch {
+        // A write that cannot go out yet is not an error of writing it.
+      }
+    }
+    return correctionsView(meetingId);
+  }
+
+  async function publishCorrections(
+    meetingId: string,
+    ids: string[] = [],
+  ): Promise<PublishedCorrections> {
+    await listCorrections(meetingId);
+    const entry = corrections.get(meetingId)!;
+    const view = correctionsView(meetingId);
+    const wanted = entry.list.filter((c) =>
+      ids.length === 0
+        ? view.corrections.some((v) => v.id === c.id && v.state === "local")
+        : ids.includes(c.id),
+    );
+    if (wanted.length === 0)
+      fail(
+        ids.length === 0 ? "nothing_to_publish" : "not_found",
+        ids.length === 0
+          ? "Every correction is queued or published already."
+          : "No such correction.",
+      );
+    let queued = 0;
+    for (const c of wanted) queued += queueCorrection(meetingId, c, true);
+    return { corrections: correctionsView(meetingId), queued, notes: [] };
+  }
+
+  async function deleteCorrection(meetingId: string, id: string): Promise<Corrections> {
+    await listCorrections(meetingId);
+    const entry = corrections.get(meetingId)!;
+    const shown = correctionsView(meetingId).corrections.find((c) => c.id === id);
+    if (!shown) fail("not_found", "No such correction.");
+    if (!shown!.canDelete)
+      fail(
+        "correction_queued",
+        "This correction was queued for publishing: it is part of the record and stays.",
+      );
+    entry.list = entry.list.filter((c) => c.id !== id);
+    return correctionsView(meetingId);
   }
 
   function queue(
@@ -1043,6 +1359,10 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
           : [],
       };
     },
+    listCorrections,
+    addCorrection,
+    publishCorrections,
+    deleteCorrection,
     onOutboxChanged: (cb): Promise<Unsubscribe> => {
       const entry = { cb };
       listeners.add(entry);
@@ -1082,6 +1402,23 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
     },
     remoteTopics: () => structuredClone(world.remoteTopics ?? []),
     setTopicsUnknown: (unknown) => void (world.topicsUnknown = unknown),
+    issueComments: (n) => world.comments.filter((c) => c.issue === n).map((c) => c.text),
+    correctionFiles: () => world.correctionFiles.map(({ path, text }) => ({ path, text })),
+    nextCorrections: (cycleId) => {
+      const out: { text: string; item: string | null; issue: string | null; date: string }[] = [];
+      for (const [meetingId, entry] of corrections) {
+        if (entry.cycleId !== cycleId) continue;
+        const items = snapshots.get(meetingId)?.draft.items ?? [];
+        for (const c of entry.list)
+          out.push({
+            text: c.text,
+            item: items.find((i) => i.id === c.item)?.text ?? null,
+            issue: c.issue,
+            date: c.date,
+          });
+      }
+      return out.sort((a, b) => b.date.localeCompare(a.date));
+    },
   };
 
   return { methods, hooks, isLocked, refreshIssues };

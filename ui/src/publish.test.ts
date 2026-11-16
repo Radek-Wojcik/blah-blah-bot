@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type {
+  Correction,
+  CorrectionStep,
   CycleTasks,
   OpResult,
   OutboxOp,
@@ -9,6 +11,9 @@ import type {
   Topic,
 } from "./ipc/types";
 import {
+  CORRECTION_STATE_LABELS,
+  DEFAULT_PUBLISH_RULE,
+  RULE_HELP,
   RULE_ORDER,
   STATUS_WRITE_BACK_NOTE,
   addableTargets,
@@ -20,10 +25,16 @@ import {
   chosenTargets,
   committedOp,
   conflictRows,
+  correctionAbout,
+  correctionBadgeClass,
+  correctionProblem,
+  correctionRuleHelp,
+  correctionStatusLine,
   countOps,
   countProposals,
   decisionLabel,
   issueNumber,
+  isCorrectionOp,
   issueUrl,
   lockedByOps,
   maskWebhook,
@@ -46,7 +57,9 @@ import {
   taskCounts,
   taskOfTarget,
   tasksAsOf,
+  today,
   tokenProblem,
+  unqueued,
   topicDifference,
   topicLine,
   topicsSummary,
@@ -585,5 +598,138 @@ describe("rules and the topics of the plan", () => {
       'Add the topic "m5-i07" to topics.yaml.',
       "Close the topic t-1 in topics.yaml.",
     ]);
+  });
+});
+
+describe("corrections", () => {
+  const base: Correction = {
+    id: "c1",
+    date: "2026-11-16",
+    text: "The mount moved.",
+    item: "i3",
+    issue: "#12",
+    state: "local",
+    file: null,
+    comment: null,
+    fileName: null,
+    url: null,
+    canDelete: true,
+  };
+  const step = (over: Partial<CorrectionStep>): CorrectionStep => ({
+    opId: 1,
+    state: "done",
+    attempts: 1,
+    nextAttemptUnixMs: null,
+    lastError: null,
+    result: null,
+    ...over,
+  });
+
+  it("explains the rule of the github target in plain words, for every value", () => {
+    expect(correctionRuleHelp("on-approval")).toMatch(/until you press Publish/);
+    expect(correctionRuleHelp("auto")).toMatch(/as soon as you add it/);
+    expect(correctionRuleHelp("auto")).toMatch(/cannot be taken back/);
+    expect(correctionRuleHelp("off")).toMatch(/never published/);
+    expect(correctionRuleHelp("off")).toMatch(/still reach the next meeting/);
+  });
+
+  it("says what a correction is about", () => {
+    expect(correctionAbout(base)).toBe("item i3 and issue #12");
+    expect(correctionAbout({ item: "i3", issue: null })).toBe("item i3");
+    expect(correctionAbout({ item: null, issue: "#4" })).toBe("issue #4");
+    expect(correctionAbout({ item: null, issue: null })).toBeNull();
+  });
+
+  it("describes where a correction stands, with the comment on the issue", () => {
+    expect(correctionStatusLine(base, "on-approval")).toMatch(/Not published yet/);
+    expect(correctionStatusLine(base, "off")).toMatch(/publishing is Off/);
+    expect(
+      correctionStatusLine({ ...base, state: "queued", file: step({ state: "queued" }) }, "auto"),
+    ).toBe("Waits to be published.");
+    expect(
+      correctionStatusLine(
+        {
+          ...base,
+          state: "queued",
+          file: step({ state: "queued", lastError: "The network is offline." }),
+        },
+        "auto",
+      ),
+    ).toBe("The network is offline.");
+    expect(correctionStatusLine({ ...base, state: "running" }, "auto")).toBeNull();
+    const published: Correction = {
+      ...base,
+      state: "published",
+      fileName: "corrections-2.md",
+      file: step({}),
+    };
+    expect(correctionStatusLine(published, "auto")).toBe(
+      "Published as corrections-2.md in the meeting folder.",
+    );
+    expect(correctionStatusLine({ ...published, comment: step({}) }, "auto")).toMatch(
+      /and commented on the issue/,
+    );
+    expect(
+      correctionStatusLine(
+        { ...published, comment: step({ result: { skipped: "no issue was made for this item" } }) },
+        "auto",
+      ),
+    ).toMatch(/No comment was made on an issue: no issue was made/);
+    expect(
+      correctionStatusLine(
+        { ...published, comment: step({ state: "failed", lastError: "Issue not found." }) },
+        "auto",
+      ),
+    ).toMatch(/comment on the issue failed: Issue not found/);
+    expect(
+      correctionStatusLine({ ...published, comment: step({ state: "queued" }) }, "auto"),
+    ).toMatch(/still to come/);
+  });
+
+  it("checks a note before it is sent, and offers today in the local calendar", () => {
+    expect(correctionProblem("  ", "2026-11-16")).toMatch(/Write what changed/);
+    expect(correctionProblem("x".repeat(2001), "2026-11-16")).toMatch(/2000/);
+    expect(correctionProblem("x", "16.11.2026")).toMatch(/YYYY-MM-DD/);
+    expect(correctionProblem("x", "2026-11-16")).toBeNull();
+    expect(today(new Date(2026, 10, 5, 23, 59))).toBe("2026-11-05");
+  });
+
+  it("keeps the operations of corrections apart from those of the meeting", () => {
+    const op = (kind: OutboxOp["kind"]): OutboxOp => ({
+      id: 1,
+      meetingId: "m5",
+      target: "github",
+      kind,
+      opKey: "k",
+      label: "l",
+      state: "done",
+      attempts: 0,
+      nextAttemptUnixMs: null,
+      lastError: null,
+      result: { file: "corrections.md", url: "https://github.com/o/r/blob/main/x/corrections.md" },
+      afterId: null,
+      createdUnixMs: 1,
+      updatedUnixMs: 1,
+    });
+    expect(isCorrectionOp(op("commit_correction"))).toBe(true);
+    expect(isCorrectionOp(op("comment_correction"))).toBe(true);
+    expect(isCorrectionOp(op("commit_meeting"))).toBe(false);
+    expect(opLink(op("commit_correction"))).toEqual({
+      href: "https://github.com/o/r/blob/main/x/corrections.md",
+      text: "corrections.md",
+    });
+    expect(unqueued([base, { ...base, id: "c2", state: "published" }]).map((c) => c.id)).toEqual([
+      "c1",
+    ]);
+    expect(CORRECTION_STATE_LABELS.local).toBe("Only on this computer");
+    expect(correctionBadgeClass("published")).toBe("badge badge-job-done");
+  });
+
+  it("explains each publishing rule by its consequence, and the one in use is the default", () => {
+    expect(RULE_HELP.off).toMatch(/Nothing is ever published/);
+    expect(RULE_HELP["on-approval"]).toMatch(/until you have looked at the draft/);
+    expect(RULE_HELP["on-approval"]).toMatch(/used until you choose another rule/);
+    expect(RULE_HELP.auto).toMatch(/cannot be taken back/);
+    expect(DEFAULT_PUBLISH_RULE).toEqual({ github: "on-approval", discord: "on-approval" });
   });
 });

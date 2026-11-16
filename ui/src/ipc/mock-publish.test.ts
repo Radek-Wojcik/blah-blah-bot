@@ -706,3 +706,197 @@ describe("the folder for meeting reports", () => {
     );
   });
 });
+
+describe("corrections to a published meeting", () => {
+  /** The demo meeting published to GitHub (its issues made), ready for corrections. */
+  async function published(): Promise<Backend> {
+    const b = fresh();
+    await publishAll(b);
+    await settled(b);
+    return b;
+  }
+  const states = (b: Backend) =>
+    b.listCorrections("m5").then((v) => v.corrections.map((c) => c.state));
+
+  it("needs a published meeting and a sensible note, and writes nothing otherwise", async () => {
+    const b = fresh();
+    expect(await codeOf(b.addCorrection("m5", "Moved."))).toBe("not_published");
+    await publishAll(b);
+    expect(await codeOf(b.addCorrection("m5", "   "))).toBe("invalid");
+    expect(await codeOf(b.addCorrection("m5", "x", "i99"))).toBe("not_found");
+    expect(await codeOf(b.addCorrection("m5", "x", undefined, "twelve"))).toBe("invalid");
+    expect(await codeOf(b.addCorrection("m5", "x", undefined, undefined, "16.11.2026"))).toBe(
+      "invalid",
+    );
+    expect((await b.listCorrections("m5")).corrections).toEqual([]);
+    const view = await b.addCorrection("m5", "  Moved.  ", undefined, "12", "2026-11-15");
+    expect(view.corrections[0]).toMatchObject({
+      id: "c1",
+      text: "Moved.",
+      issue: "#12",
+      date: "2026-11-15",
+      state: "local",
+      canDelete: true,
+    });
+    expect(view.locked && view.inRepository).toBe(true);
+    expect(view.rule).toBe("on-approval");
+  });
+
+  it("waits for the user, then adds a file next to the meeting and comments on the issue", async () => {
+    const b = await published();
+    const draft = await b.getDraft("m5");
+    const task = draft.draft.items.find((i) => i.type === "task")!;
+    await b.addCorrection("m5", "The part arrived early.", task.id);
+    expect(await states(b)).toEqual(["local"]);
+    expect(hooks().correctionFiles()).toEqual([]);
+
+    const result = await b.publishCorrections("m5");
+    expect(result.queued).toBe(2);
+    await settled(b);
+    const view = await b.listCorrections("m5");
+    expect(view.corrections[0]).toMatchObject({
+      state: "published",
+      fileName: "corrections.md",
+      canDelete: false,
+    });
+    expect(view.corrections[0].url).toMatch(/meetings\/NOMAD\/.*corrections\.md$/);
+    const files = hooks().correctionFiles();
+    expect(files).toHaveLength(1);
+    expect(files[0].text).toBe("The part arrived early.");
+    const made = hooks()
+      .issues()
+      .find((i) => i.meeting === "m5" && i.item === task.id)!;
+    expect(hooks().issueComments(made.number)).toHaveLength(1);
+    expect(made.state).toBe("open");
+
+    // A second one is a second file; a note about no item gets no comment.
+    await b.addCorrection("m5", "Another.");
+    await b.publishCorrections("m5");
+    await settled(b);
+    expect(
+      hooks()
+        .correctionFiles()
+        .map((f) => f.path.split("/").pop()),
+    ).toEqual(["corrections.md", "corrections-2.md"]);
+    expect(hooks().issueComments(made.number)).toHaveLength(1);
+    // Asked again, nothing is queued twice, and a queued correction stays.
+    expect((await b.publishCorrections("m5", ["c1"])).queued).toBe(0);
+    expect(await codeOf(b.deleteCorrection("m5", "c1"))).toBe("correction_queued");
+    expect(await codeOf(b.publishCorrections("m5"))).toBe("nothing_to_publish");
+  });
+
+  it("deletes only a correction that was never queued", async () => {
+    const b = await published();
+    await b.addCorrection("m5", "Typo.");
+    expect((await b.deleteCorrection("m5", "c1")).corrections).toEqual([]);
+    expect(await codeOf(b.deleteCorrection("m5", "c1"))).toBe("not_found");
+  });
+
+  it("follows the rule of the github target: Automatic queues at once, Off never", async () => {
+    const b = await published();
+    await b.setTargetRule("NOMAD", "github", "auto");
+    const view = await b.addCorrection("m5", "Automatic.");
+    expect(view.rule).toBe("auto");
+    expect(view.corrections[0].state).not.toBe("local");
+    await settled(b);
+    expect(hooks().correctionFiles()).toHaveLength(1);
+
+    await b.setTargetRule("NOMAD", "github", "off");
+    const off = await b.addCorrection("m5", "Off.");
+    expect(off.corrections[1].state).toBe("local");
+    expect(await codeOf(b.publishCorrections("m5"))).toBe("nothing_to_publish");
+    expect(hooks().correctionFiles()).toHaveLength(1);
+  });
+
+  it("keeps the public repository check for a repository nobody confirmed", async () => {
+    const b = fresh();
+    await b.confirmPublicRepo("NOMAD");
+    await b.publishMeeting("m5", ["github"]);
+    await settled(b);
+    await b.addCorrection("m5", "Moved.");
+    // Confirmed once for this repository: the correction goes out.
+    expect((await b.publishCorrections("m5")).queued).toBeGreaterThan(0);
+
+    // A meeting whose repository was never confirmed (private then, public now) is asked first.
+    const c = fresh();
+    hooks().setVisibility("private");
+    await c.publishMeeting("m5", ["github"]);
+    await settled(c);
+    hooks().setVisibility("public");
+    await c.addCorrection("m5", "Moved.");
+    expect(await codeOf(c.publishCorrections("m5"))).toBe("public_repo_unconfirmed");
+    expect(hooks().correctionFiles()).toEqual([]);
+    await c.confirmPublicRepo("NOMAD");
+    expect((await c.publishCorrections("m5")).queued).toBeGreaterThan(0);
+    // Automatic does not get around it either.
+    const d = fresh();
+    hooks().setVisibility("private");
+    await d.publishMeeting("m5", ["github"]);
+    await settled(d);
+    hooks().setVisibility("public");
+    await d.setTargetRule("NOMAD", "github", "auto");
+    const view = await d.addCorrection("m5", "Auto.");
+    expect(view.corrections[0].state).toBe("local");
+  });
+
+  it("refuses a correction for a meeting that is not in the repository", async () => {
+    const b = fresh();
+    await b.confirmPublicRepo("NOMAD");
+    await b.publishMeeting("m5", ["discord"]);
+    const view = await b.addCorrection("m5", "Moved.");
+    expect(view.inRepository).toBe(false);
+    expect(await codeOf(b.publishCorrections("m5"))).toBe("not_in_repository");
+  });
+
+  it("waits for the issue of its item and survives the network going away", async () => {
+    const b = fresh();
+    await publishAll(b);
+    const task = (await b.getDraft("m5")).draft.items.find((i) => i.type === "task")!;
+    await b.addCorrection("m5", "Moved.", task.id);
+    // Queued before the meeting finished: the comment still finds the issue that gets made.
+    await b.publishCorrections("m5");
+    await settled(b);
+    const made = hooks()
+      .issues()
+      .find((i) => i.meeting === "m5" && i.item === task.id)!;
+    expect(hooks().issueComments(made.number)).toHaveLength(1);
+
+    hooks().setOffline(true);
+    await b.addCorrection("m5", "Later.");
+    await b.publishCorrections("m5", ["c2"]);
+    const waiting = await until(
+      () => b.listCorrections("m5"),
+      (v) => v.corrections[1].file?.lastError != null,
+    );
+    expect(waiting.corrections[1].state).toBe("queued");
+    expect(hooks().correctionFiles()).toHaveLength(1);
+    hooks().setOffline(false);
+    const back = await until(
+      () => b.listCorrections("m5"),
+      (v) => v.corrections[1].state === "published",
+    );
+    expect(back.corrections[1].fileName).toBe("corrections-2.md");
+    expect(hooks().correctionFiles()).toHaveLength(2);
+  });
+
+  it("hands the corrections to the next processing, with the text of the item", async () => {
+    const b = await published();
+    const task = (await b.getDraft("m5")).draft.items.find((i) => i.type === "task")!;
+    await b.addCorrection("m5", "Moved.", task.id, undefined, "2026-11-15");
+    expect(hooks().nextCorrections("NOMAD")).toEqual([
+      { text: "Moved.", item: task.text, issue: null, date: "2026-11-15" },
+    ]);
+  });
+
+  it("keeps the corrections out of a locked draft", async () => {
+    const b = await published();
+    const before = await b.getDraft("m5");
+    await b.addCorrection("m5", "Moved.");
+    const after = await b.getDraft("m5");
+    expect(after.draft).toEqual(before.draft);
+    expect(after.locked).toBe(true);
+    expect(await codeOf(b.updateDraftItem("m5", before.draft.items[0].id, { text: "x" }))).toBe(
+      "published",
+    );
+  });
+});

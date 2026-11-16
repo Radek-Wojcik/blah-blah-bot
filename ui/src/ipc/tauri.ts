@@ -112,6 +112,11 @@ export function createTauriBackend(): Backend {
     retryOutboxOp: (id) => invoke("retry_outbox_op", { id }),
     cancelOutboxOp: (id) => invoke("cancel_outbox_op", { id }),
     cycleTasks: (cycleId) => invoke("cycle_tasks", { cycleId }),
+    listCorrections: (meetingId) => invoke("list_corrections", { meetingId }),
+    addCorrection: (meetingId, text, item, issue, date) =>
+      invoke("add_correction", { meetingId, text, item, issue, date }),
+    publishCorrections: (meetingId, ids) => invoke("publish_corrections", { meetingId, ids }),
+    deleteCorrection: (meetingId, id) => invoke("delete_correction", { meetingId, id }),
     getSettings: () => invoke("get_settings"),
     saveSettings: (settings) => invoke("save_settings", { settings }),
     onRecordingState: (cb) => listen("recording-state", (e) => cb(e.payload as never)),

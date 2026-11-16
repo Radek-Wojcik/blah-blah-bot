@@ -126,7 +126,13 @@ export type IpcErrorCode =
   /** The value is not a Discord webhook; the message never repeats it. */
   | "invalid_webhook"
   /** The cycle has no such target (a Discord target needs a webhook reference). */
-  | "no_target";
+  | "no_target"
+  /** A correction needs a published (locked) meeting. */
+  | "not_published"
+  /** A correction needs the meeting in the repository, and it is not there. */
+  | "not_in_repository"
+  /** The correction was queued for publishing: it is part of the record and stays. */
+  | "correction_queued";
 
 export interface IpcError {
   code: IpcErrorCode;
@@ -822,7 +828,10 @@ export interface PlanSummary {
 }
 
 export type PlanBlockCode =
-  "public_repo_unconfirmed" | "discord_webhook_missing" | "nothing_to_publish";
+  | "public_repo_unconfirmed"
+  | "discord_webhook_missing"
+  | "nothing_to_publish"
+  | "not_in_repository";
 
 export interface PlanBlock {
   code: PlanBlockCode;
@@ -843,7 +852,13 @@ export interface RepoPublishInfo {
 }
 
 export type OpTarget = "github" | "issues" | "discord";
-export type OpKind = "commit_meeting" | "create_issue" | "set_issue_state" | "post_discord";
+export type OpKind =
+  | "commit_meeting"
+  | "create_issue"
+  | "set_issue_state"
+  | "post_discord"
+  | "commit_correction"
+  | "comment_correction";
 export type OpState = "queued" | "running" | "done" | "failed" | "cancelled";
 
 /** One operation of the outbox. `result` is what the operation reported, as JSON. */
@@ -902,6 +917,14 @@ export interface OpResult {
   number?: number;
   url?: string;
   sent_chunks?: number;
+  /** A correction: the name of the new file in the meeting folder (`corrections-2.md`). */
+  file?: string;
+  /** A correction: the path of the file in the repository. */
+  path?: string;
+  /** A correction comment: false when an earlier attempt had posted it. */
+  commented?: boolean;
+  /** A correction comment that was left out, and why. */
+  skipped?: string;
 }
 
 export interface OutboxState {
@@ -956,4 +979,61 @@ export interface CycleTasks {
   asOf: string | null;
   open: CycleTask[];
   done: CycleTask[];
+}
+
+// ----- corrections to a published meeting -------------------------------------------------------
+
+/** One operation of a correction (the new file, or the comment on the issue). */
+export interface CorrectionStep {
+  opId: number;
+  state: "queued" | "running" | "done" | "failed";
+  attempts: number;
+  nextAttemptUnixMs: number | null;
+  lastError: string | null;
+  result: OpResult | null;
+}
+
+/**
+ * Where a correction stands: `local` (written, not queued), `queued`, `running`, `published` (the
+ * file is in the repository) or `failed`.
+ */
+export type CorrectionState = "local" | "queued" | "running" | "published" | "failed";
+
+/** A note written after a meeting was published. The published draft never changes. */
+export interface Correction {
+  id: string;
+  /** `YYYY-MM-DD`, the day it was written. */
+  date: string;
+  text: string;
+  /** The item of the meeting it corrects. */
+  item: string | null;
+  /** The issue it corrects, `#12`. */
+  issue: string | null;
+  state: CorrectionState;
+  file: CorrectionStep | null;
+  comment: CorrectionStep | null;
+  /** The name of the file in the meeting folder once published. */
+  fileName: string | null;
+  url: string | null;
+  /** Only a correction that was never queued can be deleted. */
+  canDelete: boolean;
+}
+
+export interface Corrections {
+  meetingId: string;
+  cycleId: string;
+  /** The draft is locked (published or queued): corrections can be added. */
+  locked: boolean;
+  /** The meeting is in the repository (or its commit is queued): corrections can be published. */
+  inRepository: boolean;
+  /** The rule of the `github` target, which decides when a correction is published. */
+  rule: PublishMode;
+  corrections: Correction[];
+}
+
+export interface PublishedCorrections {
+  corrections: Corrections;
+  /** Operations queued by this call. */
+  queued: number;
+  notes: string[];
 }

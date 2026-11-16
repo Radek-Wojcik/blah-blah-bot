@@ -1,4 +1,6 @@
 import type {
+  Correction,
+  CorrectionState,
   CycleTask,
   CycleTasks,
   OpResult,
@@ -47,9 +49,10 @@ export const RULE_SHORT: Record<PublishMode, string> = {
 };
 
 export const RULE_HELP: Record<PublishMode, string> = {
-  off: "Never published, not even when you press Publish.",
-  "on-approval": "Nothing leaves this computer until you press Publish.",
-  auto: "Queued as soon as the draft is complete, without a click. A public or unconfirmed repository still waits for your confirmation.",
+  off: "Nothing is ever published to this target, not even when you press Publish.",
+  "on-approval":
+    "Nothing leaves this computer until you have looked at the draft and press Publish. This is what is used until you choose another rule.",
+  auto: "Published as soon as the draft is complete, without a click. It cannot be taken back, and the people it names are notified. A public or unconfirmed repository still waits for your confirmation.",
 };
 
 /**
@@ -268,7 +271,14 @@ export function opLink(op: OutboxOp): { href: string; text: string } | null {
     return { href: r.url, text: `#${r.number}` };
   if (op.kind === "commit_meeting" && r.report_url)
     return { href: r.report_url, text: r.commit ? `commit ${r.commit}` : "report" };
+  if (op.kind === "commit_correction" && r.url)
+    return { href: r.url, text: r.file ?? "correction" };
   return null;
+}
+
+/** An operation that publishes a correction: it belongs to a correction, not to the meeting. */
+export function isCorrectionOp(op: OutboxOp): boolean {
+  return op.kind === "commit_correction" || op.kind === "comment_correction";
 }
 
 /** Text for the offline banner, or null when every target answers. */
@@ -534,4 +544,94 @@ export function taskCounts(tasks: CycleTasks | null): string {
 export function tasksAsOf(tasks: CycleTasks | null): string {
   if (!tasks) return "";
   return tasks.asOf ? `As of ${tasks.asOf}.` : "The issues were never read: pull the repository.";
+}
+
+// ----- corrections --------------------------------------------------------------------------
+
+export const CORRECTION_STATE_LABELS: Record<CorrectionState, string> = {
+  local: "Only on this computer",
+  queued: "Waiting",
+  running: "Publishing",
+  published: "Published",
+  failed: "Failed",
+};
+
+/** The class of the badge of a correction state, reusing the colours of the operations. */
+export function correctionBadgeClass(state: CorrectionState): string {
+  const cls = {
+    local: "badge-excluded",
+    queued: "badge-job-queued",
+    running: "badge-job-running",
+    published: "badge-job-done",
+    failed: "badge-job-failed",
+  }[state];
+  return `badge ${cls}`;
+}
+
+/** What the rule of the `github` target means for corrections, in plain words. */
+export function correctionRuleHelp(rule: PublishMode): string {
+  switch (rule) {
+    case "off":
+      return "GitHub is Off for this cycle: corrections stay on this computer and are never published, not even when you press Publish. They still reach the next meeting.";
+    case "auto":
+      return "GitHub is Automatic for this cycle: a correction is published as soon as you add it. It cannot be taken back. A public or unconfirmed repository still waits for your confirmation.";
+    default:
+      return "GitHub is On approval for this cycle: a correction stays on this computer until you press Publish next to it.";
+  }
+}
+
+/** What a correction is about, `item i3 and issue #12`, or null for a general note. */
+export function correctionAbout(c: Pick<Correction, "item" | "issue">): string | null {
+  const parts: string[] = [];
+  if (c.item) parts.push(`item ${c.item}`);
+  if (c.issue) parts.push(`issue ${c.issue}`);
+  return parts.length === 0 ? null : parts.join(" and ");
+}
+
+/** The line under a correction: where it stands, and what is still to happen. */
+export function correctionStatusLine(c: Correction, rule: PublishMode): string | null {
+  switch (c.state) {
+    case "local":
+      return rule === "off"
+        ? "Kept on this computer: publishing is Off."
+        : "Not published yet. It already counts for the next meeting.";
+    case "queued":
+      return c.file?.lastError ?? "Waits to be published.";
+    case "running":
+      return null;
+    case "failed":
+      return c.file?.lastError ?? "Publishing failed.";
+    case "published": {
+      const comment = c.comment;
+      const where = c.fileName ? `Published as ${c.fileName} in the meeting folder` : "Published";
+      if (!comment) return `${where}.`;
+      if (comment.state === "done")
+        return comment.result?.skipped
+          ? `${where}. No comment was made on an issue: ${comment.result.skipped}.`
+          : `${where}, and commented on the issue.`;
+      if (comment.state === "failed")
+        return `${where}. The comment on the issue failed: ${comment.lastError ?? "see the outbox"}`;
+      return `${where}. The comment on the issue is still to come.`;
+    }
+  }
+}
+
+/** Today as `YYYY-MM-DD` in the local calendar, the default day of a correction. */
+export function today(now: Date = new Date()): string {
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${day}`;
+}
+
+/** Why a correction cannot be written, or null. */
+export function correctionProblem(text: string, date: string): string | null {
+  if (text.trim() === "") return "Write what changed.";
+  if (text.trim().length > 2000) return "A correction is at most 2000 characters.";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return "The date is YYYY-MM-DD.";
+  return null;
+}
+
+/** The corrections that were not queued yet: what Publish all would send. */
+export function unqueued(list: Correction[]): Correction[] {
+  return list.filter((c) => c.state === "local");
 }
