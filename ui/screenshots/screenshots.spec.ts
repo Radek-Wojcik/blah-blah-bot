@@ -17,6 +17,19 @@ const OUT = path.resolve(here, "../../docs/img");
 
 test.use({ colorScheme: "dark", deviceScaleFactor: 1 });
 
+/** Assembles the frames with Pillow from an ephemeral uv environment (no system Python). */
+function makeGif(args: string[]) {
+  execFileSync("uv", [
+    "run",
+    "--no-project",
+    "--with",
+    "pillow",
+    "python",
+    path.join(here, "make-gif.py"),
+    ...args,
+  ]);
+}
+
 // The frame folders of the GIFs live in <repo>/target/e2e-tmp and go after every test.
 test.afterEach(() => {
   cleanupDirs();
@@ -181,12 +194,7 @@ test("record flow GIF", async ({ page }) => {
   await page.getByRole("button", { name: "Stop" }).click();
   await shot();
   fs.mkdirSync(OUT, { recursive: true });
-  execFileSync("python", [
-    path.join(here, "make-gif.py"),
-    path.join(OUT, "record-flow.gif"),
-    "900",
-    ...frames,
-  ]);
+  makeGif([path.join(OUT, "record-flow.gif"), "900", ...frames]);
   expect(fs.statSync(path.join(OUT, "record-flow.gif")).size).toBeLessThan(10_000_000);
 });
 
@@ -213,12 +221,7 @@ test("processing GIF", async ({ page }) => {
   await expect(job.getByText("Processed", { exact: true })).toBeVisible({ timeout: 20_000 });
   await shot();
   fs.mkdirSync(OUT, { recursive: true });
-  execFileSync("python", [
-    path.join(here, "make-gif.py"),
-    path.join(OUT, "processing.gif"),
-    "900",
-    ...frames,
-  ]);
+  makeGif([path.join(OUT, "processing.gif"), "900", ...frames]);
   expect(fs.statSync(path.join(OUT, "processing.gif")).size).toBeLessThan(10_000_000);
 });
 
@@ -255,12 +258,7 @@ test("naming voices GIF", async ({ page }) => {
   await expect(page.getByRole("status")).toContainText("3 of 4");
   await shot(600);
   fs.mkdirSync(OUT, { recursive: true });
-  execFileSync("python", [
-    path.join(here, "make-gif.py"),
-    path.join(OUT, "naming-voices.gif"),
-    "1400",
-    ...frames,
-  ]);
+  makeGif([path.join(OUT, "naming-voices.gif"), "1400", ...frames]);
   expect(fs.statSync(path.join(OUT, "naming-voices.gif")).size).toBeLessThan(10_000_000);
 });
 
@@ -318,11 +316,6 @@ test("draft editing GIF", async ({ page }) => {
   await expect(page.getByLabel("Rendered report")).toContainText(text);
   await shot(600);
   fs.mkdirSync(OUT, { recursive: true });
-  execFileSync("python", [
-    path.join(here, "make-gif.py"),
-    path.join(OUT, "draft-editing.gif"),
-    "1300",
-    ...frames,
-  ]);
+  makeGif([path.join(OUT, "draft-editing.gif"), "1300", ...frames]);
   expect(fs.statSync(path.join(OUT, "draft-editing.gif")).size).toBeLessThan(1_500_000);
 });
