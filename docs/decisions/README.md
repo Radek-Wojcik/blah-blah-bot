@@ -23,3 +23,4 @@ Each record states the context, the decision, its consequences and the alternati
 | [0017](0017-cycles-extraction-and-drafts.md) | Cycles, extraction, report modes and drafts | Accepted |
 | [0018](0018-publishing.md) | Publishing: commit, issues, Discord and the outbox | Accepted |
 | [0019](0019-default-publish-rule-per-target.md) | Default publish rule per target, explicit choice, corrections after publication | Accepted |
+| [0020](0020-discord-bot-and-notion-export.md) | Discord bot and Notion export: task exporter, idempotency keys, bot permissions and intents | Proposed |
