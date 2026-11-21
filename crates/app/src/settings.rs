@@ -107,10 +107,32 @@ impl Settings {
 mod tests {
     use super::*;
 
-    fn temp(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("bbb-settings-{}-{name}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir.join("settings.json")
+    /// Path of a settings file inside a scratch folder that is removed when this is dropped.
+    struct TempFile {
+        _dir: tempfile::TempDir,
+        path: PathBuf,
+    }
+
+    impl std::ops::Deref for TempFile {
+        type Target = std::path::Path;
+        fn deref(&self) -> &std::path::Path {
+            &self.path
+        }
+    }
+
+    impl AsRef<std::path::Path> for TempFile {
+        fn as_ref(&self) -> &std::path::Path {
+            &self.path
+        }
+    }
+
+    fn temp(name: &str) -> TempFile {
+        let dir = tempfile::Builder::new()
+            .prefix(&format!("bbb-settings-{name}-"))
+            .tempdir()
+            .unwrap();
+        let path = dir.path().join("settings.json");
+        TempFile { _dir: dir, path }
     }
 
     #[test]

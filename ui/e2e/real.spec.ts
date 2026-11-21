@@ -8,15 +8,17 @@
  */
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, type Page, chromium, expect, test } from "@playwright/test";
+import { cleanupDirs, freshDir } from "../support/e2e-tmp";
 
 const EXE = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../target/debug/app.exe",
 );
+// The shared Python environment of the worker: no test installs a copy of its own.
+const WORKER_ENV = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../worker/.venv");
 let nextPort = 9330;
 
 interface Running {
@@ -57,6 +59,7 @@ async function launch(dataDir: string): Promise<Running> {
       ...process.env,
       BBB_DEMO: "1",
       BBB_DATA_DIR: dataDir,
+      ...(fs.existsSync(WORKER_ENV) ? { BBB_WORKER_ENV_DIR: WORKER_ENV } : {}),
       WEBVIEW2_USER_DATA_FOLDER: path.join(dataDir, "webview"),
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`,
     },
@@ -86,11 +89,13 @@ function kill(app: Running) {
   }
 }
 
-function freshDir(label: string) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), `bbb-e2e-${label}-`));
-}
-
 test.skip(!fs.existsSync(EXE), "debug build of the app not found");
+
+// Data folders live in <repo>/target/e2e-tmp (see support/e2e-tmp.ts) and are removed after
+// every test, also a failed one; the apps are killed in each test's own `finally`.
+test.afterEach(() => {
+  cleanupDirs();
+});
 
 test("record three tracks, add a source, take a screenshot, stop", async () => {
   const dir = freshDir("flow");

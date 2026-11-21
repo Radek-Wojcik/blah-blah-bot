@@ -8,6 +8,9 @@ import { defineConfig } from "@playwright/test";
  */
 export default defineConfig({
   timeout: 60_000,
+  // Scratch folders go to <repo>/target/e2e-tmp, not to the user's temp directory.
+  globalSetup: "./support/global-setup.ts",
+  globalTeardown: "./support/global-teardown.ts",
   fullyParallel: false,
   workers: 1,
   reporter: [["list"]],
