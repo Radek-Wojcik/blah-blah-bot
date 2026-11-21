@@ -223,6 +223,52 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     ALTER TABLE outbox_v6 RENAME TO outbox;
     CREATE INDEX idx_outbox_due ON outbox(state, next_attempt_unix_ms);
     ",
+    // Version 7: Notion export and editing a Discord message. A target and two more kinds of
+    // outbox operation (a CHECK constraint cannot be altered, so the table is rebuilt with its
+    // rows, ids and links kept), plus the table that remembers where a meeting's items and
+    // posts live in external services (ids only, never secrets).
+    "
+    CREATE TABLE outbox_v7 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        target TEXT NOT NULL CHECK (target IN ('github','issues','discord','notion')),
+        kind TEXT NOT NULL
+            CHECK (kind IN ('commit_meeting','create_issue','set_issue_state','post_discord',
+                            'commit_correction','comment_correction','export_notion',
+                            'edit_discord')),
+        op_key TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}',
+        state TEXT NOT NULL CHECK (state IN ('queued','running','done','failed','cancelled')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_unix_ms INTEGER,
+        last_error TEXT,
+        result TEXT,
+        after_id INTEGER REFERENCES outbox(id) ON DELETE SET NULL,
+        created_unix_ms INTEGER NOT NULL,
+        updated_unix_ms INTEGER NOT NULL,
+        UNIQUE (meeting_id, op_key)
+    );
+    INSERT INTO outbox_v7 (id, meeting_id, target, kind, op_key, payload, state, attempts,
+                           next_attempt_unix_ms, last_error, result, after_id,
+                           created_unix_ms, updated_unix_ms)
+        SELECT id, meeting_id, target, kind, op_key, payload, state, attempts,
+               next_attempt_unix_ms, last_error, result, after_id,
+               created_unix_ms, updated_unix_ms FROM outbox;
+    DROP TABLE outbox;
+    ALTER TABLE outbox_v7 RENAME TO outbox;
+    CREATE INDEX idx_outbox_due ON outbox(state, next_attempt_unix_ms);
+
+    CREATE TABLE external_refs (
+        meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        target TEXT NOT NULL CHECK (target IN ('notion','discord')),
+        ref_key TEXT NOT NULL,
+        external_id TEXT NOT NULL,
+        url TEXT,
+        extra TEXT NOT NULL DEFAULT '{}',
+        updated_unix_ms INTEGER NOT NULL,
+        PRIMARY KEY (meeting_id, target, ref_key)
+    );
+    ",
 ];
 
 /// Schema version after all migrations have run.
@@ -315,7 +361,7 @@ mod tests {
     fn migrating_a_version_4_database_adds_the_publishing_tables_and_keeps_the_data() {
         let s = Store::init(v4_database()).unwrap();
         assert_eq!(s.schema_version().unwrap(), LATEST);
-        assert_eq!(LATEST, 6);
+        assert_eq!(LATEST, 7);
 
         // Existing data is untouched.
         let m = s.get_meeting("20261113-140501").unwrap().unwrap().meeting;
@@ -457,5 +503,102 @@ mod tests {
         assert_eq!(index, 1);
         s.delete_meeting("20261113-140501").unwrap();
         assert_eq!(count(&s, "outbox"), 0);
+    }
+
+    #[test]
+    fn migrating_a_version_6_database_keeps_the_outbox_and_adds_notion_and_external_refs() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        for sql in &MIGRATIONS[..6] {
+            conn.execute_batch(sql).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 6).unwrap();
+        conn.execute_batch(
+            r#"INSERT INTO meetings (id, title, started_unix_ms, state, dir)
+                 VALUES ('20261113-140501', 'Weekly', 5, 'stopped', 'm1');
+               INSERT INTO outbox (id, meeting_id, target, kind, op_key, payload, state, attempts,
+                                   last_error, result, after_id, created_unix_ms, updated_unix_ms)
+                 VALUES (7, '20261113-140501', 'github', 'commit_meeting', 'commit', '{"a":1}',
+                         'done', 2, NULL, '{"folder":"2026-11-13"}', NULL, 10, 11),
+                        (9, '20261113-140501', 'discord', 'post_discord', 'discord', '{}',
+                         'failed', 8, 'boom', NULL, 7, 12, 13),
+                        (12, '20261113-140501', 'github', 'commit_correction', 'correction:c1',
+                         '{}', 'queued', 0, NULL, NULL, 7, 14, 15);
+               INSERT INTO publications (meeting_id, cycle_id, folder, snapshot_dir)
+                 VALUES ('20261113-140501', 'NOMAD', '2026-11-13', 'm1/work/publish/1');"#,
+        )
+        .unwrap();
+        let s = Store::init(conn).unwrap();
+        assert_eq!(s.schema_version().unwrap(), LATEST);
+        assert_eq!(LATEST, 7);
+
+        let ops = s.list_ops(Some("20261113-140501")).unwrap();
+        assert_eq!(ops.len(), 3);
+        assert_eq!((ops[0].id, ops[0].attempts, ops[0].after_id), (7, 2, None));
+        assert_eq!(ops[0].result.as_deref(), Some(r#"{"folder":"2026-11-13"}"#));
+        assert_eq!((ops[1].id, ops[1].after_id), (9, Some(7)));
+        assert_eq!(ops[1].last_error.as_deref(), Some("boom"));
+        assert_eq!((ops[2].id, ops[2].after_id), (12, Some(7)));
+        assert!(s.get_publication("20261113-140501").unwrap().is_some());
+
+        // New rows continue after the old ids, can follow an old row and take the new names.
+        let new_op = |target, kind, key: &str, after: &str| crate::NewOp {
+            meeting_id: "20261113-140501".into(),
+            target,
+            kind,
+            op_key: key.into(),
+            payload: "{}".into(),
+            after_op_key: Some(after.into()),
+        };
+        let (op, created) = s
+            .enqueue_op(
+                &new_op(
+                    crate::OutboxTarget::Notion,
+                    crate::OutboxKind::ExportNotion,
+                    "notion:i1",
+                    "commit",
+                ),
+                20,
+            )
+            .unwrap();
+        assert!(created && op.id > 12 && op.after_id == Some(7), "{op:?}");
+        let (op, _) = s
+            .enqueue_op(
+                &new_op(
+                    crate::OutboxTarget::Discord,
+                    crate::OutboxKind::EditDiscord,
+                    "discord-edit:c1",
+                    "discord",
+                ),
+                21,
+            )
+            .unwrap();
+        assert_eq!(op.kind, crate::OutboxKind::EditDiscord);
+        assert_eq!(op.after_id, Some(9));
+
+        // The index of due operations survived the rebuild.
+        let index: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'idx_outbox_due'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(index, 1);
+
+        // The new table exists and goes with the meeting.
+        s.conn
+            .execute(
+                "INSERT INTO external_refs (meeting_id, target, ref_key, external_id,
+                                            updated_unix_ms)
+                 VALUES ('20261113-140501', 'notion', 'task:i1', 'page', 1)",
+                [],
+            )
+            .unwrap();
+        assert_eq!(count(&s, "external_refs"), 1);
+        s.delete_meeting("20261113-140501").unwrap();
+        assert_eq!(count(&s, "outbox"), 0);
+        assert_eq!(count(&s, "external_refs"), 0);
     }
 }

@@ -34,8 +34,10 @@ pub enum OutboxTarget {
     Github,
     /// GitHub issues of the repository.
     Issues,
-    /// A Discord webhook.
+    /// A Discord webhook or bot.
     Discord,
+    /// A Notion database.
+    Notion,
 }
 
 impl OutboxTarget {
@@ -44,6 +46,7 @@ impl OutboxTarget {
             Self::Github => "github",
             Self::Issues => "issues",
             Self::Discord => "discord",
+            Self::Notion => "notion",
         }
     }
 
@@ -52,6 +55,7 @@ impl OutboxTarget {
             "github" => Ok(Self::Github),
             "issues" => Ok(Self::Issues),
             "discord" => Ok(Self::Discord),
+            "notion" => Ok(Self::Notion),
             other => Err(StoreError::UnknownState(other.to_string())),
         }
     }
@@ -69,6 +73,10 @@ pub enum OutboxKind {
     CommitCorrection,
     /// A comment with a correction on the issue of an item.
     CommentCorrection,
+    /// A task exported to a Notion database as a page.
+    ExportNotion,
+    /// The Discord message of a meeting edited after a correction.
+    EditDiscord,
 }
 
 impl OutboxKind {
@@ -80,6 +88,8 @@ impl OutboxKind {
             Self::PostDiscord => "post_discord",
             Self::CommitCorrection => "commit_correction",
             Self::CommentCorrection => "comment_correction",
+            Self::ExportNotion => "export_notion",
+            Self::EditDiscord => "edit_discord",
         }
     }
 
@@ -91,6 +101,8 @@ impl OutboxKind {
             "post_discord" => Ok(Self::PostDiscord),
             "commit_correction" => Ok(Self::CommitCorrection),
             "comment_correction" => Ok(Self::CommentCorrection),
+            "export_notion" => Ok(Self::ExportNotion),
+            "edit_discord" => Ok(Self::EditDiscord),
             other => Err(StoreError::UnknownState(other.to_string())),
         }
     }
@@ -378,9 +390,10 @@ impl Store {
     /// Operations for a target in `skip` stay queued (a host that just refused to connect).
     /// The oldest due operation goes first.
     ///
-    /// A Discord post also waits while an issue operation of the same meeting is queued or
-    /// running, so that the message can link the issues that were created; an issue that
-    /// failed for good or was cancelled does not hold it back.
+    /// A Discord post (`post_discord` only, not an edit of it) also waits while an issue
+    /// operation of the same meeting is queued or running, so that the message can link the
+    /// issues that were created; an issue that failed for good or was cancelled does not
+    /// hold it back.
     pub fn claim_next_op(&self, now_ms: i64, skip: &[OutboxTarget]) -> Result<Option<OutboxOp>> {
         let tx = self.conn.unchecked_transaction()?;
         let due: Vec<(i64, String)> = {
@@ -390,7 +403,7 @@ impl Store {
                    AND (o.next_attempt_unix_ms IS NULL OR o.next_attempt_unix_ms <= ?1)
                    AND (o.after_id IS NULL
                         OR EXISTS (SELECT 1 FROM outbox a WHERE a.id = o.after_id AND a.state = 'done'))
-                   AND (o.target <> 'discord'
+                   AND (o.kind <> 'post_discord'
                         OR NOT EXISTS (SELECT 1 FROM outbox i
                                        WHERE i.meeting_id = o.meeting_id AND i.target = 'issues'
                                          AND i.state IN ('queued', 'running')))
@@ -1135,6 +1148,81 @@ mod tests {
         let post_op = s.claim_next_op(20, &[]).unwrap().unwrap();
         assert_eq!(post_op.op_key, "discord");
         assert_eq!(post_op.meeting_id, "m1");
+    }
+
+    #[test]
+    fn an_edit_of_the_discord_message_does_not_wait_for_issues() {
+        let s = store();
+        s.enqueue_op(
+            &new_op(
+                "m1",
+                OutboxTarget::Issues,
+                OutboxKind::CreateIssue,
+                "issue:i1",
+            ),
+            1,
+        )
+        .unwrap();
+        s.enqueue_op(
+            &new_op(
+                "m1",
+                OutboxTarget::Discord,
+                OutboxKind::PostDiscord,
+                "discord",
+            ),
+            1,
+        )
+        .unwrap();
+        let (edit, _) = s
+            .enqueue_op(
+                &new_op(
+                    "m1",
+                    OutboxTarget::Discord,
+                    OutboxKind::EditDiscord,
+                    "discord-edit:c1",
+                ),
+                1,
+            )
+            .unwrap();
+        // The issue goes first, the edit is not held back by it, the post still is.
+        let first = s.claim_next_op(10, &[]).unwrap().unwrap();
+        assert_eq!(first.kind, OutboxKind::CreateIssue);
+        let second = s.claim_next_op(10, &[]).unwrap().unwrap();
+        assert_eq!(second.id, edit.id);
+        assert!(s.claim_next_op(10, &[]).unwrap().is_none());
+    }
+
+    #[test]
+    fn the_notion_and_edit_names_round_trip_and_match_the_check_constraint() {
+        let s = store();
+        assert_eq!(OutboxTarget::Notion.as_str(), "notion");
+        assert_eq!(OutboxKind::ExportNotion.as_str(), "export_notion");
+        assert_eq!(OutboxKind::EditDiscord.as_str(), "edit_discord");
+        assert_eq!(OutboxTarget::parse("notion").unwrap(), OutboxTarget::Notion);
+        assert_eq!(
+            OutboxKind::parse("export_notion").unwrap(),
+            OutboxKind::ExportNotion
+        );
+        assert_eq!(
+            OutboxKind::parse("edit_discord").unwrap(),
+            OutboxKind::EditDiscord
+        );
+        let cases = [
+            (OutboxTarget::Notion, OutboxKind::ExportNotion, "notion:i1"),
+            (
+                OutboxTarget::Discord,
+                OutboxKind::EditDiscord,
+                "discord-edit:c1",
+            ),
+        ];
+        for (target, kind, key) in cases {
+            let (op, created) = s.enqueue_op(&new_op("m1", target, kind, key), 5).unwrap();
+            assert!(created);
+            let back = s.get_op(op.id).unwrap().unwrap();
+            assert_eq!((back.target, back.kind), (target, kind));
+            let listed = s.list_ops(Some("m1")).unwrap();
+            assert!(listed.iter().any(|o| o.id == op.id && o.kind == kind));
+        }
     }
 
     #[test]
