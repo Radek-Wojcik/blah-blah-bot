@@ -449,9 +449,11 @@ mod tests {
 
     #[test]
     fn reopening_keeps_data_and_version() {
-        let dir = std::env::temp_dir().join(format!("bbb-store-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("test.db");
+        let dir = tempfile::Builder::new()
+            .prefix("bbb-store-")
+            .tempdir()
+            .unwrap();
+        let path = dir.path().join("test.db");
         {
             let s = Store::open(&path).unwrap();
             s.create_meeting(&meeting("a", 1)).unwrap();
@@ -460,7 +462,6 @@ mod tests {
         assert_eq!(s.list_meetings().unwrap().len(), 1);
         assert_eq!(s.schema_version().unwrap(), migrations::LATEST);
         drop(s);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

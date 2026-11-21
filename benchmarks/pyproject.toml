@@ -53,6 +53,9 @@ packages = ["src/bbb_bench"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Do not keep the temporary folders of earlier runs in the temp directory.
+tmp_path_retention_count = 0
+tmp_path_retention_policy = "none"
 
 [tool.ruff]
 line-length = 100

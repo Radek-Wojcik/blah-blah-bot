@@ -75,12 +75,16 @@ struct Lab {
     root: PathBuf,
     store: Arc<Mutex<Store>>,
     sup: Supervisor,
+    /// Removes the work folder when the lab is dropped; keep it the last field.
+    _guard: tempfile::TempDir,
 }
 
 fn lab(name: &str) -> Lab {
-    let root = std::env::temp_dir().join(format!("bbb-spk-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
+    let guard = tempfile::Builder::new()
+        .prefix(&format!("bbb-spk-{name}-"))
+        .tempdir()
+        .unwrap();
+    let root = guard.path().to_path_buf();
     let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
     let worker_dir = repo_root().join("worker");
     let runner_root = root.clone();
@@ -104,7 +108,12 @@ fn lab(name: &str) -> Lab {
         |_, _, _, _| {},
     );
     let sup = Supervisor::new(store.clone(), Arc::new(runner), Arc::new(Allow), 3);
-    Lab { root, store, sup }
+    Lab {
+        root,
+        store,
+        sup,
+        _guard: guard,
+    }
 }
 
 /// Record a synthetic meeting into the lab the way the recorder writes it.

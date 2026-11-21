@@ -43,8 +43,8 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Sequence
-from contextlib import ExitStack
+from collections.abc import Iterator, Sequence
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -800,16 +800,32 @@ def load_all(args: argparse.Namespace) -> list[Labeled]:
     return [load_labeled(d) for d in expand_meetings(args.meetings)]
 
 
+@contextmanager
+def scratch_dir(prefix: str) -> Iterator[Path]:
+    """A temporary folder that is removed on exit, also after a failure or an interrupt.
+
+    A file that a just stopped server still holds open makes the first removal fail, so the
+    removal is retried before giving up loudly.
+    """
+    path = Path(tempfile.mkdtemp(prefix=prefix))
+    try:
+        yield path
+    finally:
+        for _ in range(10):
+            shutil.rmtree(path, ignore_errors=True)
+            if not path.exists():
+                break
+            time.sleep(1)
+        if path.exists():
+            print(f"warning: could not remove {path}", file=sys.stderr)
+
+
 def work_root(stack: ExitStack, args: argparse.Namespace) -> Path:
     if args.work:
         root = Path(args.work).resolve()
         root.mkdir(parents=True, exist_ok=True)
         return root
-    return Path(
-        stack.enter_context(
-            tempfile.TemporaryDirectory(prefix="bbb-stage4-", ignore_cleanup_errors=True)
-        )
-    )
+    return stack.enter_context(scratch_dir("bbb-stage4-"))
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:

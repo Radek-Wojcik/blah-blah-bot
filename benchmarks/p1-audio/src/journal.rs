@@ -441,9 +441,8 @@ mod tests {
 
     #[test]
     fn journal_file_appends_and_replays() {
-        let dir = std::env::temp_dir().join(format!("p1-audio-journal-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("journal.jsonl");
+        let dir = crate::test_util::TempDir::new("journal");
+        let path = dir.path().join("journal.jsonl");
         {
             let mut j = Journal::create(&path).unwrap();
             for e in sample_entries() {
@@ -459,6 +458,5 @@ mod tests {
         assert_eq!(text.lines().count(), sample_entries().len() + 1);
         let r = replay_file(&path).unwrap();
         assert_eq!(r.tracks["mic"].segments.len(), 2);
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

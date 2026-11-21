@@ -139,8 +139,8 @@ mod tests {
 
     #[test]
     fn writes_segments_and_journal() {
-        let root = std::env::temp_dir().join(format!("p1-audio-track-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
+        let guard = crate::test_util::TempDir::new("track");
+        let root = guard.path().to_path_buf();
         let journal = Arc::new(Mutex::new(
             Journal::create(&root.join("journal.jsonl")).unwrap(),
         ));
@@ -182,7 +182,6 @@ mod tests {
             "{:?}",
             t.problems(100, 16_000)
         );
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
