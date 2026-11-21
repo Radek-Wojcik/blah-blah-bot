@@ -8,6 +8,8 @@ mod play;
 mod record;
 mod sessions;
 mod sysutil;
+#[cfg(test)]
+mod test_util;
 mod timeline;
 mod track;
 mod tracker;

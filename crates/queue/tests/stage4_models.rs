@@ -260,6 +260,8 @@ struct Lab {
     script: Script,
     /// Wall time of every stage run in this test, in order.
     timings: Vec<(Stage, Duration)>,
+    /// Removes the work folder when the lab is dropped; keep it the last field.
+    _guard: tempfile::TempDir,
 }
 
 fn lab(script: Script, speaker_count: u32) -> Lab {
@@ -268,9 +270,11 @@ fn lab(script: Script, speaker_count: u32) -> Lab {
     assert!(model.is_file(), "BBB_LLM_MODEL is not a file: {model:?}");
     assert!(llama.is_file(), "BBB_LLAMA_SERVER is not a file: {llama:?}");
 
-    let root = std::env::temp_dir().join(format!("bbb-s4-{}-{}", script.name, std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
+    let guard = tempfile::Builder::new()
+        .prefix(&format!("bbb-s4-{}-", script.name))
+        .tempdir()
+        .unwrap();
+    let root = guard.path().to_path_buf();
     let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
 
     let worker_dir = repo_root().join("worker");
@@ -377,6 +381,7 @@ fn lab(script: Script, speaker_count: u32) -> Lab {
         gate,
         script,
         timings: Vec::new(),
+        _guard: guard,
     }
 }
 

@@ -817,11 +817,8 @@ mod tests {
         assert_eq!(read_pcm(&path).unwrap(), pcm);
     }
 
-    fn tempdir(name: &str) -> PathBuf {
-        let p = std::env::temp_dir().join(format!("bbb-voices-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&p);
-        fs::create_dir_all(&p).unwrap();
-        p
+    fn tempdir(name: &str) -> crate::test_util::TestDir {
+        crate::test_util::TestDir::new(&format!("voices-{name}"))
     }
 
     fn voice(id: &str, embedding: Vec<f32>, ms: u64) -> VoiceRow {

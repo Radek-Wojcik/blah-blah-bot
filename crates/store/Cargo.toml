@@ -14,6 +14,7 @@ rusqlite = { version = "0.42", features = ["bundled"] }
 
 [dev-dependencies]
 serde_json.workspace = true
+tempfile = "3"
 
 [lints]
 workspace = true

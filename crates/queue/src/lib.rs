@@ -12,6 +12,8 @@ pub mod gpu;
 pub mod runner;
 pub mod stage;
 mod supervisor;
+#[cfg(test)]
+mod test_util;
 pub mod transcript;
 pub mod voices;
 pub mod worker;

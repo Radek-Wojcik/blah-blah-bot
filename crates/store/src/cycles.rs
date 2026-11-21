@@ -838,10 +838,11 @@ mod tests {
 
     #[test]
     fn a_migrated_database_opens_again_unchanged() {
-        let dir = std::env::temp_dir().join(format!("bbb-store-v4-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("v3.db");
-        let _ = std::fs::remove_file(&path);
+        let dir = tempfile::Builder::new()
+            .prefix("bbb-store-v4-")
+            .tempdir()
+            .unwrap();
+        let path = dir.path().join("v3.db");
         {
             let conn = Connection::open(&path).unwrap();
             for sql in &crate::migrations::MIGRATIONS[..3] {
@@ -858,6 +859,5 @@ mod tests {
             assert_eq!(s.schema_version().unwrap(), crate::migrations::LATEST);
             assert_eq!(s.list_participants().unwrap().len(), 1);
         }
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

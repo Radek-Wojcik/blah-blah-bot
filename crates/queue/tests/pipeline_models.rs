@@ -64,13 +64,18 @@ fn write_wav(path: &Path, pcm: &[u8]) {
 struct Fixture {
     root: PathBuf,
     store: Arc<Mutex<Store>>,
+    /// Removes the work folder when the fixture is dropped; keep it the last field.
+    _guard: tempfile::TempDir,
 }
 
 /// A stopped meeting recorded the way the recorder writes it: segment files per track.
 fn fixture(name: &str, with_screenshot: bool) -> Fixture {
     let mini = env_path("BBB_MINI_DIR").join("mini-en");
-    let root = std::env::temp_dir().join(format!("bbb-it-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    let guard = tempfile::Builder::new()
+        .prefix(&format!("bbb-it-{name}-"))
+        .tempdir()
+        .unwrap();
+    let root = guard.path().to_path_buf();
     let store = Store::open_in_memory().unwrap();
     store
         .create_meeting(&Meeting {
@@ -135,6 +140,7 @@ fn fixture(name: &str, with_screenshot: bool) -> Fixture {
     Fixture {
         root,
         store: Arc::new(Mutex::new(store)),
+        _guard: guard,
     }
 }
 

@@ -131,10 +131,8 @@ pub fn read_samples(path: &Path) -> Result<(Info, Vec<i16>), String> {
 mod tests {
     use super::*;
 
-    fn temp_dir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("p1-audio-{name}-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn temp_dir(name: &str) -> crate::test_util::TempDir {
+        crate::test_util::TempDir::new(name)
     }
 
     #[test]
@@ -162,7 +160,7 @@ mod tests {
     #[test]
     fn segment_file_round_trip() {
         let dir = temp_dir("wav");
-        let path = dir.join("a.wav");
+        let path = dir.path().join("a.wav");
         let mut f = SegmentFile::create(&path, 16_000).unwrap();
         f.write(&[1, -2, 3]).unwrap();
         f.write(&[i16::MAX, i16::MIN]).unwrap();
@@ -170,13 +168,12 @@ mod tests {
         let (info, samples) = read_samples(&path).unwrap();
         assert_eq!(info.data_len, 10);
         assert_eq!(samples, vec![1, -2, 3, i16::MAX, i16::MIN]);
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn unfinished_file_is_readable() {
         let dir = temp_dir("wav-crash");
-        let path = dir.join("crash.wav");
+        let path = dir.path().join("crash.wav");
         let mut f = SegmentFile::create(&path, 16_000).unwrap();
         f.write(&[5, 6, 7, 8]).unwrap();
         f.flush().unwrap();
@@ -184,6 +181,5 @@ mod tests {
         let (_, samples) = read_samples(&path).unwrap();
         assert_eq!(samples, vec![5, 6, 7, 8]);
         drop(f);
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

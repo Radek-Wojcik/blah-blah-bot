@@ -311,9 +311,8 @@ mod tests {
         serde_json::from_str(FIXTURE).unwrap()
     }
 
-    fn tmp(name: &str) -> PathBuf {
-        let p = std::env::temp_dir().join(format!("bbb-tr-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&p);
+    fn tmp(name: &str) -> crate::test_util::TestDir {
+        let p = crate::test_util::TestDir::new(&format!("tr-{name}"));
         std::fs::create_dir_all(p.join("work")).unwrap();
         p
     }

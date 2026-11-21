@@ -80,6 +80,12 @@ def summarize(values: list[float]) -> dict[str, float | int | None]:
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    # The narrowband copies of the recordings live in a folder that is removed on exit.
+    with tempfile.TemporaryDirectory(prefix="bbb-p4-") as tmp_root:
+        return _run(args, Path(tmp_root))
+
+
+def _run(args: argparse.Namespace, tmp_root: Path) -> dict[str, Any]:
     pipeline = dc.load_pipeline()
     meetings = [Path(m) for m in args.meetings]
     conditions: dict[str, Any] = {}
@@ -90,9 +96,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             wav = meeting / "mixed.wav"
             if condition == "narrowband":
                 samples, rate = dc.read_wav_mono16k(wav)
-                tmp = Path(tempfile.mkdtemp()) / "nb.wav"
-                write_wav(tmp, narrowband(samples, rate), rate)
-                wav = tmp
+                wav = tmp_root / f"nb-{meeting.name}.wav"
+                write_wav(wav, narrowband(samples, rate), rate)
             for speaker, (vec, _sec) in embeddings_of(pipeline, wav, meeting).items():
                 items.append((meeting.name, speaker, voices[speaker]["voice"], vec))
         pairs = []

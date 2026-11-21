@@ -192,11 +192,8 @@ mod tests {
         }
     }
 
-    fn tmp(name: &str) -> std::path::PathBuf {
-        let p = std::env::temp_dir().join(format!("bbb-cleanup-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&p);
-        std::fs::create_dir_all(&p).unwrap();
-        p
+    fn tmp(name: &str) -> crate::test_util::TestDir {
+        crate::test_util::TestDir::new(&format!("cleanup-{name}"))
     }
 
     #[test]
