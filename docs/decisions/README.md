@@ -21,3 +21,4 @@ Each record states the context, the decision, its consequences and the alternati
 | [0015](0015-processing-pipeline.md) | Processing pipeline: queue, worker contract and GPU guard | Accepted |
 | [0016](0016-speaker-recognition.md) | Speaker recognition: embeddings, thresholds, profiles and sample clips | Accepted |
 | [0017](0017-cycles-extraction-and-drafts.md) | Cycles, extraction, report modes and drafts | Accepted |
+| [0020](0020-installer-signing.md) | Installer signing | Proposed |
