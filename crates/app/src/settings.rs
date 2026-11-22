@@ -48,8 +48,9 @@ pub struct BridgeSettings {
     pub port: u16,
     /// Ports tried in order when `port` is taken.
     pub port_fallbacks: Vec<u16>,
-    /// Extension ids accepted as `Origin`; empty accepts any extension (pairing still
-    /// decides who may stream).
+    /// Extension ids accepted as `Origin`; by default the id of the extension of this
+    /// release (it follows from the key in its manifest). Empty accepts any extension
+    /// (pairing still decides who may stream).
     pub allowed_extension_ids: Vec<String>,
     /// Paired extensions. Changed only through pairing and unpairing: a settings save from
     /// the UI keeps the stored list.
@@ -64,7 +65,7 @@ impl Default for BridgeSettings {
             enabled: true,
             port: bridge::server::DEFAULT_PORT,
             port_fallbacks: bridge::server::FALLBACK_PORTS.collect(),
-            allowed_extension_ids: Vec::new(),
+            allowed_extension_ids: vec![bridge::server::EXTENSION_ID.to_string()],
             clients: Vec::new(),
             auto_add_tabs: true,
         }
@@ -346,6 +347,7 @@ mod tests {
         assert!(b.enabled && b.auto_add_tabs);
         assert_eq!(b.ports().first(), Some(&17_555));
         assert_eq!(b.ports().len(), 10);
+        assert_eq!(b.allowed_extension_ids, [bridge::server::EXTENSION_ID]);
         assert!(b.validate().is_ok());
         let low = BridgeSettings {
             port: 80,

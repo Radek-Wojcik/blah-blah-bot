@@ -15,6 +15,9 @@ use crate::protocol::HEARTBEAT_TIMEOUT_MS;
 pub const DEFAULT_PORT: u16 = 17_555;
 /// Ports tried in order when the default one is taken.
 pub const FALLBACK_PORTS: std::ops::RangeInclusive<u16> = 17_556..=17_564;
+/// Id of the Chrome extension, derived from the public `key` in `extension/manifest.json`
+/// (ADR 0021). The application accepts only this origin unless the settings say otherwise.
+pub const EXTENSION_ID: &str = "pbgjebpmicmffhjbphlgginplaflodnj";
 /// Sockets served at the same time, handshakes included. More are closed right away.
 const MAX_SOCKETS: usize = 8;
 /// How often streams waiting for `resume` and expired codes are checked.

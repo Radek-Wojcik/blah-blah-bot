@@ -24,7 +24,7 @@ export function createMockBridge(opts: MockBridgeOptions) {
     enabled: true,
     port: 17555,
     portFallbacks: [17556, 17557, 17558, 17559, 17560, 17561, 17562, 17563, 17564],
-    allowedExtensionIds: [],
+    allowedExtensionIds: ["pbgjebpmicmffhjbphlgginplaflodnj"],
     clients: [
       {
         id: "c-5f0e2a9b4c1d7e38",
