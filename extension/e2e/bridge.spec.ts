@@ -33,15 +33,21 @@ async function startReceiver(): Promise<Receiver> {
 }
 
 async function streamStatus(bc: Chrome) {
-  const sw = await bc.serviceWorker();
-  return sw.evaluate(async () => {
-    const reply = await chrome.runtime.sendMessage({ target: "service-worker", type: "status" });
-    return reply.status as {
-      paired: boolean;
-      clientState: string;
-      streams: { tabId: number; status: string; framesSent: number; pendingFrames: number }[];
-    };
-  });
+  // A service worker does not receive its own messages, so ask through an extension page.
+  const page = await bc.context.newPage();
+  try {
+    await page.goto(`chrome-extension://${bc.extensionId}/popup.html`);
+    return await page.evaluate(async () => {
+      const reply = await chrome.runtime.sendMessage({ target: "service-worker", type: "status" });
+      return reply.status as {
+        paired: boolean;
+        clientState: string;
+        streams: { tabId: number; status: string; framesSent: number; pendingFrames: number }[];
+      };
+    });
+  } finally {
+    await page.close();
+  }
 }
 
 test.describe.configure({ mode: "serial" });

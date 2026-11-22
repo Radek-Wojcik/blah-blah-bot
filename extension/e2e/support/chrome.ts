@@ -42,7 +42,23 @@ function killProfileProcesses(profileDir: string): void {
   }
 }
 
+/** Waits until the extension APIs exist in the worker; right after start they can be missing. */
+async function ready(worker: Worker): Promise<Worker> {
+  for (let i = 0; i < 50; i++) {
+    const ok = await worker
+      .evaluate(() => typeof chrome !== "undefined" && !!chrome.storage)
+      .catch(() => false);
+    if (ok) return worker;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return worker;
+}
+
 async function findServiceWorker(context: BrowserContext): Promise<Worker> {
+  return ready(await findRawServiceWorker(context));
+}
+
+async function findRawServiceWorker(context: BrowserContext): Promise<Worker> {
   // The newest worker: a stopped one stays in the list until Playwright notices.
   const existing = context
     .serviceWorkers()
