@@ -113,7 +113,10 @@ export type IpcErrorCode =
   /** The draft does not exist before the reduce stage has run. */
   | "no_draft"
   | "no_new_draft"
-  | "draft_invalid";
+  | "draft_invalid"
+  // Stage 8: a piece of the setup is missing (the codes of `SetupErrorCode`).
+  | SetupErrorCode
+  | "setup_incomplete";
 
 export interface IpcError {
   code: IpcErrorCode;

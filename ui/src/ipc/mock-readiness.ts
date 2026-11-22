@@ -9,14 +9,16 @@ import type {
 } from "./types";
 
 /**
- * A minimal stand-in for the setup readiness report of the real application, derived from the
- * settings and the model list of the mock backend. The first-run wizard replaces it with
- * scenarios of its own.
+ * A stand-in for the setup readiness report of the real application, derived from the settings
+ * and the model list of the mock backend. `workerEnv` tells whether the processing environment
+ * exists; `working` names the item that is being prepared right now.
  */
 export function mockSetupStatus(
   settings: ProcessingSettings,
   models: ModelStatus[],
   llamaCandidates: string[] = [],
+  workerEnv = true,
+  working: string | null = null,
 ): SetupStatus {
   const cached = (key: string) => models.find((m) => m.key === key)?.cached ?? false;
   const ok = (key: string, message: string): SetupItem => ({ key, state: "ok", message });
@@ -38,9 +40,16 @@ export function mockSetupStatus(
   const visionOn = settings.describeScreenshots;
   const managed = settings.llm?.defaultKind !== "external";
   const llamaNeeded = visionOn || (managed && !settings.skipReports);
-  const llamaPath = settings.llamaServerPath || llamaCandidates[0] || "";
+  const llamaPath = settings.llamaServerPath;
   const items: SetupItem[] = [
-    ok("workerEnv", "The processing environment is ready."),
+    workerEnv
+      ? ok("workerEnv", "The processing environment is ready.")
+      : problem(
+          "workerEnv",
+          "setup_worker_env",
+          "The processing environment has not been created yet.",
+          "Prepare it in the setup.",
+        ),
     modelItem("whisper-turbo", "The speech recognition model (Whisper turbo)"),
     modelItem("diarization", "The speaker model (pyannote)"),
     settings.hfTokenSet
@@ -84,16 +93,27 @@ export function mockSetupStatus(
             "Download it in the setup, or skip screenshot analysis.",
           ),
   ];
+  const shown = items.map((i): SetupItem => {
+    if (i.key !== working) return i;
+    return { key: i.key, state: "working", message: "Working on it." };
+  });
   return {
-    ready: items.every((i) => i.state === "ok" || i.state === "skipped"),
+    ready: shown.every((i) => i.state === "ok" || i.state === "skipped"),
     firstRunDone: settings.firstRunDone,
-    items,
+    items: shown,
     llamaCandidates,
   };
 }
 
-/** The path rules of the real application in short: absolute, and a file of the right kind. */
-export function mockCheckSetupPath(kind: SetupPathKind, path: string): SetupPathCheck {
+/**
+ * The path rules of the real application in short: absolute, a file of the right kind and, when
+ * the files that exist are given, an existing one.
+ */
+export function mockCheckSetupPath(
+  kind: SetupPathKind,
+  path: string,
+  existing?: ReadonlySet<string>,
+): SetupPathCheck {
   const fail = (code: string, message: string): SetupPathCheck => ({ ok: false, code, message });
   const p = path.trim();
   if (p === "") return fail("path_empty", "No path was given.");
@@ -104,9 +124,16 @@ export function mockCheckSetupPath(kind: SetupPathKind, path: string): SetupPath
   if (kind === "llamaServer" && !/llama-server[^\\/]*\.exe$/.test(lower))
     return wrong("llama-server.exe");
   if (kind === "llmModel" && !lower.endsWith(".gguf")) return wrong("A .gguf file");
+  if (existing && !existing.has(p)) return fail("path_not_found", `No file exists at ${p}`);
   return { ok: true, code: null, message: null };
 }
 
-export function mockGgufModels(): GgufFile[] {
-  return [];
+/** The GGUF files of `dir` (every known one without a folder), as the real scan lists them. */
+export function mockGgufModels(known: GgufFile[], dir?: string): GgufFile[] {
+  if (dir === undefined || dir.trim() === "") return [...known];
+  const prefix = dir
+    .trim()
+    .replace(/[\\/]+$/, "")
+    .toLowerCase();
+  return known.filter((g) => g.path.toLowerCase().startsWith(`${prefix}\\`));
 }

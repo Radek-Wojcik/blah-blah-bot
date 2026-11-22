@@ -15,6 +15,7 @@ import {
 import { createCycleStore, type RecordingReport } from "./mock-cycles";
 import { createMockDrafts } from "./mock-drafts";
 import { mockCheckSetupPath, mockGgufModels, mockSetupStatus } from "./mock-readiness";
+import { applySetupScenario, type SetupScenario } from "./mock-setup";
 import { fail } from "./mock-util";
 import { isLocalHost, missingForKind, urlHost, validateLlmSettings } from "../llm";
 import { validateVoiceSettings } from "../speakers";
@@ -97,6 +98,11 @@ export interface MockOptions {
    * are no image.
    */
   overlayFault?: "blank" | "black" | "broken";
+  /**
+   * A setup scenario for the first-run wizard (see `mock-setup.ts`). Without it the mock
+   * reports a finished setup and does not check it before processing.
+   */
+  setup?: SetupScenario;
 }
 
 /** In-memory backend that serves the fictional demo cycle. No audio devices, files or network. */
@@ -135,6 +141,19 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
   const stepMs = Math.max(40, opts.jobStepMs ?? 1200);
   const processing = demoProcessingSettings();
   const models = demoModels();
+  const world = applySetupScenario(opts.setup, processing, models);
+  // The steps of a setup scenario are slower than a queue tick so that their progress can be seen.
+  const setupMs = world.active ? Math.max(stepMs / 4, 60) : stepMs / 4;
+  let preparing = false;
+  /** The readiness report; without a scenario the demo setup counts as finished. */
+  const readiness = () =>
+    mockSetupStatus(
+      processing,
+      world.active ? models : models.map((m) => ({ ...m, cached: true })),
+      world.llamaCandidates,
+      world.workerEnv,
+      preparing ? "workerEnv" : null,
+    );
   let jobs: JobView[] = demoJobs();
   const transcripts = new Map<string, TranscriptData>([["m5", demoTranscript("m5")]]);
   const drafts = createMockDrafts(cycles, (id) => transcripts.has(id));
@@ -231,7 +250,6 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
   const progressListeners = new Set<{ cb: (p: ModelsProgress) => void }>();
   const modelsListeners = new Set<{ cb: () => void }>();
   const setupListeners = new Set<{ cb: (p: SetupProgress) => void }>();
-  const setupLlamaCandidates: string[] = [];
 
   const emit = () => stateListeners.forEach((l) => l.cb(structuredClone(state)));
   const emitMeetings = () => meetingListeners.forEach((l) => l.cb());
@@ -520,6 +538,14 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     processMeeting: async (id, options?: ProcessOptions) => {
       const m = meetings.find((x) => x.id === id);
       if (!m) fail("internal", "Meeting not found");
+      if (world.active) {
+        // The same refusal as the real application: the item's problem and its fix.
+        const blocker = readiness().items.find(
+          (i) => i.code !== undefined && i.state === "missing",
+        );
+        if (blocker?.code)
+          fail(blocker.code, `${blocker.message}${blocker.fixHint ? ` ${blocker.fixHint}` : ""}`);
+      }
       const plan = planLlm(id, options?.llm?.kind);
       const existing = jobs.find((j) => j.meetingId === id);
       if (existing && options?.llm) {
@@ -717,7 +743,11 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       if (invalid) fail("invalid", invalid);
       // The token and key flags are owned by set/clear, as in the real application.
       const flags = { externalKeySet: llm().externalKeySet, cloudKeySet: llm().cloudKeySet };
-      Object.assign(processing, s, { hfTokenSet: processing.hfTokenSet });
+      // The token flag and the first-run flag are owned by their own commands.
+      Object.assign(processing, s, {
+        hfTokenSet: processing.hfTokenSet,
+        firstRunDone: processing.firstRunDone,
+      });
       processing.llm = { ...(s.llm ?? llm()), ...flags };
     },
     setHfToken: async (token) => {
@@ -726,21 +756,41 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     },
     clearHfToken: async () => void (processing.hfTokenSet = false),
     modelStatus: async () => structuredClone(models),
-    setupStatus: async () => mockSetupStatus(processing, models, setupLlamaCandidates),
-    detectLlamaServer: async () => [...setupLlamaCandidates],
-    findGgufModels: async () => mockGgufModels(),
-    checkSetupPath: async (kind, path) => mockCheckSetupPath(kind, path),
+    setupStatus: async () => readiness(),
+    detectLlamaServer: async () => [...world.llamaCandidates],
+    findGgufModels: async (dir) => mockGgufModels(world.ggufs, dir),
+    checkSetupPath: async (kind, path) =>
+      mockCheckSetupPath(kind, path, world.active ? world.knownFiles : undefined),
     prepareWorkerEnv: async () => {
-      setupListeners.forEach((l) =>
-        l.cb({
-          key: "workerEnv",
-          line: "The processing environment is ready",
-          fraction: 1,
-          done: true,
-          ok: true,
-          error: null,
-        }),
-      );
+      if (preparing) fail("busy", "The environment is already being prepared.");
+      preparing = true;
+      const lines: Array<[string, number | null]> = [
+        ["Resolving packages", 0.1],
+        ["Downloading packages", 0.45],
+        ["Installing packages", 0.8],
+      ];
+      const send = (line: string, fraction: number | null, end?: string | null) =>
+        setupListeners.forEach((l) =>
+          l.cb({
+            key: "workerEnv",
+            line,
+            fraction,
+            done: end !== undefined,
+            ok: end === undefined ? null : end === null,
+            error: end ?? null,
+          }),
+        );
+      lines.forEach(([line, fraction], n) => setTimeout(() => send(line, fraction), n * setupMs));
+      setTimeout(() => {
+        preparing = false;
+        if (world.envFailures > 0) {
+          world.envFailures -= 1;
+          send("uv sync failed", null, "uv sync failed: no network connection.");
+          return;
+        }
+        world.workerEnv = true;
+        send("The processing environment is ready", 1, null);
+      }, lines.length * setupMs);
     },
     setFirstRunDone: async (done = true) => void (processing.firstRunDone = done),
     downloadModels: async (keys) => {
@@ -754,6 +804,21 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
           );
       }
       for (const key of keys) {
+        if ((world.downloadFailures[key] ?? 0) > 0) {
+          // Like the real application: the failure arrives as an event, not as a rejection.
+          world.downloadFailures[key] -= 1;
+          setTimeout(() => {
+            progressListeners.forEach((l) =>
+              l.cb({
+                key,
+                fraction: 0,
+                message: "Failed: the download was interrupted (network error).",
+              }),
+            );
+            modelsListeners.forEach((l) => l.cb());
+          }, setupMs);
+          continue;
+        }
         let step = 0;
         const timer = setInterval(() => {
           step += 1;
@@ -767,7 +832,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
             if (model) model.cached = true;
             modelsListeners.forEach((l) => l.cb());
           }
-        }, stepMs / 4);
+        }, setupMs);
       }
     },
     getSettings: async () => ({

@@ -1,5 +1,6 @@
 import type { Backend } from "./ipc/backend";
 import { createMockBackend } from "./ipc/mock";
+import { parseSetupScenario } from "./ipc/mock-setup";
 import { createTauriBackend } from "./ipc/tauri";
 
 /**
@@ -16,10 +17,13 @@ export function selectBackend(search: string = window.location.search): Backend 
   const jobms = params.get("jobms");
   // `overlayfault=blank|black|broken` makes the screenshot overlay receive a bad capture.
   const fault = params.get("overlayfault");
+  // `setup=fresh|ready|no-vision|no-llama|download-fails` starts in a state of the first-run setup.
+  const setup = parseSetupScenario(params.get("setup"));
   return createMockBackend({
     recording: params.get("state") === "recording",
     // `newdraft=1` starts with a newer draft next to the edited one of the demo meeting.
     newDraft: params.get("newdraft") === "1",
+    ...(setup === undefined ? {} : { setup }),
     ...(rate === null ? {} : { clockRate: Number(rate) }),
     ...(jobms === null ? {} : { jobStepMs: Number(jobms) }),
     ...(fault === "blank" || fault === "black" || fault === "broken"
