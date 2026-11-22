@@ -1,0 +1,82 @@
+name: Release
+
+# Runs only when a version tag is pushed. It never runs for branches or pull requests.
+# It builds the installer and creates a DRAFT release; a person publishes it after checking it.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Rust toolchain
+        shell: pwsh
+        run: |
+          rustup show
+          cargo --version
+
+      - name: Version and release notes
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          # The tag, Cargo, Tauri and the UI package must name the same version, and the
+          # CHANGELOG must have a non-empty section for it.
+          python scripts/check_versions.py --tag $env:TAG
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          New-Item -ItemType Directory -Force -Path target | Out-Null
+          python scripts/release_notes.py $env:TAG | Set-Content -Encoding utf8 target/release-notes.md
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Build and check the installer
+        # Downloads the pinned uv release and checks its SHA256, builds the UI and the NSIS
+        # installer, inspects the payload and writes target/installer/SHA256SUMS.txt.
+        # Signing stays off unless a BBB_SIGN_COMMAND secret exists (docs/decisions/0020).
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+          BBB_SIGN_COMMAND: ${{ secrets.BBB_SIGN_COMMAND }}
+        run: ./scripts/build-installer.ps1 -Tag $env:TAG
+
+      - name: Check the checksum file against the installer
+        shell: pwsh
+        run: |
+          Push-Location target/installer
+          foreach ($line in Get-Content SHA256SUMS.txt) {
+            $hash, $name = $line -split '  ', 2
+            $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $name).Hash.ToLower()
+            if ($actual -ne $hash) { throw "checksum mismatch for $name" }
+            Write-Host "ok  $name"
+          }
+          Pop-Location
+
+      - name: Create the draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          $installer = Get-ChildItem target/installer -Filter '*-setup.exe'
+          if ($installer.Count -ne 1) { throw "expected one installer, found $($installer.Count)" }
+          gh release create $env:TAG --draft --verify-tag --title $env:TAG `
+            --notes-file target/release-notes.md `
+            $installer.FullName target/installer/SHA256SUMS.txt
+          if ($LASTEXITCODE -ne 0) { exit 1 }
