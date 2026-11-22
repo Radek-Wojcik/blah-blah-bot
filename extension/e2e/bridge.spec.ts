@@ -243,3 +243,164 @@ test("a fake Meet page is reported as joined and left, never with its code", asy
   const text = JSON.stringify(receiver.events);
   expect(text).not.toContain(FAKE_MEET_CODE);
 });
+
+test("a tab group is captured tab by tab; a late tab waits; a closed tab ends its stream", async () => {
+  // Chrome lets the extension capture a tab only after the user acted on it, so the test uses
+  // the synthetic hook for the capture itself; everything around it is the real extension:
+  // tab groups, the group state of the service worker, the badge and the `group` message.
+  await bc.context.route("https://*.group.test/**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: "<!doctype html><title>Group page</title><p>page</p>",
+    }),
+  );
+  const sw = await bc.serviceWorker();
+  const tabIds = () =>
+    sw.evaluate(async () => (await chrome.tabs.query({})).map((t) => t.id as number));
+  const openTab = async (name: string) => {
+    const before = new Set(await tabIds());
+    const page = await bc.context.newPage();
+    await page.goto(`https://${name}.group.test/`);
+    const id = (await tabIds()).find((i) => !before.has(i));
+    expect(id).toBeDefined();
+    return { page, id: id as number, host: `${name}.group.test` };
+  };
+  type Wire = { tab_id: number; status: string }[];
+  const groupEvent = (mark: number, gid: number, want: [number, string][]) =>
+    receiver.waitFor(
+      (e) =>
+        receiver.events.indexOf(e) >= mark &&
+        e.event === "group" &&
+        e.group_id === gid &&
+        JSON.stringify((e.list as Wire).map((t) => [t.tab_id, t.status])) === JSON.stringify(want),
+      15_000,
+    );
+  const badge = () => sw.evaluate(() => chrome.action.getBadgeText({}));
+  const capture = async (t: { id: number; host: string }, gid: number) => {
+    const r = await hook(bc, {
+      type: "synthetic-start",
+      tabId: t.id,
+      groupId: gid,
+      host: t.host,
+      title: "Local title",
+    });
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    return r.streamId as string;
+  };
+
+  const a = await openTab("a");
+  const b = await openTab("b");
+  const c = await openTab("c");
+  const gid = await sw.evaluate(
+    (ids) => chrome.tabs.group({ tabIds: ids as [number, ...number[]] }),
+    [a.id, b.id, c.id],
+  );
+
+  // One action per tab: the group is reported after each of them.
+  let mark = receiver.events.length;
+  const idA = await capture(a, gid);
+  await groupEvent(mark, gid, [
+    [a.id, "captured"],
+    [b.id, "waiting"],
+    [c.id, "waiting"],
+  ]);
+  await expect.poll(badge).toBe("+2");
+
+  mark = receiver.events.length;
+  const idB = await capture(b, gid);
+  await groupEvent(mark, gid, [
+    [a.id, "captured"],
+    [b.id, "captured"],
+    [c.id, "waiting"],
+  ]);
+  await expect.poll(badge).toBe("+1");
+
+  mark = receiver.events.length;
+  const idC = await capture(c, gid);
+  await groupEvent(mark, gid, [
+    [a.id, "captured"],
+    [b.id, "captured"],
+    [c.id, "captured"],
+  ]);
+  await expect.poll(badge).toBe("");
+
+  // A tab added to the group later is waiting, the badge counts it and the group is reported.
+  mark = receiver.events.length;
+  const d = await openTab("d");
+  await sw.evaluate((x) => chrome.tabs.group({ tabIds: [x.id], groupId: x.gid }), {
+    id: d.id,
+    gid,
+  });
+  await groupEvent(mark, gid, [
+    [a.id, "captured"],
+    [b.id, "captured"],
+    [c.id, "captured"],
+    [d.id, "waiting"],
+  ]);
+  await expect.poll(badge).toBe("+1");
+  expect(await sw.evaluate((id) => chrome.action.getBadgeText({ tabId: id }), d.id)).toBe("+1");
+
+  // The popup's view: statuses, the summary and the tab "Next tab" would activate.
+  const page = await openPopup(bc);
+  const view = await page.evaluate(async (tabId) => {
+    const reply = await chrome.runtime.sendMessage({
+      target: "service-worker",
+      type: "group-view",
+      tabId,
+    });
+    return reply.group as {
+      summary: string;
+      next: number | null;
+      tabs: { tabId: number; label: string; status: string }[];
+    };
+  }, a.id);
+  expect(view.summary).toBe("3/4 tabs");
+  expect(view.next).toBe(d.id);
+  expect(view.tabs.map((t) => t.status)).toEqual([
+    "captured",
+    "captured",
+    "captured",
+    "not_audible",
+  ]);
+  expect(view.tabs.map((t) => t.label)).toEqual([
+    "Local title",
+    "Local title",
+    "Local title",
+    "Tab 4",
+  ]);
+  const next = await page.evaluate(
+    async (tabId) =>
+      (await chrome.runtime.sendMessage({ target: "service-worker", type: "next-tab", tabId }))
+        .tabId as number,
+    a.id,
+  );
+  expect(next).toBe(d.id);
+  expect(await sw.evaluate((id) => chrome.tabs.get(id).then((t) => t.active), d.id)).toBe(true);
+  await page.close();
+
+  // Closing a captured tab ends its stream and takes it out of the group.
+  mark = receiver.events.length;
+  await b.page.close();
+  const endB = await receiver.waitForEnd(idB);
+  expect(endB.reason).toBe("tab_closed");
+  await groupEvent(mark, gid, [
+    [a.id, "captured"],
+    [c.id, "captured"],
+    [d.id, "waiting"],
+  ]);
+
+  // Only tab hosts reach the application, never a title.
+  const text = JSON.stringify(receiver.of("group"));
+  expect(text).not.toContain("Local title");
+  expect(text).not.toContain("Group page");
+  expect(receiver.of("stream_started").find((e) => e.stream_id === idA)?.host).toBe("a.group.test");
+
+  await hook(bc, { type: "synthetic-stop", tabId: a.id });
+  await hook(bc, { type: "synthetic-stop", tabId: c.id });
+  await receiver.waitForEnd(idA);
+  await receiver.waitForEnd(idC);
+  await expect.poll(badge).toBe("+3"); // stopped tabs wait again, with the late tab
+  for (const t of [a, c, d]) await t.page.close();
+  await expect.poll(badge).toBe(""); // the group is gone with its tabs
+});
