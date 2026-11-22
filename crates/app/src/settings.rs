@@ -38,6 +38,78 @@ pub struct LastReport {
     pub meeting_type: Option<String>,
 }
 
+/// The local bridge to the Chrome extension.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BridgeSettings {
+    /// Listen for the extension at all.
+    pub enabled: bool,
+    /// Port tried first on `127.0.0.1`.
+    pub port: u16,
+    /// Ports tried in order when `port` is taken.
+    pub port_fallbacks: Vec<u16>,
+    /// Extension ids accepted as `Origin`; empty accepts any extension (pairing still
+    /// decides who may stream).
+    pub allowed_extension_ids: Vec<String>,
+    /// Paired extensions. Changed only through pairing and unpairing: a settings save from
+    /// the UI keeps the stored list.
+    pub clients: Vec<bridge::pairing::PairedClient>,
+    /// Record a tab the extension starts while a recording runs, without asking.
+    pub auto_add_tabs: bool,
+}
+
+impl Default for BridgeSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            port: bridge::server::DEFAULT_PORT,
+            port_fallbacks: bridge::server::FALLBACK_PORTS.collect(),
+            allowed_extension_ids: Vec::new(),
+            clients: Vec::new(),
+            auto_add_tabs: true,
+        }
+    }
+}
+
+impl BridgeSettings {
+    /// Ports in the order they are tried.
+    pub fn ports(&self) -> Vec<u16> {
+        let mut out = vec![self.port];
+        out.extend(
+            self.port_fallbacks
+                .iter()
+                .copied()
+                .filter(|p| *p != self.port),
+        );
+        out
+    }
+
+    /// The settings as the UI may see them: no secret hashes.
+    pub fn redacted(mut self) -> Self {
+        for c in &mut self.clients {
+            c.secret_sha256.clear();
+        }
+        self
+    }
+
+    /// Check values entered in the settings screen.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.port < 1024 || self.port_fallbacks.iter().any(|p| *p < 1024) {
+            return Err("Bridge ports must be between 1024 and 65535".into());
+        }
+        if self.port_fallbacks.len() > 32 {
+            return Err("At most 32 fallback ports".into());
+        }
+        let id_ok = |id: &String| id.len() == 32 && id.bytes().all(|b| (b'a'..=b'p').contains(&b));
+        if let Some(bad) = self.allowed_extension_ids.iter().find(|id| !id_ok(id)) {
+            return Err(format!(
+                "`{bad}` is not a Chrome extension id (32 letters a to p)"
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -50,6 +122,8 @@ pub struct Settings {
     pub cycle_repos: Vec<CycleRepoSetting>,
     /// What the last recording used; filled by the application when a recording starts.
     pub last_report: Option<LastReport>,
+    /// The bridge to the Chrome extension.
+    pub bridge: BridgeSettings,
 }
 
 impl Default for Settings {
@@ -60,6 +134,7 @@ impl Default for Settings {
             screenshot_hotkey: "Ctrl+Alt+S".into(),
             cycle_repos: Vec::new(),
             last_report: None,
+            bridge: BridgeSettings::default(),
         }
     }
 }
@@ -84,12 +159,19 @@ impl Settings {
         std::fs::rename(&tmp, path)
     }
 
-    /// These settings with the values only the application changes (the repository list and
-    /// the last report) taken from `current`, so a settings screen that does not know them
-    /// cannot wipe them.
+    /// These settings with the values only the application changes (the repository list,
+    /// the last report and the paired extensions) taken from `current`, so a settings screen
+    /// that does not know them cannot wipe them.
     pub fn keeping_managed_from(mut self, current: &Settings) -> Self {
         self.cycle_repos = current.cycle_repos.clone();
         self.last_report = current.last_report.clone();
+        self.bridge.clients = current.bridge.clients.clone();
+        self
+    }
+
+    /// The settings as the UI may see them: secret hashes removed.
+    pub fn redacted(mut self) -> Self {
+        self.bridge = self.bridge.redacted();
         self
     }
 
@@ -139,6 +221,11 @@ mod tests {
                 template: None,
                 meeting_type: Some("budget".into()),
             }),
+            bridge: BridgeSettings {
+                port: 18000,
+                clients: vec![client("c-1")],
+                ..BridgeSettings::default()
+            },
         };
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), s);
@@ -220,5 +307,63 @@ mod tests {
         assert_eq!(merged.record_hotkey, "Ctrl+F5");
         assert_eq!(merged.cycle_repos, current.cycle_repos);
         assert_eq!(merged.last_report, current.last_report);
+    }
+
+    fn client(id: &str) -> bridge::pairing::PairedClient {
+        bridge::pairing::PairedClient {
+            id: id.into(),
+            name: "Chrome 136".into(),
+            ext_version: "0.6.0".into(),
+            secret_sha256: "ab".repeat(32),
+            paired_unix_ms: 1,
+        }
+    }
+
+    #[test]
+    fn a_settings_save_keeps_the_paired_extensions_but_takes_the_bridge_options() {
+        let mut current = Settings::default();
+        current.bridge.clients.push(client("c-1"));
+        let mut from_ui = Settings::default().redacted();
+        from_ui.bridge.enabled = false;
+        from_ui.bridge.auto_add_tabs = false;
+        let merged = from_ui.keeping_managed_from(&current);
+        assert_eq!(merged.bridge.clients, current.bridge.clients);
+        assert!(!merged.bridge.enabled && !merged.bridge.auto_add_tabs);
+    }
+
+    #[test]
+    fn the_ui_never_sees_secret_hashes() {
+        let mut s = Settings::default();
+        s.bridge.clients.push(client("c-1"));
+        let shown = s.redacted();
+        assert_eq!(shown.bridge.clients[0].id, "c-1");
+        assert!(shown.bridge.clients[0].secret_sha256.is_empty());
+    }
+
+    #[test]
+    fn bridge_defaults_and_validation() {
+        let b = BridgeSettings::default();
+        assert!(b.enabled && b.auto_add_tabs);
+        assert_eq!(b.ports().first(), Some(&17_555));
+        assert_eq!(b.ports().len(), 10);
+        assert!(b.validate().is_ok());
+        let low = BridgeSettings {
+            port: 80,
+            ..BridgeSettings::default()
+        };
+        assert!(low.validate().is_err());
+        let bad_id = BridgeSettings {
+            allowed_extension_ids: vec!["not-an-id".into()],
+            ..BridgeSettings::default()
+        };
+        assert!(bad_id.validate().is_err());
+        let good_id = BridgeSettings {
+            allowed_extension_ids: vec!["mddhpjgdobfbknicbomoojpbpkgfpima".into()],
+            ..BridgeSettings::default()
+        };
+        assert!(good_id.validate().is_ok());
+        // A file from before the bridge existed gets the defaults.
+        let s: Settings = serde_json::from_str(r#"{"recordHotkey":"Ctrl+F1"}"#).unwrap();
+        assert_eq!(s.bridge, BridgeSettings::default());
     }
 }

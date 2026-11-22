@@ -97,6 +97,7 @@ pub fn start_recording(
     )?;
     let root = state.recordings_root()?;
     state.recorder.start(&root, req, report.clone())?;
+    state.browser().sync_recording(state.recorder.meeting_id());
     // Best effort from here on: the recording is running.
     if let Some(last) = cycles::last_report_of(&report) {
         if let Err(e) = state.update_settings(|s| {
@@ -121,6 +122,7 @@ pub fn start_recording(
 #[tauri::command]
 pub fn stop_recording(app: AppHandle, state: State<'_, AppState>) -> IpcResult<()> {
     state.recorder.stop()?;
+    state.browser().sync_recording(None);
     overlay::cancel(&app);
     emit_state(&app, &RecordingState::idle());
     emit_meetings_changed(&app);
@@ -157,7 +159,8 @@ pub async fn take_screenshot(app: AppHandle) -> IpcResult<()> {
 
 #[tauri::command]
 pub fn get_settings(state: State<'_, AppState>) -> IpcResult<Settings> {
-    state.settings()
+    // The UI never sees the hashes of the extension secrets.
+    state.settings().map(Settings::redacted)
 }
 
 #[tauri::command]

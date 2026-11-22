@@ -345,6 +345,23 @@ impl Recorder {
             .map_err(session_error)
     }
 
+    /// Record a browser tab the extension streams. Returns the track name.
+    pub fn add_tab(&self, stream_id: &str, label: &str) -> IpcResult<String> {
+        let spec = SourceSpec::parse(&format!("tab:{stream_id}"))
+            .map_err(|e| IpcError::new("source_not_found", e.to_string()))?;
+        let mut guard = self.lock_active()?;
+        let a = guard
+            .as_mut()
+            .ok_or_else(|| IpcError::new("not_recording", "Not recording"))?;
+        a.session.add_source(spec, label).map_err(session_error)
+    }
+
+    /// Id of the meeting being recorded.
+    pub fn meeting_id(&self) -> Option<String> {
+        let g = self.active.lock().ok()?;
+        g.as_ref().map(|a| a.meeting_id.clone())
+    }
+
     pub fn remove_source(&self, id: &str) -> IpcResult<()> {
         let mut guard = self.lock_active()?;
         let a = guard
@@ -455,5 +472,53 @@ mod tests {
         let id = recorder.stop().unwrap();
         let guard = store.lock().unwrap();
         assert_eq!(guard.get_report_settings(&id).unwrap(), Some(report));
+    }
+
+    #[test]
+    fn a_tab_added_while_recording_is_stored_as_its_own_track() {
+        use recorder::push::ToneTabSource;
+        use recorder::session::{RoutingBackend, ToneBackend};
+        let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
+        let backend = Arc::new(RoutingBackend::new(
+            Arc::new(ToneBackend),
+            Arc::new(ToneTabSource {
+                hz: 660,
+                end_after: None,
+            }),
+        ));
+        let recorder = Recorder::new(store.clone(), backend, true);
+        let root = testkit::target_tempdir("app-tab");
+        // Not recording: a tab is refused.
+        assert_eq!(
+            recorder.add_tab("t1", "Tab: example.org").unwrap_err().code,
+            "not_recording"
+        );
+        let req = StartRecordingRequest {
+            title: None,
+            source_ids: vec!["tone:220".into()],
+            report: None,
+            use_last_report: false,
+        };
+        recorder
+            .start(root.path(), req, ReportSettings::default())
+            .unwrap();
+        assert!(recorder.meeting_id().is_some());
+        assert_eq!(recorder.add_tab("t1", "Tab: example.org").unwrap(), "tab");
+        assert_eq!(
+            recorder.add_tab("t1", "Tab: example.org").unwrap_err().code,
+            "source_already_added"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        let state = recorder.tick().unwrap();
+        let tab = state.sources.iter().find(|s| s.id == "tab:t1").unwrap();
+        assert_eq!(tab.label, "Tab: example.org");
+        let id = recorder.stop().unwrap();
+        assert!(recorder.meeting_id().is_none());
+        let guard = store.lock().unwrap();
+        let details = guard.get_meeting(&id).unwrap().unwrap();
+        let track = details.tracks.iter().find(|t| t.name == "tab").unwrap();
+        assert_eq!(track.source, "browser-tab");
+        assert!(track.ended);
+        assert!(track.total_samples.unwrap_or(0) > 16_000 * 4 / 10);
     }
 }

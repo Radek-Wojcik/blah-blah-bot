@@ -26,6 +26,7 @@ cycle-store = { path = "../cycle-store" }
 speakers = { path = "../speakers" }
 keyring-core = "1"
 recorder = { path = "../recorder" }
+bridge = { path = "../bridge" }
 
 [target.'cfg(windows)'.dependencies]
 windows-native-keyring-store = "1"

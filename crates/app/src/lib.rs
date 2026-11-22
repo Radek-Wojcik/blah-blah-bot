@@ -1,5 +1,6 @@
 //! Desktop shell: tray icon, windows, global hotkeys and IPC commands.
 
+mod browser;
 mod commands;
 mod cycle_commands;
 mod cycles;
@@ -104,6 +105,8 @@ fn start_ticker(app: AppHandle) {
             if let Some(s) = state.recorder.tick() {
                 commands::emit_state(&app, &s);
             }
+            // Every way to start or stop a recording ends up here within one tick.
+            state.browser().sync_recording(state.recorder.meeting_id());
         });
     if let Err(e) = spawned {
         tracing::error!(error = %e, "could not start the state ticker");
@@ -131,6 +134,7 @@ pub fn run() {
             }
             let settings = state.settings()?;
             app.manage(state);
+            handle.state::<AppState>().start_browser(handle.clone());
             // Jobs interrupted by a crash continue; nothing else starts on its own.
             handle.state::<AppState>().processing().resume_interrupted();
             if let Ok(root) = handle.state::<AppState>().recordings_root() {
@@ -176,6 +180,10 @@ pub fn run() {
             commands::take_screenshot,
             commands::get_settings,
             commands::save_settings,
+            browser::bridge_status,
+            browser::start_pairing,
+            browser::cancel_pairing,
+            browser::unpair_client,
             processing_commands::process_meeting,
             processing_commands::queue_state,
             processing_commands::retry_job,

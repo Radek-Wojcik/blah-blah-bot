@@ -4,9 +4,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use recorder::screenshot::Frame;
-use recorder::session::{CaptureBackend, ToneBackend, WasapiBackend};
+use recorder::session::{CaptureBackend, RoutingBackend, ToneBackend, WasapiBackend};
 use tauri::{AppHandle, Manager};
 
+use crate::browser::{AppHost, Browser};
 use crate::cycles::ParticipantSync;
 use crate::ipc::{IpcError, IpcResult};
 use crate::processing::Processing;
@@ -28,6 +29,8 @@ pub struct AppState {
     pub recorder: Recorder,
     processing: Arc<Processing>,
     pub pending_shot: Mutex<Option<PendingShot>>,
+    browser: Arc<Browser>,
+    browser_host: Arc<AppHost>,
 }
 
 /// Keeps the stored participants of a cycle in step with `cycle.yaml`, locking the database
@@ -69,12 +72,18 @@ impl AppState {
         // `BBB_DEMO=1` swaps real audio capture for generated tones: used by the demo mode,
         // the UI screenshots script and tests of the application itself.
         let demo = std::env::var_os("BBB_DEMO").is_some();
-        let backend: Arc<dyn CaptureBackend> = if demo {
+        let devices: Arc<dyn CaptureBackend> = if demo {
             Arc::new(ToneBackend)
         } else {
             Arc::new(WasapiBackend)
         };
-        let settings = Arc::new(Mutex::new(Settings::load(&settings_path)));
+        let loaded = Settings::load(&settings_path);
+        // Browser tabs come from the bridge, in demo mode as well.
+        let browser_host = Arc::new(AppHost::default());
+        let browser = Browser::new(&loaded.bridge, browser_host.clone());
+        let backend: Arc<dyn CaptureBackend> =
+            Arc::new(RoutingBackend::new(devices, browser.tab_source()));
+        let settings = Arc::new(Mutex::new(loaded));
         let root_app = app.clone();
         let repos_settings = settings.clone();
         let processing = Processing::new(
@@ -104,7 +113,23 @@ impl AppState {
             data_dir,
             default_recordings,
             pending_shot: Mutex::new(None),
+            browser,
+            browser_host,
         })
+    }
+
+    /// The bridge to the Chrome extension.
+    pub fn browser(&self) -> &Arc<Browser> {
+        &self.browser
+    }
+
+    /// Start the bridge once the application is set up.
+    pub fn start_browser(&self, app: AppHandle) {
+        self.browser_host.bind(app);
+        match self.settings() {
+            Ok(s) => self.browser.apply(&s.bridge),
+            Err(e) => tracing::error!(error = %e, "bridge not started"),
+        }
     }
 
     /// Run `f` with the store locked.
@@ -156,10 +181,16 @@ impl AppState {
     /// Save settings from the settings screen. The repository list and the last report are
     /// kept as they are: only the cycle commands change them.
     pub fn save_settings(&self, new: Settings) -> IpcResult<()> {
-        self.update_settings(|s| {
+        new.bridge
+            .validate()
+            .map_err(|m| IpcError::new("invalid", m))?;
+        let bridge = self.update_settings(|s| {
             *s = new.keeping_managed_from(s);
-            Ok(())
-        })
+            Ok(s.bridge.clone())
+        })?;
+        // Outside the settings lock: the bridge may report back into the settings.
+        self.browser.apply(&bridge);
+        Ok(())
     }
 
     /// Change the settings under the lock and save them. Nothing is stored when `f` fails.
