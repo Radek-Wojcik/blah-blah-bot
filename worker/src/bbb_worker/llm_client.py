@@ -225,12 +225,20 @@ def response_format(name: str, schema: dict[str, Any]) -> dict[str, Any]:
     return {"type": "json_schema", "json_schema": {"name": name, "strict": True, "schema": clean}}
 
 
+_PROBLEM_CHARS = 200
+
+
 def _first_error(validator: jsonschema.Draft202012Validator, data: Any) -> str | None:
     errors = sorted(validator.iter_errors(data), key=lambda e: list(e.path))
     if not errors:
         return None
-    where = "/".join(str(p) for p in errors[0].path) or "<root>"
-    return f"{where}: {errors[0].message}"
+    first = errors[0]
+    where = "/".join(str(p) for p in first.path) or "<root>"
+    # jsonschema quotes the offending value ("'<text>' is too long"). That value is model
+    # output and can contain meeting content, and this text ends up in error messages and
+    # logs, so it names the rule only.
+    message = first.message.replace(repr(first.instance), "<value>")
+    return f"{where}: {message[:_PROBLEM_CHARS]}"
 
 
 def _parse(resp: dict[str, Any]) -> tuple[Any, str]:

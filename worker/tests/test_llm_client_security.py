@@ -264,3 +264,17 @@ def test_a_partly_skipped_extract_is_still_a_success(tmp_path):
         extract.run(m)
     flags = [w["skipped"] for w in read_json(m.work_dir / "extract" / "windows.json")["windows"]]
     assert flags[0] is True and not all(flags)
+
+
+def test_a_schema_problem_names_the_rule_and_not_the_value():
+    import jsonschema
+
+    validator = jsonschema.Draft202012Validator(
+        {"type": "object", "properties": {"note": {"type": "string", "maxLength": 5}}}
+    )
+    secret = "the confidential budget figures"
+    problem = llm_client._first_error(validator, {"note": secret})
+    assert problem is not None and problem.startswith("note: ")
+    assert "confidential" not in problem
+    assert "too long" in problem
+    assert llm_client._first_error(validator, {"note": "ok"}) is None
