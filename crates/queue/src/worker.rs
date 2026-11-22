@@ -161,6 +161,10 @@ pub struct JobOptions {
     /// those stages are skipped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub llm: Option<LlmOptions>,
+    /// Leave the screenshots undescribed: the `vision` stage is skipped (the user turned
+    /// screenshot analysis off). Written to the manifest only when set.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub skip_vision: bool,
 }
 
 impl Default for JobOptions {
@@ -172,6 +176,7 @@ impl Default for JobOptions {
             max_speakers: None,
             vision_base_url: None,
             llm: None,
+            skip_vision: false,
         }
     }
 }

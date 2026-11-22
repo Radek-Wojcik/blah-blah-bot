@@ -47,6 +47,7 @@
         "asr_model": { "enum": ["turbo", "large-v3"], "default": "turbo" },
         "glossary": { "type": "array", "items": { "type": "string" } },
         "max_speakers": { "type": ["integer", "null"], "minimum": 1 },
+        "skip_vision": { "type": "boolean", "default": false, "description": "The user turned screenshot analysis off: the application skips the vision stage and the worker is not asked to run it" },
         "llm": {
           "type": "object",
           "description": "Backend of the extract and reduce stages. Keys are never stored here: they come from the environment variable BBB_LLM_API_KEY.",

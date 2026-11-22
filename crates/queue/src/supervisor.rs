@@ -244,6 +244,9 @@ impl Supervisor {
     fn plan(&self, meeting_id: &str, job: &JobRow, stage: Stage) -> Result<Plan, QueueError> {
         let options = JobOptions::from_json(&job.options);
         let kind = options.llm.as_ref().map(|l| l.kind);
+        if stage == Stage::Vision && options.skip_vision {
+            return Ok(Plan::Skip("screenshot analysis is turned off".into()));
+        }
         if !stage.uses_llm() {
             return Ok(Plan::Run(kind));
         }
@@ -541,6 +544,54 @@ mod tests {
             assert_eq!(row.error, None);
             assert_eq!(row.attempts, 0);
         }
+    }
+
+    #[test]
+    fn turning_screenshot_analysis_off_skips_only_the_vision_stage_and_the_job_finishes() {
+        let options = serde_json::to_string(&JobOptions {
+            skip_vision: true,
+            ..JobOptions::default()
+        })
+        .unwrap();
+        let (sup, runner, gate) = setup_with(&options, None);
+        assert_eq!(sup.drive("m1").unwrap(), StepOutcome::Finished);
+        let ran = runner.calls.lock().unwrap().clone();
+        assert!(!ran.contains(&Stage::Vision), "{ran:?}");
+        // Every other stage before the language-model ones still ran.
+        assert_eq!(
+            ran,
+            STAGES[..7]
+                .iter()
+                .copied()
+                .filter(|s| *s != Stage::Vision)
+                .collect::<Vec<_>>()
+        );
+        let row = stage_row(&sup, Stage::Vision);
+        assert_eq!(row.status, StageStatus::Done);
+        assert_eq!(
+            row.note.as_deref(),
+            Some("screenshot analysis is turned off")
+        );
+        assert_eq!((row.error, row.attempts), (None, 0));
+        // A skipped stage never waits for the GPU.
+        assert!(!gate.0.lock().unwrap().contains(&Stage::Vision));
+    }
+
+    #[test]
+    fn the_vision_stage_runs_unless_it_was_turned_off_and_old_options_still_load() {
+        let (sup, runner, _) = setup_with("{}", None);
+        assert_eq!(sup.drive("m1").unwrap(), StepOutcome::Finished);
+        assert!(runner.calls.lock().unwrap().contains(&Stage::Vision));
+        assert!(!JobOptions::from_json(r#"{"language":"pl"}"#).skip_vision);
+        // The flag is left out of the manifest options while it is off.
+        let json = serde_json::to_value(JobOptions::default()).unwrap();
+        assert!(json.get("skip_vision").is_none());
+        let json = serde_json::to_value(JobOptions {
+            skip_vision: true,
+            ..JobOptions::default()
+        })
+        .unwrap();
+        assert_eq!(json["skip_vision"], true);
     }
 
     #[test]
