@@ -1,0 +1,124 @@
+{
+  "description": "Bridge protocol v2 text messages shared by the Rust and the extension tests. Every `valid` message matches schemas/bridge-message.schema.json and survives a parse and serialize round trip unchanged; every `invalid` message is refused by the receiver.",
+  "client": [
+    {
+      "name": "hello with a pairing code",
+      "message": { "type": "hello", "version": 2, "client": "Chrome 136", "ext_version": "0.6.0", "pairing_code": "7K3M9QXD" }
+    },
+    {
+      "name": "hello with the client secret",
+      "message": {
+        "type": "hello",
+        "version": 2,
+        "client": "Chrome 136",
+        "ext_version": "0.6.0",
+        "client_id": "c-5f0e2a9b4c1d7e38",
+        "secret": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+      }
+    },
+    {
+      "name": "start of a tab in a group",
+      "message": {
+        "type": "start",
+        "stream_id": "t812-1",
+        "tab_id": 812,
+        "group_id": 4,
+        "title": "Weekly sync - Google Meet",
+        "host": "meet.google.com",
+        "sample_rate": 16000,
+        "channels": 1,
+        "format": "s16le",
+        "frame_samples": 320
+      }
+    },
+    {
+      "name": "start of a tab without a group",
+      "message": {
+        "type": "start",
+        "stream_id": "t95-2",
+        "tab_id": 95,
+        "title": "Design review recording",
+        "host": "video.example.org",
+        "sample_rate": 16000,
+        "channels": 1,
+        "format": "s16le",
+        "frame_samples": 320
+      }
+    },
+    { "name": "resume after a reconnect", "message": { "type": "resume", "stream_id": "t812-1", "next_seq": 1520 } },
+    {
+      "name": "stop when the tab closes",
+      "message": { "type": "stop", "stream_id": "t812-1", "reason": "tab_closed", "frames_sent": 1600, "samples_sent": 512000, "frames_dropped": 0 }
+    },
+    { "name": "meet joined", "message": { "type": "meet", "tab_id": 812, "host": "meet.google.com", "state": "joined" } },
+    {
+      "name": "group status",
+      "message": {
+        "type": "group",
+        "group_id": 4,
+        "tabs": [
+          { "tab_id": 812, "status": "captured" },
+          { "tab_id": 813, "status": "waiting" },
+          { "tab_id": 814, "status": "failed" }
+        ]
+      }
+    },
+    { "name": "ping", "message": { "type": "ping", "t": 1794579901123.5 } },
+    { "name": "pong without time", "message": { "type": "pong" } }
+  ],
+  "server": [
+    {
+      "name": "hello_ok after pairing",
+      "message": {
+        "type": "hello_ok",
+        "client_id": "c-5f0e2a9b4c1d7e38",
+        "secret": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+        "session_id": "s-3",
+        "app_version": "0.6.0",
+        "recording": false,
+        "heartbeat_ms": 5000
+      }
+    },
+    {
+      "name": "hello_ok on a later connection",
+      "message": {
+        "type": "hello_ok",
+        "client_id": "c-5f0e2a9b4c1d7e38",
+        "session_id": "s-4",
+        "app_version": "0.6.0",
+        "recording": true,
+        "heartbeat_ms": 5000
+      }
+    },
+    { "name": "error for a wrong code", "message": { "type": "error", "code": "bad_code", "message": "The pairing code is not correct." } },
+    { "name": "error for an expired code", "message": { "type": "error", "code": "code_expired", "message": "The pairing code expired. Start pairing again in the application." } },
+    { "name": "error for an old version", "message": { "type": "error", "code": "bad_version", "message": "Protocol version 1 is not supported; this application speaks version 2." } },
+    { "name": "start_ok", "message": { "type": "start_ok", "stream_id": "t812-1", "stream_no": 1, "track": "tab" } },
+    { "name": "start refused while idle", "message": { "type": "start_refused", "stream_id": "t95-2", "reason": "not_recording" } },
+    {
+      "name": "state while recording",
+      "message": {
+        "type": "state",
+        "recording": true,
+        "meeting_id": "20261113-142501",
+        "streams": [
+          { "stream_id": "t812-1", "track": "tab", "status": "recording" },
+          { "stream_id": "t95-2", "track": "tab-2", "status": "waiting" }
+        ]
+      }
+    },
+    { "name": "state while idle", "message": { "type": "state", "recording": false, "streams": [] } }
+  ],
+  "invalid": [
+    { "name": "hello with both code and secret", "text": "{\"type\":\"hello\",\"version\":2,\"client\":\"c\",\"ext_version\":\"1\",\"pairing_code\":\"7K3M9QXD\",\"client_id\":\"c-1\",\"secret\":\"x\"}" },
+    { "name": "hello without credentials", "text": "{\"type\":\"hello\",\"version\":2,\"client\":\"c\",\"ext_version\":\"1\"}" },
+    { "name": "start at 48 kHz", "text": "{\"type\":\"start\",\"stream_id\":\"s\",\"tab_id\":1,\"title\":\"\",\"host\":\"\",\"sample_rate\":48000,\"channels\":1,\"format\":\"s16le\",\"frame_samples\":320}" },
+    { "name": "start in stereo", "text": "{\"type\":\"start\",\"stream_id\":\"s\",\"tab_id\":1,\"title\":\"\",\"host\":\"\",\"sample_rate\":16000,\"channels\":2,\"format\":\"s16le\",\"frame_samples\":320}" },
+    { "name": "stream id with a slash", "text": "{\"type\":\"resume\",\"stream_id\":\"a/b\",\"next_seq\":0}" },
+    { "name": "unknown stop reason", "text": "{\"type\":\"stop\",\"stream_id\":\"s\",\"reason\":\"bored\",\"frames_sent\":0,\"samples_sent\":0,\"frames_dropped\":0}" },
+    { "name": "unknown type", "text": "{\"type\":\"teleport\"}" },
+    { "name": "missing type", "text": "{\"stream_id\":\"s\"}" },
+    { "name": "not JSON", "text": "hello" },
+    { "name": "negative tab id", "text": "{\"type\":\"meet\",\"tab_id\":-1,\"host\":\"meet.google.com\",\"state\":\"joined\"}" }
+  ]
+}

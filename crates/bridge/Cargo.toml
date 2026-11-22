@@ -1,0 +1,19 @@
+[package]
+name = "bridge"
+description = "Local WebSocket bridge to the Chrome extension: protocol, pairing and server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+jsonschema = { version = "0.30", default-features = false }
+
+[lints]
+workspace = true

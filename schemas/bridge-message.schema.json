@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Radek-Wojcik/blah-blah-bot/schemas/bridge-message.schema.json",
+  "title": "Bridge message",
+  "description": "Text messages of the bridge protocol version 2 between the Chrome extension and the application (ADR 0020). Audio travels in binary frames that this schema does not describe: a 16-byte little-endian header u32 stream_no | u32 seq | f64 sent_ms, then signed 16-bit mono samples at 16 kHz. Receivers ignore unknown fields; senders send only the fields below.",
+  "oneOf": [
+    { "$ref": "#/$defs/hello" },
+    { "$ref": "#/$defs/start" },
+    { "$ref": "#/$defs/resume" },
+    { "$ref": "#/$defs/stop" },
+    { "$ref": "#/$defs/meet" },
+    { "$ref": "#/$defs/group" },
+    { "$ref": "#/$defs/ping" },
+    { "$ref": "#/$defs/pong" },
+    { "$ref": "#/$defs/hello_ok" },
+    { "$ref": "#/$defs/error" },
+    { "$ref": "#/$defs/start_ok" },
+    { "$ref": "#/$defs/start_refused" },
+    { "$ref": "#/$defs/state" }
+  ],
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,64}$" },
+    "u32": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+    "count": { "type": "integer", "minimum": 0 },
+    "hello": {
+      "description": "Extension to application, first message. Pairs with a code, or authenticates with the client id and secret received at pairing.",
+      "type": "object",
+      "required": ["type", "version", "client", "ext_version"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "hello" },
+        "version": { "const": 2 },
+        "client": { "type": "string", "maxLength": 200 },
+        "ext_version": { "type": "string", "maxLength": 64 },
+        "pairing_code": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "client_id": { "$ref": "#/$defs/id" },
+        "secret": { "type": "string", "minLength": 1, "maxLength": 128 }
+      },
+      "oneOf": [
+        { "required": ["pairing_code"], "not": { "anyOf": [{ "required": ["client_id"] }, { "required": ["secret"] }] } },
+        { "required": ["client_id", "secret"], "not": { "required": ["pairing_code"] } }
+      ]
+    },
+    "start": {
+      "description": "Extension to application: a tab starts streaming. Frames follow only after start_ok.",
+      "type": "object",
+      "required": ["type", "stream_id", "tab_id", "title", "host", "sample_rate", "channels", "format", "frame_samples"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "start" },
+        "stream_id": { "$ref": "#/$defs/id" },
+        "tab_id": { "$ref": "#/$defs/u32" },
+        "group_id": { "type": "integer" },
+        "title": { "type": "string" },
+        "host": { "type": "string", "maxLength": 255 },
+        "sample_rate": { "const": 16000 },
+        "channels": { "const": 1 },
+        "format": { "const": "s16le" },
+        "frame_samples": { "type": "integer", "minimum": 1, "maximum": 4800 }
+      }
+    },
+    "resume": {
+      "description": "Extension to application, after a reconnect: continue a stream accepted on an earlier connection. next_seq is the sequence number of the next frame sent. The answer is start_ok or start_refused.",
+      "type": "object",
+      "required": ["type", "stream_id", "next_seq"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "resume" },
+        "stream_id": { "$ref": "#/$defs/id" },
+        "next_seq": { "$ref": "#/$defs/u32" }
+      }
+    },
+    "stop": {
+      "type": "object",
+      "required": ["type", "stream_id", "reason", "frames_sent", "samples_sent", "frames_dropped"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "stop" },
+        "stream_id": { "$ref": "#/$defs/id" },
+        "reason": { "enum": ["user_stop", "track_ended", "tab_closed", "connection_lost"] },
+        "frames_sent": { "$ref": "#/$defs/count" },
+        "samples_sent": { "$ref": "#/$defs/count" },
+        "frames_dropped": { "$ref": "#/$defs/count" }
+      }
+    },
+    "meet": {
+      "description": "A Google Meet tab became audible or was closed. Carries the host only, never the meeting code.",
+      "type": "object",
+      "required": ["type", "tab_id", "host", "state"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "meet" },
+        "tab_id": { "$ref": "#/$defs/u32" },
+        "host": { "type": "string", "maxLength": 255 },
+        "state": { "enum": ["joined", "left"] }
+      }
+    },
+    "group": {
+      "type": "object",
+      "required": ["type", "group_id", "tabs"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "group" },
+        "group_id": { "type": "integer" },
+        "tabs": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "type": "object",
+            "required": ["tab_id", "status"],
+            "additionalProperties": false,
+            "properties": {
+              "tab_id": { "$ref": "#/$defs/u32" },
+              "status": { "enum": ["captured", "waiting", "failed"] }
+            }
+          }
+        }
+      }
+    },
+    "ping": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": { "type": { "const": "ping" }, "t": { "type": "number" } }
+    },
+    "pong": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": { "type": { "const": "pong" }, "t": { "type": "number" } }
+    },
+    "hello_ok": {
+      "description": "Application to extension. secret is sent once, right after pairing.",
+      "type": "object",
+      "required": ["type", "client_id", "session_id", "app_version", "recording", "heartbeat_ms"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "hello_ok" },
+        "client_id": { "$ref": "#/$defs/id" },
+        "secret": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "session_id": { "$ref": "#/$defs/id" },
+        "app_version": { "type": "string" },
+        "recording": { "type": "boolean" },
+        "heartbeat_ms": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "error": {
+      "description": "Application to extension, sent before the application closes the connection.",
+      "type": "object",
+      "required": ["type", "code", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "error" },
+        "code": { "enum": ["bad_version", "bad_code", "code_expired", "unpaired", "busy", "bad_message"] },
+        "message": { "type": "string" }
+      }
+    },
+    "start_ok": {
+      "type": "object",
+      "required": ["type", "stream_id", "stream_no", "track"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "start_ok" },
+        "stream_id": { "$ref": "#/$defs/id" },
+        "stream_no": { "$ref": "#/$defs/u32" },
+        "track": { "type": "string", "minLength": 1 }
+      }
+    },
+    "start_refused": {
+      "type": "object",
+      "required": ["type", "stream_id", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "start_refused" },
+        "stream_id": { "$ref": "#/$defs/id" },
+        "reason": { "enum": ["not_recording", "duplicate", "declined", "unknown_stream"] }
+      }
+    },
+    "state": {
+      "description": "Application to extension: the complete recording state, sent after hello_ok and whenever it changes. A stream missing from streams is not recorded.",
+      "type": "object",
+      "required": ["type", "recording", "streams"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "state" },
+        "recording": { "type": "boolean" },
+        "meeting_id": { "type": "string" },
+        "streams": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["stream_id", "track", "status"],
+            "additionalProperties": false,
+            "properties": {
+              "stream_id": { "$ref": "#/$defs/id" },
+              "track": { "type": "string" },
+              "status": { "enum": ["recording", "waiting"] }
+            }
+          }
+        }
+      }
+    }
+  }
+}
