@@ -15,6 +15,8 @@ mod recording;
 mod recording_dto;
 mod secrets;
 mod settings;
+mod setup;
+mod setup_commands;
 mod speaker_commands;
 mod state;
 
@@ -189,6 +191,12 @@ pub fn run() {
             processing_commands::clear_hf_token,
             processing_commands::model_status,
             processing_commands::download_models,
+            setup_commands::setup_status,
+            setup_commands::detect_llama_server,
+            setup_commands::find_gguf_models,
+            setup_commands::check_setup_path,
+            setup_commands::prepare_worker_env,
+            setup_commands::set_first_run_done,
             speaker_commands::get_meeting_voices,
             speaker_commands::assign_voice,
             speaker_commands::assign_voice_new,

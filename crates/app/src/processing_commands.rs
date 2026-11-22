@@ -96,8 +96,11 @@ fn transcript_error(e: TranscriptError) -> IpcError {
     }
 }
 
+/// Async: the readiness check asks the worker which models are cached (a process). A missing
+/// piece of the setup is refused with a `setup_*` code (see `crate::setup`) and a message that
+/// says how to fix it, instead of failing deep inside the worker.
 #[tauri::command]
-pub fn process_meeting(
+pub async fn process_meeting(
     state: State<'_, AppState>,
     id: String,
     options: Option<ProcessOptions>,
@@ -122,6 +125,7 @@ pub fn process_meeting(
             secrets::get(name).is_some()
         })
     })?;
+    crate::setup_commands::ensure_ready(&state, &id, &job)?;
     state.processing().process(&id, job)
 }
 
@@ -295,6 +299,11 @@ pub fn cloud_key_present(state: State<'_, AppState>) -> bool {
 
 #[tauri::command]
 pub fn set_external_key(state: State<'_, AppState>, key: String) -> IpcResult<()> {
+    // A key is not stored for an address it would be sent to in clear text.
+    state
+        .processing()
+        .llm_settings()?
+        .check_external_key_transport(true)?;
     secrets::set(&key_entry(&state, LlmKind::External)?, &key)
 }
 

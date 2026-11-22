@@ -16,19 +16,22 @@ use queue::{GateDecision, GpuGate, Next, Stage, StepOutcome, Supervisor, STAGES}
 use serde::{Deserialize, Serialize};
 use speakers::Thresholds;
 use store::{LlmKind, StageStatus, Store};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::cycles::{PullLedger, RepoCycleSource};
 use crate::ipc::{IpcError, IpcResult};
 use crate::llm::{self, LlmSettings};
 use crate::secrets;
 use crate::settings::CycleRepoSetting;
+use crate::setup;
 
 type RepoList = Arc<dyn Fn() -> Vec<CycleRepoSetting> + Send + Sync>;
 
 pub const EVENT_QUEUE: &str = "queue-changed";
 pub const EVENT_MODELS_PROGRESS: &str = "models-progress";
 pub const EVENT_MODELS_CHANGED: &str = "models-changed";
+/// Progress of the processing environment set-up (`prepare_worker_env`).
+pub const EVENT_SETUP_PROGRESS: &str = "setup-progress";
 
 /// A stage that crashed this many times in a row is marked failed instead of retried.
 const MAX_CRASHES: u32 = 3;
@@ -103,6 +106,14 @@ pub struct ProcessingSettings {
     pub clip_max_days: u32,
     /// Language-model backend of the extraction stages.
     pub llm: LlmSettings,
+    /// Describe the screenshots of a meeting with the vision model. Off: the stage is skipped
+    /// and the report is made without screenshot descriptions.
+    pub describe_screenshots: bool,
+    /// The user chose to go without reports: no language model is needed.
+    pub skip_reports: bool,
+    /// The first-run setup was completed. Changed only by `set_first_run_done`: a settings
+    /// save keeps the stored value.
+    pub first_run_done: bool,
     /// Filled when reading; ignored when saving.
     #[serde(skip_deserializing)]
     pub hf_token_set: bool,
@@ -126,6 +137,9 @@ impl Default for ProcessingSettings {
             voice_margin: voice.thresholds.margin,
             clip_max_days: voice.clip_max_days,
             llm: LlmSettings::default(),
+            describe_screenshots: true,
+            skip_reports: false,
+            first_run_done: false,
             hf_token_set: false,
         }
     }
@@ -176,19 +190,35 @@ fn non_empty(s: &str) -> Option<PathBuf> {
     (!t.is_empty()).then(|| PathBuf::from(t))
 }
 
-/// The worker folder: the setting, `BBB_WORKER_DIR`, `worker/` next to the executable, or
-/// `worker/` in a parent folder of the executable (a development build).
-fn find_worker_dir(configured: &str) -> PathBuf {
+/// The worker folder: the setting, then (development builds only) `BBB_WORKER_DIR`, then
+/// `worker/` in the resource folder of the installation or next to the executable, and
+/// (development builds only) in a parent folder of the executable. A release build looks
+/// nowhere else, so a folder planted in a parent directory or in the environment is never run.
+fn find_worker_dir(configured: &str, resource_dir: Option<&Path>) -> PathBuf {
     if let Some(p) = non_empty(configured) {
         return p;
     }
-    if let Some(p) = std::env::var_os("BBB_WORKER_DIR") {
-        return PathBuf::from(p);
+    if cfg!(debug_assertions) {
+        if let Some(p) = std::env::var_os("BBB_WORKER_DIR") {
+            return PathBuf::from(p);
+        }
+    }
+    let is_worker = |d: &Path| d.join("pyproject.toml").is_file();
+    if let Some(dir) = resource_dir {
+        let candidate = dir.join("worker");
+        if is_worker(&candidate) {
+            return candidate;
+        }
     }
     if let Ok(exe) = std::env::current_exe() {
-        for dir in exe.ancestors().skip(1) {
+        let reach = if cfg!(debug_assertions) {
+            usize::MAX
+        } else {
+            1
+        };
+        for dir in exe.ancestors().skip(1).take(reach) {
             let candidate = dir.join("worker");
-            if candidate.join("pyproject.toml").exists() {
+            if is_worker(&candidate) {
                 return candidate;
             }
         }
@@ -316,6 +346,8 @@ pub struct Processing {
     settings: Arc<Mutex<ProcessingSettings>>,
     settings_path: PathBuf,
     env_dir: PathBuf,
+    /// The folder the installer puts its resources in (the bundled `uv` and `worker/`).
+    resource_dir: Option<PathBuf>,
     live: Arc<Mutex<HashMap<String, Live>>>,
     /// Which attempt of which job already pulled its cycle repository.
     pulls: PullLedger,
@@ -323,6 +355,8 @@ pub struct Processing {
     last_event: Mutex<Instant>,
     driver_running: Arc<AtomicBool>,
     models_busy: Arc<AtomicBool>,
+    /// The processing environment is being created (`prepare_worker_env`).
+    env_busy: Arc<AtomicBool>,
 }
 
 impl Processing {
@@ -338,17 +372,19 @@ impl Processing {
         let settings_path = config_dir.join("processing.json");
         let settings = Arc::new(Mutex::new(ProcessingSettings::load(&settings_path)));
         let env_dir = worker_env_dir(data_dir);
+        let resource_dir = app.path().resource_dir().ok();
         let live: Arc<Mutex<HashMap<String, Live>>> = Arc::default();
         let cycle_repos: RepoList = Arc::new(cycle_repos);
 
         let runner_settings = {
             let settings = settings.clone();
             let env_dir = env_dir.clone();
+            let resource_dir = resource_dir.clone();
             move || {
                 let s = settings.lock().map(|s| s.clone()).unwrap_or_default();
                 RunnerSettings {
                     // The key is chosen by the runner from the options the stage runs with.
-                    worker: worker_config(&s, &env_dir, None),
+                    worker: worker_config(&s, &env_dir, resource_dir.as_deref(), None),
                     meeting_root: meeting_root(),
                     retention: s.audio_retention.into(),
                     voice: s.voice_settings(),
@@ -407,12 +443,14 @@ impl Processing {
             settings,
             settings_path,
             env_dir,
+            resource_dir,
             live,
             pulls: PullLedger::default(),
             cycle_repos,
             last_event: Mutex::new(Instant::now() - EVENT_THROTTLE),
             driver_running: Arc::default(),
             models_busy: Arc::default(),
+            env_busy: Arc::default(),
         });
         if let Ok(mut t) = progress_target.lock() {
             *t = Some(Arc::downgrade(&this));
@@ -451,7 +489,7 @@ impl Processing {
         Ok(s)
     }
 
-    pub fn save_settings(&self, new: ProcessingSettings) -> IpcResult<()> {
+    pub fn save_settings(&self, mut new: ProcessingSettings) -> IpcResult<()> {
         if new.gpu_max_util_percent == 0 || new.gpu_max_util_percent > 100 {
             return Err(IpcError::new(
                 "invalid",
@@ -459,6 +497,11 @@ impl Processing {
             ));
         }
         new.llm.validate()?;
+        let external_key_stored = new
+            .llm
+            .key_entry(LlmKind::External)
+            .is_some_and(|entry| secrets::get(&entry).is_some());
+        new.llm.check_external_key_transport(external_key_stored)?;
         let thresholds = new.voice_settings().thresholds;
         if !thresholds.is_valid() {
             return Err(IpcError::new(
@@ -466,11 +509,17 @@ impl Processing {
                 "voice thresholds must satisfy 0 <= suggest <= accept <= 1 and margin >= 0",
             ));
         }
-        new.save(&self.settings_path)?;
-        *self
+        let mut current = self
             .settings
             .lock()
-            .map_err(|_| IpcError::new("internal", "settings lock poisoned"))? = new;
+            .map_err(|_| IpcError::new("internal", "settings lock poisoned"))?;
+        // A path that is run or read later is checked when it changes (an executable is never
+        // taken on trust), and the setup flag is not the settings screen's to change.
+        setup::validate_settings_paths(&new, &current)
+            .map_err(|p| IpcError::new(p.code, p.message))?;
+        new.first_run_done = current.first_run_done;
+        new.save(&self.settings_path)?;
+        *current = new;
         Ok(())
     }
 
@@ -504,9 +553,44 @@ impl Processing {
         }
     }
 
-    fn worker_config(&self) -> WorkerConfig {
+    pub(crate) fn worker_config(&self) -> WorkerConfig {
         let s = self.settings.lock().map(|s| s.clone()).unwrap_or_default();
-        worker_config(&s, &self.env_dir, None)
+        worker_config(&s, &self.env_dir, self.resource_dir.as_deref(), None)
+    }
+
+    /// The settings as stored (without the flags filled in by [`Processing::settings`]).
+    pub(crate) fn settings_snapshot(&self) -> ProcessingSettings {
+        self.settings.lock().map(|s| s.clone()).unwrap_or_default()
+    }
+
+    pub(crate) fn env_dir(&self) -> &Path {
+        &self.env_dir
+    }
+
+    pub(crate) fn resource_dir(&self) -> Option<&Path> {
+        self.resource_dir.as_deref()
+    }
+
+    pub(crate) fn models_busy(&self) -> bool {
+        self.models_busy.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn env_busy(&self) -> &Arc<AtomicBool> {
+        &self.env_busy
+    }
+
+    pub(crate) fn app(&self) -> &AppHandle {
+        &self.app
+    }
+
+    /// Records that the first-run setup was completed (or is to be run again).
+    pub fn set_first_run_done(&self, done: bool) -> IpcResult<()> {
+        let mut guard = self.settings.lock().map_err(poisoned)?;
+        let mut next = guard.clone();
+        next.first_run_done = done;
+        next.save(&self.settings_path)?;
+        *guard = next;
+        Ok(())
     }
 
     /// The language-model settings, for choosing a backend and the cloud dialog.
@@ -546,6 +630,8 @@ impl Processing {
                 "only a finished recording can be processed",
             ));
         }
+        let mut options = options;
+        options.skip_vision = !self.settings_snapshot().describe_screenshots;
         let json = serde_json::to_string(&options).unwrap_or_else(|_| "{}".into());
         let created = self
             .supervisor
@@ -553,6 +639,7 @@ impl Processing {
             .map_err(|e| IpcError::new("internal", e.to_string()))?;
         if !created {
             self.apply_llm_to_existing_job(meeting_id, &options)?;
+            self.refresh_skip_vision(meeting_id)?;
         }
         self.emit_queue();
         self.kick();
@@ -608,7 +695,15 @@ impl Processing {
         }
     }
 
+    /// A job keeps its options, but the screenshot setting of now applies when it runs again.
+    fn refresh_skip_vision(&self, meeting_id: &str) -> IpcResult<()> {
+        let skip = !self.settings_snapshot().describe_screenshots;
+        let store = self.store.lock().map_err(poisoned)?;
+        set_skip_vision(&store, meeting_id, skip)
+    }
+
     pub fn retry(self: &Arc<Self>, meeting_id: &str) -> IpcResult<()> {
+        self.refresh_skip_vision(meeting_id)?;
         self.supervisor
             .retry(meeting_id)
             .map_err(|e| IpcError::new("not_found", e.to_string()))?;
@@ -930,6 +1025,24 @@ fn apply_llm_to_job(store: &Store, meeting_id: &str, options: &JobOptions) -> Ip
     Ok(())
 }
 
+/// Stores `skip_vision` in the options of the job of a meeting, when it differs. Does nothing
+/// for a meeting without a job.
+fn set_skip_vision(store: &Store, meeting_id: &str, skip: bool) -> IpcResult<()> {
+    let Some(job) = store.get_job(meeting_id)? else {
+        return Ok(());
+    };
+    let mut options = JobOptions::from_json(&job.options);
+    if options.skip_vision != skip {
+        options.skip_vision = skip;
+        store.set_job_options(
+            meeting_id,
+            &serde_json::to_string(&options).unwrap_or_else(|_| "{}".into()),
+            queue::now_ms(),
+        )?;
+    }
+    Ok(())
+}
+
 fn poisoned<T>(_: std::sync::PoisonError<T>) -> IpcError {
     IpcError::new("internal", "lock poisoned")
 }
@@ -937,14 +1050,21 @@ fn poisoned<T>(_: std::sync::PoisonError<T>) -> IpcError {
 fn worker_config(
     s: &ProcessingSettings,
     env_dir: &Path,
+    resource_dir: Option<&Path>,
     llm_api_key: Option<worker::Secret>,
 ) -> WorkerConfig {
+    let path_var = std::env::var_os("PATH");
     WorkerConfig {
-        uv: non_empty(&s.uv_path).unwrap_or_else(|| PathBuf::from("uv")),
-        worker_dir: find_worker_dir(&s.worker_dir),
+        // The setting, the bundled uv, then the PATH (absolute folders only). When none of them
+        // gives a usable program the plain name is kept, so the start fails with its message;
+        // the readiness check refuses the job before that.
+        uv: setup::resolve_uv(&s.uv_path, resource_dir, path_var.as_deref())
+            .unwrap_or_else(|_| non_empty(&s.uv_path).unwrap_or_else(|| PathBuf::from("uv"))),
+        worker_dir: find_worker_dir(&s.worker_dir, resource_dir),
         env_dir: env_dir.to_path_buf(),
         models_dir: non_empty(&s.models_dir),
-        llama_server: non_empty(&s.llama_server_path),
+        llama_server: setup::resolve_llama(&s.llama_server_path, &setup::DetectEnv::from_process())
+            .path(),
         hf_token: secrets::get(secrets::HF_TOKEN),
         // The reference estimate for a 10-hour meeting is below 4 hours; stop after 6.
         step_timeout: Duration::from_secs(6 * 3600),
@@ -1019,7 +1139,7 @@ mod tests {
 
     #[test]
     fn explicit_worker_dir_wins() {
-        assert_eq!(find_worker_dir("D:/w"), PathBuf::from("D:/w"));
+        assert_eq!(find_worker_dir("D:/w", None), PathBuf::from("D:/w"));
     }
 
     fn job_store() -> Store {
@@ -1114,6 +1234,56 @@ mod tests {
         assert_eq!(e.code, "busy");
         // A meeting without a job is not an error here.
         apply_llm_to_job(&s, "nope", &external()).unwrap();
+    }
+
+    #[test]
+    fn the_screenshot_setting_reaches_a_job_that_exists_and_keeps_its_other_options() {
+        let s = job_store();
+        let options = JobOptions {
+            language: "pl".into(),
+            ..JobOptions::default()
+        };
+        s.set_job_options("m1", &serde_json::to_string(&options).unwrap(), 2)
+            .unwrap();
+        let stored = |s: &Store| JobOptions::from_json(&s.get_job("m1").unwrap().unwrap().options);
+        assert!(!stored(&s).skip_vision);
+        set_skip_vision(&s, "m1", true).unwrap();
+        let after = stored(&s);
+        assert!(after.skip_vision);
+        assert_eq!(after.language, "pl");
+        set_skip_vision(&s, "m1", false).unwrap();
+        assert!(!stored(&s).skip_vision);
+        // A meeting without a job is not an error.
+        set_skip_vision(&s, "nope", true).unwrap();
+    }
+
+    #[test]
+    fn screenshot_analysis_is_on_by_default_and_the_setup_flag_is_not_part_of_a_save() {
+        let s = ProcessingSettings::default();
+        assert!(s.describe_screenshots);
+        assert!(!s.skip_reports && !s.first_run_done);
+        let json = serde_json::to_string(&s).unwrap().to_lowercase();
+        assert!(!json.contains("token") || json.contains("hftokenset"));
+    }
+
+    #[test]
+    fn the_worker_folder_comes_from_the_installation_resources_when_it_has_one() {
+        let dir = tempfile::Builder::new()
+            .prefix("bbb-processing-worker-")
+            .tempdir()
+            .unwrap();
+        let worker = dir.path().join("worker");
+        std::fs::create_dir_all(&worker).unwrap();
+        std::fs::write(worker.join("pyproject.toml"), "").unwrap();
+        // The setting wins; without it the installation's folder is found (the development
+        // override and the folders around the executable come after it).
+        assert_eq!(
+            find_worker_dir("D:/w", Some(dir.path())),
+            PathBuf::from("D:/w")
+        );
+        if std::env::var_os("BBB_WORKER_DIR").is_none() {
+            assert_eq!(find_worker_dir("", Some(dir.path())), worker);
+        }
     }
 
     #[test]
