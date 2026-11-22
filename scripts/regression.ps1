@@ -245,7 +245,8 @@ try {
 
     if (-not $ReportOnly -and $Mode -eq "cpu") {
         Write-Host "=== CPU part: every suite once" -ForegroundColor Cyan
-        if (Test-Path $logDir) { Remove-Item -LiteralPath $logDir -Recurse -Force }
+        # A full run starts clean; a partial one (-Suite, -Skip) adds to the logs that exist.
+        if (($Skip.Count -eq 0) -and ($Suite.Count -eq 0) -and (Test-Path $logDir)) { Remove-Item -LiteralPath $logDir -Recurse -Force }
         $cpuArgs = @{ LogDir = $logDir }
         if ($Skip.Count -gt 0) { $cpuArgs.Skip = $Skip }
         if ($Suite.Count -gt 0) { $cpuArgs.Suite = $Suite }
@@ -291,7 +292,7 @@ try {
             if ($row.status -eq "failed") { $failed.Add("GPU step $($step.id)") }
             $rows.Add($row)
         }
-        ConvertTo-Json -InputObject @($rows) -Depth 4 | Set-Content -LiteralPath (Join-Path $gpuDir "gpu-steps.json") -Encoding UTF8
+        ConvertTo-Json -InputObject @($rows.ToArray()) -Depth 4 | Set-Content -LiteralPath (Join-Path $gpuDir "gpu-steps.json") -Encoding UTF8
         # The two hour timing run leaves a work folder of segment files behind.
         $pipelineWork = Join-Path $regDir "pipeline-2h-work"
         if (Test-Path -LiteralPath $pipelineWork) { Remove-Item -LiteralPath $pipelineWork -Recurse -Force }

@@ -23,9 +23,10 @@
   Print the steps of the selected suites and exit without running anything.
 
 .PARAMETER LogDir
-  Write the output of every step to <LogDir>\NN-<step>.log (pytest also writes a JUnit file
-  next to it) and a summary of the steps to <LogDir>\steps.json. scripts\regression.ps1 reads
-  these files to build its report.
+  Write the output of every step to <LogDir>\<step>.log (pytest also writes a JUnit file next
+  to it) and a summary of the steps to <LogDir>\steps.json. A later partial run (-Suite, -Skip)
+  into the same folder replaces only the steps it ran. scripts\regression.ps1 reads these files
+  to build its report.
 
 .EXAMPLE
   scripts\test-all.ps1 -Skip ui
@@ -51,7 +52,6 @@ $repo = Split-Path -Parent $PSScriptRoot
 $testTmp = Join-Path $repo "target\test-tmp"
 $failures = New-Object System.Collections.Generic.List[string]
 $steps = New-Object System.Collections.Generic.List[object]
-$script:stepNo = 0
 $logRoot = ""
 if ($LogDir) {
     $logRoot = if ([System.IO.Path]::IsPathRooted($LogDir)) { $LogDir } else { Join-Path $repo $LogDir }
@@ -64,9 +64,8 @@ function Invoke-Step([string]$group, [string]$title, [string]$dir, [scriptblock]
     }
     Write-Host ""
     Write-Host "=== $title" -ForegroundColor Cyan
-    $script:stepNo++
     $slug = ($title.ToLowerInvariant() -replace '[^a-z0-9]+', '-').Trim('-')
-    $logName = "{0:D2}-{1}.log" -f $script:stepNo, $slug
+    $logName = "$slug.log"
     $writer = $null
     $savedAddOpts = $env:PYTEST_ADDOPTS
     $savedEap = $ErrorActionPreference
@@ -78,11 +77,17 @@ function Invoke-Step([string]$group, [string]$title, [string]$dir, [scriptblock]
             New-Item -ItemType Directory -Force -Path $logRoot | Out-Null
             $writer = New-Object System.IO.StreamWriter((Join-Path $logRoot $logName), $false, (New-Object System.Text.UTF8Encoding($false)))
             if ($title -like "*pytest") {
-                $env:PYTEST_ADDOPTS = "--junitxml=" + (Join-Path $logRoot ($logName -replace '\.log$', '.junit.xml'))
+                # pytest splits the variable like a shell: quote the path and use forward slashes.
+                $junit = (Join-Path $logRoot ($logName -replace '\.log$', '.junit.xml')) -replace '\\', '/'
+                $env:PYTEST_ADDOPTS = "--junitxml=`"$junit`""
             }
             # Merged stderr must not turn into a terminating error in Windows PowerShell 5.1.
             $ErrorActionPreference = "Continue"
-            & $command 2>&1 | ForEach-Object { $line = "$_"; $writer.WriteLine($line); $line }
+            & $command 2>&1 | ForEach-Object {
+                $line = if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { "$_" }
+                $writer.WriteLine($line)
+                $line
+            }
         } else {
             & $command
         }
@@ -139,7 +144,14 @@ try {
     if (-not $List) {
         if ($logRoot) {
             New-Item -ItemType Directory -Force -Path $logRoot | Out-Null
-            ConvertTo-Json -InputObject @($steps) -Depth 4 | Set-Content -LiteralPath (Join-Path $logRoot "steps.json") -Encoding UTF8
+            # Steps of an earlier partial run (-Suite, -Skip) stay in the summary unless they ran again.
+            $stepsFile = Join-Path $logRoot "steps.json"
+            $kept = @()
+            if (Test-Path -LiteralPath $stepsFile) {
+                $ran = @($steps | ForEach-Object { $_.name })
+                $kept = @(Get-Content -LiteralPath $stepsFile -Raw | ConvertFrom-Json | Where-Object { $_.name -notin $ran })
+            }
+            ConvertTo-Json -InputObject (@($kept) + @($steps.ToArray())) -Depth 4 | Set-Content -LiteralPath $stepsFile -Encoding UTF8
         }
         Write-Host ""
         Write-Host "=== cleaning scratch files" -ForegroundColor Cyan
