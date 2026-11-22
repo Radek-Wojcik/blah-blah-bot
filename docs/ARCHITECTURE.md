@@ -136,7 +136,7 @@ Rust modules are crates in one Cargo workspace. Licenses of third-party parts ar
   - Microphone capture and per-process loopback capture through WASAPI ([`wasapi`](https://github.com/HEnquist/wasapi-rs) crate, application loopback with process tree).
   - Listing audio sessions to offer capturable applications.
   - Adding and removing sources during a recording. Every track has its own start offset on a shared session clock.
-  - Receiving browser audio from `bridge`.
+  - Receiving browser audio from `bridge`: a tab is a pushed track (`push.rs`) placed by sample count; missing frames become silence journaled as `stream_gap`, and the sender clock feeds drift correction and fills capture stalls longer than 1 s. `RoutingBackend` sends tab sources to a `TabSource` and everything else to the capture backend.
   - Segmented writing and the session journal (section 7.1).
   - Region screenshot overlay; PNG files with an offset in milliseconds from recording start.
   - Meeting detection: a known conferencing process with an active audio session that also uses the microphone raises a "start recording?" prompt. Google Meet is detected by the extension.
@@ -144,8 +144,11 @@ Rust modules are crates in one Cargo workspace. Licenses of third-party parts ar
 
 ### 4.4 `bridge` (Rust)
 
-- **Responsibility:** WebSocket server bound to `127.0.0.1` for the Chrome extension. Receives PCM frames per tab, plus control messages (tab started, tab stopped, Meet detected).
-- **Security:** one-time pairing token entered in the extension, origin check against the extension ID, no listening on external interfaces.
+- **Responsibility:** WebSocket server (blocking, [tungstenite](https://github.com/snapview/tungstenite-rs)) bound to `127.0.0.1` for the Chrome extension, port 17555 with fallbacks 17556 to 17564. One connection carries every captured tab: JSON control messages (pairing, stream start, resume, stop, Meet, tab group, heartbeat, recording state) and binary audio frames (16-byte header `stream_no | seq | sent_ms`, then 16 kHz mono 16-bit PCM). Protocol version 2, schema `schemas/bridge-message.schema.json`, fixtures shared with the extension tests. See [ADR 0020](decisions/0020-bridge-protocol-and-pairing.md).
+- **Parts:** `protocol` (messages, frame layout, limits), `pairing` (codes, secrets), `server` and `conn` (socket, upgrade checks, message loop), `hub` (paired clients, connections, streams; hands each stream's frames to the recorder and keeps a stream 30 s for `resume` after a lost connection). `examples/test_receiver` runs the bridge alone for extension tests.
+- **Pairing:** the user starts pairing in Settings; an 8-character code is valid 5 minutes, works once and locks after 5 wrong attempts. The extension receives a client id and a 32-byte secret; the application keeps the SHA-256 of the secret in the settings. Unpairing closes the extension's connections.
+- **Security:** loopback peers only, `Host` must name `127.0.0.1` or `localhost` with the bound port, `Origin` must be an extension (from the allowed ids once set), two connections at most, size limits (16 KiB text, 9.6 KB audio per frame), a connection silent for 15 s is closed.
+- **Application side:** `crates/app/src/browser.rs` starts the server from `settings.bridge`, stores pairings, tells the hub whether a recording runs and adds an accepted tab to it as the source `tab:<stream id>` (Tauri commands `bridge_status`, `start_pairing`, `cancel_pairing`, `unpair_client`; event `bridge-changed`).
 
 ### 4.5 `extension` (TypeScript, Chrome Manifest V3)
 
@@ -447,7 +450,7 @@ See [ADR 0005](decisions/0005-llm-backend.md).
 - **Audio** is deleted after processing (section 7.3).
 - **Voice profiles** stay on the machine (section 7.4).
 - **Transcripts** contain personal data. Before the first publication to a public repository the application shows a warning and requires confirmation.
-- **Bridge** accepts only local, paired connections.
+- **Bridge** accepts only local, paired connections (ADR 0020); the settings hold only a hash of each extension's secret.
 - **Model weights** are downloaded on first use with the user's own Hugging Face token where a model is gated. Nothing is redistributed with the application.
 - **Paths** are resolved from the user profile and settings. No absolute paths are compiled in.
 
@@ -457,6 +460,7 @@ See [ADR 0005](decisions/0005-llm-backend.md).
 |---|---|
 | Crash or power loss while recording | Journal replay; at most one segment lost; meeting recoverable |
 | Audio device removed or application closed mid-recording | Track ends, others continue; event recorded in the journal; tray notification |
+| Extension connection lost (service worker restart, network) | The tab stream waits 30 s for `resume`; frames lost on the way become silence journaled as `stream_gap`; a closed tab ends only its track |
 | GPU busy | Job waits between stages; the user sees the reason |
 | Worker crash or timeout | Stage marked failed; retry resumes from that stage |
 | Invalid model output | Validation, bounded retries, then the window is flagged and skipped with a visible warning |
@@ -486,6 +490,7 @@ See [ADR 0005](decisions/0005-llm-backend.md).
 | Whisper large-v3-turbo | Default ASR | MIT | Confirmed, measured in Stage 0 |
 | llama.cpp | Model server | MIT | Confirmed |
 | uv | Python environment management | MIT OR Apache-2.0 | Confirmed |
+| `tungstenite` crate | WebSocket server of the bridge | MIT OR Apache-2.0 | Confirmed (crates.io, 0.30.0) |
 
 Rules:
 

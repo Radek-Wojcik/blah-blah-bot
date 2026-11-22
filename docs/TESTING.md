@@ -183,4 +183,16 @@ The GPU guard is tested on recorded traces: a real trace of the idle reference m
 
 Extract and reduce with the real model through `llama-server` are covered by the whole-pipeline test above; the Python worker tests marked `models` cover the Stage 2 steps only.
 
+## 14. Stage 6 test commands
+
+| What | Command | Runs |
+|---|---|---|
+| Bridge: message and frame contract on the shared fixtures (`crates/bridge/tests/fixtures`) against `schemas/bridge-message.schema.json`, pairing state machine with an injected clock, hub (streams, resume, unpairing, busy), and the server over real sockets on `127.0.0.1` with a port picked by the system: pairing with a right, wrong, expired and reused code, foreign `Origin` and `Host`, another protocol version, reconnect with the secret, resume with lost frames, heartbeat timeout, oversized messages, two interleaved streams, a third connection | `cargo test -p bridge` | CI |
+| Pushed tab tracks: gaps journaled as `stream_gap`, late bursts, stale frames, capture stalls, sender clock drift, stop; a tab recorded next to a tone through `RoutingBackend`, a closed tab ending only its track | `cargo test -p recorder` | CI |
+| Application: bridge settings (clients kept on save, hashes hidden), a tab streamed through the hub recorded as a `browser-tab` track with its gap journaled, auto add off, pairing needs a running server | `cargo test -p app` | CI |
+| Settings > Browser extension on the mock backend: pairing code, simulated extension entering it (`pairms=N`), unpair, bridge switched off | `cd ui && npm test && npm run test:e2e` | CI |
+| The bridge alone for extension tests: prints JSON lines (`listening`, `pairing_code`, `paired`, `stream_started`, `stream_ended`, `summary`); `--port 0`, `--code`, `--extension-id`, `--duration`, `--out-dir` (raw PCM per stream), `--idle` | `cargo run -p bridge --example test_receiver -- --port 0 --code 7K3M9QXD` | Locally, by the extension tests |
+
+Test data of new tests lives under `target/`: Rust tests take their folders from `testkit::target_tempdir` (`target/tmp`, removed also when a test fails), never from the system temporary folder.
+
 The fake worker in `crates/queue/tests/stage4_fake_worker.rs` is a small Python script started in place of `python -m bbb_worker`; it needs only a Python 3 interpreter on `PATH`, no models and no GPU. Cloud is tested against a mock server only; no test sends text to a hosted service.
