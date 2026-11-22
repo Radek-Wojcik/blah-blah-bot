@@ -153,7 +153,26 @@ fn check_url(what: &str, url: &str, https_required: bool) -> IpcResult<()> {
     Ok(())
 }
 
+/// Whether an API key may be sent to `url`: over https, or over plain http to this machine
+/// only. A key sent in clear text to another host could be read on the way.
+pub fn key_may_be_sent_to(url: &str) -> bool {
+    let url = url.trim();
+    url.starts_with("https://") || worker::url_host(url).is_some_and(|h| is_loopback_host(&h))
+}
+
 impl LlmSettings {
+    /// Refuses a plain-http address of the external server on another machine while a key is
+    /// stored for it: the key would travel unencrypted. `key_stored` tells whether there is one.
+    pub fn check_external_key_transport(&self, key_stored: bool) -> IpcResult<()> {
+        let url = self.external.base_url.trim();
+        if key_stored && !url.is_empty() && !key_may_be_sent_to(url) {
+            return Err(invalid(
+                "external server: an API key is stored for this address, so it must start with https:// (plain http:// is only allowed for this machine); remove the key or use https",
+            ));
+        }
+        Ok(())
+    }
+
     /// Refuses values the worker or the confirmation could not use.
     pub fn validate(&self) -> IpcResult<()> {
         if self.default_kind == LlmKind::Cloud {
@@ -277,7 +296,12 @@ pub fn key_for(llm: &LlmOptions, get: impl Fn(&str) -> Option<String>) -> Option
         LlmKind::External => secrets::EXTERNAL_KEY,
         LlmKind::Cloud => secrets::CLOUD_KEY,
     };
-    let host = llm.base_url.as_deref().and_then(worker::url_host)?;
+    let url = llm.base_url.as_deref()?;
+    // Never in clear text to another machine, whatever the job's address says.
+    if !key_may_be_sent_to(url) {
+        return None;
+    }
+    let host = worker::url_host(url)?;
     get(&secrets::endpoint_key(base, &host)).map(Secret::new)
 }
 
@@ -1011,6 +1035,43 @@ mod tests {
         assert!(key_for(&options(LlmKind::Cloud, Some("https:///v1")), get).is_none());
         // Debug output never shows it.
         assert!(!format!("{cloud:?}").contains("secret-of"));
+    }
+
+    #[test]
+    fn a_key_is_never_sent_over_plain_http_to_another_machine() {
+        let get = |_: &str| Some("secret".to_string());
+        for url in [
+            "http://llm.example.com/v1",
+            "http://192.168.1.20:11434/v1",
+            "http://llm.lan/v1",
+        ] {
+            assert!(
+                key_for(&options(LlmKind::External, Some(url)), get).is_none(),
+                "{url}"
+            );
+            assert!(!key_may_be_sent_to(url), "{url}");
+        }
+        for url in [
+            "https://llm.example.com/v1",
+            "http://localhost:11434/v1",
+            "http://127.0.0.1:8080/v1",
+            "http://[::1]:8080/v1",
+        ] {
+            assert!(
+                key_for(&options(LlmKind::External, Some(url)), get).is_some(),
+                "{url}"
+            );
+        }
+        // Saving, or storing a key, is refused for such an address; without a key it is fine.
+        let mut s = configured();
+        s.external.base_url = "http://llm.example.com/v1".into();
+        assert!(s.check_external_key_transport(false).is_ok());
+        let e = s.check_external_key_transport(true).unwrap_err();
+        assert!(e.message.contains("https://"));
+        s.external.base_url = "https://llm.example.com/v1".into();
+        assert!(s.check_external_key_transport(true).is_ok());
+        s.external.base_url = String::new();
+        assert!(s.check_external_key_transport(true).is_ok());
     }
 
     #[test]
