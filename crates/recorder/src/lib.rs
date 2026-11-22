@@ -6,10 +6,12 @@
 //! needs a start offset on that clock.
 //!
 //! The modules that contain only logic (`timeline`, `journal`, `track`, `tracker`, `drift`,
-//! `push`, `wav`, `convert`) build and are tested on every platform. The modules that talk to the
+//! `push`, `wav`, `convert`, `detect`) build and are tested on every platform. The modules that talk to the
 //! Windows audio stack (`capture`, `sessions`, `sysutil`) exist on Windows only.
 
 pub mod convert;
+pub mod detect;
+pub mod detect_trace;
 pub mod drift;
 pub mod error;
 pub mod journal;
