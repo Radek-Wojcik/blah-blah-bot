@@ -17,6 +17,20 @@ def server_binary() -> str:
     return os.environ.get("BBB_LLAMA_SERVER", "llama-server")
 
 
+def not_found_message(binary: str) -> str:
+    """What the user sees when `llama-server` cannot be started: where it was looked for and
+    what to do about it."""
+    where = (
+        f"at '{binary}'"
+        if os.path.dirname(binary)
+        else f"on the PATH (looked for '{binary}')"
+    )
+    return (
+        f"llama-server was not found {where}. "
+        "Set its location in Settings > Processing or run the setup again."
+    )
+
+
 def _get(url: str, timeout: float = 2.0) -> bytes:
     with urllib.request.urlopen(url, timeout=timeout) as resp:
         return resp.read()
@@ -43,8 +57,9 @@ def running(
         with socket.socket() as s:
             s.bind(("127.0.0.1", 0))
             port = s.getsockname()[1]
+    binary = server_binary()
     cmd = [
-        server_binary(),
+        binary,
         "-m",
         str(model),
         "-c",
@@ -59,7 +74,15 @@ def running(
     ]
     if mmproj:
         cmd += ["--mmproj", str(mmproj)]
-    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except FileNotFoundError as e:
+        raise RuntimeError(not_found_message(binary)) from e
+    except OSError as e:
+        raise RuntimeError(
+            f"llama-server at '{binary}' could not be started ({e}). "
+            "Check the file in Settings > Processing or run the setup again."
+        ) from e
     base = f"http://127.0.0.1:{port}"
     try:
         deadline = time.time() + startup_timeout_s

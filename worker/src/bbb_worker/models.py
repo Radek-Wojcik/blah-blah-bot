@@ -96,13 +96,16 @@ def local_path(key: str) -> Path:
     except Exception as e:
         raise ModelMissing(
             f"The model '{key}' ({spec.repo}) is not downloaded. "
-            "Download it from the processing settings first."
+            "Download it in Settings > Processing or run the setup again."
         ) from e
     folder = Path(path)
     if spec.patterns:
         missing = [p for p in spec.patterns if not (folder / p).exists()]
         if missing:
-            raise ModelMissing(f"The model '{key}' is incomplete: missing {', '.join(missing)}.")
+            raise ModelMissing(
+                f"The model '{key}' is incomplete: missing {', '.join(missing)}. "
+                "Download it again in Settings > Processing or run the setup again."
+            )
     return folder
 
 
@@ -123,7 +126,7 @@ def download(key: str, token: str | None) -> Path:
     if spec.gated and not token:
         raise ModelMissing(
             f"'{spec.repo}' is gated: accept its conditions on Hugging Face and add your "
-            "access token in the processing settings."
+            "access token in Settings > Processing or in the setup."
         )
 
     class Reporter(tqdm):  # type: ignore[misc]
