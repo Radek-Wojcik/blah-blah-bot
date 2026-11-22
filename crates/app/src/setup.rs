@@ -138,6 +138,26 @@ fn is_network_or_device(path: &Path) -> bool {
     })
 }
 
+/// Checks that `raw` names a folder on a local drive: an absolute path that is not a network
+/// (a UNC share) or device path. Touching such a path sends the user's Windows credentials
+/// to another machine, and a repository there is controlled by whoever runs that machine.
+pub fn check_local_folder(label: &str, raw: &str) -> Result<(), PathProblem> {
+    let path = Path::new(raw.trim());
+    if !path.is_absolute() {
+        return Err(PathProblem::new(
+            "path_not_absolute",
+            format!("{label}: the path must be absolute (start with a drive letter): {raw}"),
+        ));
+    }
+    if is_network_or_device(path) {
+        return Err(PathProblem::new(
+            "path_network",
+            format!("{label}: network and device paths are not accepted: {raw}"),
+        ));
+    }
+    Ok(())
+}
+
 /// The first bytes of a file, fewer when it is shorter.
 fn head(path: &Path, n: usize) -> std::io::Result<Vec<u8>> {
     let mut buf = Vec::with_capacity(n);
@@ -473,13 +493,12 @@ pub fn resolve_llama(configured: &str, env: &DetectEnv) -> LlamaResolution {
 }
 
 impl LlamaResolution {
-    /// The program to start, if there is one.
+    /// The program to start, if there is one. A path that failed the check is never returned:
+    /// a program that did not pass is not started (the readiness check says what to fix).
     pub fn path(&self) -> Option<PathBuf> {
         match self {
             Self::Configured(p) | Self::Detected(p) => Some(p.clone()),
-            Self::NotSet => None,
-            // Handed on as it is: starting it fails with a clear message.
-            Self::Invalid { path, .. } => Some(PathBuf::from(path)),
+            Self::NotSet | Self::Invalid { .. } => None,
         }
     }
 }
@@ -1426,6 +1445,28 @@ mod tests {
     }
 
     #[test]
+    fn only_absolute_folders_on_a_local_drive_are_accepted() {
+        assert!(check_local_folder("Folder", r"C:\Users\me\cycles").is_ok());
+        for network in [
+            r"\\host\share\repo",
+            r"\\?\UNC\host\share\repo",
+            r"\\.\pipe\x",
+        ] {
+            assert_eq!(
+                check_local_folder("Folder", network).unwrap_err().code,
+                "path_network",
+                "{network}"
+            );
+        }
+        assert_eq!(
+            check_local_folder("Folder", r"cycles\repo")
+                .unwrap_err()
+                .code,
+            "path_not_absolute"
+        );
+    }
+
+    #[test]
     fn a_configured_llama_server_that_is_wrong_is_reported_not_replaced() {
         let d = scratch("llama-invalid");
         let name = exe("llama-server");
@@ -1438,6 +1479,11 @@ mod tests {
             LlamaResolution::Invalid { problem, .. } => assert_eq!(problem.code, "path_not_found"),
             other => panic!("{other:?}"),
         }
+        // A path that failed the check is never handed on to be started.
+        assert_eq!(
+            resolve_llama(r"C:\gone\llama-server.exe", &env).path(),
+            None
+        );
         assert_eq!(
             resolve_llama(&good.to_string_lossy(), &env),
             LlamaResolution::Configured(good)

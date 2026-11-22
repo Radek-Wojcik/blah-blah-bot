@@ -157,6 +157,8 @@ impl AppState {
     /// kept as they are: only the cycle commands change them.
     pub fn save_settings(&self, new: Settings) -> IpcResult<()> {
         self.update_settings(|s| {
+            new.check_new_locations(s)
+                .map_err(|p| IpcError::new("invalid", p.message))?;
             *s = new.keeping_managed_from(s);
             Ok(())
         })

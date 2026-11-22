@@ -1262,6 +1262,8 @@ pub fn add_local_repo(settings: &mut Settings, path: &str) -> IpcResult<CycleRep
             "choose the folder of the repository",
         ));
     }
+    crate::setup::check_local_folder("Repository folder", path)
+        .map_err(|p| IpcError::new("invalid", p.message))?;
     let repo =
         Repo::open(path).map_err(|_| IpcError::new("invalid", "this folder does not exist"))?;
     let canonical = repo.root().to_string_lossy().into_owned();
@@ -2437,6 +2439,13 @@ pub(crate) mod tests {
             add_local_repo(&mut settings, " ").unwrap_err().code,
             "invalid"
         );
+        // A network share or a relative path is refused before anything touches it.
+        for bad in [r"\\host\share\repo", r"relative\repo"] {
+            assert_eq!(
+                add_local_repo(&mut settings, bad).unwrap_err().code,
+                "invalid"
+            );
+        }
 
         // Cycles of both repositories are listed together; ids are global.
         Repo::init_local(&other).unwrap();

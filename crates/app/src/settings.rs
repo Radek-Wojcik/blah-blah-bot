@@ -93,6 +93,17 @@ impl Settings {
         self
     }
 
+    /// Checks the folders this save newly sets: the recordings folder must be on a local drive.
+    /// A value that did not change is left alone, so a folder chosen by an older version does
+    /// not block unrelated changes.
+    pub fn check_new_locations(&self, current: &Settings) -> Result<(), crate::setup::PathProblem> {
+        let new = self.recordings_dir.trim();
+        if !new.is_empty() && new != current.recordings_dir.trim() {
+            crate::setup::check_local_folder("Recordings folder", new)?;
+        }
+        Ok(())
+    }
+
     /// Effective recordings folder.
     pub fn recordings_root(&self, default: PathBuf) -> PathBuf {
         if self.recordings_dir.trim().is_empty() {
@@ -133,6 +144,23 @@ mod tests {
             .unwrap();
         let path = dir.path().join("settings.json");
         TempFile { _dir: dir, path }
+    }
+
+    #[test]
+    fn a_network_recordings_folder_is_refused_unless_it_was_already_set() {
+        let mut current = Settings::default();
+        let mut new = current.clone();
+        new.recordings_dir = r"\\host\share\rec".into();
+        assert_eq!(
+            new.check_new_locations(&current).unwrap_err().code,
+            "path_network"
+        );
+        current.recordings_dir = new.recordings_dir.clone();
+        assert!(new.check_new_locations(&current).is_ok());
+        new.recordings_dir = r"D:\Rec".into();
+        assert!(new.check_new_locations(&current).is_ok());
+        new.recordings_dir = String::new();
+        assert!(new.check_new_locations(&current).is_ok());
     }
 
     #[test]

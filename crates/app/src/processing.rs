@@ -786,7 +786,14 @@ impl Processing {
                 match self.supervisor.step(&id) {
                     Ok(StepOutcome::Ran { .. }) => progressed = true,
                     Ok(StepOutcome::Failed { stage, error }) => {
-                        tracing::error!(meeting = %id, stage = stage.as_str(), %error, "stage failed");
+                        // The text can quote meeting content (an invalid answer of the model, a
+                        // traceback): the log keeps its size only; the job row has the text.
+                        tracing::error!(
+                            meeting = %id,
+                            stage = stage.as_str(),
+                            error_chars = error.chars().count(),
+                            "stage failed"
+                        );
                         progressed = true;
                     }
                     Ok(_) => {}
@@ -1056,10 +1063,9 @@ fn worker_config(
     let path_var = std::env::var_os("PATH");
     WorkerConfig {
         // The setting, the bundled uv, then the PATH (absolute folders only). When none of them
-        // gives a usable program the plain name is kept, so the start fails with its message;
-        // the readiness check refuses the job before that.
-        uv: setup::resolve_uv(&s.uv_path, resource_dir, path_var.as_deref())
-            .unwrap_or_else(|_| non_empty(&s.uv_path).unwrap_or_else(|| PathBuf::from("uv"))),
+        // gives a usable program the path stays empty, so starting it fails; a program that
+        // did not pass the check is never run. The readiness check refuses the job before that.
+        uv: setup::resolve_uv(&s.uv_path, resource_dir, path_var.as_deref()).unwrap_or_default(),
         worker_dir: find_worker_dir(&s.worker_dir, resource_dir),
         env_dir: env_dir.to_path_buf(),
         models_dir: non_empty(&s.models_dir),
