@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import platform
 import subprocess
 import sys
@@ -14,7 +15,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-RESULTS_DIR = Path(__file__).resolve().parents[2] / "results"
+# `BBB_RESULTS_DIR` sends the result files somewhere else (the regression run keeps its fresh
+# measurements out of the recorded baselines this way).
+RESULTS_DIR = (
+    Path(os.environ["BBB_RESULTS_DIR"])
+    if os.environ.get("BBB_RESULTS_DIR")
+    else Path(__file__).resolve().parents[2] / "results"
+)
 
 
 def gpu_info() -> dict[str, Any]:

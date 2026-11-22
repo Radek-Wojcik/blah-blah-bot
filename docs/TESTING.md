@@ -184,3 +184,13 @@ The GPU guard is tested on recorded traces: a real trace of the idle reference m
 Extract and reduce with the real model through `llama-server` are covered by the whole-pipeline test above; the Python worker tests marked `models` cover the Stage 2 steps only.
 
 The fake worker in `crates/queue/tests/stage4_fake_worker.rs` is a small Python script started in place of `python -m bbb_worker`; it needs only a Python 3 interpreter on `PATH`, no models and no GPU. Cloud is tested against a mock server only; no test sends text to a hosted service.
+
+## 15. Stage 8 regression
+
+The regression suite, the report with the go/no-go recommendation and the ten hour end-to-end run are described in [REGRESSION.md](REGRESSION.md). In short:
+
+| What | Command | Runs |
+|---|---|---|
+| Every CPU suite once, then the report (`target\regression\report\stage8-regression.{json,md}`) | `scripts\regression.ps1` | Before a release; no GPU |
+| GPU measurements compared with the recorded baselines (two percentage points), pipeline resilience cases, speaker recognition, extraction | `scripts\regression.ps1 -Mode gpu -AudioDir ... -Model ... -LlamaServer ...` | Locally before a release, once, on an idle GPU |
+| Ten hour end-to-end run on synthetic audio | `scripts\ten-hour-run.ps1 ... -Run` | Before 1.0, overnight |

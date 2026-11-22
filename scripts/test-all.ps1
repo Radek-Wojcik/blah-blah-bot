@@ -16,34 +16,91 @@
 .PARAMETER Skip
   Suites to leave out: rust, worker, benchmarks, ui.
 
+.PARAMETER Suite
+  Run only these suites (same names as -Skip). Default: all of them.
+
+.PARAMETER List
+  Print the steps of the selected suites and exit without running anything.
+
+.PARAMETER LogDir
+  Write the output of every step to <LogDir>\NN-<step>.log (pytest also writes a JUnit file
+  next to it) and a summary of the steps to <LogDir>\steps.json. scripts\regression.ps1 reads
+  these files to build its report.
+
 .EXAMPLE
   scripts\test-all.ps1 -Skip ui
+
+.EXAMPLE
+  scripts\test-all.ps1 -Suite worker,benchmarks -LogDir target\test-logs
 #>
 [CmdletBinding()]
-param([string[]]$Skip = @())
+param([string[]]$Skip = @(), [string[]]$Suite = @(), [switch]$List, [string]$LogDir = "")
 
 $ErrorActionPreference = "Stop"
 # `-File` passes "a,b" as one string: accept both forms.
 $Skip = @($Skip | ForEach-Object { $_ -split "," } | Where-Object { $_ })
-foreach ($name in $Skip) {
+$Suite = @($Suite | ForEach-Object { $_ -split "," } | Where-Object { $_ })
+foreach ($name in $Skip + $Suite) {
     if ($name -notin "rust", "worker", "benchmarks", "ui") { throw "unknown suite '$name' (rust, worker, benchmarks, ui)" }
+}
+# -Suite narrows the selection; -Skip removes from what is left.
+if ($Suite.Count -gt 0) {
+    $Skip = @("rust", "worker", "benchmarks", "ui" | Where-Object { $_ -notin $Suite -or $_ -in $Skip })
 }
 $repo = Split-Path -Parent $PSScriptRoot
 $testTmp = Join-Path $repo "target\test-tmp"
 $failures = New-Object System.Collections.Generic.List[string]
+$steps = New-Object System.Collections.Generic.List[object]
+$script:stepNo = 0
+$logRoot = ""
+if ($LogDir) {
+    $logRoot = if ([System.IO.Path]::IsPathRooted($LogDir)) { $LogDir } else { Join-Path $repo $LogDir }
+}
 
-function Invoke-Step([string]$title, [string]$dir, [scriptblock]$command) {
+function Invoke-Step([string]$group, [string]$title, [string]$dir, [scriptblock]$command) {
+    if ($List) {
+        Write-Host ("{0,-11} {1}   (in {2})" -f $group, $title, $dir)
+        return
+    }
     Write-Host ""
     Write-Host "=== $title" -ForegroundColor Cyan
+    $script:stepNo++
+    $slug = ($title.ToLowerInvariant() -replace '[^a-z0-9]+', '-').Trim('-')
+    $logName = "{0:D2}-{1}.log" -f $script:stepNo, $slug
+    $writer = $null
+    $savedAddOpts = $env:PYTEST_ADDOPTS
+    $savedEap = $ErrorActionPreference
+    $status = "passed"
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
     Push-Location (Join-Path $repo $dir)
     try {
-        & $command
+        if ($logRoot) {
+            New-Item -ItemType Directory -Force -Path $logRoot | Out-Null
+            $writer = New-Object System.IO.StreamWriter((Join-Path $logRoot $logName), $false, (New-Object System.Text.UTF8Encoding($false)))
+            if ($title -like "*pytest") {
+                $env:PYTEST_ADDOPTS = "--junitxml=" + (Join-Path $logRoot ($logName -replace '\.log$', '.junit.xml'))
+            }
+            # Merged stderr must not turn into a terminating error in Windows PowerShell 5.1.
+            $ErrorActionPreference = "Continue"
+            & $command 2>&1 | ForEach-Object { $line = "$_"; $writer.WriteLine($line); $line }
+        } else {
+            & $command
+        }
         if ($LASTEXITCODE -ne 0) { throw "exit code $LASTEXITCODE" }
     } catch {
+        $ErrorActionPreference = $savedEap
         Write-Host "FAILED: $title ($_)" -ForegroundColor Red
+        $status = "failed"
         $failures.Add($title)
     } finally {
+        $ErrorActionPreference = $savedEap
+        $env:PYTEST_ADDOPTS = $savedAddOpts
+        if ($writer) { $writer.Dispose() }
         Pop-Location
+        $watch.Stop()
+        if ($logRoot) {
+            $steps.Add([ordered]@{ group = $group; name = $title; status = $status; seconds = [math]::Round($watch.Elapsed.TotalSeconds, 1); log = $logName })
+        }
     }
 }
 
@@ -51,36 +108,45 @@ $savedTemp = $env:TEMP
 $savedTmp = $env:TMP
 $hygiene = 0
 try {
-    New-Item -ItemType Directory -Force -Path $testTmp | Out-Null
-    $env:TEMP = $testTmp
-    $env:TMP = $testTmp
+    if (-not $List) {
+        New-Item -ItemType Directory -Force -Path $testTmp | Out-Null
+        $env:TEMP = $testTmp
+        $env:TMP = $testTmp
+    }
 
     if ($Skip -notcontains "rust") {
-        Invoke-Step "cargo fmt --check" "." { cargo fmt --all --check }
-        Invoke-Step "cargo clippy" "." { cargo clippy --workspace --all-targets -- -D warnings }
-        Invoke-Step "cargo test" "." { cargo test --workspace }
+        Invoke-Step "rust" "cargo fmt --check" "." { cargo fmt --all --check }
+        Invoke-Step "rust" "cargo clippy" "." { cargo clippy --workspace --all-targets -- -D warnings }
+        Invoke-Step "rust" "cargo test" "." { cargo test --workspace }
     }
     if ($Skip -notcontains "worker") {
-        Invoke-Step "worker pytest" "worker" { uv run --no-sync pytest -q }
+        Invoke-Step "worker" "worker pytest" "worker" { uv run --no-sync pytest -q }
     }
     if ($Skip -notcontains "benchmarks") {
-        Invoke-Step "benchmarks pytest" "benchmarks" { uv run pytest -q }
+        Invoke-Step "benchmarks" "benchmarks pytest" "benchmarks" { uv run pytest -q }
     }
     if ($Skip -notcontains "ui") {
-        Invoke-Step "ui typecheck" "ui" { npm run typecheck }
-        Invoke-Step "ui lint" "ui" { npm run lint }
-        Invoke-Step "ui format:check" "ui" { npm run format:check }
-        Invoke-Step "ui unit tests" "ui" { npm test }
-        Invoke-Step "ui mock end-to-end tests" "ui" { npm run test:e2e }
+        Invoke-Step "ui" "ui typecheck" "ui" { npm run typecheck }
+        Invoke-Step "ui" "ui lint" "ui" { npm run lint }
+        Invoke-Step "ui" "ui format:check" "ui" { npm run format:check }
+        Invoke-Step "ui" "ui unit tests" "ui" { npm test }
+        Invoke-Step "ui" "ui mock end-to-end tests" "ui" { npm run test:e2e }
     }
+    if ($List) { exit 0 }
 } finally {
     $env:TEMP = $savedTemp
     $env:TMP = $savedTmp
-    Write-Host ""
-    Write-Host "=== cleaning scratch files" -ForegroundColor Cyan
-    & (Join-Path $PSScriptRoot "clean-test-tmp.ps1")
-    & (Join-Path $PSScriptRoot "check-temp-hygiene.ps1")
-    $hygiene = $LASTEXITCODE
+    if (-not $List) {
+        if ($logRoot) {
+            New-Item -ItemType Directory -Force -Path $logRoot | Out-Null
+            ConvertTo-Json -InputObject @($steps) -Depth 4 | Set-Content -LiteralPath (Join-Path $logRoot "steps.json") -Encoding UTF8
+        }
+        Write-Host ""
+        Write-Host "=== cleaning scratch files" -ForegroundColor Cyan
+        & (Join-Path $PSScriptRoot "clean-test-tmp.ps1")
+        & (Join-Path $PSScriptRoot "check-temp-hygiene.ps1")
+        $hygiene = $LASTEXITCODE
+    }
 }
 
 if ($failures.Count -gt 0) {
