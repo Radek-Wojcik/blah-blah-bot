@@ -327,6 +327,8 @@ try {
     Push-Location (Join-Path $repo "benchmarks")
     try { & uv @reportArgs; $reportExit = $LASTEXITCODE } catch { $reportExit = 1 } finally { Pop-Location }
     if ($reportExit -ne 0) { $failed.Add("report generator") }
+    # uv leaves a lock file in the redirected temp folder: remove it again.
+    & (Join-Path $PSScriptRoot "clean-test-tmp.ps1") -Quiet | Out-Null
     $env:TEMP = $savedTemp
     $env:TMP = $savedTmp
 }

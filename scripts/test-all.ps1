@@ -149,7 +149,15 @@ try {
             $kept = @()
             if (Test-Path -LiteralPath $stepsFile) {
                 $ran = @($steps | ForEach-Object { $_.name })
-                $kept = @(Get-Content -LiteralPath $stepsFile -Raw | ConvertFrom-Json | Where-Object { $_.name -notin $ran })
+                # Windows PowerShell 5.1 hands a JSON array over as one object: go through it.
+                $parsed = Get-Content -LiteralPath $stepsFile -Raw | ConvertFrom-Json
+                foreach ($old in @($parsed)) {
+                    foreach ($item in @($old)) {
+                        if ($item.name -and $item.name -notin $ran) {
+                            $kept += [ordered]@{ group = $item.group; name = $item.name; status = $item.status; seconds = $item.seconds; log = $item.log }
+                        }
+                    }
+                }
             }
             ConvertTo-Json -InputObject (@($kept) + @($steps.ToArray())) -Depth 4 | Set-Content -LiteralPath $stepsFile -Encoding UTF8
         }
