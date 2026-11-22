@@ -15,7 +15,13 @@
       "description": "Reference to a secret in the Windows Credential Manager, never the secret itself",
       "pattern": "^cred:[A-Za-z0-9][A-Za-z0-9_./-]*$"
     },
-    "snowflake": { "type": "string", "pattern": "^[0-9]{1,25}$" }
+    "snowflake": { "type": "string", "pattern": "^[0-9]{1,25}$" },
+    "notion_id": {
+      "type": "string",
+      "description": "A Notion database or data source id: 32 hex digits, with or without dashes",
+      "pattern": "^[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}$"
+    },
+    "notion_property": { "type": "string", "minLength": 1, "maxLength": 100 }
   },
   "properties": {
     "id": { "$ref": "#/$defs/identifier" },
@@ -94,21 +100,51 @@
         },
         "discord": {
           "type": "object",
-          "required": ["webhook"],
+          "description": "Exactly one of webhook and bot",
           "additionalProperties": false,
           "properties": {
             "webhook": { "$ref": "#/$defs/credential" },
+            "bot": {
+              "type": "object",
+              "required": ["token", "guild", "channel"],
+              "additionalProperties": false,
+              "properties": {
+                "token": { "$ref": "#/$defs/credential" },
+                "guild": { "$ref": "#/$defs/snowflake" },
+                "channel": { "$ref": "#/$defs/snowflake" },
+                "thread": { "type": "boolean", "description": "One thread per meeting under the summary. Default true." },
+                "edit_on_correction": { "type": "boolean", "description": "Edit the summary when a correction is published. Default true." }
+              }
+            },
             "publish": { "$ref": "#/$defs/publish" },
             "template": { "$ref": "#/$defs/identifier" }
-          }
+          },
+          "oneOf": [{ "required": ["webhook"] }, { "required": ["bot"] }]
         },
         "notion": {
           "type": "object",
-          "required": ["database"],
+          "required": ["token", "database"],
           "additionalProperties": false,
           "properties": {
-            "database": { "type": "string", "minLength": 1 },
-            "publish": { "$ref": "#/$defs/publish" }
+            "token": { "$ref": "#/$defs/credential" },
+            "database": { "$ref": "#/$defs/notion_id" },
+            "data_source": { "$ref": "#/$defs/notion_id" },
+            "publish": { "$ref": "#/$defs/publish" },
+            "properties": {
+              "type": "object",
+              "description": "Names of Notion properties; status_value is required when status is set (checked after schema validation)",
+              "additionalProperties": false,
+              "properties": {
+                "title": { "$ref": "#/$defs/notion_property" },
+                "key": { "$ref": "#/$defs/notion_property" },
+                "assignee": { "$ref": "#/$defs/notion_property" },
+                "due": { "$ref": "#/$defs/notion_property" },
+                "status": { "$ref": "#/$defs/notion_property" },
+                "status_value": { "$ref": "#/$defs/notion_property" },
+                "meeting": { "$ref": "#/$defs/notion_property" },
+                "cycle": { "$ref": "#/$defs/notion_property" }
+              }
+            }
           }
         }
       }

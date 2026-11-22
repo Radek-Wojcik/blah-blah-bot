@@ -29,11 +29,13 @@ pub mod topics;
 
 pub use context::{build_context, Context, ContextRequest, DEFAULT_MAX_PREVIOUS_ITEMS};
 pub use corrections::{Correction, CorrectionMarker, CorrectionsFile};
+pub use cycle::normalize_notion_id;
 pub use cycle::repo_path_problem;
 pub use cycle::{
-    Cycle, DiscordRef, DiscordTarget, GithubTarget, GlossaryEntry, Languages, NotionTarget,
-    Participant, PublishMode, Report, Targets, DEFAULT_DISCORD_PUBLISH, DEFAULT_GITHUB_PUBLISH,
-    DEFAULT_MEETINGS_PATH, DEFAULT_TEMPLATE_NAME,
+    Cycle, DiscordBot, DiscordMode, DiscordRef, DiscordTarget, GithubTarget, GlossaryEntry,
+    Languages, NotionProperties, NotionTarget, Participant, PublishMode, Report, Targets,
+    DEFAULT_DISCORD_PUBLISH, DEFAULT_GITHUB_PUBLISH, DEFAULT_MEETINGS_PATH, DEFAULT_NOTION_KEY,
+    DEFAULT_NOTION_PUBLISH, DEFAULT_NOTION_TITLE, DEFAULT_TEMPLATE_NAME,
 };
 pub use draft::{
     Certainty, CertaintyLevel, Decision, Draft, Item, ItemType, Language, LanguageSetting,

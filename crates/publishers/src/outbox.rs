@@ -337,6 +337,10 @@ impl Dispatcher {
             OutboxKind::PostDiscord => self.post_discord(op),
             OutboxKind::CommitCorrection => self.commit_correction(op),
             OutboxKind::CommentCorrection => self.comment_correction(op),
+            // Placeholders until the executors exist.
+            OutboxKind::ExportNotion | OutboxKind::EditDiscord => Err(OpError::permanent(
+                "this kind of operation is not implemented yet",
+            )),
         }
     }
 

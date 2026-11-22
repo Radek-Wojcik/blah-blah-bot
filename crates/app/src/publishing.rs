@@ -304,6 +304,14 @@ fn label_of(op: &OutboxOp) -> String {
             format!("Add the correction {id} to the repository")
         }
         OutboxKind::CommentCorrection => "Comment the correction on its issue".to_string(),
+        OutboxKind::ExportNotion => format!("Export the task to Notion: {}", text("title")),
+        OutboxKind::EditDiscord => {
+            let id = payload
+                .pointer("/correction/id")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            format!("Update the Discord message for the correction {id}")
+        }
     }
 }
 
@@ -362,7 +370,7 @@ fn parse_targets(names: &[String]) -> IpcResult<Vec<PublishTarget>> {
         let t = PublishTarget::parse(name.trim()).ok_or_else(|| {
             IpcError::new(
                 "invalid",
-                format!("{name} is not a target (github or discord)"),
+                format!("{name} is not a target (github, discord or notion)"),
             )
         })?;
         if !out.contains(&t) {

@@ -11,9 +11,9 @@ use std::path::{Path, PathBuf};
 
 use cycle_store::schema::is_identifier;
 use cycle_store::{
-    Cycle, CycleEntry, DiscordRef, DiscordTarget, GithubTarget, GlossaryEntry, IssueCache,
-    LanguageSetting, Languages, NotionTarget, Participant, PublishMode, Repo, ReportMode, Template,
-    TemplateSection, Topic, TopicStatus, ValidationIssue,
+    Cycle, CycleEntry, DiscordBot, DiscordRef, DiscordTarget, GithubTarget, GlossaryEntry,
+    IssueCache, LanguageSetting, Languages, NotionProperties, NotionTarget, Participant,
+    PublishMode, Repo, ReportMode, Template, TemplateSection, Topic, TopicStatus, ValidationIssue,
 };
 use queue::context::{CycleData, CycleSource};
 use queue::RunError;
@@ -126,8 +126,11 @@ fn default_true() -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiscordTargetDto {
-    /// A `cred:` reference, never the webhook URL.
-    pub webhook: String,
+    /// A `cred:` reference, never the webhook URL. Exactly one of `webhook` and `bot`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot: Option<DiscordBotDto>,
     pub publish: PublishMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template: Option<String>,
@@ -135,9 +138,95 @@ pub struct DiscordTargetDto {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DiscordBotDto {
+    /// A `cred:` reference, never the bot token.
+    pub token: String,
+    pub guild: String,
+    pub channel: String,
+    #[serde(default = "default_true")]
+    pub thread: bool,
+    #[serde(default = "default_true")]
+    pub edit_on_correction: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NotionTargetDto {
+    /// A `cred:` reference, never the integration token.
+    pub token: String,
     pub database: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_source: Option<String>,
     pub publish: PublishMode,
+    #[serde(default)]
+    pub properties: NotionPropertiesDto,
+}
+
+/// The Notion property names of the field mapping.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct NotionPropertiesDto {
+    pub title: String,
+    pub key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub due: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meeting: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cycle: Option<String>,
+}
+
+impl Default for NotionPropertiesDto {
+    fn default() -> Self {
+        NotionProperties::default().into()
+    }
+}
+
+impl From<NotionProperties> for NotionPropertiesDto {
+    fn from(p: NotionProperties) -> Self {
+        Self {
+            title: p.title,
+            key: p.key,
+            assignee: p.assignee,
+            due: p.due,
+            status: p.status,
+            status_value: p.status_value,
+            meeting: p.meeting,
+            cycle: p.cycle,
+        }
+    }
+}
+
+impl From<NotionPropertiesDto> for NotionProperties {
+    /// A name the user left empty is no name: the defaults for `title` and `key`, no property
+    /// for the optional fields.
+    fn from(d: NotionPropertiesDto) -> Self {
+        let defaults = NotionProperties::default();
+        let name = |value: String, default: String| {
+            if value.trim().is_empty() {
+                default
+            } else {
+                value
+            }
+        };
+        let optional = |value: Option<String>| value.filter(|v| !v.trim().is_empty());
+        Self {
+            title: name(d.title, defaults.title),
+            key: name(d.key, defaults.key),
+            assignee: optional(d.assignee),
+            due: optional(d.due),
+            status: optional(d.status),
+            status_value: optional(d.status_value),
+            meeting: optional(d.meeting),
+            cycle: optional(d.cycle),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -210,12 +299,22 @@ impl From<&Cycle> for CycleDto {
                 }),
                 discord: c.targets.discord.as_ref().map(|t| DiscordTargetDto {
                     webhook: t.webhook.clone(),
+                    bot: t.bot.as_ref().map(|b| DiscordBotDto {
+                        token: b.token.clone(),
+                        guild: b.guild.clone(),
+                        channel: b.channel.clone(),
+                        thread: b.thread,
+                        edit_on_correction: b.edit_on_correction,
+                    }),
                     publish: t.publish,
                     template: t.template.clone(),
                 }),
                 notion: c.targets.notion.as_ref().map(|t| NotionTargetDto {
+                    token: t.token.clone(),
                     database: t.database.clone(),
+                    data_source: t.data_source.clone(),
                     publish: t.publish,
+                    properties: t.properties.clone().into(),
                 }),
             },
         }
@@ -265,13 +364,23 @@ impl From<CycleDto> for Cycle {
                     issues: t.issues,
                 }),
                 discord: d.targets.discord.map(|t| DiscordTarget {
-                    webhook: t.webhook,
+                    webhook: t.webhook.filter(|w| !w.is_empty()),
+                    bot: t.bot.map(|b| DiscordBot {
+                        token: b.token,
+                        guild: b.guild,
+                        channel: b.channel,
+                        thread: b.thread,
+                        edit_on_correction: b.edit_on_correction,
+                    }),
                     publish: t.publish,
                     template: t.template.filter(|t| !t.is_empty()),
                 }),
                 notion: d.targets.notion.map(|t| NotionTarget {
+                    token: t.token,
                     database: t.database,
+                    data_source: t.data_source.filter(|s| !s.trim().is_empty()),
                     publish: t.publish,
+                    properties: t.properties.into(),
                 }),
             },
         }
@@ -841,8 +950,9 @@ pub fn save_cycle<S: ParticipantSync + ?Sized>(
 /// explicit publication; the public-repository check applies to every mode.
 ///
 /// A cycle without `targets.github` gets one with the default folder and issues on. Discord
-/// needs a webhook reference, which only the cycle editor can add, so a cycle without a
-/// Discord target is refused (`no_target`). Nothing is written when the rule is already set.
+/// needs a webhook or bot reference and Notion a token and a database, which only the cycle
+/// editor can add, so a cycle without such a target is refused (`no_target`). Nothing is
+/// written when the rule is already set.
 pub fn set_target_rule(
     repos: &[CycleRepoSetting],
     cycle_id: &str,
@@ -873,10 +983,23 @@ pub fn set_target_rule(
             discord.publish = mode;
             changed
         }
+        "notion" => {
+            let notion = cycle.targets.notion.as_mut().ok_or_else(|| {
+                IpcError::new(
+                    "no_target",
+                    "this cycle has no Notion target: add one in the cycle settings first",
+                )
+            })?;
+            let changed = notion.publish != mode;
+            notion.publish = mode;
+            changed
+        }
         other => {
             return Err(IpcError::new(
                 "invalid",
-                format!("{other} is not a target with a publishing rule (github or discord)"),
+                format!(
+                    "{other} is not a target with a publishing rule (github, discord or notion)"
+                ),
             ))
         }
     };
@@ -1810,7 +1933,8 @@ pub(crate) mod tests {
         assert_eq!(e.code, "no_target");
         let mut cycle = repo.load_cycle("NOMAD").unwrap();
         cycle.targets.discord = Some(DiscordTarget {
-            webhook: "cred:discord/nomad".into(),
+            webhook: Some("cred:discord/nomad".into()),
+            bot: None,
             publish: PublishMode::OnApproval,
             template: Some("short".into()),
         });
@@ -1819,18 +1943,45 @@ pub(crate) mod tests {
         let discord = t.discord.unwrap();
         assert_eq!(discord.publish, PublishMode::Auto);
         assert_eq!(
-            discord.webhook, "cred:discord/nomad",
+            discord.webhook.as_deref(),
+            Some("cred:discord/nomad"),
             "the reference is kept"
         );
         assert_eq!(discord.template.as_deref(), Some("short"));
 
-        // The rest of the file is as it was, and the other target kept its rule.
+        // Notion needs a target with a token and a database.
+        let e = set_target_rule(lab.repos(), "NOMAD", "notion", PublishMode::Auto).unwrap_err();
+        assert_eq!(e.code, "no_target");
+        let mut cycle = repo.load_cycle("NOMAD").unwrap();
+        cycle.targets.notion = Some(NotionTarget {
+            token: "cred:notion/nomad".into(),
+            database: "0123456789abcdef0123456789abcdef".into(),
+            data_source: None,
+            publish: PublishMode::OnApproval,
+            properties: NotionProperties::default(),
+        });
+        repo.save_cycle(&cycle).unwrap();
+        let t = set_target_rule(lab.repos(), "NOMAD", "notion", PublishMode::Off).unwrap();
+        let notion = t.notion.unwrap();
+        assert_eq!(notion.publish, PublishMode::Off);
+        assert_eq!(notion.token, "cred:notion/nomad", "the reference is kept");
+        assert_eq!(notion.properties, NotionPropertiesDto::default());
+        let text = yaml(&repo);
+        set_target_rule(lab.repos(), "NOMAD", "notion", PublishMode::Off).unwrap();
+        assert_eq!(yaml(&repo), text, "the same rule writes nothing");
+
+        // The rest of the file is as it was, and the other targets kept their rules.
         let after = repo.load_cycle("NOMAD").unwrap();
         assert_eq!(after.targets.github.unwrap().publish, PublishMode::Off);
+        assert_eq!(
+            after.targets.discord.unwrap().publish,
+            PublishMode::Auto,
+            "a Notion rule leaves Discord alone"
+        );
         assert_eq!(after.name, "Nomad rover");
 
         // Other targets and unknown cycles are refused.
-        for bad in ["notion", "", "Github", "slack"] {
+        for bad in ["", "Github", "slack"] {
             let e = set_target_rule(lab.repos(), "NOMAD", bad, PublishMode::Auto).unwrap_err();
             assert_eq!(e.code, "invalid", "{bad:?}");
         }
@@ -1899,7 +2050,8 @@ targets:
         }];
         dto.report.by_type.insert("budget".into(), "default".into());
         dto.targets.discord = Some(DiscordTargetDto {
-            webhook: "cred:discord/nomad".into(),
+            webhook: Some("cred:discord/nomad".into()),
+            bot: None,
             publish: PublishMode::OnApproval,
             template: None,
         });
@@ -1925,6 +2077,77 @@ targets:
         )
         .unwrap();
         assert!(yaml.contains("cred:discord/nomad"));
+    }
+
+    #[test]
+    fn the_bot_and_notion_targets_round_trip_through_the_dto() {
+        let lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        let mut dto = get_cycle(lab.repos(), "NOMAD").unwrap().cycle;
+        dto.targets.discord = Some(DiscordTargetDto {
+            webhook: None,
+            bot: Some(DiscordBotDto {
+                token: "cred:discord-bot/team".into(),
+                guild: "111111111111111111".into(),
+                channel: "222222222222222222".into(),
+                thread: true,
+                edit_on_correction: false,
+            }),
+            publish: PublishMode::OnApproval,
+            template: None,
+        });
+        dto.targets.notion = Some(NotionTargetDto {
+            token: "cred:notion/nomad".into(),
+            database: "0123456789abcdef0123456789abcdef".into(),
+            data_source: Some("fedcba98-7654-3210-fedc-ba9876543210".into()),
+            publish: PublishMode::Auto,
+            properties: NotionPropertiesDto {
+                assignee: Some("Assignee".into()),
+                status: Some("Status".into()),
+                status_value: Some("Not started".into()),
+                ..NotionPropertiesDto::default()
+            },
+        });
+        let r = save_cycle(lab.repos(), &lab.store, dto.clone()).unwrap();
+        assert!(r.saved, "{:?}", r.issues);
+        assert_eq!(r.details.as_ref().unwrap().cycle, dto);
+
+        let json = serde_json::to_value(&dto).unwrap();
+        assert_eq!(json["targets"]["discord"]["bot"]["editOnCorrection"], false);
+        assert_eq!(json["targets"]["discord"]["bot"]["thread"], true);
+        assert!(json["targets"]["discord"].get("webhook").is_none());
+        assert_eq!(json["targets"]["notion"]["properties"]["title"], "Name");
+        assert_eq!(
+            json["targets"]["notion"]["properties"]["statusValue"],
+            "Not started"
+        );
+        assert!(json["targets"]["notion"]["properties"].get("due").is_none());
+        assert_eq!(
+            json["targets"]["notion"]["dataSource"],
+            "fedcba98-7654-3210-fedc-ba9876543210"
+        );
+
+        // Empty names and ids from the editor mean "not set".
+        let mut blank = dto.clone();
+        {
+            let notion = blank.targets.notion.as_mut().unwrap();
+            notion.data_source = Some("  ".into());
+            notion.properties.assignee = Some(String::new());
+            notion.properties.title = String::new();
+            notion.properties.status = None;
+            notion.properties.status_value = None;
+        }
+        let cycle = Cycle::from(blank);
+        let notion = cycle.targets.notion.unwrap();
+        assert_eq!(notion.data_source, None);
+        assert_eq!(notion.properties, NotionProperties::default());
+
+        // Both a webhook and a bot is refused by the schema, nothing is written.
+        let mut both = dto;
+        both.targets.discord.as_mut().unwrap().webhook = Some("cred:discord/nomad".into());
+        let r = save_cycle(lab.repos(), &lab.store, both).unwrap();
+        assert!(!r.saved);
+        assert!(r.issues.iter().any(|i| i.path == "targets.discord"));
     }
 
     #[test]

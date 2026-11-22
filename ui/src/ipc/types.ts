@@ -434,12 +434,55 @@ export interface CycleParticipant {
   discord?: { userId?: string; roleId?: string };
 }
 
+/** `targets.discord.bot`: a bot that posts and opens a thread per meeting. */
+export interface DiscordBotTarget {
+  /** A `cred:` reference to the bot token, never the token. */
+  token: string;
+  /** The server id (digits, kept as text). */
+  guild: string;
+  /** The text or announcement channel id (digits, kept as text). */
+  channel: string;
+  /** One thread per meeting under the summary. Default true. */
+  thread: boolean;
+  /** Edit the summary when a correction is published. Default true. */
+  editOnCorrection: boolean;
+}
+
+/** The names of the Notion properties the task fields go to. */
+export interface NotionProperties {
+  /** Type `title`. Default "Name". */
+  title: string;
+  /** Type `rich_text`, holds the idempotency key. Default "BBB key". */
+  key: string;
+  assignee?: string;
+  due?: string;
+  status?: string;
+  /** The status a new page gets; required when `status` is set. */
+  statusValue?: string;
+  meeting?: string;
+  cycle?: string;
+}
+
 export interface CycleTargets {
   /** `issues` (default true): create issues for tasks and write back status changes. */
   github?: { path: string; publish: PublishMode; issues?: boolean } | null;
-  /** `webhook` is a `cred:` reference, never a URL. */
-  discord?: { webhook: string; publish: PublishMode; template?: string } | null;
-  notion?: { database: string; publish: PublishMode } | null;
+  /** Exactly one of `webhook` and `bot`. `webhook` is a `cred:` reference, never a URL. */
+  discord?: {
+    webhook?: string;
+    bot?: DiscordBotTarget;
+    publish: PublishMode;
+    template?: string;
+  } | null;
+  notion?: {
+    /** A `cred:` reference to the integration token, never the token. */
+    token: string;
+    /** The database id (32 hex digits, dashes allowed). Not a secret. */
+    database: string;
+    /** Needed when the database has more than one data source. */
+    dataSource?: string;
+    publish: PublishMode;
+    properties: NotionProperties;
+  } | null;
 }
 
 /** `cycle.yaml` as the editor sees it. */

@@ -116,7 +116,7 @@ export function validateCycle(c: CycleDto, templates: string[]): CycleIssue[] {
     if (!PUBLISH.includes(t.github.publish)) add("targets.github.publish", "unknown publish rule");
   }
   if (t.discord) {
-    if (!CREDENTIAL.test(t.discord.webhook))
+    if (t.discord.webhook !== undefined && !CREDENTIAL.test(t.discord.webhook))
       add(
         "targets.discord.webhook",
         "must be a reference such as cred:discord/nomad; a webhook address is never stored in the repository",

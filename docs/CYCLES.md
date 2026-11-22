@@ -54,7 +54,35 @@ report:
 targets:
   github: { path: meetings, publish: on-approval }
   discord: { webhook: "cred:discord/nomad", publish: on-approval, template: short }
-  notion: { database: "cred:notion/nomad-db", publish: on-approval }
+  notion: { token: "cred:notion/nomad", database: "0123456789abcdef0123456789abcdef", publish: on-approval }
+```
+
+A Discord target posts through a webhook (above) or through a bot, and a Notion target needs the token of an integration and the database it exports tasks to. The bot and the full Notion mapping look like this:
+
+```yaml
+targets:
+  discord:
+    bot:
+      token: cred:discord-bot/team          # secret reference, never the token
+      guild: "111111111111111111"           # server id, quoted
+      channel: "222222222222222222"         # text or announcement channel id, quoted
+      thread: true                          # default true: one thread per meeting under the summary
+      edit_on_correction: true              # default true: edit the summary when a correction is published
+    publish: on-approval
+  notion:
+    token: cred:notion/nomad
+    database: "0123456789abcdef0123456789abcdef"
+    data_source: "fedcba98-7654-3210-fedc-ba9876543210"   # only when the database has several data sources
+    publish: on-approval
+    properties:                             # Notion property names
+      title: Name                           # type title (default "Name")
+      key: BBB key                          # type rich_text (default "BBB key"), holds the idempotency key
+      assignee: Assignee                    # rich_text, select or multi_select
+      due: Due                              # date
+      status: Status                        # status or select, set when a page is created
+      status_value: Not started             # required when status is set
+      meeting: Meeting                      # url or rich_text
+      cycle: Cycle                          # select or rich_text
 ```
 
 Only `id` and `name` are required. Unknown keys are rejected, so a misspelled key is reported instead of ignored. Identifiers (`id`, participant ids, template names, meeting types) match `^[A-Za-z0-9][A-Za-z0-9_-]*$`; they are used in file names and keys, so spaces, dots and slashes are not allowed.
@@ -80,11 +108,22 @@ Only `id` and `name` are required. Unknown keys are rejected, so a misspelled ke
 | `targets.github.path` | relative path | `meetings` | Folder for meeting reports: a meeting is committed to `<path>/<ID>/<date>/`. Relative to the repository, names separated by `/` and made of letters, digits, `.`, `_` and `-`; no `.` or `..` name, no leading `/`, no drive letter or backslash, no `.git`, no name ending in a dot. Meetings already published under another path stay where they are, and both folders are read for the context of the next meeting. |
 | `targets.github.publish` | `auto`, `on-approval`, `off` | `on-approval` | Whether the report, the issues and the topics (and the corrections to a published meeting) are published automatically when the draft is complete, when you press Publish, or not at all. You choose it; until you do, `on-approval` is used. Status changes are never written back automatically. A cycle without `targets.github` still has this target with the default. See [Publishing rules](#publishing-rules). |
 | `targets.github.issues` | `true`, `false` | `true` | Whether task items become GitHub issues and approved status changes are written back to them. With `false` only the report is committed. |
-| `targets.discord.webhook` | `cred:` reference | required | Name of a secret, for example `cred:discord/nomad`. A URL is rejected: the webhook URL never appears in the repository. The webhook is entered in the publishing settings and stored in the Windows Credential Manager under `target:<name>` (`target:discord/nomad`), a namespace of its own, so a reference in a repository cannot reach any other secret of the application. |
+| `targets.discord.webhook` | `cred:` reference | none | Exactly one of `webhook` and `bot` is required. Name of a secret, for example `cred:discord/nomad`. A URL is rejected: the webhook URL never appears in the repository. The webhook is entered in the publishing settings and stored in the Windows Credential Manager under `target:<name>` (`target:discord/nomad`), a namespace of its own, so a reference in a repository cannot reach any other secret of the application. |
+| `targets.discord.bot.token` | `cred:` reference | required with `bot` | Name of the bot token, for example `cred:discord-bot/team`. A token itself is rejected. Stored in the Windows Credential Manager under `target:<name>` like the webhook. |
+| `targets.discord.bot.guild` | Discord snowflake | required with `bot` | The server id. Quote the number. |
+| `targets.discord.bot.channel` | Discord snowflake | required with `bot` | The text or announcement channel the summary is posted to. Quote the number. |
+| `targets.discord.bot.thread` | `true`, `false` | `true` | One thread per meeting under the summary. Left out of the file while true. |
+| `targets.discord.bot.edit_on_correction` | `true`, `false` | `true` | Edit the summary when a correction is published. Left out of the file while true. |
 | `targets.discord.publish` | as above | `on-approval` | A cycle without `targets.discord` has no Discord target: nothing is posted. |
 | `targets.discord.template` | template name | none | Separate template for the Discord message; without it the built-in short message is used (one message, see below). A template of your own should stay short as well: a long one is split into several messages. |
-| `targets.notion.database` | text | required | Database id, or a `cred:` reference to it. |
-| `targets.notion.publish` | as above | `on-approval` | |
+| `targets.notion.token` | `cred:` reference | required | Name of the integration token, for example `cred:notion/nomad`. A token itself is rejected. Stored in the Windows Credential Manager under `target:<name>`. |
+| `targets.notion.database` | Notion id | required | The database id: 32 hexadecimal digits, with or without dashes. It is not a secret. |
+| `targets.notion.data_source` | Notion id | none | The data source id; needed only when the database has more than one. |
+| `targets.notion.publish` | as above | `on-approval` | A cycle without `targets.notion` has no Notion target. Status changes are never exported. |
+| `targets.notion.properties.title` | property name | `Name` | The page title property (type `title`). Left out of the file while default. |
+| `targets.notion.properties.key` | property name | `BBB key` | The `rich_text` property that holds the key which makes an export idempotent. |
+| `targets.notion.properties.assignee`, `due`, `status`, `meeting`, `cycle` | property name | none | Optional fields: a field without a property name is not exported. |
+| `targets.notion.properties.status_value` | text | none | The status a new page gets; required when `properties.status` is set. |
 
 ### Checks beyond the schema
 
@@ -92,6 +131,8 @@ Only `id` and `name` are required. Unknown keys are rejected, so a misspelled ke
 * Every template named in `report.by_type` exists in `templates/`.
 * `report.default_template` exists when `default_mode` is `template` or `by-type`.
 * `id` equals the directory name.
+* `targets.discord` has exactly one of `webhook` and `bot`.
+* `targets.notion.properties.status_value` is set when `properties.status` is.
 
 A cycle that fails a check is still listed, with its issues (each with the path of the offending value, for example `participants[2].id`), so a broken cycle never hides the others. It cannot be used for a recording until it is fixed.
 

@@ -647,7 +647,14 @@ export function CycleEditor(props: { cycleId: string; onBack: () => void }) {
                 checked={notion != null}
                 onChange={(e) =>
                   setTargets({
-                    notion: e.target.checked ? { database: "", publish: "on-approval" } : null,
+                    notion: e.target.checked
+                      ? {
+                          token: "cred:",
+                          database: "",
+                          publish: "on-approval",
+                          properties: { title: "Name", key: "BBB key" },
+                        }
+                      : null,
                   })
                 }
               />

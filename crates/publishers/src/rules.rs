@@ -1,8 +1,8 @@
 //! Which targets a meeting goes to, and when: the per-target rules of `cycle.yaml`
 //! (`targets.<name>.publish`: `auto`, `on-approval` or `off`) and their defaults.
 //!
-//! The defaults are two constants in `cycle-store` (`DEFAULT_GITHUB_PUBLISH`,
-//! `DEFAULT_DISCORD_PUBLISH`), read by the parser of `cycle.yaml` and by these rules alike:
+//! The defaults are constants in `cycle-store` (`DEFAULT_GITHUB_PUBLISH`,
+//! `DEFAULT_DISCORD_PUBLISH`, `DEFAULT_NOTION_PUBLISH`), read by the parser of `cycle.yaml` and by these rules alike:
 //! changing one is a change of a constant. They are set by ADR 0019, chosen because
 //! what is published cannot be taken back: a pushed transcript stays in the history of the
 //! repository, and an issue assignment or a Discord ping has already notified somebody.
@@ -16,13 +16,15 @@
 
 use cycle_store::{Cycle, PublishMode};
 
-pub use cycle_store::{DEFAULT_DISCORD_PUBLISH, DEFAULT_GITHUB_PUBLISH};
+pub use cycle_store::{DEFAULT_DISCORD_PUBLISH, DEFAULT_GITHUB_PUBLISH, DEFAULT_NOTION_PUBLISH};
+
 /// A place a meeting can be published to. GitHub covers the commit with the report and the
-/// transcript, the issues and the status changes.
+/// transcript, the issues and the status changes; Notion gets the task items only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum PublishTarget {
     Github,
     Discord,
+    Notion,
 }
 
 impl PublishTarget {
@@ -30,6 +32,7 @@ impl PublishTarget {
         match self {
             Self::Github => "github",
             Self::Discord => "discord",
+            Self::Notion => "notion",
         }
     }
 
@@ -37,6 +40,7 @@ impl PublishTarget {
         match s {
             "github" => Some(Self::Github),
             "discord" => Some(Self::Discord),
+            "notion" => Some(Self::Notion),
             _ => None,
         }
     }
@@ -60,6 +64,8 @@ pub struct TargetRules {
     pub issues: bool,
     /// `None`: the cycle has no Discord target.
     pub discord: Option<PublishMode>,
+    /// `None`: the cycle has no Notion target. Status changes never go to Notion.
+    pub notion: Option<PublishMode>,
 }
 
 impl TargetRules {
@@ -75,6 +81,8 @@ impl TargetRules {
             issues: cycle.targets.github.as_ref().is_none_or(|t| t.issues),
             // A cycle without `targets.discord` has no Discord target at all.
             discord: cycle.targets.discord.as_ref().map(|t| t.publish),
+            // A cycle without `targets.notion` has no Notion target at all.
+            notion: cycle.targets.notion.as_ref().map(|t| t.publish),
         }
     }
 
@@ -83,6 +91,7 @@ impl TargetRules {
         match target {
             PublishTarget::Github => Some(self.github),
             PublishTarget::Discord => self.discord,
+            PublishTarget::Notion => self.notion,
         }
     }
 
@@ -108,7 +117,8 @@ mod tests {
             ..GithubTarget::default()
         });
         c.targets.discord = discord.map(|publish| DiscordTarget {
-            webhook: "cred:discord/nomad".into(),
+            webhook: Some("cred:discord/nomad".into()),
+            bot: None,
             publish,
             template: None,
         });
@@ -123,6 +133,9 @@ mod tests {
         assert_eq!(rules.github, DEFAULT_GITHUB_PUBLISH);
         assert!(rules.issues);
         assert_eq!(rules.discord, None, "no Discord target without a webhook");
+        assert_eq!(rules.notion, None, "no Notion target without a token");
+        assert_eq!(DEFAULT_NOTION_PUBLISH, PublishMode::OnApproval);
+        assert!(!rules.allows(PublishTarget::Notion, Trigger::Explicit));
         assert!(!rules.allows(PublishTarget::Github, Trigger::Auto));
         assert!(rules.allows(PublishTarget::Github, Trigger::Explicit));
         assert!(!rules.allows(PublishTarget::Discord, Trigger::Explicit));
@@ -173,9 +186,44 @@ targets:
 
     #[test]
     fn targets_have_stable_names() {
-        for t in [PublishTarget::Github, PublishTarget::Discord] {
+        for t in [
+            PublishTarget::Github,
+            PublishTarget::Discord,
+            PublishTarget::Notion,
+        ] {
             assert_eq!(PublishTarget::parse(t.as_str()), Some(t));
         }
-        assert_eq!(PublishTarget::parse("notion"), None);
+        assert_eq!(PublishTarget::Notion.as_str(), "notion");
+        assert_eq!(PublishTarget::parse("slack"), None);
+    }
+
+    #[test]
+    fn the_notion_rule_comes_from_its_target_and_defaults_to_on_approval() {
+        let cycle = Cycle::from_yaml_str(
+            "id: NOMAD
+name: Nomad
+targets:
+  notion: { token: \"cred:notion/nomad\", database: \"0123456789abcdef0123456789abcdef\" }
+",
+        )
+        .unwrap();
+        let rules = TargetRules::of(&cycle);
+        assert_eq!(rules.notion, Some(DEFAULT_NOTION_PUBLISH));
+        assert!(!rules.allows(PublishTarget::Notion, Trigger::Auto));
+        assert!(rules.allows(PublishTarget::Notion, Trigger::Explicit));
+        for (mode, auto, explicit) in [
+            (PublishMode::Auto, true, true),
+            (PublishMode::OnApproval, false, true),
+            (PublishMode::Off, false, false),
+        ] {
+            let mut c = cycle.clone();
+            c.targets.notion.as_mut().unwrap().publish = mode;
+            let rules = TargetRules::of(&c);
+            assert_eq!(rules.allows(PublishTarget::Notion, Trigger::Auto), auto);
+            assert_eq!(
+                rules.allows(PublishTarget::Notion, Trigger::Explicit),
+                explicit
+            );
+        }
     }
 }

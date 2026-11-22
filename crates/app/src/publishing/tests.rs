@@ -266,7 +266,7 @@ fn a_target_that_is_off_or_missing_cannot_be_published() {
     assert_eq!(err.code, "nothing_to_publish");
     let err = rig
         .publishing
-        .publish(MEETING, &["notion".to_string()])
+        .publish(MEETING, &["slack".to_string()])
         .unwrap_err();
     assert_eq!(err.code, "invalid");
     let err = rig.publishing.publish(MEETING, &[]).unwrap_err();

@@ -91,9 +91,9 @@ fn discord_refs(repos: &[CycleRepoSetting]) -> Vec<(String, String)> {
         };
         for entry in entries {
             let Some(cycle) = entry.cycle else { continue };
-            if let Some(discord) = cycle.targets.discord {
-                if secrets::reference_name(&discord.webhook).is_ok() {
-                    out.push((discord.webhook.trim().to_string(), cycle.id));
+            if let Some(webhook) = cycle.targets.discord.and_then(|d| d.webhook) {
+                if secrets::reference_name(&webhook).is_ok() {
+                    out.push((webhook.trim().to_string(), cycle.id));
                 }
             }
         }
@@ -481,7 +481,8 @@ mod tests {
         let repo = lab.repo();
         let mut cycle = repo.load_cycle("NOMAD").unwrap();
         cycle.targets.discord = Some(cycle_store::DiscordTarget {
-            webhook: reference.into(),
+            webhook: Some(reference.into()),
+            bot: None,
             publish: cycle_store::PublishMode::OnApproval,
             template: None,
         });

@@ -271,7 +271,8 @@ fn plan_input<'a>(
         .targets
         .discord
         .as_ref()
-        .is_some_and(|d| p.env.webhook(&d.webhook).is_some());
+        .and_then(|d| d.webhook.as_deref())
+        .is_some_and(|reference| p.env.webhook(reference).is_some());
     PlanInput {
         meeting_id: p.meeting_id,
         draft: p.draft,

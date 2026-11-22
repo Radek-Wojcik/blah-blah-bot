@@ -7,10 +7,13 @@
 pub mod addr;
 pub mod correction;
 pub mod discord;
+pub mod discord_bot;
+pub mod export;
 pub mod flow;
 pub mod gate;
 pub mod github;
 pub mod http;
+pub mod notion;
 pub mod outbox;
 pub mod plan;
 pub mod rules;

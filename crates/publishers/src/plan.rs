@@ -609,7 +609,7 @@ pub fn build(input: &PlanInput<'_>) -> PublishPlan {
                         cycle: cycle_id,
                         date,
                         snapshot: input.snapshot.dir.clone(),
-                        reference: target.webhook.clone(),
+                        reference: target.webhook.clone().unwrap_or_default(),
                         template: target.template.clone(),
                         files,
                     }),
