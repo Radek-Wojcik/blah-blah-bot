@@ -1767,7 +1767,9 @@ mod tests {
         let miss = build_status(&ProcessingSettings::default(), &Probe::empty());
         let json = serde_json::to_value(&miss).unwrap();
         assert_eq!(json["items"][0]["code"], "setup_worker_env");
-        assert!(json["items"][0]["fixHint"].as_str().is_some_and(|h| !h.is_empty()));
+        assert!(json["items"][0]["fixHint"]
+            .as_str()
+            .is_some_and(|h| !h.is_empty()));
     }
 
     #[test]
