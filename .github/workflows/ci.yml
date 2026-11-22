@@ -18,13 +18,22 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: ui/package-lock.json
+          cache-dependency-path: |
+            ui/package-lock.json
+            extension/package-lock.json
       - name: Rust format and lints
         run: |
           cargo fmt --all --check
           cargo clippy --workspace --all-targets -- -D warnings
       - name: UI lints
         working-directory: ui
+        run: |
+          npm ci
+          npm run typecheck
+          npm run lint
+          npm run format:check
+      - name: Extension lints
+        working-directory: extension
         run: |
           npm ci
           npm run typecheck
@@ -49,11 +58,18 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: ui/package-lock.json
+          cache-dependency-path: |
+            ui/package-lock.json
+            extension/package-lock.json
       - name: Rust unit and integration tests
         run: cargo test --workspace
       - name: UI unit tests
         working-directory: ui
+        run: |
+          npm ci
+          npm test
+      - name: Extension unit tests
+        working-directory: extension
         run: |
           npm ci
           npm test
@@ -78,7 +94,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: ui/package-lock.json
+          cache-dependency-path: |
+            ui/package-lock.json
+            extension/package-lock.json
       - name: UI flows on the mock backend
         working-directory: ui
         run: |
@@ -97,12 +115,19 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: ui/package-lock.json
+          cache-dependency-path: |
+            ui/package-lock.json
+            extension/package-lock.json
       - name: Build the UI
         working-directory: ui
         run: |
           npm ci
           npm run build
+      - name: Build and pack the extension
+        working-directory: extension
+        run: |
+          npm ci
+          npm run pack
       - name: Build the application
         run: cargo build -p app --features custom-protocol
 
