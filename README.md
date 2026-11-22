@@ -106,7 +106,7 @@ Every key is described in [docs/CYCLES.md](docs/CYCLES.md); the schema is `schem
 
 Keys are stored in the Windows Credential Manager and are never shown again or written to a file.
 
-**Environment switches** (development and tests): `BBB_DEMO` runs the interface on generated data without audio devices, `BBB_DATA_DIR` keeps all application data in one folder, `BBB_LOG` sets the log filter, `BBB_WORKER_DIR` points to the Python worker folder.
+**Environment switches** (development and tests): `BBB_DEMO` runs the interface on generated data without audio devices, `BBB_DATA_DIR` keeps all application data in one folder, `BBB_LOG` sets the log filter, `BBB_WORKER_DIR` points to the Python worker folder, `BBB_WORKER_ENV_DIR` to a shared worker Python environment (by default each data folder gets its own `worker-venv`).
 
 ## Stage 4 measurements
 

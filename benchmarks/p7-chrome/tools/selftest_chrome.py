@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -165,6 +166,16 @@ def run_stages() -> None:
             subprocess.run(
                 ["taskkill", "/PID", str(chrome.pid), "/T", "/F"], capture_output=True, check=False
             )
+            try:
+                chrome.wait(timeout=15)  # let go of the profile files before they are removed
+            except subprocess.TimeoutExpired:
+                pass
+            # The context manager ignores a failed removal; do not leave the profile behind.
+            for _ in range(10):
+                if not Path(prof).exists():
+                    break
+                shutil.rmtree(prof, ignore_errors=True)
+                time.sleep(1)
     for proc in (receiver1, receiver2):
         proc.wait(timeout=90)
 

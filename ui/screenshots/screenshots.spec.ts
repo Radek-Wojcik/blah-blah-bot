@@ -7,15 +7,20 @@
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Page, expect, test } from "@playwright/test";
+import { cleanupDirs, freshDir } from "../support/e2e-tmp";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const OUT = path.resolve(here, "../../docs/img");
 
 test.use({ colorScheme: "dark", deviceScaleFactor: 1 });
+
+// The frame folders of the GIFs live in <repo>/target/e2e-tmp and go after every test.
+test.afterEach(() => {
+  cleanupDirs();
+});
 
 async function settle(page: Page) {
   await page.evaluate(() => document.fonts.ready);
@@ -148,7 +153,7 @@ test.describe("static screenshots", () => {
 
 test("record flow GIF", async ({ page }) => {
   const frames: string[] = [];
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bbb-gif-"));
+  const dir = freshDir("gif");
   const shot = async () => {
     await page.waitForTimeout(450);
     const file = path.join(dir, `f${String(frames.length).padStart(2, "0")}.png`);
@@ -187,7 +192,7 @@ test("record flow GIF", async ({ page }) => {
 
 test("processing GIF", async ({ page }) => {
   const frames: string[] = [];
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bbb-gif-"));
+  const dir = freshDir("gif");
   const shot = async (wait = 350) => {
     await page.waitForTimeout(wait);
     const file = path.join(dir, `f${String(frames.length).padStart(2, "0")}.png`);
@@ -219,7 +224,7 @@ test("processing GIF", async ({ page }) => {
 
 test("naming voices GIF", async ({ page }) => {
   const frames: string[] = [];
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bbb-gif-"));
+  const dir = freshDir("gif");
   const shot = async (wait = 350) => {
     await page.waitForTimeout(wait);
     const file = path.join(dir, `f${String(frames.length).padStart(2, "0")}.png`);
@@ -261,7 +266,7 @@ test("naming voices GIF", async ({ page }) => {
 
 test("draft editing GIF", async ({ page }) => {
   const frames: string[] = [];
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bbb-gif-"));
+  const dir = freshDir("gif");
   const shot = async (wait = 350) => {
     await page.waitForTimeout(wait);
     const file = path.join(dir, `f${String(frames.length).padStart(2, "0")}.png`);

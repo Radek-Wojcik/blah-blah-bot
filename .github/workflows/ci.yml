@@ -65,6 +65,10 @@ jobs:
         run: |
           uv sync --frozen --only-group dev
           uv run --no-sync pytest -q
+      - name: No scratch files left behind by the tests
+        if: always()
+        shell: pwsh
+        run: ./scripts/check-temp-hygiene.ps1
 
   ui:
     runs-on: windows-latest
@@ -80,6 +84,10 @@ jobs:
         run: |
           npm ci
           npx playwright test --project=mock
+      - name: No scratch files left behind by the tests
+        if: always()
+        shell: pwsh
+        run: ./scripts/check-temp-hygiene.ps1
 
   build:
     runs-on: windows-latest

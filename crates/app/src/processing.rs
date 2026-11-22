@@ -196,6 +196,19 @@ fn find_worker_dir(configured: &str) -> PathBuf {
     PathBuf::from("worker")
 }
 
+/// The Python environment of the worker: `BBB_WORKER_ENV_DIR` when it is set to a folder
+/// (a shared environment, used by the end-to-end tests so that none of them installs its own
+/// copy), otherwise `worker-venv` in the data folder.
+fn worker_env_dir(data_dir: &Path) -> PathBuf {
+    env_dir_from(data_dir, std::env::var_os("BBB_WORKER_ENV_DIR"))
+}
+
+fn env_dir_from(data_dir: &Path, shared: Option<std::ffi::OsString>) -> PathBuf {
+    shared
+        .and_then(|p| non_empty(&p.to_string_lossy()))
+        .unwrap_or_else(|| data_dir.join("worker-venv"))
+}
+
 // ----- GPU gate with live settings -----------------------------------------------------------
 
 /// The GPU gate, rebuilt when the thresholds in the settings change.
@@ -324,7 +337,7 @@ impl Processing {
     ) -> Arc<Self> {
         let settings_path = config_dir.join("processing.json");
         let settings = Arc::new(Mutex::new(ProcessingSettings::load(&settings_path)));
-        let env_dir = data_dir.join("worker-venv");
+        let env_dir = worker_env_dir(data_dir);
         let live: Arc<Mutex<HashMap<String, Live>>> = Arc::default();
         let cycle_repos: RepoList = Arc::new(cycle_repos);
 
@@ -944,6 +957,24 @@ fn worker_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_worker_environment_is_per_data_folder_unless_a_shared_one_is_given() {
+        let data = Path::new("D:/data");
+        assert_eq!(env_dir_from(data, None), data.join("worker-venv"));
+        assert_eq!(
+            env_dir_from(data, Some("".into())),
+            data.join("worker-venv")
+        );
+        assert_eq!(
+            env_dir_from(data, Some("  ".into())),
+            data.join("worker-venv")
+        );
+        assert_eq!(
+            env_dir_from(data, Some("D:/shared/venv".into())),
+            PathBuf::from("D:/shared/venv")
+        );
+    }
 
     #[test]
     fn defaults_delete_the_audio_after_processing_and_ask_after_recording() {

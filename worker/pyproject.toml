@@ -44,6 +44,9 @@ packages = ["src/bbb_worker"]
 testpaths = ["tests"]
 pythonpath = [".", "src"]
 addopts = "-m 'not models'"
+# Do not keep the temporary folders of earlier runs in the temp directory.
+tmp_path_retention_count = 0
+tmp_path_retention_policy = "none"
 markers = ["models: needs real models and a GPU (run locally before a release)"]
 
 [tool.ruff]
