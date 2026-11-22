@@ -28,6 +28,7 @@ CTranslate2                  MIT                     https://github.com/OpenNMT/
 pyannote.audio               MIT                     https://github.com/pyannote/pyannote-audio
 llama.cpp                    MIT                     https://github.com/ggml-org/llama.cpp
 uv                           MIT OR Apache-2.0       https://github.com/astral-sh/uv
+tungstenite (Rust crate)     MIT OR Apache-2.0       https://github.com/snapview/tungstenite-rs
 
 Models (downloaded by the user, not redistributed)
 --------------------------------------------------
