@@ -195,7 +195,12 @@ impl HubObserver for Receiver {
     }
 
     fn group(&self, g: &bridge::protocol::Group) {
-        emit(json!({"event": "group", "group_id": g.group_id, "tabs": g.tabs.len()}));
+        emit(json!({
+            "event": "group",
+            "group_id": g.group_id,
+            "tabs": g.tabs.len(),
+            "list": g.tabs,
+        }));
     }
 }
 
