@@ -64,6 +64,8 @@ cd ui && npm ci && npm run build && cd ..
 cargo run -p app --release --features custom-protocol
 ```
 
+Browser tabs and Google Meet need the Chrome extension: [docs/guides/extension.md](docs/guides/extension.md) explains how to install it from the release zip and pair it with the application.
+
 Open the settings to download the models and, for screenshot description and for extraction with the managed backend, to point the application to a `llama-server` executable, its model folder and a GGUF model file. Recordings are written to `Documents\BlahBlahBot\recordings` unless you change the folder in the settings. Run the tests with `cargo test --workspace`, `npm test` and `npx playwright test --project=mock` in `ui`; the end-to-end suite against the real application is `npx playwright test --project=real` after a debug build.
 
 ## Cycles and report modes
