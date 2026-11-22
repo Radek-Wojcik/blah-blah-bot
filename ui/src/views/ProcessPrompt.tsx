@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useBackend } from "../backend-context";
 import { errorMessage, useRecordingState } from "../hooks";
+import { type StepId, stepForError } from "../first-run";
 import type { LlmKind } from "../ipc/types";
 import { Modal } from "./Modal";
 import {
@@ -25,13 +26,14 @@ import {
  * picks another). Choosing the cloud opens a confirmation of what would be sent; there is no
  * automatic fallback to it.
  */
-export function ProcessPrompt() {
+export function ProcessPrompt(props: { onOpenSetup?: (step: StepId, reason: string) => void }) {
   const backend = useBackend();
   const recording = useRecordingState();
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pick, setPick] = useState<LlmKind | null>(null);
   const [cloud, setCloud] = useState(false);
+  const [setupStep, setSetupStep] = useState<StepId | null>(null);
   const llm = useLlmSettings(pending);
   const lastRecorded = useRef<string | null>(null);
 
@@ -48,6 +50,7 @@ export function ProcessPrompt() {
     void backend.getProcessingSettings().then((s) => {
       if (!cancelled && s.processAfterRecording === "ask") {
         setError(null);
+        setSetupStep(null);
         setPick(null);
         setCloud(false);
         setPending(id);
@@ -81,6 +84,7 @@ export function ProcessPrompt() {
 
   const run = (options?: Parameters<typeof backend.processMeeting>[1]) => {
     setError(null);
+    setSetupStep(null);
     backend
       .processMeeting(pending, options)
       .then(() => {
@@ -90,6 +94,7 @@ export function ProcessPrompt() {
       .catch((e) => {
         setCloud(false);
         setError(errorMessage(e));
+        setSetupStep(stepForError(e));
       });
   };
   const kind = pick ?? llm?.defaultKind ?? "managed";
@@ -123,6 +128,17 @@ export function ProcessPrompt() {
         </p>
       )}
       <div className="actions">
+        {error && setupStep && props.onOpenSetup && (
+          <button
+            className="btn"
+            onClick={() => {
+              props.onOpenSetup?.(setupStep, error);
+              setPending(null);
+            }}
+          >
+            Open setup
+          </button>
+        )}
         <button className="btn btn-ghost" onClick={() => setPending(null)}>
           Later
         </button>

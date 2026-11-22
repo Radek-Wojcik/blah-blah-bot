@@ -14,7 +14,7 @@ import { validateVoiceSettings } from "../speakers";
 import { VoiceProfiles } from "./VoiceProfiles";
 
 /** Settings of the processing pipeline: after-recording choice, retention, GPU guard, paths, token, models. */
-export function ProcessingSettingsView() {
+export function ProcessingSettingsView(props: { onRunSetup?: () => void }) {
   const backend = useBackend();
   const [settings, setSettings] = useState<Settings | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -181,6 +181,22 @@ export function ProcessingSettingsView() {
               />
               <small>Clips of voices you have not named are deleted after this time.</small>
             </label>
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={settings.describeScreenshots}
+                onChange={(e) => set({ describeScreenshots: e.target.checked })}
+              />
+              Describe screenshots with the vision model
+            </label>
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={!settings.skipReports}
+                onChange={(e) => set({ skipReports: !e.target.checked })}
+              />
+              Write reports with a language model
+            </label>
             <label>
               uv executable
               <input value={settings.uvPath} onChange={(e) => set({ uvPath: e.target.value })} />
@@ -213,6 +229,11 @@ export function ProcessingSettingsView() {
             )}
             <div className="actions">
               {message && <span role="status">{message}</span>}
+              {props.onRunSetup && (
+                <button className="btn btn-ghost" type="button" onClick={props.onRunSetup}>
+                  Run setup again
+                </button>
+              )}
               <button className="btn btn-record" type="submit" disabled={voiceError !== null}>
                 Save processing settings
               </button>

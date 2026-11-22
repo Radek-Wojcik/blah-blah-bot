@@ -2,15 +2,18 @@ import { useEffect, useState } from "react";
 import { useBackend } from "../backend-context";
 import { repoState } from "../cycles";
 import { formatDateTimeUtc, formatDuration } from "../format";
+import { type StepId, stepForError } from "../first-run";
 import { errorMessage, useCycles, useMeetings, useRecordingState } from "../hooks";
 import type { MeetingSummary, Settings } from "../ipc/types";
 import { canProcess, jobStateLabel } from "../processing";
 import { CycleEditor } from "./CycleEditor";
 import { CyclesView } from "./Cycles";
 import { DraftEditor } from "./DraftEditor";
+import { FirstRun } from "./FirstRun";
 import { ProcessPrompt } from "./ProcessPrompt";
 import { ProcessingSettingsView } from "./ProcessingSettings";
 import { QueueView } from "./Queue";
+import { ReadinessBanner } from "./ReadinessBanner";
 import { SpeakersView } from "./Speakers";
 import { TranscriptView } from "./Transcript";
 
@@ -44,13 +47,45 @@ function initialRoute(): Route {
   return { page: "meetings", meetingId: null };
 }
 
+/** The first-run wizard when it is open: at which step, and why it was opened there. */
+interface Wizard {
+  step?: StepId;
+  reason?: string | null;
+}
+
 export function Main() {
+  const backend = useBackend();
   const [route, setRoute] = useState(initialRoute);
+  // `undefined` until it is known whether the first-run setup was completed.
+  const [wizard, setWizard] = useState<Wizard | null | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    void backend.getProcessingSettings().then((s) => {
+      if (!cancelled) setWizard((cur) => (cur === undefined ? (s.firstRunDone ? null : {}) : cur));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [backend]);
+  const openSetup = (step?: StepId, reason?: string | null) => setWizard({ step, reason });
   const page = route.page;
   const setPage = (p: Page) => setRoute({ page: p, meetingId: null });
   const inMeetings =
     page === "meetings" || page === "transcript" || page === "speakers" || page === "draft";
   const recording = useRecordingState();
+  if (wizard === undefined) return null;
+  if (wizard !== null)
+    return (
+      <FirstRun
+        initialStep={wizard.step}
+        reason={wizard.reason}
+        onClose={() => setWizard(null)}
+        onOpenSettings={() => {
+          setWizard(null);
+          setPage("settings");
+        }}
+      />
+    );
   return (
     <div className="main">
       <nav className="panel sidebar" aria-label="Main navigation">
@@ -102,6 +137,7 @@ export function Main() {
               onOpenTranscript={(id) => setRoute({ page: "transcript", meetingId: id })}
               onOpenSpeakers={(id) => setRoute({ page: "speakers", meetingId: id })}
               onOpenDraft={(id) => setRoute({ page: "draft", meetingId: id })}
+              onOpenSetup={openSetup}
             />
           )}
           {page === "queue" && (
@@ -140,10 +176,10 @@ export function Main() {
               onOpenTranscript={() => setRoute({ page: "transcript", meetingId: route.meetingId })}
             />
           )}
-          {page === "settings" && <SettingsView />}
+          {page === "settings" && <SettingsView onRunSetup={() => openSetup("welcome")} />}
         </div>
       </section>
-      <ProcessPrompt />
+      <ProcessPrompt onOpenSetup={openSetup} />
     </div>
   );
 }
@@ -169,6 +205,7 @@ function MeetingList(props: {
   onOpenTranscript: (id: string) => void;
   onOpenSpeakers: (id: string) => void;
   onOpenDraft: (id: string) => void;
+  onOpenSetup: (step?: StepId, reason?: string | null) => void;
 }) {
   const backend = useBackend();
   const { meetings, reload } = useMeetings();
@@ -177,6 +214,18 @@ function MeetingList(props: {
   const act = (p: Promise<unknown>) => {
     setError(null);
     p.then(reload).catch((e) => setError(errorMessage(e)));
+  };
+  // A refusal because the setup is incomplete opens the step that fixes it.
+  const process = (id: string) => {
+    setError(null);
+    backend
+      .processMeeting(id)
+      .then(reload)
+      .catch((e) => {
+        const step = stepForError(e);
+        if (step) props.onOpenSetup(step, errorMessage(e));
+        else setError(errorMessage(e));
+      });
   };
 
   return (
@@ -189,6 +238,7 @@ function MeetingList(props: {
         </h2>
         <span className="chip">{meetings.length} stored</span>
       </div>
+      <ReadinessBanner onOpenSetup={(step) => props.onOpenSetup(step)} />
       {error && (
         <p className="error" role="alert">
           {error}
@@ -256,7 +306,7 @@ function MeetingList(props: {
                     <button
                       className="btn btn-small btn-stop"
                       disabled={!canProcess(m, props.recordingMeetingId)}
-                      onClick={() => act(backend.processMeeting(m.id))}
+                      onClick={() => process(m.id)}
                     >
                       Process
                     </button>
@@ -277,7 +327,7 @@ function MeetingList(props: {
   );
 }
 
-function SettingsView() {
+function SettingsView(props: { onRunSetup: () => void }) {
   const backend = useBackend();
   const [settings, setSettings] = useState<Settings | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -343,7 +393,7 @@ function SettingsView() {
         </div>
       </div>
       <CycleRepos />
-      <ProcessingSettingsView />
+      <ProcessingSettingsView onRunSetup={props.onRunSetup} />
     </>
   );
 }

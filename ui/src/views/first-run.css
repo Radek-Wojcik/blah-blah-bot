@@ -1,0 +1,217 @@
+/* First-run wizard. Builds on the panel, button, form and model styles of styles.css. */
+.setup {
+  height: 100%;
+  display: grid;
+  grid-template-columns: clamp(190px, 22vw, 280px) minmax(0, 1fr);
+  gap: var(--gap);
+  padding: var(--gap);
+}
+.setup-nav {
+  min-height: 0;
+  overflow: auto;
+}
+.setup-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.setup-steps li {
+  position: relative;
+  display: flex;
+}
+.setup-steps .nav {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.6em;
+  padding-right: 1.6em;
+}
+.setup-num {
+  font-family: var(--font-mono);
+  color: var(--muted);
+}
+.setup-dot {
+  position: absolute;
+  right: 0.7em;
+  top: 50%;
+  width: 0.6em;
+  height: 0.6em;
+  margin-top: -0.3em;
+  background: var(--muted);
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+}
+.setup-dot-ok {
+  background: var(--green);
+}
+.setup-dot-todo {
+  background: var(--yellow);
+}
+.setup-dot-working {
+  background: var(--cyan);
+}
+.setup-body {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 4px;
+}
+.setup-panel {
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.setup-panel p {
+  margin: 0;
+}
+.setup-kicker {
+  color: var(--muted);
+  font-size: 0.72em;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+}
+.setup-title {
+  margin: 0;
+  font-size: 1.4em;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.setup-title::before {
+  content: "// ";
+  color: var(--magenta);
+}
+.setup-title:focus-visible {
+  outline: 1px solid var(--cyan);
+  outline-offset: 4px;
+}
+.setup-reason {
+  border-left-color: var(--magenta);
+  color: var(--text);
+}
+.setup-note {
+  color: var(--muted);
+  font-size: 0.9em;
+}
+.setup-note-problem {
+  color: var(--text);
+}
+.setup-help {
+  color: var(--muted);
+  font-size: 0.85em;
+}
+.setup-help code,
+.setup-panel code {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+.setup-run {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.setup-run .progress {
+  flex: none;
+}
+.setup-log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+}
+.progress-busy {
+  animation: setup-busy 1.4s ease-in-out infinite alternate;
+}
+@keyframes setup-busy {
+  from {
+    margin-left: 0;
+  }
+  to {
+    margin-left: 60%;
+  }
+}
+.setup-token {
+  max-width: 620px;
+}
+.setup-inline {
+  justify-content: flex-start;
+}
+.setup-actions {
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.setup-actions .btn-ghost {
+  margin-right: auto;
+}
+.setup-summary {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.setup-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0.6em 0.8em;
+  border-left: 2px solid var(--line);
+  background: rgba(255, 255, 255, 0.02);
+}
+.setup-item-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.setup-item-name {
+  font-weight: 600;
+}
+.setup-item-text {
+  color: var(--muted);
+  font-size: 0.85em;
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+.readiness-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 14px;
+  margin-bottom: var(--gap);
+  border-left-color: var(--yellow);
+  background: rgba(252, 238, 10, 0.06);
+  color: var(--text);
+}
+@media (max-width: 720px) {
+  .setup {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+}
+.form label.check-row {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+.form label.check-row input {
+  flex: none;
+  accent-color: var(--magenta);
+}
