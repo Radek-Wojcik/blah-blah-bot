@@ -362,9 +362,11 @@ checksum = "dc0b364ead1874514c8c2855ab558056ebfeb775653e7ae45ff72f28f8f3166c"
 name = "bridge"
 version = "0.5.0"
 dependencies = [
+ "getrandom 0.3.4",
  "jsonschema",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.21",
 ]
 
