@@ -37,7 +37,7 @@ const client: BridgeClient = new BridgeClient({
     mux.onConnected();
   },
   onState: (state) => {
-    if (state === "backoff" || state === "stopped") mux.onDisconnected();
+    if (state !== "ready") mux.onDisconnected();
   },
   onMessage: (msg: ServerMessage) => {
     if (msg.type === "start_ok") mux.onStartOk(msg);

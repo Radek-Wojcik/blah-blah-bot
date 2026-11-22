@@ -24,6 +24,8 @@ export async function pairViaPopup(bc: Chrome, code: string): Promise<string> {
     await popup.fill("#code", code);
     await popup.click("#pairBtn");
     await popup.locator("#capture").waitFor({ state: "visible", timeout: 15_000 });
+    // "Paired." replaces the connection state a moment after the form disappears.
+    await popup.locator("#line").filter({ hasText: "Paired." }).waitFor({ timeout: 5_000 });
     return (await popup.locator("#line").textContent()) ?? "";
   } finally {
     await popup.close();
