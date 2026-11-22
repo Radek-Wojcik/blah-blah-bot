@@ -568,3 +568,36 @@ test.describe("voice profiles on the mock backend", () => {
     await expect(section.getByRole("status")).toHaveText("Processing settings saved");
   });
 });
+
+test.describe("browser extension settings on the mock backend", () => {
+  test("pair an extension with a code, see it connect, unpair it", async ({ page }) => {
+    await page.goto("/?view=main&backend=mock&pairms=500");
+    await page.getByRole("button", { name: "Settings" }).click();
+    const section = page.getByRole("region", { name: "Browser extension" });
+    await expect(section.getByTestId("bridge-state")).toHaveText("Listening on 127.0.0.1:17555.");
+    const list = section.getByRole("list", { name: "Paired extensions" });
+    await expect(list.getByRole("listitem")).toHaveCount(1);
+
+    await section.getByRole("button", { name: "Pair extension" }).click();
+    await expect(section.getByTestId("pairing-code")).toHaveText("7K3M-9QXD");
+    await expect(section.getByLabel("Time left")).toContainText(/^[45]:\d\d$/);
+    // The simulated extension enters the code: the code goes away, a second extension appears.
+    await expect(section.getByTestId("pairing-code")).toHaveCount(0);
+    await expect(list.getByRole("listitem")).toHaveCount(2);
+    await expect(list.getByRole("listitem").nth(1)).toContainText("connected");
+
+    await section.getByRole("button", { name: "Unpair Chrome 137" }).click();
+    await expect(list.getByRole("listitem")).toHaveCount(1);
+  });
+
+  test("turning the bridge off stops pairing", async ({ page }) => {
+    await page.goto("/?view=main&backend=mock");
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByLabel("Accept the Chrome extension on this computer").uncheck();
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("status")).toHaveText("Saved");
+    const section = page.getByRole("region", { name: "Browser extension" });
+    await expect(section.getByTestId("bridge-state")).toContainText("Off");
+    await expect(section.getByRole("button", { name: "Pair extension" })).toBeDisabled();
+  });
+});

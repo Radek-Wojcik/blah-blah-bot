@@ -92,6 +92,10 @@ export function createTauriBackend(): Backend {
     renderReport: (meetingId, variant) => invoke("render_report", { meetingId, variant }),
     getSettings: () => invoke("get_settings"),
     saveSettings: (settings) => invoke("save_settings", { settings }),
+    bridgeStatus: () => invoke("bridge_status"),
+    startPairing: () => invoke("start_pairing"),
+    cancelPairing: () => invoke("cancel_pairing"),
+    unpairClient: (clientId) => invoke("unpair_client", { clientId }),
     onRecordingState: (cb) => listen("recording-state", (e) => cb(e.payload as never)),
     onMeetingsChanged: (cb) => listen("meetings-changed", () => cb()),
     onQueueChanged: (cb) => listen("queue-changed", (e) => cb(e.payload as never)),
@@ -99,6 +103,7 @@ export function createTauriBackend(): Backend {
     onModelsChanged: (cb) => listen("models-changed", () => cb()),
     onDraftChanged: (cb) => listen("draft-changed", (e) => cb(e.payload as string)),
     onCyclesChanged: (cb) => listen("cycles-changed", () => cb()),
+    onBridgeChanged: (cb) => listen("bridge-changed", (e) => cb(e.payload as never)),
   };
 }
 

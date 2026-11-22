@@ -13,6 +13,7 @@ import {
   toneWav,
 } from "./mock-demo";
 import { createCycleStore, type RecordingReport } from "./mock-cycles";
+import { createMockBridge } from "./mock-bridge";
 import { createMockDrafts } from "./mock-drafts";
 import { fail } from "./mock-util";
 import { isLocalHost, missingForKind, urlHost, validateLlmSettings } from "../llm";
@@ -95,6 +96,8 @@ export interface MockOptions {
    * are no image.
    */
   overlayFault?: "blank" | "black" | "broken";
+  /** Simulate an extension entering the pairing code this many milliseconds after pairing starts. */
+  bridgePairMs?: number;
 }
 
 /** In-memory backend that serves the fictional demo cycle. No audio devices, files or network. */
@@ -104,6 +107,12 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     recordHotkey: "Ctrl+Alt+R",
     screenshotHotkey: "Ctrl+Alt+S",
   };
+  // ----- the bridge to the Chrome extension -----
+  const bridge = createMockBridge({
+    now: () => Date.now(),
+    demoPairedUnixMs: DEMO_NOW - 3 * 24 * 3600_000,
+    ...(opts.bridgePairMs === undefined ? {} : { pairAfterMs: opts.bridgePairMs }),
+  });
   // ----- cycles, report settings and drafts -----
   const cycles = createCycleStore();
   /** What each meeting was recorded with; a meeting without an entry has no cycle. */
@@ -758,14 +767,19 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         kind: r.kind,
       })),
       lastReport: cycles.lastReport(),
+      bridge: bridge.settings(),
     }),
-    // The repository list and the last report are not saved from the settings screen.
-    saveSettings: async (s) =>
-      void Object.assign(settings, {
+    // The repository list, the last report and the paired extensions are not saved from the
+    // settings screen.
+    saveSettings: async (s) => {
+      bridge.save(s.bridge);
+      Object.assign(settings, {
         recordingsDir: s.recordingsDir,
         recordHotkey: s.recordHotkey,
         screenshotHotkey: s.screenshotHotkey,
-      }),
+      });
+    },
+    ...bridge.methods,
     onRecordingState: (cb) => subscribe(stateListeners, cb),
     onMeetingsChanged: (cb) => subscribe(meetingListeners, cb),
     onQueueChanged: (cb) => subscribe(queueListeners, cb),

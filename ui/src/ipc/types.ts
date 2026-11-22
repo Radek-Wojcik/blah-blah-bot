@@ -79,6 +79,68 @@ export interface Settings {
   cycleRepos?: CycleRepoSetting[];
   /** The report choice of the last recording that started; filled by the application. */
   lastReport?: LastReport | null;
+  /** The bridge to the Chrome extension (always present from the backend). */
+  bridge?: BridgeSettings;
+}
+
+/** A paired Chrome extension as stored in the settings (the secret is never sent to the UI). */
+export interface PairedClientSetting {
+  id: string;
+  name: string;
+  extVersion: string;
+  /** Always empty in the UI. */
+  secretSha256: string;
+  pairedUnixMs: number;
+}
+
+export interface BridgeSettings {
+  /** Listen for the extension on 127.0.0.1. */
+  enabled: boolean;
+  /** Port tried first (1024 to 65535). */
+  port: number;
+  /** Ports tried in order when `port` is taken. */
+  portFallbacks: number[];
+  /** Extension ids accepted as Origin; empty accepts any extension (pairing still decides). */
+  allowedExtensionIds: string[];
+  /** Read-only for the settings screen: changed by pairing and `unpairClient`. */
+  clients: PairedClientSetting[];
+  /** Record a tab the extension starts while a recording runs, without asking. */
+  autoAddTabs: boolean;
+}
+
+/** A pairing code on offer, shown as `7K3M-9QXD`. */
+export interface PairingView {
+  code: string;
+  expiresUnixMs: number;
+}
+
+export interface BridgeClientView {
+  id: string;
+  name: string;
+  extVersion: string;
+  pairedUnixMs: number;
+  connected: boolean;
+}
+
+export interface BridgeStreamView {
+  streamId: string;
+  title: string;
+  host: string;
+  track: string | null;
+  /** The connection was lost; the stream waits for the extension to come back. */
+  waiting: boolean;
+}
+
+/** State of the bridge to the Chrome extension; payload of `bridge-changed`. */
+export interface BridgeStatus {
+  enabled: boolean;
+  listening: boolean;
+  port: number | null;
+  /** Why the bridge is not listening although it is enabled. */
+  error: string | null;
+  pairing: PairingView | null;
+  clients: BridgeClientView[];
+  streams: BridgeStreamView[];
 }
 
 export type IpcErrorCode =
@@ -113,7 +175,10 @@ export type IpcErrorCode =
   /** The draft does not exist before the reduce stage has run. */
   | "no_draft"
   | "no_new_draft"
-  | "draft_invalid";
+  | "draft_invalid"
+  // Stage 6: the browser extension bridge.
+  /** Pairing needs the bridge to be enabled and listening. */
+  | "bridge_off";
 
 export interface IpcError {
   code: IpcErrorCode;

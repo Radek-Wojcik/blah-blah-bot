@@ -1,5 +1,6 @@
 import type {
   AddRepoRequest,
+  BridgeStatus,
   CloudPreview,
   CycleDetails,
   CycleDto,
@@ -62,6 +63,14 @@ export interface Backend {
 
   getSettings(): Promise<Settings>;
   saveSettings(settings: Settings): Promise<void>;
+
+  /** The bridge to the Chrome extension: server, pairing code, paired extensions, tab streams. */
+  bridgeStatus(): Promise<BridgeStatus>;
+  /** Offer a new pairing code (5 minutes, single use). Rejects with `bridge_off` when not listening. */
+  startPairing(): Promise<BridgeStatus>;
+  cancelPairing(): Promise<BridgeStatus>;
+  /** Forget a paired extension and close its connection. */
+  unpairClient(clientId: string): Promise<BridgeStatus>;
 
   /**
    * Create the processing job of a meeting if missing and start processing. With `options.llm`
@@ -180,4 +189,5 @@ export interface Backend {
   onDraftChanged(cb: (meetingId: string) => void): Promise<Unsubscribe>;
   /** A cycle, template or repository changed. */
   onCyclesChanged(cb: () => void): Promise<Unsubscribe>;
+  onBridgeChanged(cb: (status: BridgeStatus) => void): Promise<Unsubscribe>;
 }

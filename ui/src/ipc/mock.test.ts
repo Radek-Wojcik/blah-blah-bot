@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Backend } from "./backend";
 import { demoCycle, validateCycle } from "./mock-cycles";
 import { addItem, demoDraft, moveItem, setSections, updateItem } from "./mock-draft";
@@ -865,5 +865,53 @@ describe("participants of a cycle", () => {
     // The same name again names the existing person.
     const again = await b.assignVoiceNew("m5", "v3", "mira example");
     expect(again.participants.filter((p) => p.name === "Mira Example")).toHaveLength(1);
+  });
+});
+
+describe("browser extension bridge", () => {
+  it("pairs with a code, then an extension appears and can be unpaired", async () => {
+    vi.useFakeTimers();
+    try {
+      const b = createMockBackend({ clockRate: 0, bridgePairMs: 200 });
+      const seen: number[] = [];
+      await b.onBridgeChanged((s) => seen.push(s.clients.length));
+      const before = await b.bridgeStatus();
+      expect(before.listening).toBe(true);
+      expect(before.clients).toHaveLength(1);
+      const pairing = (await b.startPairing()).pairing;
+      expect(pairing?.code).toMatch(/^[0-9A-Z]{4}-[0-9A-Z]{4}$/);
+      await vi.advanceTimersByTimeAsync(250);
+      const after = await b.bridgeStatus();
+      expect(after.pairing).toBeNull();
+      expect(after.clients).toHaveLength(2);
+      expect(seen.at(-1)).toBe(2);
+      const gone = await b.unpairClient(after.clients[1].id);
+      expect(gone.clients).toHaveLength(1);
+      await expect(b.unpairClient("c-none")).rejects.toMatchObject({ code: "not_found" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the paired extensions on a settings save and refuses pairing when off", async () => {
+    const b = createMockBackend({ clockRate: 0 });
+    const s = await b.getSettings();
+    expect(s.bridge?.clients).toHaveLength(1);
+    expect(s.bridge?.clients[0].secretSha256).toBe("");
+    await b.saveSettings({ ...s, bridge: { ...s.bridge!, enabled: false, clients: [] } });
+    const saved = await b.getSettings();
+    expect(saved.bridge?.enabled).toBe(false);
+    expect(saved.bridge?.clients).toHaveLength(1);
+    expect((await b.bridgeStatus()).listening).toBe(false);
+    await expect(b.startPairing()).rejects.toMatchObject({ code: "bridge_off" });
+    await expect(
+      b.saveSettings({ ...saved, bridge: { ...saved.bridge!, port: 80 } }),
+    ).rejects.toMatchObject({ code: "invalid" });
+  });
+
+  it("cancelling hides the code", async () => {
+    const b = createMockBackend({ clockRate: 0 });
+    await b.startPairing();
+    expect((await b.cancelPairing()).pairing).toBeNull();
   });
 });

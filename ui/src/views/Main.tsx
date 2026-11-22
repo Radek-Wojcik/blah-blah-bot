@@ -5,6 +5,7 @@ import { formatDateTimeUtc, formatDuration } from "../format";
 import { errorMessage, useCycles, useMeetings, useRecordingState } from "../hooks";
 import type { MeetingSummary, Settings } from "../ipc/types";
 import { canProcess, jobStateLabel } from "../processing";
+import { BrowserExtension } from "./BrowserExtension";
 import { CycleEditor } from "./CycleEditor";
 import { CyclesView } from "./Cycles";
 import { DraftEditor } from "./DraftEditor";
@@ -288,6 +289,9 @@ function SettingsView() {
 
   if (!settings) return null;
   const set = (patch: Partial<Settings>) => setSettings({ ...settings, ...patch });
+  const bridge = settings.bridge;
+  const setBridge = (patch: Partial<NonNullable<Settings["bridge"]>>) =>
+    bridge && set({ bridge: { ...bridge, ...patch } });
 
   return (
     <>
@@ -333,6 +337,38 @@ function SettingsView() {
                 onChange={(e) => set({ screenshotHotkey: e.target.value })}
               />
             </label>
+            {bridge && (
+              <fieldset>
+                <legend>Browser extension</legend>
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={bridge.enabled}
+                    onChange={(e) => setBridge({ enabled: e.target.checked })}
+                  />
+                  Accept the Chrome extension on this computer
+                </label>
+                <label>
+                  Port
+                  <input
+                    type="number"
+                    min={1024}
+                    max={65535}
+                    value={bridge.port}
+                    onChange={(e) => setBridge({ port: Number(e.target.value) })}
+                  />
+                  <small>If it is taken, the next free port up to {bridge.port + 9} is used.</small>
+                </label>
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={bridge.autoAddTabs}
+                    onChange={(e) => setBridge({ autoAddTabs: e.target.checked })}
+                  />
+                  Record a tab as soon as the extension sends it during a recording
+                </label>
+              </fieldset>
+            )}
             <div className="actions">
               {message && <span role="status">{message}</span>}
               <button className="btn btn-record" type="submit">
@@ -342,6 +378,7 @@ function SettingsView() {
           </form>
         </div>
       </div>
+      <BrowserExtension />
       <CycleRepos />
       <ProcessingSettingsView />
     </>
