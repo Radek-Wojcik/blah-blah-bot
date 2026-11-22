@@ -42,6 +42,25 @@ If you capture a tab while no recording runs, the extension waits and starts sen
 
 Chrome allows capturing a tab only after you invoked the extension on it (click, popup or shortcut); this is a browser rule, so a tab cannot be captured in the background and several tabs take one action each.
 
+## Capture a tab group
+
+Chrome allows capturing a tab only after you acted on that very tab, so a group of tabs is never captured in one step. The extension guides you through it: one action per tab, and it always shows which tabs are still missing.
+
+1. Put the tabs in a Chrome tab group (right click a tab, Add tab to new group) and start a recording in the application.
+2. On the first tab click the extension icon and press **Capture this group** (or press **Alt+Shift+R**). The popup lists the tabs of the group with their status:
+
+   | Status | Meaning |
+   |---|---|
+   | captured | the tab is being recorded |
+   | waiting for click | not captured yet; needs the click or the shortcut on that tab |
+   | not audible | like waiting, but the tab plays no sound at the moment |
+   | failed | the last attempt did not work; try again on that tab |
+
+3. Press **Next tab** in the popup to bring the next missing tab to the front (tabs that play sound come first, then silent ones, then failed ones), then click the icon there. The shortcut does both: **Alt+Shift+R** captures the tab you are on and then switches to the next tab that is still missing, so for a group you press it once per tab. Pressing it on a captured tab stops that tab.
+4. A tab added to the group later is waiting: the toolbar badge shows `+1` (the number of tabs that wait for an action) and the application is told. Closing a captured tab ends its stream; the tab leaves the group list.
+
+Every tab is its own track of the recording, labelled `Tab: <site name>`. Only the site name and the tab id are sent to the application, never the page title. Chrome shows the extension a tab's title only for tabs it was used on, so other tabs of the group appear as `Tab 2`, `Tab 3` in the popup until you capture them.
+
 ## Google Meet
 
 A tab on a Meet call address that is playing sound is reported to the application as a Meet call (`MEET` on the badge). Only the site name (`meet.google.com`) is sent, never the meeting code or the title. The extension asks Chrome for access to `https://meet.google.com/*` for this and for nothing else; it cannot read other sites.
@@ -54,6 +73,7 @@ A tab on a Meet call address that is playing sound is reported to the applicatio
 | "Waiting for the application" | The application is not running, the bridge is switched off in its settings, or another program uses the ports 17555 to 17564. |
 | Nothing is recorded though the popup says Connected | A tab is accepted only while a recording runs; start the recording first. |
 | The extension is gone after Chrome updated | Switch it on again in `chrome://extensions` (developer mode extensions can be switched off by Chrome). |
+| A tab of the group stays "waiting for click" | Chrome cannot capture a tab in the background; open the tab and click the icon or press Alt+Shift+R there. |
 | "Cannot capture a tab" | The tab is a Chrome page (`chrome://`), the extension was not invoked on it, or Chrome is still releasing an earlier capture; try again after a moment. |
 
 ## For developers

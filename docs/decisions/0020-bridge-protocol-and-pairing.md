@@ -29,7 +29,7 @@ One WebSocket carries every tab. Text frames are JSON with a `type`; receivers i
 | ext to app | `resume{stream_id, next_seq}` | After a reconnect; answered with `start_ok` (same `stream_no`) or `start_refused{unknown_stream}` |
 | ext to app | `stop{stream_id, reason, frames_sent, samples_sent, frames_dropped}` | `user_stop`, `track_ended`, `tab_closed`, `connection_lost` |
 | ext to app | `meet{tab_id, host, state}` | A Meet tab `joined` or `left`; host only, never the meeting code |
-| ext to app | `group{group_id, tabs[{tab_id, status}]}` | Guided capture of a tab group (M3) |
+| ext to app | `group{group_id, tabs[{tab_id, status}]}` | Status of the tabs of a group the user is capturing: `captured`, `waiting` (needs a click; also a silent tab) or `failed`. Sent after every change and again after a reconnect; a group without tabs is sent once with an empty list. No title or address, only tab ids |
 | both | `ping{t?}` / `pong{t?}` | Heartbeat |
 | app to ext | `state{recording, meeting_id?, streams[{stream_id, track, status}]}` | Complete state after `hello_ok` and on every change; a stream missing from the list is not recorded |
 
