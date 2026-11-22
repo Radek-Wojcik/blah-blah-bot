@@ -6,20 +6,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-### Security
+Draft notes for 1.0.0. Nothing here is released yet.
 
-- Model downloads are pinned to one commit per repository, and the turbo Whisper model uses its new repository owner. Models downloaded by earlier versions are downloaded once more.
-- The application runs `git` without the repository's hooks, filesystem monitor and `ext::` remotes.
-- Repository folders and the recordings folder must be absolute paths on a local drive; a stored `llama-server` or `uv` path that fails the check is no longer started.
-- Failed stages are logged by stage and message length only; worker schema messages no longer quote model output.
-- CI and release checkouts do not keep the workflow token, and the release workflow has no default permissions.
-- Added `docs/SECURITY-REVIEW.md`.
+### Added
+
+- Windows installer: a per-user NSIS installer that needs no administrator rights. It contains the application, the processing worker, the schemas, the license notices and a pinned `uv`; model files are never part of it. A release workflow builds it on a version tag only, writes `SHA256SUMS.txt` and creates a draft release. The installer is not signed, so Windows SmartScreen shows a warning ([docs/INSTALL.md](docs/INSTALL.md), [ADR 0020](docs/decisions/0020-installer-signing.md), status Proposed).
+- First-run setup wizard: welcome, processing environment, speech models and Hugging Face token, `llama-server`, language model, screenshot analysis (download or skip), a summary with a Fix button for every open item, and a first cycle. Every step can be skipped. A readiness banner appears while something that processing needs is missing, and **Run setup again** in Settings reopens the wizard.
+- Setup readiness check in the application: processing is refused up front with a stable `setup_*` code and a message that says how to fix it, instead of failing inside a job. Paths entered in the settings are checked before they are saved.
+- Option to skip screenshot analysis: with **Describe screenshots** off, the vision stage is skipped and screenshots are kept but not described.
+- Regression runner (`scripts/regression.ps1`) with a CPU part and an opt-in GPU part, a report with per-threshold verdicts and a go/no-go recommendation, and a ten hour end-to-end run script ([docs/REGRESSION.md](docs/REGRESSION.md)).
+- Requirements traceability matrix for all 52 requirements, with a script that checks its references ([docs/TRACEABILITY.md](docs/TRACEABILITY.md)).
+- Documentation: user guide, troubleshooting by error code, limitations, install guide with the clean-machine test procedure, security review, dependency audit, contributor test rules.
+- `scripts/test-all.ps1` and helpers that keep every test's temporary files inside the repository and check that none are left in the system temp folder.
+- Read-only dependency audit script, `deny.toml` and a non-blocking audit job in CI.
+- `NOTICE` completed with every dependency and downloadable model.
+
+### Changed
+
+- Missing `llama-server` and missing or incomplete models now produce messages that say what is missing and how to fix it.
+- Screenshot GIFs are assembled with Pillow from a `uv` environment instead of the system Python.
+- Release notes of a version are extracted from this changelog by the release workflow, and a check keeps the version numbers consistent.
 
 ### Fixed
 
 - Region screenshot (Ctrl+Alt+S) showed a black screen over every monitor. The desktop was captured correctly; the cause was in the display path. The content security policy did not allow the page to reach the IPC protocol, so Tauri fell back to the postMessage interface, which returns binary results as an array of numbers; the overlay built its image from that array as if it were bytes, the PNG could not be decoded and the black page background was all that was left. The policy now allows the IPC protocol, binary results are converted correctly in both modes, and the frozen desktop is encoded with fast compression off the main thread.
 - The overlay no longer stays as a black sheet when something goes wrong: a capture that is all black, cannot be decoded or does not arrive within 20 seconds is reported in a message and the overlay closes itself. Escape, a click and a right click close it in every state.
 - The overlay window is read back after it is placed over the monitors and placed again when the system changed its position or size.
+- The regression report keeps the step summary of partial runs and removes its scratch files.
+
+### Security
+
+- Model downloads are pinned to one commit per repository, and the turbo Whisper model uses its new repository owner. Models downloaded by earlier versions are downloaded once more.
+- The application runs `git` without the repository's hooks, filesystem monitor and `ext::` remotes.
+- Repository folders and the recordings folder must be absolute paths on a local drive; a stored `llama-server` or `uv` path that fails the check is no longer started.
+- An external API key is never sent over plain `http` to another machine.
+- Failed stages are logged by stage and message length only; worker schema messages no longer quote model output.
+- CI and release checkouts do not keep the workflow token, and the release workflow has no default permissions.
+- Updated `url` (RUSTSEC-2026-0592) and `typescript-eslint` (minimatch advisory). Remaining advisories and why they are accepted are listed in [docs/DEPENDENCY-AUDIT.md](docs/DEPENDENCY-AUDIT.md).
+- Added [docs/SECURITY-REVIEW.md](docs/SECURITY-REVIEW.md).
+
+### Known limitations
+
+- The installer is unsigned. The clean-machine installation test has not been done, and Windows 11 has not been tested.
+- The first setup downloads several GB (a processing environment of about 7.4 GB plus models).
+- Quality was measured on synthetic meetings only. The full list is in [docs/LIMITATIONS.md](docs/LIMITATIONS.md).
 
 ## [0.5.0] - 2026-11-16
 

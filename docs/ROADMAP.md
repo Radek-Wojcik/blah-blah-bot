@@ -412,12 +412,12 @@ flowchart LR
 - *Measurements:* all thresholds re-measured and published.
 
 **Definition of done**
-- [ ] Installer works on a clean machine
-- [ ] No metric regressed beyond tolerance against its baseline
-- [ ] Every requirement is covered
-- [ ] Known limitations documented
-- [ ] `NOTICE` complete
-- [ ] Release v1.0.0 published with installer
+- [ ] Installer works on a clean machine (partly: the installer, its build and the release workflow exist; the clean-machine test on Windows 10 and Windows 11 has not been done)
+- [ ] No metric regressed beyond tolerance against its baseline (not done: the regression runner and report exist; the GPU run and the ten hour run have not been done for a release candidate)
+- [ ] Every requirement is covered (partly: [TRACEABILITY.md](TRACEABILITY.md) maps all 52 requirements; rows for Stages 5 to 7 stay pending merge, and open gaps are listed there)
+- [x] Known limitations documented ([LIMITATIONS.md](LIMITATIONS.md))
+- [ ] `NOTICE` complete (done on this branch, including the model license check; confirm at the final merge)
+- [ ] Release v1.0.0 published with installer (not done; the installer signing decision, [ADR 0020](decisions/0020-installer-signing.md), is still Proposed)
 
 **Demo and visuals.** Hero GIF of the whole flow; full screenshot set.
 

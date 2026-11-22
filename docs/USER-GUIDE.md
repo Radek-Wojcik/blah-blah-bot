@@ -22,15 +22,20 @@ You can also build from source; the commands are in the README and in [CONTRIBUT
 
 ## First run
 
-Open **Settings > Processing**. Processing needs the pieces below, and each is checked before a job starts. A missing piece is reported with a code and a way to fix it instead of failing in the middle of a job (see [TROUBLESHOOTING.md](TROUBLESHOOTING.md)).
+On the first start the application opens a setup wizard. It prepares what processing needs and can be skipped step by step: nothing in it blocks you, and what is not set up is listed at the end and explained again when you try to process a meeting. The list on the left shows every step with its state, and you can jump to any of them.
 
-1. **Processing environment.** A Python environment created with `uv` from the files shipped with the application. The first run downloads several GB and needs a network connection. `uv` is taken from the path in the settings, then from the installation, then from the PATH.
-2. **Speech model** (Whisper turbo, about 1.6 GB). Download it in the settings.
-3. **Speaker model** (pyannote). It is gated: accept its terms on its page on Hugging Face, create a read token and enter it under **Hugging Face token**. The token is kept in the Windows Credential Manager. It is not needed once the model has been downloaded.
-4. **Screenshot model** (about 5 GB) and **llama-server**. Both are needed only while screenshot analysis is on. Turn **Describe screenshots** off to skip them.
-5. **Language model for reports.** Choose one of: a local model (a `.gguf` file run by `llama-server`), an external OpenAI-compatible server, or a cloud endpoint chosen per meeting. You can also turn reports off, which gives a transcript only.
+1. **Welcome.** What the setup does, and a reminder that the environment and the models take tens of gigabytes of disk space. Audio, transcripts and reports stay on this computer unless you choose a cloud language model yourself.
+2. **Processing environment.** A Python environment created with `uv` from the files shipped with the application. The first run downloads several GB and needs a network connection; progress is shown while it runs. `uv` is taken from the path in the settings, then from the installation, then from the PATH.
+3. **Speech models.** Download the speech model (Whisper turbo, about 1.6 GB) and the speaker model (pyannote). The speaker model is gated: accept its terms on its page on Hugging Face, create a read token and enter it under **Hugging Face token**. The token is kept in the Windows Credential Manager and is not needed once the model has been downloaded. Models can be checked only after the environment exists.
+4. **llama-server.** It is part of llama.cpp and is not shipped with the application. The step lists the copies it finds (the settings, the `BBB_LLAMA_SERVER` variable, the PATH, the WinGet folders and the usual install folders) and lets you pick one or enter a path. You can install it with `winget install ggml.LlamaCpp`. It is needed for screenshot analysis and for a local language model.
+5. **Language model.** Choose one of: a local model (a `.gguf` file run by `llama-server`; the step offers the files it finds and a path field), an external OpenAI-compatible server or a cloud endpoint (both configured in **Settings > Processing**), or turn reports off, which gives a transcript only.
+6. **Screenshot analysis.** Download the screenshot model (about 5 GB), or choose **Skip screenshot analysis**. With it skipped, screenshots are still saved with the meeting but are not described, and neither the model nor `llama-server` is needed for that purpose. You can turn it on again here or in the settings.
+7. **Summary.** Every item with its state (ready, missing, needs fixing, skipped). Each open item has a **Fix** button that takes you to its step. **Continue anyway** is offered while something is open.
+8. **First cycle.** Create your first cycle (an id such as `WEEKLY` and a name), or skip. A recording cannot start without a cycle, and you can also create one later on the Cycles page.
 
-`llama-server` is part of llama.cpp and is not shipped with the application. If it is not on the PATH, the application also looks in the WinGet folders and the usual install folders. You can install it with `winget install ggml.LlamaCpp`, or point to your own `llama-server.exe`.
+**Leave setup** closes the wizard at any point. While something that processing needs is missing, a banner above the meeting list names it, and **Open setup** reopens the wizard at the first open item. If you start processing with something missing, the refusal carries a code and a message, and the wizard opens at the matching step ([TROUBLESHOOTING.md](TROUBLESHOOTING.md)).
+
+To go through the wizard again, use **Run setup again** in **Settings > Processing**. The settings page also lets you change every value later, including the tool paths, the token and model downloads.
 
 Paths you enter are checked before they are saved: each must be an absolute local path to a file of the expected kind. Network paths are refused.
 

@@ -161,7 +161,7 @@ Rust modules are crates in one Cargo workspace. Licenses of third-party parts ar
 
 ### 4.7 `ai-worker` (Python sidecar)
 
-Runs only while a job is processing. The environment is created with `uv` on first use and is not part of the installer.
+Runs only while a job is processing. The environment is created with `uv` on first use and is not part of the installer; the installer ships the worker sources, the lock file, the schemas and a pinned `uv`. Every downloaded model is pinned to one commit of its repository ([ADR 0021](decisions/0021-model-revision-pinning.md)).
 
 | Step | Function | Technology |
 |---|---|---|
@@ -186,7 +186,7 @@ Each step is a separate process invocation with file inputs and outputs, so a cr
 - **Cache and state:** the date of the last successful pull and the last error are kept in `.git/bbb-cache.json`; the open-issue list of a cycle in `.git/bbb-issues-<ID>.json`. Both are inside `.git`, so they never appear in the working tree or in a commit.
 - **Offline behaviour:** the working tree is the cache. A failed pull (no network, no upstream, a conflict) leaves the clone as it was, aborts an interrupted rebase and records the reason; the interface shows "state as of <date>". A local-only repository has nothing to pull. Without the `git` CLI cycle repositories cannot be used.
 - **Open issues:** the crate can fetch them from the GitHub REST API (pull requests excluded, up to 500) and falls back to the cached list. The application currently builds the context from the cache only and has no setting for a GitHub token, so fetching is not yet wired in; issues are read only.
-- **Technology:** git CLI invoked as a subprocess; GitHub REST API for issues.
+- **Technology:** git CLI invoked as a subprocess, without the repository's hooks, filesystem monitor and `ext::` remotes; GitHub REST API for issues.
 
 ### 4.10 `publishers` (Rust)
 

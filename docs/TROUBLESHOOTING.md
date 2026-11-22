@@ -1,13 +1,13 @@
 # Troubleshooting
 
-Before a meeting is processed, the application checks the setup item by item. A missing piece is refused with a stable code and a message that says how to fix it. This page lists those codes, then other common problems. Settings referred to here are in **Settings > Processing**.
+Before a meeting is processed, the application checks the setup item by item. A missing piece is refused with a stable code and a message that says how to fix it. This page lists those codes, then other common problems. The first-run wizard ([USER-GUIDE.md](USER-GUIDE.md#first-run)) fixes each of them: the banner above the meeting list, the **Fix** buttons on the wizard summary and a refused processing all open it at the step that belongs to the code. Settings referred to here are in **Settings > Processing**, where **Run setup again** reopens the wizard.
 
 ## First-run checks
 
 | Code | Typical message | What to do |
 |---|---|---|
-| `setup_worker_env` | "The processing environment has not been created yet." / "uv, the installer of the processing environment, is not available" / "The processing worker was not found" | Prepare the environment in the setup. The first run needs a network connection and downloads several GB (about 7.4 GB on the reference machine). If `uv` is missing, install it or set the path to `uv.exe`. If the worker folder was not found, reinstall the application or set the worker folder. |
-| `setup_model_missing` | "The speech recognition model (Whisper turbo) is not downloaded." | Download it in the setup (about 1.6 GB). Models cannot be checked until the environment exists, so prepare that first. |
+| `setup_worker_env` | "The processing environment has not been created yet." / "uv, the installer of the processing environment, is not available" / "The processing worker was not found" | Prepare the environment in the setup (step "Processing environment"). The first run needs a network connection and downloads several GB (about 7.4 GB on the reference machine). If `uv` is missing, install it or set the path to `uv.exe`. If the worker folder was not found, reinstall the application or set the worker folder. |
+| `setup_model_missing` | "The speech recognition model (Whisper turbo) is not downloaded." | Download it in the setup (step "Speech models", about 1.6 GB). Models cannot be checked until the environment exists, so prepare that first. |
 | `setup_hf_token` | "No Hugging Face token is stored. The speaker model needs one." | Accept the terms of the speaker model on Hugging Face, create a read token and enter it. After the model is downloaded the token is no longer needed. |
 | `setup_llama_server` | "llama-server was not found on this computer." | See [llama-server not found](#llama-server-not-found). |
 | `setup_llm_model` | "No language model was chosen, so no report can be written." | See [No language model chosen](#no-language-model-chosen). |
