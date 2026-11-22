@@ -26,13 +26,36 @@ impl Output {
     }
 }
 
-/// Runs `git [-C dir] args...` without ever prompting on a terminal.
+/// The null device: pointing `core.hooksPath` there means no hook file can be found.
+#[cfg(windows)]
+const NULL_DEVICE: &str = "NUL";
+#[cfg(not(windows))]
+const NULL_DEVICE: &str = "/dev/null";
+
+/// Options placed before every command. A repository is data that other people can change (a
+/// synced folder, a shared remote), so what its local configuration or its hooks name must
+/// never be started by this application: no hooks, no filesystem monitor, no `ext::` remote.
+fn hardening_args() -> Vec<String> {
+    [
+        format!("core.hooksPath={NULL_DEVICE}"),
+        "core.fsmonitor=false".to_string(),
+        "protocol.ext.allow=never".to_string(),
+        "protocol.file.allow=user".to_string(),
+    ]
+    .into_iter()
+    .flat_map(|setting| ["-c".to_string(), setting])
+    .collect()
+}
+
+/// Runs `git [-C dir] args...` without ever prompting on a terminal and without running the
+/// repository's hooks or helpers (see [`hardening_args`]).
 pub(crate) fn run<I, S>(dir: Option<&Path>, args: I) -> Result<Output>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
     let mut cmd = Command::new("git");
+    cmd.args(hardening_args());
     if let Some(dir) = dir {
         cmd.arg("-C").arg(dir);
     }
@@ -84,4 +107,89 @@ where
 /// Whether a `git` executable can be started.
 pub fn git_available() -> bool {
     run(None, ["--version"]).map(|o| o.ok).unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn every_command_starts_with_the_hardening_options() {
+        let args = hardening_args();
+        let pairs: Vec<&[String]> = args.chunks(2).collect();
+        assert!(pairs.iter().all(|p| p[0] == "-c"));
+        let settings: Vec<&str> = pairs.iter().map(|p| p[1].as_str()).collect();
+        assert!(settings.contains(&format!("core.hooksPath={NULL_DEVICE}").as_str()));
+        assert!(settings.contains(&"core.fsmonitor=false"));
+        assert!(settings.contains(&"protocol.ext.allow=never"));
+    }
+
+    #[test]
+    fn a_hook_and_a_filesystem_monitor_of_the_repository_do_not_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        let marker = tmp.path().join("ran.txt");
+        let marker_arg = marker.to_string_lossy().replace('\\', "/");
+        run_ok(Some(&repo), ["init", "--quiet"]).unwrap();
+        let hook = repo.join(".git").join("hooks").join("pre-commit");
+        fs::write(&hook, format!("#!/bin/sh\necho hook > \"{marker_arg}\"\n")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        fs::write(repo.join("a.txt"), "a").unwrap();
+        fn add<'a>(args: &[&'a str]) -> Vec<&'a str> {
+            let mut full = vec![
+                "-c",
+                "user.name=Test User",
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "commit.gpgsign=false",
+            ];
+            full.extend_from_slice(args);
+            full
+        }
+
+        // Control: plain git runs the hook here. When it cannot (no shell for hooks), the
+        // behaviour cannot be observed on this machine and the check is skipped.
+        let plain = Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(add(&[
+                "commit",
+                "--quiet",
+                "--allow-empty",
+                "-m",
+                "control",
+            ]))
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(plain.status.success());
+        if !marker.exists() {
+            return;
+        }
+        fs::remove_file(&marker).unwrap();
+
+        run_ok(
+            Some(&repo),
+            [
+                "config",
+                "core.fsmonitor",
+                &format!("echo fsm > \"{marker_arg}\""),
+            ],
+        )
+        .unwrap();
+        run_ok(
+            Some(&repo),
+            add(&["commit", "--quiet", "--allow-empty", "-m", "hardened"]),
+        )
+        .unwrap();
+        run_ok(Some(&repo), ["status", "--porcelain"]).unwrap();
+        assert!(!marker.exists(), "a repository hook or monitor was started");
+    }
 }
