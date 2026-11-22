@@ -26,6 +26,9 @@ pub enum DiscKind {
     TimestampError,
     /// The source delivered nothing for a while and silence was inserted to stay on the clock.
     SilenceFilled,
+    /// Frames of a pushed stream (a browser tab) never arrived: their sequence numbers are
+    /// missing. Silence of the same length was inserted.
+    StreamGap,
 }
 
 impl DiscKind {
@@ -641,6 +644,30 @@ mod tests {
         assert!(DiscKind::DataDiscontinuity.is_loss());
         assert!(DiscKind::TimestampError.is_loss());
         assert!(!DiscKind::SilenceFilled.is_loss());
+        assert!(DiscKind::StreamGap.is_loss());
+    }
+
+    #[test]
+    fn stream_gaps_are_journaled_and_old_kinds_still_read() {
+        let line = r#"{"event":"discontinuity","track":"tab","offset_ms":200.0,"kind":"stream_gap","frames":960}"#;
+        assert_eq!(
+            decode_line(line).unwrap(),
+            Entry::Discontinuity {
+                track: "tab".into(),
+                offset_ms: 200.0,
+                kind: DiscKind::StreamGap,
+                frames: 960,
+            }
+        );
+        // A line written before stream gaps existed.
+        let old = r#"{"event":"discontinuity","track":"mic","offset_ms":1.0,"kind":"silence_filled","frames":16}"#;
+        assert!(matches!(
+            decode_line(old).unwrap(),
+            Entry::Discontinuity {
+                kind: DiscKind::SilenceFilled,
+                ..
+            }
+        ));
     }
 
     #[test]
