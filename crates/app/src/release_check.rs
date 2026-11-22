@@ -232,7 +232,7 @@ fn a_meeting_is_committed_and_pushed_to_a_new_branch_with_the_token_from_the_env
     let (t, _) = checked_target();
     let branch = format!("release-check-{}", now_unix_ms());
     let base = web_base(&t.api);
-    let dir = tempfile::tempdir().unwrap();
+    let dir = test_tmp::TestDir::new("release-check");
     let work = dir.path().join("clone");
     let repo = Repo::init_local(&work).unwrap();
     run_git(

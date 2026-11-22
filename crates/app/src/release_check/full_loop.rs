@@ -309,7 +309,6 @@ impl Drop for CloseIssues {
 
 /// The database and the clone live in `tmp`; the dispatcher thread is stopped with the rig.
 struct Rig {
-    tmp: tempfile::TempDir,
     root: PathBuf,
     clone: PathBuf,
     db: PathBuf,
@@ -317,13 +316,15 @@ struct Rig {
     repos: Arc<Mutex<Vec<CycleRepoSetting>>>,
     store: Arc<Mutex<Store>>,
     publishing: Arc<Publishing>,
+    /// Last, so that it is removed after the database and the dispatcher let go of its files.
+    tmp: test_tmp::TestDir,
 }
 
 impl Rig {
     /// A clone of the test repository in a temporary folder, a database file there, and a
     /// publishing service over them with the real credential store.
     fn new(world: &World) -> Rig {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_tmp::TestDir::new("full-loop");
         let remote = world.remote.clone();
         let clone = tmp.path().join("clone");
         git_with_token(
@@ -623,7 +624,7 @@ fn the_full_loop_check_passes_against_the_fakes() {
     use publishers::testing::{FakeDiscord, FakeGithub, Visibility};
 
     const TOKEN: &str = "ghp_FullLoopFakeToken0123456789";
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = test_tmp::TestDir::new("full-loop");
     let remote = tmp.path().join("remote.git");
     std::fs::create_dir_all(&remote).unwrap();
     let git = |dir: &Path, args: &[&str]| {

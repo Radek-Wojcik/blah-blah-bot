@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/app", "crates/cycle-store", "crates/publishers", "crates/queue", "crates/recorder", "crates/speakers", "crates/store"]
+members = ["crates/app", "crates/cycle-store", "crates/publishers", "crates/queue", "crates/recorder", "crates/speakers", "crates/store", "crates/test-tmp"]
 exclude = ["benchmarks"]
 
 [workspace.package]

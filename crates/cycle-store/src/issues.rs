@@ -633,7 +633,7 @@ mod tests {
 
     #[test]
     fn fetches_filters_pull_requests_and_caches() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("issues");
         let cache_path = dir.path().join("issues.json");
         let server = MockServer::start(vec![page(vec![
             issue_json(12, "Order the battery", Some("alex-example"), false),
@@ -682,7 +682,7 @@ mod tests {
 
     #[test]
     fn no_token_means_no_authorization_header() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("issues");
         let server = MockServer::start(vec![page(vec![])]);
         let list = fetch_open_issues(
             &server.base,
@@ -698,7 +698,7 @@ mod tests {
 
     #[test]
     fn follows_pages_up_to_the_limit() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("issues");
         let full = |start: u64| {
             page(
                 (start..start + 100)
@@ -739,7 +739,7 @@ mod tests {
 
     #[test]
     fn failures_return_the_cache_with_its_date() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("issues");
         let cache_path = dir.path().join("issues.json");
         let cached = IssueCache {
             repo: "owner/rover".into(),
@@ -808,7 +808,7 @@ mod tests {
 
     #[test]
     fn cache_for_another_label_is_not_used() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("issues");
         let cache_path = dir.path().join("issues.json");
         IssueCache {
             repo: "owner/rover".into(),
@@ -969,7 +969,7 @@ mod tests {
 
     #[test]
     fn an_old_cache_file_still_loads() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("issues");
         let path = dir.path().join("issues.json");
         fs::write(
             &path,
@@ -1005,7 +1005,7 @@ mod tests {
 
     #[test]
     fn apply_fetch_stores_a_success_and_falls_back_to_the_cache_on_failure() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("issues");
         let path = dir.path().join("issues.json");
         let record = IssueRecord {
             number: 3,
@@ -1032,7 +1032,7 @@ mod tests {
 
     #[test]
     fn invalid_repo_names_never_reach_the_network() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("issues");
         for bad in ["rover", "a/b/c", "../x", "owner/na me", "/x", "owner/"] {
             let list = fetch_open_issues(
                 "http://127.0.0.1:1",

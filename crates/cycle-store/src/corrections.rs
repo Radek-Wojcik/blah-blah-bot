@@ -502,7 +502,7 @@ mod tests {
 
     #[test]
     fn published_files_are_read_in_order_and_others_skipped() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("corrections");
         let write = |name: &str, c: &Correction| {
             let md = render_markdown("NOMAD", "m1", "2026-11-13", c).unwrap();
             fs::write(dir.path().join(name), md).unwrap();
@@ -519,7 +519,7 @@ mod tests {
 
     #[test]
     fn a_missing_file_is_none_and_a_broken_one_an_error() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("corrections");
         let path = dir.path().join("work").join(CORRECTIONS_FILE);
         assert!(CorrectionsFile::read(&path).unwrap().is_none());
         let mut file = CorrectionsFile::new("m1");

@@ -45,14 +45,14 @@ fn topic(id: &str, text: &str, status: TopicStatus) -> Topic {
 }
 
 struct Lab {
-    tmp: tempfile::TempDir,
+    tmp: test_tmp::TestDir,
     remote: PathBuf,
 }
 
 impl Lab {
     /// A bare remote holding a cycle NOMAD with two topics, and nothing else.
     fn new() -> Lab {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_tmp::TestDir::new("publish-tests");
         let remote = tmp.path().join("remote.git");
         fs::create_dir_all(&remote).unwrap();
         g(
@@ -630,7 +630,7 @@ fn the_preview_shows_the_merge_without_changing_anything() {
 
 #[test]
 fn a_repository_without_a_remote_gets_a_local_commit() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = test_tmp::TestDir::new("publish-tests");
     let repo = Repo::init_local(tmp.path().join("local")).unwrap();
     set_identity(repo.root());
     repo.create_cycle(&Cycle::new("NOMAD", "Nomad rover"))
@@ -673,7 +673,7 @@ fn a_repository_without_a_remote_gets_a_local_commit() {
 
 #[test]
 fn an_empty_remote_gets_its_first_branch_from_the_local_history() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = test_tmp::TestDir::new("publish-tests");
     let remote = tmp.path().join("empty.git");
     fs::create_dir_all(&remote).unwrap();
     g(
@@ -828,7 +828,7 @@ fn bad_requests_are_refused_before_git_is_touched() {
     }];
     assert!(refused(&request(&missing, None)).contains("missing"));
 
-    let not_git = tempfile::tempdir().unwrap();
+    let not_git = test_tmp::TestDir::new("publish-tests");
     let plain = Repo::open(not_git.path()).unwrap();
     assert!(publish_meeting(&plain, &request(&snap.files, None))
         .unwrap_err()
@@ -994,7 +994,7 @@ fn failures_are_classified_from_git_text() {
 
 #[test]
 fn a_cycle_created_in_the_clone_and_never_committed_is_published_and_the_clone_catches_up() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = test_tmp::TestDir::new("publish-tests");
     let remote = tmp.path().join("remote.git");
     fs::create_dir_all(&remote).unwrap();
     g(
@@ -1239,7 +1239,7 @@ fn a_push_refused_because_of_a_colleague_is_rebuilt_and_an_offline_remote_recove
 
 #[test]
 fn a_repository_without_a_remote_gets_a_local_commit_for_the_file() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = test_tmp::TestDir::new("publish-tests");
     let repo = Repo::init_local(tmp.path().join("local")).unwrap();
     set_identity(repo.root());
     repo.create_cycle(&Cycle::new("NOMAD", "Nomad rover"))

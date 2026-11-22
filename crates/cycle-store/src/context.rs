@@ -656,7 +656,7 @@ mod tests {
 
     #[test]
     fn previous_items_are_newest_first_deduped_and_capped() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("context");
         let root = dir.path().join("meetings").join("NOMAD");
         write_meeting(
             &root,
@@ -732,7 +732,7 @@ mod tests {
 
     #[test]
     fn default_cap_is_eighty_items() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("context");
         let items: Vec<_> = (0..100)
             .map(|n| item(&format!("i{n}"), ItemType::Note, &format!("note {n}")))
             .collect();
@@ -748,7 +748,7 @@ mod tests {
 
     #[test]
     fn done_and_closed_things_are_dropped() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("context");
         let mut linked_topic = item("a", ItemType::Task, "follow up on battery");
         linked_topic.relates_to = Some("t-2".into());
         let mut linked_issue = item("b", ItemType::Task, "send the invoice");
@@ -803,7 +803,7 @@ mod tests {
 
     #[test]
     fn items_with_a_closed_issue_are_done_and_those_with_an_open_issue_carry_it() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("context");
         write_meeting(
             dir.path(),
             "2026-11-13",
@@ -856,7 +856,7 @@ mod tests {
 
     #[test]
     fn invalid_meeting_files_are_skipped_with_a_warning() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("context");
         write_meeting(
             dir.path(),
             "2026-11-13",
@@ -901,7 +901,7 @@ mod tests {
 
     #[test]
     fn corrections_of_earlier_meetings_reach_the_context() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("context");
         write_meeting(
             dir.path(),
             "2026-11-13",
@@ -961,8 +961,8 @@ mod tests {
     #[test]
     fn a_local_correction_counts_and_the_same_id_is_used_once() {
         // The repository's folder and the application's own copy of one meeting.
-        let repo = tempfile::tempdir().unwrap();
-        let local = tempfile::tempdir().unwrap();
+        let repo = test_tmp::TestDir::new("context");
+        let local = test_tmp::TestDir::new("context");
         for root in [repo.path(), local.path()] {
             write_meeting(
                 root,
@@ -1007,7 +1007,7 @@ mod tests {
 
     #[test]
     fn without_corrections_the_context_has_no_such_key_and_the_cap_holds() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("context");
         write_meeting(
             dir.path(),
             "2026-11-13",
