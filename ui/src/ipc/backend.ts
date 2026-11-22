@@ -13,6 +13,7 @@ import type {
   ModelStatus,
   ModelsProgress,
   ProcessOptions,
+  GgufFile,
   ProcessingSettings,
   PullResult,
   QueueState,
@@ -24,6 +25,10 @@ import type {
   SaveCycleResult,
   SegmentEdit,
   Settings,
+  SetupPathCheck,
+  SetupPathKind,
+  SetupProgress,
+  SetupStatus,
   SourceInfo,
   StartRecordingRequest,
   TemplateCheck,
@@ -114,6 +119,19 @@ export interface Backend {
   modelStatus(): Promise<ModelStatus[]>;
   downloadModels(keys: string[]): Promise<void>;
 
+  /** What is set up and what is not, item by item. Never returns a token. */
+  setupStatus(): Promise<SetupStatus>;
+  /** `llama-server` programs found on this machine. Detection only. */
+  detectLlamaServer(): Promise<string[]>;
+  /** GGUF files in `dir`, or in the usual model folders without it. */
+  findGgufModels(dir?: string): Promise<GgufFile[]>;
+  /** Checks a path before it is saved; reads only. */
+  checkSetupPath(kind: SetupPathKind, path: string): Promise<SetupPathCheck>;
+  /** Starts creating the processing environment; follow `onSetupProgress`. */
+  prepareWorkerEnv(): Promise<void>;
+  /** Marks the first-run setup as completed (default) or to be shown again. */
+  setFirstRunDone(done?: boolean): Promise<void>;
+
   /** API keys are write-only: `ProcessingSettings.llm.cloudKeySet` / `externalKeySet` tell they are stored. */
   setCloudKey(key: string): Promise<void>;
   clearCloudKey(): Promise<void>;
@@ -175,6 +193,7 @@ export interface Backend {
   onMeetingsChanged(cb: () => void): Promise<Unsubscribe>;
   onQueueChanged(cb: (state: QueueState) => void): Promise<Unsubscribe>;
   onModelsProgress(cb: (progress: ModelsProgress) => void): Promise<Unsubscribe>;
+  onSetupProgress(cb: (progress: SetupProgress) => void): Promise<Unsubscribe>;
   onModelsChanged(cb: () => void): Promise<Unsubscribe>;
   /** Payload: the id of the meeting whose draft changed. */
   onDraftChanged(cb: (meetingId: string) => void): Promise<Unsubscribe>;

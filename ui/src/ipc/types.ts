@@ -260,6 +260,12 @@ export interface ProcessingSettings {
   clipMaxDays: number;
   /** Language-model backend settings (always present from the backend). */
   llm?: LlmSettings;
+  /** Describe screenshots with the vision model. Off: that stage is skipped. */
+  describeScreenshots: boolean;
+  /** The user chose to go without reports, so no language model is needed. */
+  skipReports: boolean;
+  /** The first-run setup was completed. A settings save never changes it: use `setFirstRunDone`. */
+  firstRunDone: boolean;
 }
 
 export type ModelKey = "whisper-turbo" | "whisper-large-v3" | "diarization" | "vision";
@@ -276,6 +282,72 @@ export interface ModelsProgress {
   key: string;
   fraction: number;
   message: string;
+}
+
+// ---------- Setup readiness (first run) ----------
+
+export type SetupItemState = "ok" | "missing" | "invalid" | "skipped" | "working";
+
+/**
+ * Codes of the items, and of the `IpcError` that `processMeeting` rejects with while a piece of
+ * the setup is missing (the message then holds the problem and the fix).
+ */
+export type SetupErrorCode =
+  | "setup_worker_env"
+  | "setup_model_missing"
+  | "setup_hf_token"
+  | "setup_llama_server"
+  | "setup_llm_model"
+  | "setup_vision";
+
+/**
+ * Keys: `workerEnv`, `model:whisper-turbo`, `model:diarization`, `hfToken`, `llamaServer`,
+ * `llmModel`, `vision`.
+ */
+export interface SetupItem {
+  key: string;
+  state: SetupItemState;
+  /** A stable code of a problem; `ok` and `skipped` items have none. */
+  code?: SetupErrorCode;
+  message: string;
+  fixHint?: string;
+}
+
+export interface SetupStatus {
+  /** Every item is `ok` or `skipped`. */
+  ready: boolean;
+  firstRunDone: boolean;
+  items: SetupItem[];
+  /** `llama-server` programs found on this machine, the configured one first. */
+  llamaCandidates: string[];
+}
+
+export interface GgufFile {
+  path: string;
+  /** Bytes. */
+  size: number;
+  /** `mmproj` is the projector of a vision model, not a language model. */
+  kind: "llm" | "mmproj";
+}
+
+export type SetupPathKind = "uv" | "llamaServer" | "llmModel" | "workerDir" | "modelsDir";
+
+export interface SetupPathCheck {
+  ok: boolean;
+  /** `path_empty`, `path_not_absolute`, `path_network`, `path_not_found`, `path_not_file`, `path_not_dir` or `path_wrong_kind`. */
+  code: string | null;
+  message: string | null;
+}
+
+/** Event `setup-progress` while the processing environment is prepared. */
+export interface SetupProgress {
+  key: string;
+  line: string;
+  fraction: number | null;
+  /** The last event of a run: `ok` and `error` tell how it ended. */
+  done: boolean;
+  ok: boolean | null;
+  error: string | null;
 }
 
 // ---------- Stage 3: speakers and voice profiles ----------

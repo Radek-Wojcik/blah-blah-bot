@@ -14,6 +14,7 @@ import {
 } from "./mock-demo";
 import { createCycleStore, type RecordingReport } from "./mock-cycles";
 import { createMockDrafts } from "./mock-drafts";
+import { mockCheckSetupPath, mockGgufModels, mockSetupStatus } from "./mock-readiness";
 import { fail } from "./mock-util";
 import { isLocalHost, missingForKind, urlHost, validateLlmSettings } from "../llm";
 import { validateVoiceSettings } from "../speakers";
@@ -30,6 +31,7 @@ import type {
   QueueState,
   RecordingState,
   Settings,
+  SetupProgress,
   SourceInfo,
   StageName,
   TranscriptData,
@@ -228,6 +230,8 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
   const queueListeners = new Set<{ cb: (s: QueueState) => void }>();
   const progressListeners = new Set<{ cb: (p: ModelsProgress) => void }>();
   const modelsListeners = new Set<{ cb: () => void }>();
+  const setupListeners = new Set<{ cb: (p: SetupProgress) => void }>();
+  const setupLlamaCandidates: string[] = [];
 
   const emit = () => stateListeners.forEach((l) => l.cb(structuredClone(state)));
   const emitMeetings = () => meetingListeners.forEach((l) => l.cb());
@@ -722,6 +726,23 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     },
     clearHfToken: async () => void (processing.hfTokenSet = false),
     modelStatus: async () => structuredClone(models),
+    setupStatus: async () => mockSetupStatus(processing, models, setupLlamaCandidates),
+    detectLlamaServer: async () => [...setupLlamaCandidates],
+    findGgufModels: async () => mockGgufModels(),
+    checkSetupPath: async (kind, path) => mockCheckSetupPath(kind, path),
+    prepareWorkerEnv: async () => {
+      setupListeners.forEach((l) =>
+        l.cb({
+          key: "workerEnv",
+          line: "The processing environment is ready",
+          fraction: 1,
+          done: true,
+          ok: true,
+          error: null,
+        }),
+      );
+    },
+    setFirstRunDone: async (done = true) => void (processing.firstRunDone = done),
     downloadModels: async (keys) => {
       for (const key of keys) {
         const model = models.find((m) => m.key === key);
@@ -771,6 +792,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     onQueueChanged: (cb) => subscribe(queueListeners, cb),
     onModelsProgress: (cb) => subscribe(progressListeners, cb),
     onModelsChanged: (cb) => subscribe(modelsListeners, cb),
+    onSetupProgress: (cb) => subscribe(setupListeners, cb),
 
     // ----- language-model keys and the cloud confirmation -----
     setCloudKey: async (key) => {
