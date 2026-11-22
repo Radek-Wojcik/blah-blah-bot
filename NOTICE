@@ -1,64 +1,162 @@
 Blah Blah Bot
 Copyright (c) 2026 Radosław Wójcik
 
-This project is released under the MIT License (see LICENSE). It depends on the
-third-party components below. Model weights are not distributed with this
-repository; they are downloaded by the user on first use.
+This project is released under the MIT License (see LICENSE). It uses the third-party
+components listed below. Model weights are not part of this repository or of the installer;
+the application downloads them on first use, or the user supplies them.
 
-Draft for Stage 0. Versions are those verified on 2026-11-13 and are updated
-whenever a dependency changes.
+Inventory date: 2026-11-21. Versions are the ones locked in Cargo.lock, ui/package-lock.json
+and worker/uv.lock at release 0.5.0. Licenses were taken from package metadata and, for the
+models, re-checked online on 2026-11-21. How to repeat the check: scripts/audit-deps.ps1.
+Findings and decisions: docs/DEPENDENCY-AUDIT.md.
 
-Software dependencies
----------------------
-Tauri 2                      Apache-2.0 OR MIT       https://github.com/tauri-apps/tauri
-wasapi (Rust crate)          MIT                     https://github.com/HEnquist/wasapi-rs
-windows (Rust crate)         MIT OR Apache-2.0       https://github.com/microsoft/windows-rs
-nvml-wrapper (Rust crate)    MIT OR Apache-2.0       https://github.com/rust-nvml/nvml-wrapper
-keyring-core (Rust crate)    MIT OR Apache-2.0       https://github.com/open-source-cooperative/keyring-rs
-windows-native-keyring-store MIT OR Apache-2.0       https://github.com/open-source-cooperative/windows-native-keyring-store
-rusqlite (Rust crate)        MIT                     https://github.com/rusqlite/rusqlite
-huggingface_hub              Apache-2.0              https://github.com/huggingface/huggingface_hub
-PyTorch                      BSD-3-Clause            https://github.com/pytorch/pytorch
-NumPy                        BSD-3-Clause            https://github.com/numpy/numpy
-jsonschema (Python)          MIT                     https://github.com/python-jsonschema/jsonschema
-NVIDIA CUDA runtime wheels   NVIDIA proprietary license, installed from PyPI into the user's
-                             environment on first use; not redistributed by this project
-faster-whisper               MIT                     https://github.com/SYSTRAN/faster-whisper
-CTranslate2                  MIT                     https://github.com/OpenNMT/CTranslate2
-pyannote.audio               MIT                     https://github.com/pyannote/pyannote-audio
-llama.cpp                    MIT                     https://github.com/ggml-org/llama.cpp
-uv                           MIT OR Apache-2.0       https://github.com/astral-sh/uv
+Policy (ADR 0012): the code and the default models use permissive licenses only (MIT,
+Apache-2.0, BSD, CC-BY-4.0). No GPL, AGPL or non-commercial component is linked into or
+shipped with the application.
 
-Models (downloaded by the user, not redistributed)
---------------------------------------------------
-Whisper large-v3 (Systran/faster-whisper-large-v3)
-    MIT. https://huggingface.co/Systran/faster-whisper-large-v3
-NVIDIA Parakeet-TDT-0.6B-v3
-    CC-BY-4.0, Copyright NVIDIA. https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3
-pyannote/speaker-diarization-community-1
-    CC-BY-4.0, Copyright pyannote. Gated download.
-    https://huggingface.co/pyannote/speaker-diarization-community-1
-Whisper large-v3-turbo (mobiuslabsgmbh/faster-whisper-large-v3-turbo)
-    MIT. CTranslate2 conversion of openai/whisper-large-v3-turbo.
-    https://huggingface.co/mobiuslabsgmbh/faster-whisper-large-v3-turbo
-Gemma 4 12B instruction-tuned (google/gemma-4-12B-it)
-    Apache-2.0 as stated on the model card. https://huggingface.co/google/gemma-4-12B-it
-    The Q4_K_M quantization used in Stage 0 is a third-party GGUF conversion
-    (repository metadata: Apache-2.0).
-Qwen3-14B
+
+1. Components shipped in the installer
+---------------------------------------
+
+Rust crates (the desktop application and its libraries)
+    The full list of crates linked into the Windows build, with versions and licenses, is
+    produced by scripts/audit-deps.ps1 (target/audit/rust-licenses.txt). It covers 296
+    third-party crates. Most are MIT OR Apache-2.0 or MIT; the others are Unicode-3.0 (18),
+    MPL-2.0 (5), Unlicense OR MIT (10), Zlib (2), BSD-3-Clause (4), ISC (1) and a few
+    triple-licensed crates (MIT, Apache-2.0 and Zlib, 0BSD or CC0-1.0 as alternatives).
+    Every crate carries at least one permissive license. Direct dependencies:
+
+    Tauri 2.12.5, tauri-build, tauri-plugin-global-shortcut, tauri-plugin-single-instance
+                                 Apache-2.0 OR MIT   https://github.com/tauri-apps/tauri
+    wasapi 0.27.0                MIT                 https://github.com/HEnquist/wasapi-rs
+    windows 0.62.2               MIT OR Apache-2.0   https://github.com/microsoft/windows-rs
+    nvml-wrapper 0.13.0          MIT OR Apache-2.0   https://github.com/Cldfire/nvml-wrapper
+    keyring-core 1.0.1           MIT OR Apache-2.0   https://github.com/open-source-cooperative/keyring-core
+    windows-native-keyring-store 1.1.0
+                                 MIT OR Apache-2.0   https://github.com/open-source-cooperative/windows-native-keyring-store
+    rusqlite 0.42.0 (bundled SQLite)
+                                 MIT                 https://github.com/rusqlite/rusqlite
+    SQLite (compiled into rusqlite)
+                                 Public domain       https://sqlite.org/copyright.html
+    ureq 3.5.2 (with native-tls, which uses the Windows Schannel library)
+                                 MIT OR Apache-2.0   https://github.com/algesten/ureq
+    serde 1.0.229, serde_json 1.0.154, thiserror 2.0.21
+                                 MIT OR Apache-2.0   https://github.com/serde-rs
+    serde_norway 0.9.42          MIT OR Apache-2.0   https://github.com/cafkafk/serde-yaml
+    jsonschema 0.30.0            MIT                 https://github.com/Stranger6667/jsonschema
+    png 0.18.1                   MIT OR Apache-2.0   https://github.com/image-rs/image-png
+    sha2 0.10.9                  MIT OR Apache-2.0   https://github.com/RustCrypto/hashes
+    sysinfo 0.38.4               MIT                 https://github.com/GuillaumeGomez/sysinfo
+    tracing 0.1.44, tracing-subscriber 0.3.23, tracing-appender 0.2.5
+                                 MIT                 https://github.com/tokio-rs/tracing
+
+    Crates under MPL-2.0 (file-level copyleft; used unmodified from crates.io, whose source
+    is the corresponding source): cssparser, cssparser-macros, selectors, dtoa-short,
+    option-ext. Crates under Unicode-3.0: the icu_* family and its helpers
+    (https://www.unicode.org/license.txt). Crates under Zlib: foldhash, zlib-rs.
+
+User interface (bundled by Vite into the application)
+    react 19.3.1                 MIT                 https://github.com/facebook/react
+    react-dom 19.3.1             MIT                 https://github.com/facebook/react
+    scheduler 0.28.0             MIT                 https://github.com/facebook/react
+    @tauri-apps/api 2.12.4       Apache-2.0 OR MIT   https://github.com/tauri-apps/tauri
+    Build and test tooling (Vite, TypeScript, ESLint, Playwright, Vitest and others) is not
+    shipped. The interface uses system fonts only; no font files are bundled. The
+    application icons were made for this project.
+
+uv 0.11.15 (pinned release; the installer carries uv.exe, which creates the worker environment)
+                                 MIT OR Apache-2.0   https://github.com/astral-sh/uv
+
+Worker source (worker/src, this project, MIT) with its lock file. The Python packages
+below are not shipped: uv installs them from PyPI into the user's environment on first use.
+
+
+2. Installed from PyPI into the user's worker environment (not redistributed)
+------------------------------------------------------------------------------
+
+faster-whisper 1.2.1             MIT                 https://github.com/SYSTRAN/faster-whisper
+CTranslate2 4.9.0                MIT                 https://github.com/OpenNMT/CTranslate2
+pyannote.audio 4.0.7             MIT                 https://github.com/pyannote/pyannote-audio
+huggingface_hub 2.4.0            Apache-2.0          https://github.com/huggingface/huggingface_hub
+PyTorch 2.11.0 (CUDA 12.8 build) BSD-3-Clause        https://github.com/pytorch/pytorch
+torchaudio 2.11.x                BSD-2/3-Clause      https://github.com/pytorch/audio
+NumPy 2.4.6 / 2.5.4              BSD-3-Clause (and 0BSD, MIT, Zlib, CC0-1.0 parts)
+                                                     https://github.com/numpy/numpy
+SciPy, scikit-learn, pandas, matplotlib, lightning, torchmetrics, onnxruntime (MIT),
+    jsonschema (MIT), requests, tqdm and the other transitive packages (about 120 in
+    total): permissive licenses (MIT, BSD, Apache-2.0, PSF, MIT-CMU). The complete pinned
+    list is worker/uv.lock; licenses are in each package's metadata.
+PyAV (av 18/19)                  BSD-3-Clause        https://github.com/PyAV-Org/PyAV
+    The PyAV wheels carry a prebuilt FFmpeg (LGPL-2.1-or-later; the build also links the
+    x264 and x265 encoders, which are GPL-2.0-or-later libraries). The worker uses PyAV only
+    to decode audio. It is installed by the user's own uv run and is not redistributed by
+    this project.
+NVIDIA CUDA runtime wheels (nvidia-cublas-cu12 12.8.4.1, nvidia-cuda-runtime-cu12 12.8.90,
+    nvidia-cudnn-cu12 9.28.1.4 and the CUDA 13 packages pulled in by PyTorch)
+                                 NVIDIA proprietary license, accepted by pip/uv when the
+                                 wheels are installed from PyPI; not redistributed by this
+                                 project.
+
+Not redistributed, supplied or installed by the user:
+    llama.cpp (llama-server)     MIT                 https://github.com/ggml-org/llama.cpp
+    Microsoft Edge WebView2 Runtime (Microsoft proprietary license). The installer downloads
+        Microsoft's bootstrapper when the runtime is missing; this project ships no part of it.
+    NVIDIA GPU driver (NVIDIA license).
+
+
+3. Models (downloaded on first use or chosen by the user, not redistributed)
+-----------------------------------------------------------------------------
+
+Checked online on 2026-11-21 (Hugging Face model metadata and model cards).
+
+Whisper large-v3-turbo, default speech recognition
+    mobiuslabsgmbh/faster-whisper-large-v3-turbo (the repository now lives under
+    dropbox-dash/faster-whisper-large-v3-turbo; Hugging Face redirects the old name).
+    MIT. CTranslate2 conversion (float16) of openai/whisper-large-v3-turbo, which is MIT,
+    Copyright (c) 2022 OpenAI.
+Whisper large-v3, optional
+    Systran/faster-whisper-large-v3. MIT, a conversion of openai/whisper-large-v3 (MIT,
+    Copyright (c) 2022 OpenAI). https://huggingface.co/Systran/faster-whisper-large-v3
+pyannote/speaker-diarization-community-1, diarization (gated: the user accepts the terms
+    with their own Hugging Face token)
+    CC-BY-4.0, Copyright pyannote (pyannoteAI). Attribution: "pyannote/speaker-diarization-
+    community-1, pyannote, CC BY 4.0, https://creativecommons.org/licenses/by/4.0/; used
+    unmodified". https://huggingface.co/pyannote/speaker-diarization-community-1
+Qwen3-VL-8B-Instruct, screenshot description (Qwen3VL-8B-Instruct-Q4_K_M.gguf and
+    mmproj-Qwen3VL-8B-Instruct-F16.gguf from Qwen/Qwen3-VL-8B-Instruct-GGUF)
+    Apache-2.0, Copyright Alibaba Cloud. https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF
+Gemma 4 12B instruction-tuned (google/gemma-4-12B-it), default language model, used as a
+    GGUF file (Q4_K_M) that the user chooses
+    Apache-2.0 as stated on the model card (Copyright Google). The repository carries no
+    LICENSE file, and the license link on the card redirects to a page that is not hosted by
+    Google; see docs/DEPENDENCY-AUDIT.md. GGUF conversions are third-party files with their
+    own repository metadata.
+    https://huggingface.co/google/gemma-4-12B-it
+Qwen3-14B, optional language model
     Apache-2.0, Copyright Alibaba Cloud. https://huggingface.co/Qwen/Qwen3-14B
+NVIDIA Parakeet-TDT-0.6B-v3, optional speech recognition (benchmarks only)
+    CC-BY-4.0, Copyright NVIDIA. This model is built on the Canary and FastConformer
+    work of NVIDIA. https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3
+    Attribution: "NVIDIA Parakeet-TDT-0.6B-v3, Copyright NVIDIA, CC BY 4.0".
 Mistral-Nemo-Instruct-2407 (compared in Stage 0, not a candidate default)
     Apache-2.0. https://huggingface.co/mistralai/Mistral-Nemo-Instruct-2407
-Qwen3-VL-8B-Instruct
-    Apache-2.0, Copyright Alibaba Cloud. https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct
-    GGUF files used for screenshot description: Qwen/Qwen3-VL-8B-Instruct-GGUF (Apache-2.0).
-    https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF
 
-Test data tooling (audio is generated locally and is not committed)
--------------------------------------------------------------------
-Used only to generate synthetic meeting audio in a separate environment
-(benchmarks/tools/tts). Nothing below is linked into or shipped with the
-application. Full list with versions: benchmarks/tools/tts/LICENSES.md.
+Evaluated and not used
+    Bielik 11B v3: Apache-2.0 weights, but the publisher's terms of use list processing
+        personal data as a prohibited use, which meeting transcripts contain.
+    Llama family: a custom community license, not a default (ADR 0012).
+    DiariZen: weights licensed for non-commercial use only.
+    Coqui XTTS (non-commercial), MMS-TTS (CC BY-NC), edge-tts (online service).
+    Models under other custom licenses may be used through an external server that the user
+    configures; the application neither downloads nor recommends them.
+
+
+4. Test data tooling (development only, nothing is shipped or linked)
+----------------------------------------------------------------------
+
+Used to generate synthetic meeting audio in a separate environment (benchmarks/tools/tts).
+Audio is generated locally and is not committed. Full list with versions:
+benchmarks/tools/tts/LICENSES.md.
 
 Chatterbox Multilingual (ResembleAI/chatterbox)
     MIT. https://huggingface.co/ResembleAI/chatterbox
@@ -66,5 +164,5 @@ Piper voice en_US-libritts-high (reference voices only)
     CC-BY-4.0, from the LibriTTS corpus (Zen et al., 2019), https://www.openslr.org/60/
     Attribution required if audio produced with it is ever redistributed.
 piper-tts and pykakasi
-    GPL-3.0-or-later. Used as local build-time tools only; no GPL code is
-    distributed with the application.
+    GPL-3.0-or-later. Used as local build-time tools only; no GPL code is distributed with
+    the application.
