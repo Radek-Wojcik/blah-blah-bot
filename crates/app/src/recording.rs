@@ -437,7 +437,7 @@ mod tests {
         use recorder::session::ToneBackend;
         let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
         let recorder = Recorder::new(store.clone(), Arc::new(ToneBackend), true);
-        let root = tempfile::tempdir().unwrap();
+        let root = testkit::target_tempdir("app");
         let report = ReportSettings {
             cycle_id: Some("NOMAD".into()),
             report_mode: Some("by-type".into()),

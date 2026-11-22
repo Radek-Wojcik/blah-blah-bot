@@ -24,5 +24,9 @@ windows = { workspace = true, features = [
 ] }
 sysinfo = { version = "0.38", default-features = false, features = ["system"] }
 
+[dev-dependencies]
+tempfile = "3"
+testkit = { path = "../testkit" }
+
 [lints]
 workspace = true

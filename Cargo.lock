@@ -78,6 +78,7 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-single-instance",
  "tempfile",
+ "testkit",
  "thiserror 2.0.21",
  "tracing",
  "tracing-appender",
@@ -3264,6 +3265,8 @@ dependencies = [
  "serde",
  "serde_json",
  "sysinfo",
+ "tempfile",
+ "testkit",
  "thiserror 2.0.21",
  "tracing",
  "wasapi",
@@ -4434,6 +4437,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5fed54709c5b3a53d09bb1c113ea4f5ceafd1e772ddcb0030a82e1d56c087b08"
 dependencies = [
  "new_debug_unreachable",
+]
+
+[[package]]
+name = "testkit"
+version = "0.5.0"
+dependencies = [
+ "tempfile",
 ]
 
 [[package]]

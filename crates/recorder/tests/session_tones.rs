@@ -15,23 +15,15 @@ use recorder::session::{Session, SessionError, SourceSpec, ToneBackend};
 use recorder::timeline::SAMPLE_RATE;
 use recorder::wav::read_samples;
 
-struct TempDir(PathBuf);
+/// A temporary folder under `target/tmp`, removed when dropped.
+struct TempDir(tempfile::TempDir);
 
 impl TempDir {
     fn new(label: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!("bbb-it-{label}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        Self(dir)
+        Self(testkit::target_tempdir(&format!("recorder-it-{label}")))
     }
     fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        self.0.path()
     }
 }
 

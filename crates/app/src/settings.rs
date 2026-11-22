@@ -107,20 +107,22 @@ impl Settings {
 mod tests {
     use super::*;
 
-    fn temp(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("bbb-settings-{}-{name}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir.join("settings.json")
+    /// A settings path in a fresh folder under `target/tmp`; the folder goes with the guard.
+    fn temp(name: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = testkit::target_tempdir(&format!("app-settings-{name}"));
+        let path = dir.path().join("settings.json");
+        (dir, path)
     }
 
     #[test]
     fn missing_file_gives_defaults() {
-        assert_eq!(Settings::load(&temp("missing")), Settings::default());
+        let (_dir, path) = temp("missing");
+        assert_eq!(Settings::load(&path), Settings::default());
     }
 
     #[test]
     fn round_trip() {
-        let path = temp("round");
+        let (_dir, path) = temp("round");
         let s = Settings {
             recordings_dir: "D:\\Rec".into(),
             record_hotkey: "Ctrl+F9".into(),
@@ -144,7 +146,7 @@ mod tests {
 
     #[test]
     fn partial_file_fills_defaults() {
-        let path = temp("partial");
+        let (_dir, path) = temp("partial");
         std::fs::write(&path, r#"{"recordHotkey":"Ctrl+F1"}"#).unwrap();
         let s = Settings::load(&path);
         assert_eq!(s.record_hotkey, "Ctrl+F1");
@@ -153,7 +155,7 @@ mod tests {
 
     #[test]
     fn corrupt_file_gives_defaults() {
-        let path = temp("corrupt");
+        let (_dir, path) = temp("corrupt");
         std::fs::write(&path, "{not json").unwrap();
         assert_eq!(Settings::load(&path), Settings::default());
     }
@@ -166,7 +168,7 @@ mod tests {
 
     #[test]
     fn a_file_from_before_cycles_still_loads() {
-        let path = temp("old");
+        let (_dir, path) = temp("old");
         std::fs::write(
             &path,
             r#"{"recordingsDir":"D:/Rec","recordHotkey":"Ctrl+F1","screenshotHotkey":"Ctrl+F2"}"#,

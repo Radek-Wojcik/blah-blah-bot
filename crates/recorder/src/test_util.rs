@@ -1,29 +1,17 @@
 //! Helpers shared by the unit tests.
 
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::path::Path;
 
-/// A temporary directory that is removed when dropped.
-pub struct TempDir(PathBuf);
+/// A temporary directory under the build output folder, removed when dropped.
+pub struct TempDir(tempfile::TempDir);
 
 impl TempDir {
-    /// Create a new empty directory under the system temp directory.
+    /// Create a new empty directory under `target/tmp`.
     pub fn new(label: &str) -> Self {
-        static COUNTER: AtomicU32 = AtomicU32::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir =
-            std::env::temp_dir().join(format!("recorder-test-{label}-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("create temp dir");
-        Self(dir)
+        Self(testkit::target_tempdir(&format!("recorder-{label}")))
     }
 
     pub fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        self.0.path()
     }
 }
