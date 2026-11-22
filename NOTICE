@@ -110,8 +110,8 @@ Not redistributed, supplied or installed by the user:
 Checked online on 2026-11-21 (Hugging Face model metadata and model cards).
 
 Whisper large-v3-turbo, default speech recognition
-    mobiuslabsgmbh/faster-whisper-large-v3-turbo (the repository now lives under
-    dropbox-dash/faster-whisper-large-v3-turbo; Hugging Face redirects the old name).
+    dropbox-dash/faster-whisper-large-v3-turbo (formerly
+    mobiuslabsgmbh/faster-whisper-large-v3-turbo; Hugging Face redirects the old name).
     MIT. CTranslate2 conversion (float16) of openai/whisper-large-v3-turbo, which is MIT,
     Copyright (c) 2022 OpenAI.
 Whisper large-v3, optional

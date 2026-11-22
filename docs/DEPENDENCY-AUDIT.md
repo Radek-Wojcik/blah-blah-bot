@@ -62,7 +62,7 @@ Source: Hugging Face model metadata and model cards. ADR 0012 expected permissiv
 | Model | Expected (ADR 0012, NOTICE) | Found | Result |
 |---|---|---|---|
 | Whisper large-v3 (Systran) | MIT | MIT | Match. |
-| Whisper large-v3-turbo (mobiuslabsgmbh) | MIT, unverified in Stage 2 | MIT, now verified. The repository has moved to `dropbox-dash/faster-whisper-large-v3-turbo`; the old name redirects. The card says it is a CTranslate2 conversion of `openai/whisper-large-v3-turbo` (MIT). | Verified. Discrepancy: the registry in `worker/src/bbb_worker/models.py` names the old owner. It works through the redirect today; pointing it at the new owner is advisable before 1.0 so a removed redirect cannot break first run. Left to the owner of that file. |
+| Whisper large-v3-turbo (mobiuslabsgmbh) | MIT, unverified in Stage 2 | MIT, now verified. The repository has moved to `dropbox-dash/faster-whisper-large-v3-turbo`; the old name redirects. The card says it is a CTranslate2 conversion of `openai/whisper-large-v3-turbo` (MIT). | Verified. The registry in `worker/src/bbb_worker/models.py` now names the new owner and pins a commit (see `docs/SECURITY-REVIEW.md`). |
 | pyannote community-1 | CC-BY-4.0, gated | `cc-by-4.0`, gated (automatic approval), gate form asks for a use case. The card itself is only readable after login, so the exact citation text could not be read. | Match. `NOTICE` carries a generic CC-BY attribution; compare it with the card text after login before 1.0. |
 | Qwen3-VL-8B-Instruct and its GGUF repository | Apache-2.0 | Apache-2.0 | Match. |
 | Qwen3-14B | Apache-2.0 | Apache-2.0, `LICENSE` file present | Match. |

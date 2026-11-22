@@ -3,6 +3,10 @@
 Weights are never bundled. They are downloaded on first use from Hugging Face into the
 cache folder given by `BBB_MODELS_DIR`. Steps resolve models with `local_path`, which never
 touches the network, so processing works offline once the models are cached.
+
+Every model is pinned to one commit of its repository (`revision`), so a changed or taken
+over repository cannot put different files on a machine. Changing a pin is a reviewed change:
+see docs/SECURITY-REVIEW.md.
 """
 
 from __future__ import annotations
@@ -18,6 +22,8 @@ from . import protocol
 class ModelSpec:
     key: str
     repo: str
+    # The full commit hash of the repository that is downloaded and loaded (40 hex digits).
+    revision: str
     # Files to fetch (glob patterns); `None` fetches the whole repository.
     patterns: tuple[str, ...] | None
     gated: bool
@@ -35,17 +41,33 @@ WHISPER_FILES = (
 
 MODELS: dict[str, ModelSpec] = {
     "whisper-turbo": ModelSpec(
-        "whisper-turbo", "mobiuslabsgmbh/faster-whisper-large-v3-turbo", WHISPER_FILES, False, "MIT"
+        "whisper-turbo",
+        "dropbox-dash/faster-whisper-large-v3-turbo",
+        "0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf",
+        WHISPER_FILES,
+        False,
+        "MIT",
     ),
     "whisper-large-v3": ModelSpec(
-        "whisper-large-v3", "Systran/faster-whisper-large-v3", WHISPER_FILES, False, "MIT"
+        "whisper-large-v3",
+        "Systran/faster-whisper-large-v3",
+        "edaa852ec7e145841d8ffdb056a99866b5f0a478",
+        WHISPER_FILES,
+        False,
+        "MIT",
     ),
     "diarization": ModelSpec(
-        "diarization", "pyannote/speaker-diarization-community-1", None, True, "CC-BY-4.0"
+        "diarization",
+        "pyannote/speaker-diarization-community-1",
+        "3533c8cf8e369892e6b79ff1bf80f7b0286a54ee",
+        None,
+        True,
+        "CC-BY-4.0",
     ),
     "vision": ModelSpec(
         "vision",
         "Qwen/Qwen3-VL-8B-Instruct-GGUF",
+        "f982a07559d4a2f6c8744d840bf6fccab30eea96",
         ("Qwen3VL-8B-Instruct-Q4_K_M.gguf", "mmproj-Qwen3VL-8B-Instruct-F16.gguf"),
         False,
         "Apache-2.0",
@@ -89,6 +111,7 @@ def local_path(key: str) -> Path:
     try:
         path = snapshot_download(
             spec.repo,
+            revision=spec.revision,
             allow_patterns=list(spec.patterns) if spec.patterns else None,
             cache_dir=cache_dir(),
             local_files_only=True,
@@ -139,6 +162,7 @@ def download(key: str, token: str | None) -> Path:
 
     path = snapshot_download(
         spec.repo,
+        revision=spec.revision,
         allow_patterns=list(spec.patterns) if spec.patterns else None,
         cache_dir=cache_dir(),
         token=token,
