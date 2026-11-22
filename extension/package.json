@@ -13,8 +13,8 @@
     "build": "npm run compile && node scripts/build.mjs",
     "build:test": "npm run compile && node scripts/build.mjs --test",
     "pack": "npm run build && node scripts/pack.mjs",
-    "test:e2e": "npm run build:test && playwright test",
-    "measure": "npm run build:test && playwright test --project=measure"
+    "test:e2e": "npm run build:test && cargo build -p bridge --example test_receiver && playwright test --project=bridge",
+    "measure": "npm run build:test && cargo build -p bridge --example test_receiver && playwright test --project=measure"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

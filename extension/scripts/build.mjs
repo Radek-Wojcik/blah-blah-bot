@@ -16,9 +16,22 @@ fs.rmSync(out, { recursive: true, force: true });
 fs.mkdirSync(out, { recursive: true });
 
 const dist = path.join(root, "dist");
+// The scripted tests listen on ports of their own so that a running application on the
+// default port is never touched.
+const TEST_PORTS = "[17564, 17563]";
 for (const name of fs.readdirSync(dist)) {
   if (!name.endsWith(".js")) continue;
   if (name === "test-hook.js" && !test) continue;
+  if (name === "protocol.js" && test) {
+    const text = fs.readFileSync(path.join(dist, name), "utf8");
+    const patched = text.replace(
+      /export const DEFAULT_PORTS = \[[^\]]*\];/,
+      `export const DEFAULT_PORTS = ${TEST_PORTS};`,
+    );
+    if (patched === text) throw new Error("DEFAULT_PORTS not found in protocol.js");
+    fs.writeFileSync(path.join(out, name), patched);
+    continue;
+  }
   fs.copyFileSync(path.join(dist, name), path.join(out, name));
 }
 for (const name of ["manifest.json", "popup.html"]) {

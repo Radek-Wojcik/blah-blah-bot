@@ -14,11 +14,12 @@ export type ToOffscreen =
   | {
       target: "offscreen";
       type: "connect";
+      extVersion: string;
       credentials: Credentials;
       port?: number;
       meetTabs: MeetTab[];
     }
-  | { target: "offscreen"; type: "pair"; code: string; meetTabs: MeetTab[] }
+  | { target: "offscreen"; type: "pair"; extVersion: string; code: string; meetTabs: MeetTab[] }
   | { target: "offscreen"; type: "disconnect" }
   | {
       target: "offscreen";

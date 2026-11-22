@@ -7,7 +7,9 @@ import type { MeetTab, OffscreenStatus, Reply, ToOffscreen } from "./ipc.js";
 import { StreamMux } from "./mux.js";
 import type { ServerMessage, StopReason } from "./protocol.js";
 
-const EXT_VERSION = chrome.runtime.getManifest().version;
+// Offscreen documents have only a part of chrome.runtime (no getManifest): the version
+// comes with the connect and pair messages.
+let extVersion = "0.0.0";
 
 let appRecording = false;
 const meetTabs = new Map<number, string>();
@@ -26,7 +28,7 @@ function sendMeetTabs(): void {
 
 const client: BridgeClient = new BridgeClient({
   createSocket: (url) => new WebSocket(url) as unknown as SocketLike,
-  extVersion: EXT_VERSION,
+  extVersion: () => extVersion,
   clientName: `Chrome ${/Chrome\/(\d+)/.exec(navigator.userAgent)?.[1] ?? "?"}`,
   onReady: (ok) => {
     appRecording = ok.recording;
@@ -52,7 +54,7 @@ const client: BridgeClient = new BridgeClient({
 });
 
 const mux = new StreamMux(client, {
-  workletUrl: chrome.runtime.getURL("pcm-worklet.js"),
+  workletUrl: new URL("pcm-worklet.js", location.href).href,
   onEnded: (tabId, streamId, reason) => notify({ type: "ended", tabId, streamId, reason }),
 });
 
@@ -92,10 +94,12 @@ function status(): OffscreenStatus {
 async function handle(msg: ToOffscreen): Promise<object> {
   switch (msg.type) {
     case "connect":
+      extVersion = msg.extVersion;
       setMeetTabs(msg.meetTabs);
       client.connect(msg.credentials, msg.port);
       return {};
     case "pair": {
+      extVersion = msg.extVersion;
       setMeetTabs(msg.meetTabs);
       const ok = await client.pair(msg.code);
       return { credentials: { client_id: ok.client_id, secret: ok.secret }, port: client.port };

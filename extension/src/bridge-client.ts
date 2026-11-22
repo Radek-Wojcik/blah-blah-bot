@@ -41,7 +41,7 @@ export interface SocketLike {
 
 export interface BridgeClientOptions {
   createSocket: (url: string) => SocketLike;
-  extVersion: string;
+  extVersion: () => string;
   clientName: string;
   ports?: number[];
   onState?: (state: ClientState, detail?: string) => void;
@@ -218,7 +218,7 @@ export class BridgeClient {
     this.socket = socket;
     this.connectTimer = setTimeout(() => this.failAttempt(), CONNECT_TIMEOUT_MS);
     socket.onopen = () => {
-      socket.send(JSON.stringify(helloMessage(this.opts.extVersion, this.opts.clientName, auth)));
+      socket.send(JSON.stringify(helloMessage(this.opts.extVersion(), this.opts.clientName, auth)));
     };
     socket.onerror = () => {
       // onclose follows; nothing to do here.

@@ -70,7 +70,7 @@ function make() {
   const messages: object[] = [];
   const client = new BridgeClient({
     createSocket: (url) => new FakeSocket(url),
-    extVersion: "0.6.0",
+    extVersion: () => "0.6.0",
     clientName: "Chrome 136",
     ports: PORTS,
     onState: (s) => states.push(s),

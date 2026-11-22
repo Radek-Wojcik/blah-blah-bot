@@ -73,8 +73,18 @@ async function ensureOffscreen(): Promise<void> {
 
 async function toOffscreen<T extends object = object>(msg: ToOffscreen): Promise<T> {
   await ensureOffscreen();
-  const reply = (await chrome.runtime.sendMessage(msg)) as
-    ({ ok: true } & T) | { ok: false; error: string } | undefined;
+  // A document that was just created needs a moment before its script listens.
+  const reply = await retry(
+    () =>
+      chrome.runtime.sendMessage(msg) as Promise<
+        ({ ok: true } & T) | { ok: false; error: string } | undefined
+      >,
+    {
+      intervalMs: 50,
+      maxMs: 3000,
+      shouldRetry: (err) => /Receiving end does not exist/i.test(String(err)),
+    },
+  );
   if (!reply || !reply.ok) throw new Error((reply && !reply.ok && reply.error) || "no reply");
   return reply;
 }
@@ -94,6 +104,7 @@ async function ensureConnected(): Promise<boolean> {
   await toOffscreen({
     target: "offscreen",
     type: "connect",
+    extVersion: VERSION,
     credentials,
     port,
     meetTabs: await meetTabs(),
@@ -233,6 +244,7 @@ async function pair(code: string): Promise<void> {
   const reply = await toOffscreen<{ credentials: Credentials; port: number | null }>({
     target: "offscreen",
     type: "pair",
+    extVersion: VERSION,
     code,
     meetTabs: await meetTabs(),
   });
