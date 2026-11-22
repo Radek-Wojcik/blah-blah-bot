@@ -126,3 +126,7 @@ jobs:
           python3 scripts/check_commits.py "$RANGE"
       - name: Large and binary files
         run: python3 scripts/check_files.py
+      - name: Release scripts and version consistency
+        run: |
+          python3 scripts/check_versions.py
+          python3 -m unittest scripts.test_release_scripts
