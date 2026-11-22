@@ -13,6 +13,8 @@ You can expect an acknowledgment within a week.
 - The local WebSocket bridge used by the browser extension
 - Local storage of recordings, transcripts and voice profiles
 
+The results of the security review are in [docs/SECURITY-REVIEW.md](docs/SECURITY-REVIEW.md).
+
 ## Supported versions
 
 The project is pre-1.0. Only the latest release receives fixes.

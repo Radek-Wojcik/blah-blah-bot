@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Security
+
+- Model downloads are pinned to one commit per repository, and the turbo Whisper model uses its new repository owner. Models downloaded by earlier versions are downloaded once more.
+- The application runs `git` without the repository's hooks, filesystem monitor and `ext::` remotes.
+- Repository folders and the recordings folder must be absolute paths on a local drive; a stored `llama-server` or `uv` path that fails the check is no longer started.
+- Failed stages are logged by stage and message length only; worker schema messages no longer quote model output.
+- CI and release checkouts do not keep the workflow token, and the release workflow has no default permissions.
+- Added `docs/SECURITY-REVIEW.md`.
+
 ### Fixed
 
 - Region screenshot (Ctrl+Alt+S) showed a black screen over every monitor. The desktop was captured correctly; the cause was in the display path. The content security policy did not allow the page to reach the IPC protocol, so Tauri fell back to the postMessage interface, which returns binary results as an array of numbers; the overlay built its image from that array as if it were bytes, the PNG could not be decoded and the black page background was all that was left. The policy now allows the IPC protocol, binary results are converted correctly in both modes, and the frozen desktop is encoded with fast compression off the main thread.
