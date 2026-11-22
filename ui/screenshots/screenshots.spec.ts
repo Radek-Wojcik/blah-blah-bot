@@ -454,7 +454,7 @@ test("draft editing GIF", async ({ page }) => {
 
 test("approve statuses and publish GIF", async ({ page }) => {
   const frames: string[] = [];
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bbb-gif-"));
+  const dir = freshDir("gif");
   const shot = async (wait = 350) => {
     await page.waitForTimeout(wait);
     const file = path.join(dir, `f${String(frames.length).padStart(2, "0")}.png`);
