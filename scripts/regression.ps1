@@ -65,6 +65,10 @@
   GPU part: longest a single step may run (default 120). A step over the limit is stopped (its
   own process tree) and counts as failed.
 
+.PARAMETER TotalTimeoutMinutes
+  GPU part: longest the whole part may take (default 0 = no limit). No step is started after
+  the limit (it is reported as skipped), and a running step gets at most the time that is left.
+
 .EXAMPLE
   scripts\regression.ps1 -Prepare
 
@@ -95,7 +99,8 @@ param(
     [string]$LongAudio = "",
     [string]$LlamaServer = "",
     [string]$Model = "",
-    [int]$StepTimeoutMinutes = 120
+    [int]$StepTimeoutMinutes = 120,
+    [int]$TotalTimeoutMinutes = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -257,10 +262,14 @@ try {
         }
         $rows = New-Object System.Collections.Generic.List[object]
         $env:BBB_RESULTS_DIR = $gpuDir
+        $partWatch = [System.Diagnostics.Stopwatch]::StartNew()
         foreach ($step in $gpuSteps) {
             $row = [ordered]@{ id = $step.id; status = "skipped"; seconds = $null; reason = ""; log = "logs/$($step.id).log" }
             $missing = Get-Missing $step
-            if ($missing.Count -gt 0) {
+            $leftMinutes = if ($TotalTimeoutMinutes -gt 0) { $TotalTimeoutMinutes - $partWatch.Elapsed.TotalMinutes } else { [double]::MaxValue }
+            if ($leftMinutes -le 1) {
+                $row.reason = "total time limit of $TotalTimeoutMinutes min reached"
+            } elseif ($missing.Count -gt 0) {
                 $row.reason = "missing parameter: " + (($missing | ForEach-Object { "-$_" }) -join ", ")
             } elseif ($step.cmd -match "@EXTRACTION@" -and $extractionDirs.Count -eq 0) {
                 $row.reason = "no meeting folders in -ExtractionDir"
@@ -271,7 +280,8 @@ try {
                 } else {
                     $step.cmd = $step.cmd.Replace("@EXTRACTION@", ($extractionDirs -join " "))
                     Write-Host "--- $($step.id)" -ForegroundColor Cyan
-                    $result = Invoke-Timed $step (Join-Path $gpuLogDir "$($step.id).log") $StepTimeoutMinutes
+                    $limit = [int][math]::Max(1, [math]::Min($StepTimeoutMinutes, [math]::Floor($leftMinutes)))
+                    $result = Invoke-Timed $step (Join-Path $gpuLogDir "$($step.id).log") $limit
                     $row.status = $result.status
                     $row.seconds = $result.seconds
                     $row.reason = $result.note
