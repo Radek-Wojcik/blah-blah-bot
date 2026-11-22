@@ -5,7 +5,7 @@
 import { BridgeClient, BridgeError, type SocketLike } from "./bridge-client.js";
 import type { MeetTab, OffscreenStatus, Reply, ToOffscreen } from "./ipc.js";
 import { StreamMux } from "./mux.js";
-import type { ServerMessage, StopReason } from "./protocol.js";
+import type { Group, ServerMessage, StopReason } from "./protocol.js";
 
 // Offscreen documents have only a part of chrome.runtime (no getManifest): the version
 // comes with the connect and pair messages.
@@ -13,6 +13,8 @@ let extVersion = "0.0.0";
 
 let appRecording = false;
 const meetTabs = new Map<number, string>();
+// The last `group` message per tab group, sent again after every reconnect.
+const groups = new Map<number, Group>();
 
 function notify(msg: Record<string, unknown>): void {
   chrome.runtime.sendMessage({ target: "service-worker", ...msg }).catch(() => {
@@ -34,6 +36,7 @@ const client: BridgeClient = new BridgeClient({
     appRecording = ok.recording;
     if (client.port !== null) notify({ type: "port", port: client.port });
     sendMeetTabs();
+    for (const g of groups.values()) client.sendText(g);
     mux.onConnected();
   },
   onState: (state) => {
@@ -48,6 +51,7 @@ const client: BridgeClient = new BridgeClient({
     }
   },
   onFatal: (code) => {
+    groups.clear();
     void mux.stopAll("connection_lost");
     notify({ type: "fatal", code });
   },
@@ -55,6 +59,8 @@ const client: BridgeClient = new BridgeClient({
 
 const mux = new StreamMux(client, {
   workletUrl: new URL("pcm-worklet.js", location.href).href,
+  onStarted: (tabId, streamId, info) =>
+    notify({ type: "started", tabId, streamId, title: info.title, host: info.host }),
   onEnded: (tabId, streamId, reason) => notify({ type: "ended", tabId, streamId, reason }),
 });
 
@@ -105,6 +111,7 @@ async function handle(msg: ToOffscreen): Promise<object> {
       return { credentials: { client_id: ok.client_id, secret: ok.secret }, port: client.port };
     }
     case "disconnect":
+      groups.clear();
       await mux.stopAll("user_stop");
       client.disconnect();
       return {};
@@ -119,6 +126,15 @@ async function handle(msg: ToOffscreen): Promise<object> {
       else meetTabs.delete(msg.tabId);
       client.sendText({ type: "meet", tab_id: msg.tabId, host: msg.host, state: msg.state });
       return {};
+    case "group": {
+      const g = msg.group;
+      // An unchanged group is not reported again (the service worker reports on every event).
+      if (JSON.stringify(groups.get(g.group_id)) === JSON.stringify(g)) return {};
+      if (g.tabs.length === 0) groups.delete(g.group_id);
+      else groups.set(g.group_id, g);
+      client.sendText(g);
+      return {};
+    }
     case "status":
       return { status: status() };
   }

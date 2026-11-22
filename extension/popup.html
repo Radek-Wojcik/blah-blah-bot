@@ -69,6 +69,54 @@
       small {
         opacity: 0.75;
       }
+      #group h2 {
+        font-size: 13px;
+        margin: 12px 0 4px;
+      }
+      #groupTabs {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      #groupTabs li {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 2px 0;
+      }
+      #groupTabs .name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #groupTabs .status {
+        flex: none;
+      }
+      #groupTabs li.active .name {
+        font-weight: 600;
+      }
+      .st-captured .status {
+        color: #1b5e20;
+      }
+      .st-failed .status {
+        color: #b71c1c;
+      }
+      .st-waiting .status,
+      .st-not_audible .status {
+        color: #8a6d00;
+      }
+      @media (prefers-color-scheme: dark) {
+        .st-captured .status {
+          color: #81c784;
+        }
+        .st-failed .status {
+          color: #ff8a80;
+        }
+        .st-waiting .status,
+        .st-not_audible .status {
+          color: #ffd54f;
+        }
+      }
     </style>
   </head>
   <body>
@@ -82,6 +130,18 @@
     <section id="capture" hidden>
       <button id="captureBtn">Capture this tab</button>
       <label><input id="auto" type="checkbox" checked /> Capture when this popup opens</label>
+      <section id="group" hidden>
+        <h2 id="groupTitle"></h2>
+        <ul id="groupTabs"></ul>
+        <button id="groupBtn">Capture this group</button>
+        <button id="nextBtn">Next tab</button>
+        <p>
+          <small
+            >Chrome allows one tab per click: capture this tab, press Next tab, then click again
+            (Alt+Shift+R does both).</small
+          >
+        </p>
+      </section>
       <p>
         <small>Shortcut: Alt+Shift+R. Streams: <span id="count">0</span>.</small>
       </p>

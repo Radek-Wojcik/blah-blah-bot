@@ -45,6 +45,8 @@ export class StreamMux {
     private readonly link: Link,
     private readonly opts: {
       workletUrl: string;
+      /** A stream was added (the tab is captured). */
+      onStarted?: (tabId: number, streamId: string, info: StreamInfo) => void;
       /** A stream ended on its own or by the application (the tab is released already). */
       onEnded: (tabId: number, streamId: string, reason: StopReason | "recording_ended") => void;
     },
@@ -108,6 +110,7 @@ export class StreamMux {
 
     this.streams.set(info.tabId, rec);
     if (this.link.isReady) session.onConnected();
+    this.opts.onStarted?.(info.tabId, info.streamId, info);
   }
 
   /** Stops one stream cleanly: flush the partial frame, send `stop`, release the tab. */

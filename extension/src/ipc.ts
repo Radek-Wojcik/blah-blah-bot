@@ -1,7 +1,8 @@
 // Messages between the popup, the service worker and the offscreen document
 // (chrome.runtime.sendMessage; `target` names the receiver).
 
-import type { Credentials, StopReason } from "./protocol.js";
+import type { Credentials, Group, StopReason } from "./protocol.js";
+import type { TabStatus } from "./groups.js";
 import type { ClientState } from "./bridge-client.js";
 import type { StreamStatusInfo } from "./mux.js";
 
@@ -32,6 +33,7 @@ export type ToOffscreen =
     }
   | { target: "offscreen"; type: "stop"; tabId: number; reason?: StopReason }
   | { target: "offscreen"; type: "meet"; tabId: number; host: string; state: "joined" | "left" }
+  | { target: "offscreen"; type: "group"; group: Group }
   | { target: "offscreen"; type: "status" };
 
 export interface OffscreenStatus {
@@ -48,7 +50,18 @@ export type ToServiceWorker =
   | { target: "service-worker"; type: "unpair" }
   | { target: "service-worker"; type: "capture"; tabId: number }
   | { target: "service-worker"; type: "stop"; tabId: number }
+  | { target: "service-worker"; type: "group-view"; tabId: number }
+  | { target: "service-worker"; type: "capture-group"; tabId: number }
+  | { target: "service-worker"; type: "next-tab"; tabId: number }
   // from the offscreen document
+  | {
+      target: "service-worker";
+      type: "started";
+      tabId: number;
+      streamId: string;
+      title: string;
+      host: string;
+    }
   | {
       target: "service-worker";
       type: "ended";
@@ -58,6 +71,17 @@ export type ToServiceWorker =
     }
   | { target: "service-worker"; type: "fatal"; code: string }
   | { target: "service-worker"; type: "port"; port: number };
+
+/** The tab group of the active tab as the popup shows it. */
+export interface GroupView {
+  groupId: number;
+  /** Title of the group as set in Chrome (local label, never sent to the application). */
+  title: string;
+  summary: string;
+  tabs: { tabId: number; label: string; host: string; status: TabStatus; active: boolean }[];
+  /** The tab "Next tab" activates, null when nothing is missing. */
+  next: number | null;
+}
 
 export interface StatusReply {
   paired: boolean;

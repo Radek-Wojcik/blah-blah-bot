@@ -1,7 +1,8 @@
 // Popup: pairing form and the capture toggle for the active tab. Opening the popup is the
 // user gesture that grants the extension access to the active tab (activeTab).
 
-import type { Reply, StatusReply, ToServiceWorker } from "./ipc.js";
+import { statusLabel } from "./groups.js";
+import type { GroupView, Reply, StatusReply, ToServiceWorker } from "./ipc.js";
 import { isMeetCallUrl } from "./meet.js";
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -40,6 +41,39 @@ function describe(s: StatusReply): [string, string] {
   }
 }
 
+/** The tab group of the active tab: one row per tab with its status. */
+async function renderGroup(paired: boolean): Promise<void> {
+  const section = $("group");
+  let view: GroupView | null = null;
+  if (paired && activeTabId !== null) {
+    try {
+      view = (await send<{ group: GroupView | null }>({ type: "group-view", tabId: activeTabId }))
+        .group;
+    } catch {
+      view = null;
+    }
+  }
+  section.hidden = view === null;
+  if (!view) return;
+  $("groupTitle").textContent = `Group${view.title ? ` ${view.title}` : ""}: ${view.summary}`;
+  const list = $("groupTabs");
+  list.replaceChildren(
+    ...view.tabs.map((t) => {
+      const li = document.createElement("li");
+      li.className = `st-${t.status}${t.active ? " active" : ""}`;
+      const name = document.createElement("span");
+      name.className = "name";
+      name.textContent = t.label;
+      const st = document.createElement("span");
+      st.className = "status";
+      st.textContent = statusLabel(t.status);
+      li.append(name, st);
+      return li;
+    }),
+  );
+  ($("nextBtn") as HTMLButtonElement).disabled = view.next === null;
+}
+
 async function render(): Promise<StatusReply> {
   const { status } = await send<{ status: StatusReply }>({ type: "status" });
   $("pair").hidden = status.paired;
@@ -50,6 +84,7 @@ async function render(): Promise<StatusReply> {
   const [text, cls] = describe(status);
   const meet = isMeetCallUrl(activeUrl) ? " This tab is a Google Meet call." : "";
   show(text + meet, cls);
+  await renderGroup(status.paired);
   return status;
 }
 
@@ -85,6 +120,26 @@ async function main(): Promise<void> {
       if (await capturing()) await send({ type: "stop", tabId: activeTabId });
       else await send({ type: "capture", tabId: activeTabId });
       await render();
+    } catch (err) {
+      show((err as Error).message, "err");
+    }
+  };
+
+  $("groupBtn").onclick = async () => {
+    if (activeTabId === null) return;
+    try {
+      await send({ type: "capture-group", tabId: activeTabId });
+    } catch (err) {
+      show((err as Error).message, "err");
+    }
+    await render().catch(() => undefined);
+  };
+
+  $("nextBtn").onclick = async () => {
+    if (activeTabId === null) return;
+    try {
+      // The popup closes when another tab comes to the front; open it there to capture it.
+      await send({ type: "next-tab", tabId: activeTabId });
     } catch (err) {
       show((err as Error).message, "err");
     }
