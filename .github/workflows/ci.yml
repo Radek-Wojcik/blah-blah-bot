@@ -130,3 +130,21 @@ jobs:
         run: |
           python3 scripts/check_versions.py
           python3 -m unittest scripts.test_release_scripts
+
+  audit:
+    # Advisory and license check. Not blocking until the baseline in docs/DEPENDENCY-AUDIT.md
+    # stays clean on its own; cargo audit also looks at crates of other platforms.
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-audit
+      - name: Dependency audit
+        shell: pwsh
+        run: ./scripts/audit-deps.ps1

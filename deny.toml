@@ -1,0 +1,48 @@
+# cargo-deny configuration (cargo-deny 0.18 format). Run: cargo deny check
+# Written for the Windows build, the only supported target. cargo-deny was not installed when
+# this file was written; scripts/audit-deps.ps1 does the same checks without it. See
+# docs/DEPENDENCY-AUDIT.md.
+
+[graph]
+targets = [{ triple = "x86_64-pc-windows-msvc" }]
+
+[advisories]
+version = 2
+# Unmaintained notices are reported for workspace crates only. The one informational notice
+# in the Windows build (chrono, pulled in by Tauri) is recorded in docs/DEPENDENCY-AUDIT.md.
+unmaintained = "workspace"
+ignore = []
+
+[licenses]
+version = 2
+# Permissive licences only. Every crate in the shipped set carries at least one of these
+# (as an alternative of an OR expression or as the only licence).
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "0BSD",
+  "Unlicense",
+  "CC0-1.0",
+  "MIT-0",
+  "BSL-1.0",
+  "Unicode-3.0",
+  # File-level copyleft: used unmodified as crates (cssparser, selectors, dtoa-short,
+  # option-ext). Source stays available from crates.io, see NOTICE.
+  "MPL-2.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
