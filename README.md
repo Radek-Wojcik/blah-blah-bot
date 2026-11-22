@@ -37,6 +37,8 @@ Local meeting recorder for Windows that turns calls into GitHub issues and Disco
 
 Taken from demo mode with fictional data.
 
+![Animated tour in demo mode: first-run setup, processing a meeting, naming voices and the report](docs/img/hero.gif)
+
 | | |
 |---|---|
 | ![Tray widget while recording, with two sources and level meters](docs/img/tray-widget.png) | ![Source picker before recording](docs/img/source-picker.png) |
@@ -47,6 +49,9 @@ Taken from demo mode with fictional data.
 | ![Voice profile management: participants, reset, delete and the matching thresholds](docs/img/speakers-profiles.png) | ![Cycle settings: participants, glossary, report defaults and publishing targets](docs/img/cycle-settings.png) |
 | ![Report mode gate before recording: cycle, report mode, template and report language](docs/img/report-mode-gate.png) | ![Draft editor with the source of an item opened: quote, time and a jump to the transcript](docs/img/draft-source-popover.png) |
 | ![Animated draft editing: open the source of an item, change the report mode and move an item to another section](docs/img/draft-editing.gif) | |
+| ![First-run setup, welcome step](docs/img/first-run-welcome.png) | ![First-run setup, speech models with a download in progress and the empty token field](docs/img/first-run-models.png) |
+| ![First-run setup, llama-server not found with the reason](docs/img/first-run-llama-server.png) | ![First-run setup summary with a missing item and its Fix button](docs/img/first-run-summary.png) |
+| ![Meeting list with the readiness banner](docs/img/readiness-banner.png) | |
 
 ## Requirements and getting started
 

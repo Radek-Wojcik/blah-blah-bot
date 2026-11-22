@@ -162,6 +162,68 @@ test.describe("static screenshots", () => {
       clip: { x: 250, y: Math.max(0, box!.y - 130), width: 1020, height: 330 },
     });
   });
+
+  // Stage 8: the first-run wizard and the readiness banner (setup scenarios of the mock backend).
+  // Run only these with: npx playwright test --project=screenshots -g "first run|readiness"
+  const setupUrl = (setup: string, jobms = 40) =>
+    `/?view=main&backend=mock&rate=0&jobms=${jobms}&setup=${setup}`;
+  const stepNav = (page: Page, name: RegExp) =>
+    page.getByRole("navigation", { name: "Setup steps" }).getByRole("button", { name }).click();
+
+  test("first run: welcome", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(setupUrl("fresh"));
+    await expect(page.getByText("Plan for tens of gigabytes")).toBeVisible();
+    await settle(page);
+    await page.screenshot({ path: path.join(OUT, "first-run-welcome.png") });
+  });
+
+  test("first run: models with a download and the token field", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    // Slow ticks keep the download part way for the picture.
+    await page.goto(setupUrl("fresh", 6_000));
+    await stepNav(page, /Speech models/);
+    await page.getByRole("button", { name: /^Download Whisper turbo/ }).click();
+    await expect(
+      page.getByRole("progressbar", { name: /^Download of Whisper turbo/ }),
+    ).toBeVisible();
+    // The token field stays empty and masked: nothing is typed into it.
+    await expect(page.getByLabel("Hugging Face token")).toHaveValue("");
+    await page.waitForTimeout(2_200);
+    await settle(page);
+    await page.screenshot({ path: path.join(OUT, "first-run-models.png") });
+  });
+
+  test("first run: llama-server not found", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(setupUrl("no-llama"));
+    await stepNav(page, /llama-server/);
+    await expect(page.getByText("llama-server was not found on this computer.")).toBeVisible();
+    await page.getByLabel("Path of llama-server.exe").fill("C:\\Tools\\missing\\llama-server.exe");
+    await page.getByRole("button", { name: "Use this llama-server" }).click();
+    await expect(page.getByRole("alert")).toContainText("No file exists at");
+    await settle(page);
+    await page.screenshot({ path: path.join(OUT, "first-run-llama-server.png") });
+  });
+
+  test("first run: summary with a missing item and its Fix button", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(setupUrl("no-vision"));
+    await stepNav(page, /Summary/);
+    await expect(page.getByRole("button", { name: /^Fix / })).toBeVisible();
+    await settle(page);
+    await page.screenshot({ path: path.join(OUT, "first-run-summary.png") });
+  });
+
+  test("readiness banner on the meeting page", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(setupUrl("no-vision"));
+    await page.getByRole("button", { name: "Leave setup" }).click();
+    await expect(page.getByText(/Setup is incomplete/)).toBeVisible();
+    await expect(page.getByRole("article")).toHaveCount(5);
+    await settle(page);
+    await page.screenshot({ path: path.join(OUT, "readiness-banner.png") });
+  });
 });
 
 test("record flow GIF", async ({ page }) => {
@@ -318,4 +380,84 @@ test("draft editing GIF", async ({ page }) => {
   fs.mkdirSync(OUT, { recursive: true });
   makeGif([path.join(OUT, "draft-editing.gif"), "1300", ...frames]);
   expect(fs.statSync(path.join(OUT, "draft-editing.gif")).size).toBeLessThan(1_500_000);
+});
+
+test("hero GIF", async ({ page }) => {
+  // The whole flow in demo mode: first-run setup, processing, naming voices and the report.
+  const frames: string[] = [];
+  const dir = freshDir("gif");
+  const shot = async (wait = 350) => {
+    await page.waitForTimeout(wait);
+    const file = path.join(dir, `f${String(frames.length).padStart(2, "0")}.png`);
+    await page.screenshot({ path: file });
+    frames.push(file);
+  };
+  const next = () => page.getByRole("button", { name: "Next", exact: true }).click();
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/?view=main&backend=mock&rate=0&jobms=1000&setup=fresh");
+  await expect(page.getByText("Plan for tens of gigabytes")).toBeVisible();
+  await shot();
+  await next();
+  await page.getByRole("button", { name: "Prepare environment" }).click();
+  await expect(page.getByRole("progressbar", { name: "Preparing the environment" })).toBeVisible();
+  await shot(500);
+  await expect(page.getByText("The processing environment is ready.")).toBeVisible();
+  await next();
+  await page.getByRole("button", { name: /^Download Whisper turbo/ }).click();
+  await expect(page.getByRole("progressbar", { name: /^Download of Whisper turbo/ })).toBeVisible();
+  await shot(500);
+  await expect(page.getByText("Downloaded", { exact: true })).toBeVisible();
+  await page.getByLabel("Hugging Face token").fill("hf_demo_token");
+  await page.getByRole("button", { name: "Store token" }).click();
+  await expect(page.getByText("A token is stored")).toBeVisible();
+  await page.getByRole("button", { name: /^Download Speaker/ }).click();
+  await expect(page.getByText("Downloaded", { exact: true })).toHaveCount(2);
+  await next();
+  await page.getByRole("radio", { name: /llama-server\.exe/ }).check();
+  await page.getByRole("button", { name: "Use this llama-server" }).click();
+  await expect(page.getByText(/^In use:/)).toBeVisible();
+  await next();
+  await page.getByRole("button", { name: "Find model files" }).click();
+  await page.getByRole("radio", { name: /gemma-4-12b/ }).check();
+  await page.getByRole("button", { name: "Use this model" }).click();
+  await expect(page.getByText("A language model is chosen.")).toBeVisible();
+  await next();
+  await page.getByRole("button", { name: /^Download Screenshot descriptions/ }).click();
+  await expect(page.getByText("The screenshot model is downloaded.")).toBeVisible();
+  await next();
+  await expect(page.getByText("Everything needed is ready.")).toBeVisible();
+  await shot();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByLabel("Cycle id").fill("ORBIT");
+  await page.getByLabel("Cycle name").fill("Orbit weekly");
+  await page.getByRole("button", { name: "Create first cycle" }).click();
+  await expect(page.getByText("Cycle ORBIT was created.")).toBeVisible();
+  await page.getByRole("button", { name: "Finish" }).click();
+  await expect(page.getByRole("heading", { name: "Meetings", level: 2 })).toBeVisible();
+  await shot();
+  // Process a meeting and follow its stages in the queue.
+  const card = page.getByRole("article").filter({ hasText: "Kickoff" });
+  await card.getByRole("button", { name: "Process" }).click();
+  await page.getByRole("button", { name: "Queue", exact: true }).click();
+  const job = page.getByRole("article", { name: "Kickoff" });
+  await expect(job).toBeVisible();
+  for (let i = 0; i < 3; i++) await shot(900);
+  await expect(job.getByText("Processed", { exact: true })).toBeVisible({ timeout: 20_000 });
+  await shot();
+  // Speakers and the report of a processed meeting (a fresh mock page each).
+  await page.goto("/?view=main&backend=mock&rate=0&page=speakers&meeting=m5");
+  await expect(page.getByRole("article")).toHaveCount(4);
+  await shot();
+  await page.getByLabel("Name for SPEAKER_03").selectOption({ label: "Jan Demo" });
+  await shot(500);
+  await page.goto("/?view=main&backend=mock&rate=0&page=draft&meeting=m5");
+  await expect(page.getByLabel("Sections", { exact: true }).getByRole("region")).toHaveCount(4);
+  await shot();
+  const ground = "Update the ground station schedule for Thursday.";
+  await page.getByRole("button", { name: `Source of: ${ground}` }).click();
+  await expect(page.getByRole("dialog", { name: `Source of: ${ground}` })).toBeVisible();
+  await shot(500);
+  fs.mkdirSync(OUT, { recursive: true });
+  makeGif([path.join(OUT, "hero.gif"), "1500", ...frames]);
+  expect(fs.statSync(path.join(OUT, "hero.gif")).size).toBeLessThan(8_000_000);
 });
