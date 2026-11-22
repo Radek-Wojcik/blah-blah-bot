@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": {
+      "../../target/installer-stage/worker": "worker",
+      "../../target/installer-stage/schemas": "schemas",
+      "../../target/installer-stage/bin": "bin",
+      "../../target/installer-stage/NOTICE.txt": "NOTICE.txt",
+      "../../target/installer-stage/LICENSE.txt": "LICENSE.txt"
+    }
+  }
+}
