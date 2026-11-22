@@ -263,6 +263,11 @@ Details are in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Documentation
 
+- [User guide](docs/USER-GUIDE.md)
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [Limitations](docs/LIMITATIONS.md)
+- [Requirements traceability](docs/TRACEABILITY.md)
+- [Installing on Windows](docs/INSTALL.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Roadmap](docs/ROADMAP.md)
 - [Testing strategy](docs/TESTING.md)

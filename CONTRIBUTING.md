@@ -25,6 +25,18 @@ cd benchmarks
 uv run pytest
 ```
 
+## Building and testing
+
+Build from source with Rust 1.85 or newer and Node.js 22 or newer (commands in the README). `scripts/test-all.ps1` runs the checks and tests of every part in turn and cleans up after itself. Its suites are `rust` (format, clippy, tests), `worker` (pytest), `benchmarks` (pytest) and `ui` (typecheck, lint, format, unit tests and the mock end-to-end tests):
+
+```powershell
+scripts	est-all.ps1 -List                   # show the steps, run nothing
+scripts	est-all.ps1 -Suite worker,benchmarks
+scripts	est-all.ps1 -Skip ui
+```
+
+Tests that need a GPU or models, and the end-to-end tests against the real application, are not part of that script; run them only when a change calls for it (see [docs/TESTING.md](docs/TESTING.md)). Run each suite once per change. Before pushing, run `python scripts/check_files.py` and `python scripts/check_commits.py origin/main..HEAD`.
+
 ## Test hygiene
 
 Tests must not leave anything behind. Thousands of leftover folders in the temp directory made a development machine take minutes to log in, so these rules apply to every contributor and every script or tool that runs tests in this repository.
@@ -45,3 +57,5 @@ Run everything in one go, with the cleanup and the check at the end:
 ```powershell
 scripts\test-all.ps1
 ```
+
+Short form, for reviewers: nothing is left in the temp directory (1, 4); end-to-end data goes under `target/e2e-tmp` (2); the worker environment is shared through `BBB_WORKER_ENV_DIR` (3); `scripts/check-temp-hygiene.ps1` runs at the end and reports zero (5, 9); no scheduled tasks, autostart entries or services from tests or tooling (7); heavy suites run once (8).
