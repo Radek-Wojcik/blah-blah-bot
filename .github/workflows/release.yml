@@ -7,8 +7,8 @@ on:
     tags:
       - "v*.*.*"
 
-permissions:
-  contents: write
+# No permissions by default; the one job asks for what it needs.
+permissions: {}
 
 concurrency:
   group: release-${{ github.ref }}
@@ -18,8 +18,13 @@ jobs:
   installer:
     runs-on: windows-latest
     timeout-minutes: 90
+    permissions:
+      # Only the last step (gh release create) uses the token; the checkout does not keep it.
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
