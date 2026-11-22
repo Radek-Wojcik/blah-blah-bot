@@ -24,6 +24,7 @@ export interface StreamEnd extends ReceiverEvent {
     wall_ms: number;
     audio_ms: number;
     drift_ms: number;
+    sender_drift_ms: number;
     recorder: null | {
       stored_samples: number;
       stored_s: number;

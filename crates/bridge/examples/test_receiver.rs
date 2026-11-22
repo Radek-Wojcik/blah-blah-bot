@@ -57,8 +57,10 @@ struct RecorderStats {
 /// Arrival statistics of a stream. `max_gap_ms` is the longest time between two frames,
 /// `max_stall_ms` the part of it beyond the audio the earlier frame carried (a burst after a
 /// stall does not hide the stall), `max_sender_gap_ms` the same measured on the sender clock,
-/// `drift_ms` the wall time between the first and the last frame minus the audio before the
-/// last frame.
+/// `drift_ms` the wall time between the first and the last arrival minus the audio before the
+/// last frame (it includes the burst of frames that waited for the start answer),
+/// `sender_drift_ms` the same on the sender clock: how far the browser's audio clock runs
+/// behind or ahead of its wall clock (negative: audio runs slower than the wall clock).
 #[derive(Default, Clone, serde::Serialize)]
 struct StreamStats {
     frames: u64,
@@ -71,6 +73,7 @@ struct StreamStats {
     wall_ms: f64,
     audio_ms: f64,
     drift_ms: f64,
+    sender_drift_ms: f64,
     end: Option<String>,
     recorder: Option<RecorderStats>,
 }
@@ -219,6 +222,7 @@ fn consume(hub: &Hub, id: &str, stats: &Mutex<BTreeMap<String, StreamStats>>, si
     let mut first_arrival: Option<Instant> = None;
     let mut last_len = 0usize;
     let mut last_sent: Option<f64> = None;
+    let mut first_sent: Option<f64> = None;
     loop {
         match feed.next(Duration::from_millis(200)) {
             FeedEvent::Frame(f) => {
@@ -250,6 +254,7 @@ fn consume(hub: &Hub, id: &str, stats: &Mutex<BTreeMap<String, StreamStats>>, si
                     s.max_sender_gap_ms = s.max_sender_gap_ms.max(f.header.sent_ms - prev);
                 }
                 last_sent = Some(f.header.sent_ms);
+                first_sent.get_or_insert(f.header.sent_ms);
                 last_len = f.samples.len();
                 first_arrival.get_or_insert(now);
                 last_arrival = Some(now);
@@ -271,6 +276,9 @@ fn consume(hub: &Hub, id: &str, stats: &Mutex<BTreeMap<String, StreamStats>>, si
                     s.wall_ms = b.duration_since(a).as_secs_f64() * 1000.0;
                     s.audio_ms = (s.samples as f64 - last_len as f64) * 1000.0 / RATE;
                     s.drift_ms = s.wall_ms - s.audio_ms;
+                }
+                if let (Some(a), Some(b)) = (first_sent, last_sent) {
+                    s.sender_drift_ms = (b - a) - s.audio_ms;
                 }
                 emit(
                     json!({"event": "stream_ended", "stream_id": id, "reason": reason.as_str(), "stats": s.clone()}),

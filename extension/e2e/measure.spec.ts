@@ -77,7 +77,8 @@ test("synthetic tab stream continuity", async () => {
         max_gap_sender_ms: round(s.max_sender_gap_ms),
         wall_s: round(s.wall_ms / 1000),
         audio_s: round(s.audio_ms / 1000),
-        drift_ms: round(s.drift_ms),
+        drift_arrival_ms: round(s.drift_ms),
+        drift_sender_ms: round(s.sender_drift_ms),
       },
       recorder: s.recorder,
       criteria: {
