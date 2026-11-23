@@ -137,6 +137,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }));
         }
         let max_delay = all_delays.iter().max().copied().unwrap_or(0);
+        // Sustain time (the longer of the microphone and the Meet time) plus two seconds.
+        let target_ms = preset.sustain_ms.max(preset.meet_audible_ms) + 2_000;
         let doc = json!({
             "name": format!("stage6-detection-{level}"),
             "preset": level.as_str(),
@@ -170,15 +172,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "missed_calls": totals.missed_calls,
                 "duplicate_prompts": totals.duplicate_prompts,
                 "delay": stats(&all_delays),
-                "max_delay_within_sustain_plus_2s_for_calls_that_prompted":
-                    max_delay <= preset.sustain_ms + 2_000 || all_delays.is_empty(),
+                "max_delay_within_target_for_calls_that_prompted":
+                    max_delay <= target_ms || all_delays.is_empty(),
                 "all_trace_expectations_met": expectations_met,
             },
             "real_trace_duration_s": real_ms / 1000,
             "targets": {
                 "false_prompts_from_idle_applications": 0,
                 "prompts_per_labelled_call": 1,
-                "delay_s_at_most": (preset.sustain_ms + 2_000) as f64 / 1000.0,
+                "delay_s_at_most": target_ms as f64 / 1000.0,
                 "cpu_share_at_most_percent": 0.1,
             },
             "not_yet_measured": [

@@ -34,7 +34,7 @@
     "false_prompts_real_idle_traces": 0,
     "false_prompts_synthetic_traces": 2,
     "labelled_calls": 6,
-    "max_delay_within_sustain_plus_2s_for_calls_that_prompted": true,
+    "max_delay_within_target_for_calls_that_prompted": true,
     "missed_calls": 0,
     "prompts": 8,
     "traces": 11

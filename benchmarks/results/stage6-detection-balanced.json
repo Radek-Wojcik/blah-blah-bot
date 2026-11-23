@@ -18,7 +18,7 @@
   "real_trace_duration_s": 240,
   "targets": {
     "cpu_share_at_most_percent": 0.1,
-    "delay_s_at_most": 10.0,
+    "delay_s_at_most": 12.0,
     "false_prompts_from_idle_applications": 0,
     "prompts_per_labelled_call": 1
   },
@@ -34,7 +34,7 @@
     "false_prompts_real_idle_traces": 0,
     "false_prompts_synthetic_traces": 1,
     "labelled_calls": 6,
-    "max_delay_within_sustain_plus_2s_for_calls_that_prompted": true,
+    "max_delay_within_target_for_calls_that_prompted": true,
     "missed_calls": 0,
     "prompts": 7,
     "traces": 11
