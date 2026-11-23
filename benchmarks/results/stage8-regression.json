@@ -1,0 +1,967 @@
+{
+  "prototype": "stage8-regression",
+  "generated_at": "2026-11-23T11:05:32+00:00",
+  "parts": {
+    "cpu": true,
+    "gpu": true
+  },
+  "tolerance": {
+    "rate_points": 2.0,
+    "perf_relative": 0.25
+  },
+  "suites": [
+    {
+      "id": "cargo-fmt-check",
+      "name": "cargo fmt --check",
+      "group": "rust",
+      "category": "static",
+      "status": "passed",
+      "seconds": 0.6,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "ignored": 0,
+      "log": "cargo-fmt-check.log"
+    },
+    {
+      "id": "cargo-clippy",
+      "name": "cargo clippy",
+      "group": "rust",
+      "category": "static",
+      "status": "passed",
+      "seconds": 1,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "ignored": 0,
+      "log": "cargo-clippy.log"
+    },
+    {
+      "id": "cargo-test",
+      "name": "cargo test",
+      "group": "rust",
+      "category": "unit",
+      "status": "passed",
+      "seconds": 17.5,
+      "passed": 488,
+      "failed": 0,
+      "skipped": 0,
+      "ignored": 10,
+      "log": "cargo-test.log"
+    },
+    {
+      "id": "worker-pytest",
+      "name": "worker pytest",
+      "group": "worker",
+      "category": "unit",
+      "status": "passed",
+      "seconds": 5.3,
+      "passed": 217,
+      "failed": 0,
+      "skipped": 0,
+      "ignored": 0,
+      "log": "worker-pytest.log"
+    },
+    {
+      "id": "benchmarks-pytest",
+      "name": "benchmarks pytest",
+      "group": "benchmarks",
+      "category": "unit",
+      "status": "passed",
+      "seconds": 13.4,
+      "passed": 154,
+      "failed": 0,
+      "skipped": 1,
+      "ignored": 0,
+      "log": "benchmarks-pytest.log"
+    },
+    {
+      "id": "ui-typecheck",
+      "name": "ui typecheck",
+      "group": "ui",
+      "category": "static",
+      "status": "passed",
+      "seconds": 2.3,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "ignored": 0,
+      "log": "ui-typecheck.log"
+    },
+    {
+      "id": "ui-lint",
+      "name": "ui lint",
+      "group": "ui",
+      "category": "static",
+      "status": "passed",
+      "seconds": 4.6,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "ignored": 0,
+      "log": "ui-lint.log"
+    },
+    {
+      "id": "ui-format-check",
+      "name": "ui format:check",
+      "group": "ui",
+      "category": "static",
+      "status": "passed",
+      "seconds": 1.1,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "ignored": 0,
+      "log": "ui-format-check.log"
+    },
+    {
+      "id": "ui-unit-tests",
+      "name": "ui unit tests",
+      "group": "ui",
+      "category": "unit",
+      "status": "passed",
+      "seconds": 4.5,
+      "passed": 191,
+      "failed": 0,
+      "skipped": 0,
+      "ignored": 0,
+      "log": "ui-unit-tests.log"
+    },
+    {
+      "id": "ui-mock-end-to-end-tests",
+      "name": "ui mock end-to-end tests",
+      "group": "ui",
+      "category": "e2e_mock",
+      "status": "passed",
+      "seconds": 112.8,
+      "passed": 76,
+      "failed": 0,
+      "skipped": 0,
+      "ignored": 0,
+      "log": "ui-mock-end-to-end-tests.log"
+    }
+  ],
+  "categories": {
+    "static": {
+      "title": "Formatting, lint and type checks",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0,
+      "suites": [
+        "cargo fmt --check",
+        "cargo clippy",
+        "ui typecheck",
+        "ui lint",
+        "ui format:check"
+      ],
+      "status": "passed"
+    },
+    "unit": {
+      "title": "Unit tests (Rust, worker, benchmarks, UI)",
+      "passed": 956,
+      "failed": 0,
+      "ignored": 2,
+      "suites": [
+        "cargo test",
+        "worker pytest",
+        "benchmarks pytest",
+        "ui unit tests"
+      ],
+      "status": "passed"
+    },
+    "contract": {
+      "title": "Contract tests (schemas and shared fixtures)",
+      "passed": 73,
+      "failed": 0,
+      "ignored": 0,
+      "suites": [],
+      "status": "passed"
+    },
+    "integration": {
+      "title": "Integration tests (Rust test binaries without models)",
+      "passed": 21,
+      "failed": 0,
+      "ignored": 9,
+      "suites": [],
+      "status": "passed"
+    },
+    "e2e_mock": {
+      "title": "End-to-end tests of the UI on the mock backend",
+      "passed": 76,
+      "failed": 0,
+      "ignored": 0,
+      "suites": [
+        "ui mock end-to-end tests"
+      ],
+      "status": "passed"
+    }
+  },
+  "gpu_steps": [
+    {
+      "id": "worker-models",
+      "title": "Worker pytest with real models (BBB_MINI_DIR, slides, vision, llama-server)",
+      "status": "passed",
+      "seconds": 135.7,
+      "note": "restored from log: passed in the full GPU run, not re-run"
+    },
+    {
+      "id": "pipeline-models",
+      "title": "Supervisor pipeline: end to end, worker killed per stage, GPU occupied",
+      "status": "passed",
+      "seconds": 131.2,
+      "note": "restored from log: passed in the full GPU run, not re-run"
+    },
+    {
+      "id": "speakers-models",
+      "title": "Speaker recognition accuracy over seven meetings",
+      "status": "passed",
+      "seconds": 520.7,
+      "note": "restored from log: passed in the full GPU run, not re-run"
+    },
+    {
+      "id": "stage4-models",
+      "title": "Whole pipeline with extract and reduce on pl-03 and en-03",
+      "status": "passed",
+      "seconds": 907.6,
+      "note": "passed on a re-run (-Only); the first attempt in the full run failed after 460.7 s (exit code 101) because a concurrent cleanup removed its scratch folder"
+    },
+    {
+      "id": "asr",
+      "title": "ASR turbo, auto language, on the Polish, English and mixed meetings",
+      "status": "passed",
+      "seconds": 104.9,
+      "note": "restored from log: passed in the full GPU run, not re-run"
+    },
+    {
+      "id": "diarization",
+      "title": "Diarization (community-1) on 2-4, 8 and 16 speaker meetings",
+      "status": "passed",
+      "seconds": 334.9,
+      "note": "restored from log: passed in the full GPU run, not re-run"
+    },
+    {
+      "id": "extraction",
+      "title": "Extraction quality on the labeled meetings",
+      "status": "passed",
+      "seconds": 971.2,
+      "note": "restored from log: passed in the full GPU run, not re-run"
+    },
+    {
+      "id": "extraction-2h",
+      "title": "Extraction timing on two hours of transcript",
+      "status": "passed",
+      "seconds": 706.5,
+      "note": "restored from log: passed in the full GPU run, not re-run"
+    },
+    {
+      "id": "pipeline-2h",
+      "title": "Worker steps on a two hour recording: time and peak VRAM",
+      "status": "passed",
+      "seconds": 371.8,
+      "note": "restored from log: passed in the full GPU run, not re-run"
+    },
+    {
+      "id": "real-app",
+      "title": "Real application end to end (`npm run test:real`, user at the machine)",
+      "status": "manual",
+      "seconds": null,
+      "note": ""
+    },
+    {
+      "id": "ten-hour",
+      "title": "Ten hour end-to-end run (`scripts/ten-hour-run.ps1`)",
+      "status": "passed",
+      "seconds": 6689.0,
+      "note": ""
+    }
+  ],
+  "thresholds": [
+    {
+      "id": "rec-cpu",
+      "area": "Recorder",
+      "measure": "CPU while recording three tracks (share of all CPUs)",
+      "target": "<= 3.0",
+      "op": "<=",
+      "target_value": 3.0,
+      "unit": "percent",
+      "value": 0.017407133282314642,
+      "source": "baseline",
+      "baseline": 0.017407133282314642,
+      "baseline_files": [
+        "stage1-soak-10h"
+      ],
+      "fresh": null,
+      "delta": null,
+      "delta_unit": "percent",
+      "status": "pass",
+      "regression": "baseline_only",
+      "note": "Stage 1 ten hour soak"
+    },
+    {
+      "id": "rec-memory",
+      "area": "Recorder",
+      "measure": "Memory (peak working set)",
+      "target": "<= 200.0",
+      "op": "<=",
+      "target_value": 200.0,
+      "unit": "mb",
+      "value": 10.1484375,
+      "source": "baseline",
+      "baseline": 10.1484375,
+      "baseline_files": [
+        "stage1-soak-10h"
+      ],
+      "fresh": null,
+      "delta": null,
+      "delta_unit": "mb",
+      "status": "pass",
+      "regression": "baseline_only",
+      "note": ""
+    },
+    {
+      "id": "rec-dropped",
+      "area": "Recorder",
+      "measure": "Dropped buffers in a 10-hour run",
+      "target": "<= 0.0",
+      "op": "<=",
+      "target_value": 0.0,
+      "unit": "count",
+      "value": 194.0,
+      "source": "baseline",
+      "baseline": 194.0,
+      "baseline_files": [
+        "stage1-soak-10h"
+      ],
+      "fresh": null,
+      "delta": null,
+      "delta_unit": "count",
+      "status": "fail",
+      "regression": "baseline_only",
+      "note": "the microphone track reports lost buffers; open since Stage 1"
+    },
+    {
+      "id": "rec-kill-loss",
+      "area": "Recorder",
+      "measure": "Audio lost when the process is killed",
+      "target": "<= 60.0",
+      "op": "<=",
+      "target_value": 60.0,
+      "unit": "seconds",
+      "value": null,
+      "source": "test",
+      "baseline": null,
+      "baseline_files": [
+        "stage1-soak-10h"
+      ],
+      "fresh": null,
+      "delta": null,
+      "delta_unit": "seconds",
+      "status": "pass",
+      "regression": "no_baseline",
+      "note": "proven by the recorder kill test (a segment is 60 s)"
+    },
+    {
+      "id": "rec-alignment",
+      "area": "Recorder",
+      "measure": "Track alignment error",
+      "target": "<= 50.0",
+      "op": "<=",
+      "target_value": 50.0,
+      "unit": "ms",
+      "value": 16.1769,
+      "source": "baseline",
+      "baseline": 16.1769,
+      "baseline_files": [
+        "stage1-soak-10h"
+      ],
+      "fresh": null,
+      "delta": null,
+      "delta_unit": "ms",
+      "status": "pass",
+      "regression": "baseline_only",
+      "note": ""
+    },
+    {
+      "id": "wer-pl",
+      "area": "Transcription",
+      "measure": "WER, Polish scripted set",
+      "target": "<= 0.15",
+      "op": "<=",
+      "target_value": 0.15,
+      "unit": "rate",
+      "value": 0.08909952606635071,
+      "source": "fresh",
+      "baseline": 0.08909952606635071,
+      "baseline_files": [
+        "p2-asr-turbo-auto-nogloss"
+      ],
+      "fresh": 0.08909952606635071,
+      "delta": 0.0,
+      "delta_unit": "points",
+      "status": "pass",
+      "regression": "ok",
+      "note": ""
+    },
+    {
+      "id": "wer-mixed",
+      "area": "Transcription",
+      "measure": "WER, mixed set",
+      "target": "<= 0.2",
+      "op": "<=",
+      "target_value": 0.2,
+      "unit": "rate",
+      "value": 0.16446124763705103,
+      "source": "fresh",
+      "baseline": 0.16446124763705103,
+      "baseline_files": [
+        "p2-asr-turbo-auto-nogloss"
+      ],
+      "fresh": 0.16446124763705103,
+      "delta": 0.0,
+      "delta_unit": "points",
+      "status": "pass",
+      "regression": "ok",
+      "note": ""
+    },
+    {
+      "id": "wer-en",
+      "area": "Transcription",
+      "measure": "WER, English set (no target, reported)",
+      "target": null,
+      "op": "",
+      "target_value": null,
+      "unit": "rate",
+      "value": 0.14305882352941177,
+      "source": "fresh",
+      "baseline": 0.14305882352941177,
+      "baseline_files": [
+        "p2-asr-turbo-auto-nogloss"
+      ],
+      "fresh": 0.14305882352941177,
+      "delta": 0.0,
+      "delta_unit": "points",
+      "status": "no_target",
+      "regression": "ok",
+      "note": ""
+    },
+    {
+      "id": "term-recall",
+      "area": "Transcription",
+      "measure": "Term recall, mixed set",
+      "target": ">= 0.85",
+      "op": ">=",
+      "target_value": 0.85,
+      "unit": "rate",
+      "value": 0.35051546391752575,
+      "source": "fresh",
+      "baseline": 0.35051546391752575,
+      "baseline_files": [
+        "p2-asr-turbo-auto-nogloss"
+      ],
+      "fresh": 0.35051546391752575,
+      "delta": 0.0,
+      "delta_unit": "points",
+      "status": "fail",
+      "regression": "ok",
+      "note": ""
+    },
+    {
+      "id": "translation-rate",
+      "area": "Transcription",
+      "measure": "Translation rate (worst meeting)",
+      "target": "<= 0.01",
+      "op": "<=",
+      "target_value": 0.01,
+      "unit": "rate",
+      "value": 0.05,
+      "source": "fresh",
+      "baseline": 0.05,
+      "baseline_files": [
+        "p2-asr-turbo-auto-nogloss"
+      ],
+      "fresh": 0.05,
+      "delta": 0.0,
+      "delta_unit": "points",
+      "status": "fail",
+      "regression": "ok",
+      "note": ""
+    },
+    {
+      "id": "der-2-4",
+      "area": "Speakers",
+      "measure": "DER, 2-4 speakers (worst meeting)",
+      "target": "<= 0.15",
+      "op": "<=",
+      "target_value": 0.15,
+      "unit": "rate",
+      "value": 0.2944808132920647,
+      "source": "fresh",
+      "baseline": 0.2944808132920647,
+      "baseline_files": [
+        "p3-diarize-community-1"
+      ],
+      "fresh": 0.2944808132920647,
+      "delta": 0.0,
+      "delta_unit": "points",
+      "status": "fail",
+      "regression": "ok",
+      "note": ""
+    },
+    {
+      "id": "der-6-10",
+      "area": "Speakers",
+      "measure": "DER, 6-10 speakers (worst meeting)",
+      "target": "<= 0.3",
+      "op": "<=",
+      "target_value": 0.3,
+      "unit": "rate",
+      "value": 0.2565139837921922,
+      "source": "fresh",
+      "baseline": 0.2565139837921922,
+      "baseline_files": [
+        "p3-diarize-community-1"
+      ],
+      "fresh": 0.2565139837921922,
+      "delta": 0.0,
+      "delta_unit": "points",
+      "status": "pass",
+      "regression": "ok",
+      "note": ""
+    },
+    {
+      "id": "der-15",
+      "area": "Speakers",
+      "measure": "DER, 15+ speakers (no target, reported)",
+      "target": null,
+      "op": "",
+      "target_value": null,
+      "unit": "rate",
+      "value": 0.2738925234463304,
+      "source": "fresh",
+      "baseline": 0.2738925234463304,
+      "baseline_files": [
+        "p3-diarize-community-1"
+      ],
+      "fresh": 0.2738925234463304,
+      "delta": 0.0,
+      "delta_unit": "points",
+      "status": "no_target",
+      "regression": "ok",
+      "note": ""
+    },
+    {
+      "id": "speaker-accuracy",
+      "area": "Speakers",
+      "measure": "Speaker accuracy for enrolled voices",
+      "target": ">= 0.9",
+      "op": ">=",
+      "target_value": 0.9,
+      "unit": "rate",
+      "value": 1.0,
+      "source": "fresh",
+      "baseline": 1.0,
+      "baseline_files": [
+        "stage3-speaker-recognition"
+      ],
+      "fresh": 1.0,
+      "delta": 0.0,
+      "delta_unit": "points",
+      "status": "pass",
+      "regression": "ok",
+      "note": ""
+    },
+    {
+      "id": "false-accept",
+      "area": "Speakers",
+      "measure": "False accept rate",
+      "target": "<= 0.02",
+      "op": "<=",
+      "target_value": 0.02,
+      "unit": "rate",
+      "value": 0.0,
+      "source": "fresh",
+      "baseline": 0.0,
+      "baseline_files": [
+        "stage3-speaker-recognition"
+      ],
+      "fresh": 0.0,
+      "delta": 0.0,
+      "delta_unit": "points",
+      "status": "pass",
+      "regression": "ok",
+      "note": ""
+    },
+    {
+      "id": "schema-validity",
+      "area": "Extraction",
+      "measure": "Schema validity (up to two retries)",
+      "target": ">= 1.0",
+      "op": ">=",
+      "target_value": 1.0,
+      "unit": "rate",
+      "value": 1.0,
+      "source": "fresh",
+      "baseline": 1.0,
+      "baseline_files": [
+        "stage4-extraction-gemma-4-12b-q4"
+      ],
+      "fresh": 1.0,
+      "delta": 0.0,
+      "delta_unit": "points",
+      "status": "pass",
+      "regression": "ok",
+      "note": ""
+    },
+    {
+      "id": "task-recall",
+      "area": "Extraction",
+      "measure": "Task recall",
+      "target": ">= 0.8",
+      "op": ">=",
+      "target_value": 0.8,
+      "unit": "rate",
+      "value": 0.8597616747181964,
+      "source": "fresh",
+      "baseline": 0.8597616747181964,
+      "baseline_files": [
+        "stage4-extraction-gemma-4-12b-q4"
+      ],
+      "fresh": 0.8597616747181964,
+      "delta": 0.0,
+      "delta_unit": "points",
+      "status": "pass",
+      "regression": "ok",
+      "note": ""
+    },
+    {
+      "id": "task-precision",
+      "area": "Extraction",
+      "measure": "Task precision",
+      "target": ">= 0.8",
+      "op": ">=",
+      "target_value": 0.8,
+      "unit": "rate",
+      "value": 0.8930709624302301,
+      "source": "fresh",
+      "baseline": 0.8930709624302301,
+      "baseline_files": [
+        "stage4-extraction-gemma-4-12b-q4"
+      ],
+      "fresh": 0.8930709624302301,
+      "delta": 0.0,
+      "delta_unit": "points",
+      "status": "pass",
+      "regression": "ok",
+      "note": ""
+    },
+    {
+      "id": "assignee-accuracy",
+      "area": "Extraction",
+      "measure": "Assignee accuracy",
+      "target": ">= 0.85",
+      "op": ">=",
+      "target_value": 0.85,
+      "unit": "rate",
+      "value": 0.9277937267410954,
+      "source": "fresh",
+      "baseline": 0.9277937267410954,
+      "baseline_files": [
+        "stage4-extraction-gemma-4-12b-q4"
+      ],
+      "fresh": 0.9277937267410954,
+      "delta": 0.0,
+      "delta_unit": "points",
+      "status": "pass",
+      "regression": "ok",
+      "note": ""
+    },
+    {
+      "id": "due-accuracy",
+      "area": "Extraction",
+      "measure": "Due-date accuracy",
+      "target": ">= 0.85",
+      "op": ">=",
+      "target_value": 0.85,
+      "unit": "rate",
+      "value": 0.921682615629984,
+      "source": "fresh",
+      "baseline": 0.921682615629984,
+      "baseline_files": [
+        "stage4-extraction-gemma-4-12b-q4"
+      ],
+      "fresh": 0.921682615629984,
+      "delta": 0.0,
+      "delta_unit": "points",
+      "status": "pass",
+      "regression": "ok",
+      "note": ""
+    },
+    {
+      "id": "quote-validity",
+      "area": "Extraction",
+      "measure": "Quote validity",
+      "target": ">= 0.95",
+      "op": ">=",
+      "target_value": 0.95,
+      "unit": "rate",
+      "value": 1.0,
+      "source": "fresh",
+      "baseline": 1.0,
+      "baseline_files": [
+        "stage4-extraction-gemma-4-12b-q4"
+      ],
+      "fresh": 1.0,
+      "delta": 0.0,
+      "delta_unit": "points",
+      "status": "pass",
+      "regression": "ok",
+      "note": ""
+    },
+    {
+      "id": "time-2h",
+      "area": "Processing",
+      "measure": "2-hour meeting, full pipeline",
+      "target": "<= 45.0",
+      "op": "<=",
+      "target_value": 45.0,
+      "unit": "minutes",
+      "value": 18.0,
+      "source": "fresh",
+      "baseline": 16.4,
+      "baseline_files": [
+        "stage2-pipeline-2h",
+        "stage4-long-gemma-4-12b-q4"
+      ],
+      "fresh": 18.0,
+      "delta": 1.6000000000000014,
+      "delta_unit": "minutes",
+      "status": "pass",
+      "regression": "ok",
+      "note": "worker steps (Stage 2) plus extraction and reduce (Stage 4)"
+    },
+    {
+      "id": "time-10h",
+      "area": "Processing",
+      "measure": "10-hour meeting, full pipeline",
+      "target": "<= 4.0",
+      "op": "<=",
+      "target_value": 4.0,
+      "unit": "hours",
+      "value": 1.858,
+      "source": "fresh",
+      "baseline": 0.9711167271057863,
+      "baseline_files": [
+        "p9-long-estimate"
+      ],
+      "fresh": 1.858,
+      "delta": 0.8868832728942138,
+      "delta_unit": "hours",
+      "status": "pass",
+      "regression": "regressed",
+      "note": "baseline is the Stage 0 estimate; the fresh value is the ten hour run"
+    },
+    {
+      "id": "peak-vram",
+      "area": "Processing",
+      "measure": "Peak VRAM in any stage",
+      "target": "<= 11500.0",
+      "op": "<=",
+      "target_value": 11500.0,
+      "unit": "mib",
+      "value": 9813,
+      "source": "fresh",
+      "baseline": 9743,
+      "baseline_files": [
+        "stage2-pipeline-2h",
+        "stage4-long-gemma-4-12b-q4"
+      ],
+      "fresh": 9813,
+      "delta": 70,
+      "delta_unit": "mib",
+      "status": "pass",
+      "regression": "ok",
+      "note": ""
+    }
+  ],
+  "resilience": [
+    {
+      "fault": "Recorder process killed during recording",
+      "expected": "Meeting recovered, loss within the threshold",
+      "coverage": "automated",
+      "status": "passed",
+      "cpu_tests": [
+        {
+          "test": "killed_process_loses_at_most_one_segment",
+          "status": "passed"
+        }
+      ],
+      "gpu_step": null,
+      "gpu_status": null,
+      "how": ""
+    },
+    {
+      "fault": "Captured application closed during recording",
+      "expected": "Its track ends, others continue",
+      "coverage": "automated",
+      "status": "passed",
+      "cpu_tests": [
+        {
+          "test": "running_then_stopped_by_itself_is_source_closed",
+          "status": "passed"
+        },
+        {
+          "test": "removing_a_source_ends_only_that_track",
+          "status": "passed"
+        }
+      ],
+      "gpu_step": null,
+      "gpu_status": null,
+      "how": ""
+    },
+    {
+      "fault": "Audio device unplugged",
+      "expected": "Track ends cleanly, notification shown",
+      "coverage": "manual",
+      "status": "manual",
+      "cpu_tests": [],
+      "gpu_step": null,
+      "gpu_status": null,
+      "how": "Unplug a USB microphone during a recording and check the notification."
+    },
+    {
+      "fault": "Disk nearly full",
+      "expected": "Recording stops with a clear message, existing segments intact",
+      "coverage": "manual",
+      "status": "manual",
+      "cpu_tests": [],
+      "gpu_step": null,
+      "gpu_status": null,
+      "how": "Record onto a small virtual disk (diskpart, administrator) until it fills."
+    },
+    {
+      "fault": "Worker killed in each stage",
+      "expected": "Retry resumes from that stage",
+      "coverage": "automated",
+      "status": "passed",
+      "cpu_tests": [
+        {
+          "test": "failure_blocks_the_job_and_retry_resumes_from_that_stage",
+          "status": "passed"
+        },
+        {
+          "test": "recover_resumes_an_interrupted_stage",
+          "status": "passed"
+        }
+      ],
+      "gpu_step": "pipeline-models",
+      "gpu_status": "passed",
+      "how": ""
+    },
+    {
+      "fault": "GPU occupied by another process",
+      "expected": "Job waits; starts when the GPU is free",
+      "coverage": "automated",
+      "status": "passed",
+      "cpu_tests": [
+        {
+          "test": "busy_gpu_never_starts",
+          "status": "passed"
+        },
+        {
+          "test": "busy_gpu_keeps_the_job_waiting_until_it_is_free",
+          "status": "passed"
+        }
+      ],
+      "gpu_step": "pipeline-models",
+      "gpu_status": "passed",
+      "how": ""
+    },
+    {
+      "fault": "Model server returns invalid JSON",
+      "expected": "Retries, then a flagged window",
+      "coverage": "automated",
+      "status": "passed",
+      "cpu_tests": [
+        {
+          "test": "test_invalid_answer_is_retried_with_the_error_in_the_prompt",
+          "status": "passed"
+        },
+        {
+          "test": "test_window_is_skipped_after_the_retries_and_the_stage_continues",
+          "status": "passed"
+        }
+      ],
+      "gpu_step": null,
+      "gpu_status": null,
+      "how": ""
+    },
+    {
+      "fault": "No network at briefing",
+      "expected": "Cached state with its date",
+      "coverage": "pending_merge",
+      "status": "pending_merge",
+      "cpu_tests": [],
+      "gpu_step": null,
+      "gpu_status": null,
+      "how": "Stage 6 (briefing) is not merged yet."
+    },
+    {
+      "fault": "No network at publishing",
+      "expected": "Outbox, automatic retry",
+      "coverage": "pending_merge",
+      "status": "pending_merge",
+      "cpu_tests": [],
+      "gpu_step": null,
+      "gpu_status": null,
+      "how": "Stage 5 (publishing and outbox) is not merged yet."
+    },
+    {
+      "fault": "Concurrent push to the cycle repository",
+      "expected": "Rebase and retry succeeds",
+      "coverage": "pending_merge",
+      "status": "pending_merge",
+      "cpu_tests": [],
+      "gpu_step": null,
+      "gpu_status": null,
+      "how": "Publishing tests of Stage 5 (`resilience`); pull with rebase is covered in `cycle-store`."
+    },
+    {
+      "fault": "Extension service worker restarted",
+      "expected": "Stream reconnects; gap recorded in the journal",
+      "coverage": "pending_merge",
+      "status": "pending_merge",
+      "cpu_tests": [],
+      "gpu_step": null,
+      "gpu_status": null,
+      "how": "Stage 6 (browser extension) is not merged yet."
+    }
+  ],
+  "hygiene_count": 0,
+  "recommendation": {
+    "verdict": "no-go",
+    "blocking": [
+      "time-10h: 10-hour meeting, full pipeline regressed against its baseline"
+    ],
+    "decisions": [
+      "rec-dropped: Dropped buffers in a 10-hour run misses the target <= 0.0 (baseline value)",
+      "term-recall: Term recall, mixed set misses the target >= 0.85 (fresh value)",
+      "translation-rate: Translation rate (worst meeting) misses the target <= 0.01 (fresh value)",
+      "der-2-4: DER, 2-4 speakers (worst meeting) misses the target <= 0.15 (fresh value)"
+    ],
+    "open": [
+      "manual step: real-app",
+      "rec-cpu: CPU while recording three tracks (share of all CPUs): baseline only, not re-measured",
+      "rec-memory: Memory (peak working set): baseline only, not re-measured",
+      "rec-dropped: Dropped buffers in a 10-hour run: baseline only, not re-measured",
+      "rec-alignment: Track alignment error: baseline only, not re-measured",
+      "resilience: Audio device unplugged (manual)",
+      "resilience: Disk nearly full (manual)",
+      "resilience: No network at briefing (pending merge)",
+      "resilience: No network at publishing (pending merge)",
+      "resilience: Concurrent push to the cycle repository (pending merge)",
+      "resilience: Extension service worker restarted (pending merge)"
+    ],
+    "accepted": [],
+    "note": "Advisory only: the decision is the project owner's. `decisions` lists targets that are missed and need an explicit acceptance (see --accepted)."
+  }
+}
