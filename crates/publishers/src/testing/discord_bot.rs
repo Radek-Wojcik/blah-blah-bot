@@ -146,7 +146,12 @@ impl FakeDiscordBot {
         bot.bot = true;
         bot.roles = vec![BOT_ROLE_ID.to_string()];
         let state = Arc::new(Mutex::new(State {
-            token: concat!("MTAwMDAwMDAwMDAwMDAwMDAx", ".GfAkE1.", "fake-Bot_token-AbC123xyz-0987654321").into(),
+            token: concat!(
+                "MTAwMDAwMDAwMDAwMDAwMDAx",
+                ".GfAkE1.",
+                "fake-Bot_token-AbC123xyz-0987654321"
+            )
+            .into(),
             bot_id: BOT_ID.into(),
             guild_id: GUILD_ID.into(),
             guild_name: "Nomad team".into(),

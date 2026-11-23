@@ -539,7 +539,11 @@ fn no_stage7_secret_ends_up_in_db_outbox_external_refs_snapshots_repos_or_logs()
     let notion_token = lab.notion.token();
     let bot_token = lab.discord_bot.bot_token();
     let wrong_notion = concat!("ntn_", "WrongNotionSecretValue0123456789abcdef");
-    let wrong_bot = concat!("MjIyMjIyMjIyMjIyMjIyMjIy", ".GwRoNg.", "WrongBotTokenSecretValue0123456789");
+    let wrong_bot = concat!(
+        "MjIyMjIyMjIyMjIyMjIyMjIy",
+        ".GwRoNg.",
+        "WrongBotTokenSecretValue0123456789"
+    );
     let secrets = [
         TOKEN.to_string(),
         notion_token.clone(),

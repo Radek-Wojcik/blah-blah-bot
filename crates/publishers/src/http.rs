@@ -1156,7 +1156,11 @@ mod tests {
             redact(&format!("old {legacy}, then ntn_{}.", "x".repeat(20)), &[]),
             "old ***, then ***."
         );
-        let bot = concat!("MTExMTExMTExMTExMTExMTEx", ".GaBcDe.", "Abcdefghijklmnopqrstuvwxyz0123456789");
+        let bot = concat!(
+            "MTExMTExMTExMTExMTExMTEx",
+            ".GaBcDe.",
+            "Abcdefghijklmnopqrstuvwxyz0123456789"
+        );
         assert_eq!(
             redact(&format!("Authorization: Bot {bot} rejected"), &[]),
             "Authorization: Bot *** rejected"

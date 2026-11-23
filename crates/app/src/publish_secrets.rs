@@ -1622,7 +1622,8 @@ mod tests {
         }
 
         // Bad Notion tokens are refused without echoing the value.
-        let bad_notion_secret = concat!("https://evil.example/ntn_sec", "ret_value_0123456789abcdef");
+        let bad_notion_secret =
+            concat!("https://evil.example/ntn_sec", "ret_value_0123456789abcdef");
         for bad in [
             "",
             "   ",
