@@ -4,7 +4,7 @@ The Chrome extension sends the audio of one browser tab to Blah Blah Bot while a
 
 ## Requirements
 
-- Chrome 116 or newer (Edge works the same way), on the computer where the application runs.
+- Chrome 116 or newer (tested on Chrome 136), on the computer where the application runs. Other browsers, Edge included, are not tested and not supported in this release.
 - Blah Blah Bot of the same release. The extension and the application agree on a protocol version; an old extension is refused with a message.
 
 ## Install

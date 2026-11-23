@@ -6,7 +6,7 @@ Local meeting recorder for Windows that turns calls into GitHub issues and Disco
 ![Platform: Windows](https://img.shields.io/badge/platform-Windows-blue)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
-> **Project status:** Stage 3 (speakers and voice profiles) is released as v0.4.0. Stage 4 (cycles and reports) is implemented and waiting for its release: the application now also keeps cycles in a Git repository and turns a processed transcript into an editable draft report with tasks, decisions, topics, notes, ideas and budgets, each linked to a quote. Publishing to GitHub and Discord comes in the next stage. Stage 1 still has one open measurement (microphone buffer flags, see below). There is no installer; build from source.
+> **Project status:** Stage 3 (speakers and voice profiles) is released as v0.4.0. Stage 4 (cycles and reports) is implemented and waiting for its release: the application now also keeps cycles in a Git repository and turns a processed transcript into an editable draft report with tasks, decisions, topics, notes, ideas and budgets, each linked to a quote. Publishing to GitHub and Discord comes in the next stage. Stage 1 still has one open measurement (microphone buffer flags, see below). Stage 6 (convenience) is implemented on its own branch and not released: a briefing, call detection with a prompt and a Chrome extension for browser tabs. It is tested on the mock backend, on recorded session traces and in a scripted Chrome; real calls, a real tab for 30 minutes and a working day of detection are not measured yet (see Stage 6 measurements). There is no installer; build from source.
 
 ## What works today
 
@@ -30,12 +30,16 @@ Local meeting recorder for Windows that turns calls into GitHub issues and Disco
 - **Draft editor.** Edit the text, assignee and due date of an item, add or delete items, rename, add and reorder sections, and move items between sections. Each item shows its source: the quote, the time and a jump to the transcript. A new draft never overwrites edits you made; you accept or discard it.
 - **Output language.** `auto`, `pl` or `en` per cycle and per meeting; `auto` follows the dominant language of the transcript.
 - **Language model backends.** A managed `llama-server` (default), an external OpenAI-compatible server, or a cloud endpoint chosen for one meeting only. The cloud is never a default and never a fallback: each meeting needs a confirmation that states the endpoint host and how much text will be sent.
+- **Briefing.** Before a meeting the briefing of a cycle lists its open tasks grouped by person (a GitHub login is matched to a participant of the cycle), sorted by due date with overdue ones marked, the tasks without an owner, and the open topics. When the clone of the cycle repository cannot be updated, the screen says "State as of <date>" and why.
+- **Meeting detection.** When a known conferencing application (Discord, Teams, Zoom or Slack; the list is a setting) keeps the microphone open for a few seconds, a small prompt asks "Record this call?" once per call: Record, Not now, or Never for this application. Browsers are not watched through their audio; Google Meet is reported by the extension. Sensitivity is low, balanced (default) or high, and no audio is opened to detect a call. Tested on session traces, not yet on real calls.
+- **Browser tabs.** A Chrome extension sends the audio of a tab to the application on your computer while a recording runs; the tab stays audible and becomes its own track (`Tab: <site>`). A group of tabs is captured with one click per tab and the popup shows which tab is still missing. A Google Meet call in a tab is reported to the detector with the site name only. Installation steps are below.
+- **Whole-browser fallback.** If the extension is not paired or a tab cannot be captured, the picker offers `Chrome (whole browser)`; choosing it together with a tab warns that the tab is recorded twice.
 - **Offline once set up.** Models are downloaded on first use with your Hugging Face token (kept in the Windows Credential Manager); processing itself needs no network.
 - **Demo mode.** The interface runs on fictional data without any audio device, which is how the screenshots below are produced.
 
 ## Screenshots
 
-Taken from demo mode with fictional data.
+Taken from demo mode with fictional data. The extension popup is the real popup page with a stubbed browser API and fictional tabs.
 
 | | |
 |---|---|
@@ -46,7 +50,8 @@ Taken from demo mode with fictional data.
 | ![Labeling screen with a recognized, a suggested and two unknown voices, each with sample clips](docs/img/speakers-label.png) | ![Animated naming of voices: play a clip, create a participant, accept a suggestion, pick a name](docs/img/naming-voices.gif) |
 | ![Voice profile management: participants, reset, delete and the matching thresholds](docs/img/speakers-profiles.png) | ![Cycle settings: participants, glossary, report defaults and publishing targets](docs/img/cycle-settings.png) |
 | ![Report mode gate before recording: cycle, report mode, template and report language](docs/img/report-mode-gate.png) | ![Draft editor with the source of an item opened: quote, time and a jump to the transcript](docs/img/draft-source-popover.png) |
-| ![Animated draft editing: open the source of an item, change the report mode and move an item to another section](docs/img/draft-editing.gif) | |
+| ![Animated draft editing: open the source of an item, change the report mode and move an item to another section](docs/img/draft-editing.gif) | ![Briefing of a cycle: open tasks by person, overdue marks and open topics](docs/img/briefing.png) |
+| ![Animated detection: a prompt for a Discord call, Record, a browser tab added, Stop and the process prompt](docs/img/detect-and-record.gif) | ![Popup of the Chrome extension: connected, a group of three tabs, two captured and one waiting for a click](docs/img/extension-popup.png) |
 
 ## Requirements and getting started
 
@@ -55,6 +60,7 @@ Taken from demo mode with fictional data.
 | OS | Windows 10 version 2004 or newer (verified on build 19045); Windows 11 not tested yet |
 | Build tools | Rust 1.85 or newer, Node.js 22 or newer |
 | GPU | NVIDIA with 12 GB VRAM (reference: RTX 3080); peak use measured at 8.5 GB in Stage 2 and 9.7 GB (absolute) during extraction of a 10 hour transcript |
+| Browser tabs | Chrome 116 or newer (tested on Chrome 136) with the extension from the release zip; other browsers are not supported |
 | Cycle repositories | The `git` command line on the PATH (the application runs it for clone and pull); credentials come from the Git credential manager |
 | Processing tools | [uv](https://docs.astral.sh/uv/) on the PATH; about 7.4 GB for the Python environment (created on first use); models downloaded on first use; a Hugging Face token and accepted terms for the speaker model |
 | Disk | about 115 MB per track per recorded hour |
@@ -67,6 +73,19 @@ cargo run -p app --release --features custom-protocol
 Browser tabs and Google Meet need the Chrome extension: [docs/guides/extension.md](docs/guides/extension.md) explains how to install it from the release zip and pair it with the application.
 
 Open the settings to download the models and, for screenshot description and for extraction with the managed backend, to point the application to a `llama-server` executable, its model folder and a GGUF model file. Recordings are written to `Documents\BlahBlahBot\recordings` unless you change the folder in the settings. Run the tests with `cargo test --workspace`, `npm test` and `npx playwright test --project=mock` in `ui`; the end-to-end suite against the real application is `npx playwright test --project=real` after a debug build.
+
+## Browser extension
+
+The extension is installed unpacked from the zip attached to each release; it is not in the Chrome Web Store and will not be ([ADR 0021](docs/decisions/0021-extension-distribution.md), status Proposed). The complete guide with troubleshooting is [docs/guides/extension.md](docs/guides/extension.md).
+
+1. Unpack `blah-blah-bot-extension-<version>.zip` to a folder that stays where it is. To build it yourself: `cd extension && npm ci && npm run pack` writes `target/extension/unpacked` and the zip.
+2. Open `chrome://extensions`, switch on **Developer mode**, choose **Load unpacked** and pick the folder. The id on the card must be `pbgjebpmicmffhjbphlgginplaflodnj`; the application accepts no other extension unless you add its id in the settings. Chrome warns about developer mode extensions and may switch them off after an update; switch it on again.
+3. **Pair once.** In the application open **Settings, Browser extension** and press **Pair extension**; it shows a code that works once and expires after 5 minutes. Click the extension icon, type the code and press **Pair**. Pairing survives restarts; **Unpair** in the settings removes it.
+4. **Record a tab.** Start a recording, open the tab, click the extension icon (or press **Alt+Shift+R**). The badge shows `REC` and the tab becomes a track. For a tab group press **Capture this group** and then **Next tab**; Chrome allows one tab per click, so each tab needs its own action.
+
+The extension asks for `tabCapture`, `offscreen`, `activeTab`, `storage`, `tabGroups` and the site `meet.google.com`; it has no `tabs` or `history` permission and talks only to `127.0.0.1`. The page title of a tab is never sent, only the site name.
+
+**Detection** is on by default. Open **Settings, Detection** to choose the sensitivity, edit the list of watched programs, switch an application off (or on again after **Never**) or switch detection off. Rules and measurement: [ADR 0022](docs/decisions/0022-meeting-detection.md) (status Proposed).
 
 ## Cycles and report modes
 
@@ -109,6 +128,37 @@ Every key is described in [docs/CYCLES.md](docs/CYCLES.md); the schema is `schem
 Keys are stored in the Windows Credential Manager and are never shown again or written to a file.
 
 **Environment switches** (development and tests): `BBB_DEMO` runs the interface on generated data without audio devices, `BBB_DATA_DIR` keeps all application data in one folder, `BBB_LOG` sets the log filter, `BBB_WORKER_DIR` points to the Python worker folder, `BBB_WORKER_ENV_DIR` to a shared worker Python environment (by default each data folder gets its own `worker-venv`).
+
+## Stage 6 measurements
+
+Raw data: `benchmarks/results/stage6-tab-30min-synthetic.json` and `stage6-detection-{low,balanced,high}.json`. Everything below is **synthetic or a reduced run**; no real call, no real tab and no working day has been measured yet.
+
+**Tab stream continuity.** A synthetic 440 Hz tone goes through the extension's audio worklet, session and WebSocket, the bridge and the recorder's pushed track, in a scripted Chrome 136 on the reference machine. Chrome's capture of a real tab is not part of it. The planned run is 30 minutes; the file in the repository is a **2 minute run** (`full_run: false`, `overall: incomplete`).
+
+| Measure | Result (120 s) | Target |
+|---|---|---|
+| Frames sent and stored | 5,978, none lost, no gap journaled | no lost frame |
+| Longest gap between frames | 46.3 ms (longest stall 26.3 ms) | 100 ms or less |
+| Stored audio | 119.55 s for 119.6 s of wall time | n/a |
+| Clock difference at the end (arrival and sender) | 94.9 ms and 96 ms; the recorder corrects drift | n/a |
+
+**Detection.** The rules of the application replayed over 11 session traces: one real trace (4 minutes of an idle Windows 10 machine, no conferencing application running) and ten made by hand (Discord and Teams calls, a call with the microphone muted, two calls 90 seconds apart, a call while recording, a Meet call, a Teams device check, a Discord microphone test, a voice search and dictation).
+
+| Sensitivity | Calls prompted once (6 labelled, synthetic) | Delay | False prompts, real idle trace | False prompts, synthetic non-call traces |
+|---|---|---|---|---|
+| Low | 5 (the second of two calls 90 s apart counts as the same call) | 20 s, Meet 30 s | 0 | 0 |
+| Balanced (default) | 6 | 8 to 10 s | 0 | 1 (a 12 s microphone test in Discord) |
+| High | 6 | 3 s | 0 | 2 (that test and a 6 s Teams device check) |
+
+No sensitivity raised a duplicate prompt. The session states in the hand-made traces (for example that Discord keeps its microphone open while muted, or how long a device check lasts) are assumptions about the applications.
+
+**Not measured yet.**
+
+- The 30 minute continuity run, and a run with a real tab (a tone page, then a call).
+- False prompts over a working day (8 hours of real use); the idle trace is 4 minutes on one machine.
+- Real Discord, Teams and Meet calls: what their audio sessions do during a call, a mute and a device check. Zoom and Slack are in the list of watched programs without a trace of their own.
+- Windows 11.
+- The default sensitivity (balanced) is a proposal, chosen on the numbers above only.
 
 ## Stage 4 measurements
 
@@ -242,6 +292,7 @@ Prototype results on the reference machine (RTX 3080 with 12 GB, Windows 10 buil
 ## Limitations
 
 - Processing needs an NVIDIA GPU; without readings from the driver a job waits.
+- Browser tabs: Chrome only, installed unpacked in developer mode (no automatic updates, and Chrome may switch the extension off). A tab can be captured only after you act on that very tab, so a group takes one action per tab. Call detection covers known desktop applications and Meet; a call in another browser tab is not detected, and neither is a call in an application that closes its microphone while muted. A short microphone test in a watched application can raise a prompt.
 - Speaker separation is measured on synthetic meetings only; on 2 to 4 speakers the error rate was above the 15% target in Stage 0 and is to be confirmed on real recordings.
 - Voice recognition is measured on synthetic voices only. Participants of a cycle belong to that cycle; a meeting without a cycle still uses the local list. A meeting processed after its audio was deleted has no sample clips, so voices are named from the transcript.
 - The Python environment is large (about 7.4 GB) and the first model downloads take a while.
@@ -257,7 +308,7 @@ Prototype results on the reference machine (RTX 3080 with 12 GB, Windows 10 buil
 | 3 | Speakers and voice profiles | v0.4.0 | Done |
 | 4 | Cycles and reports | v0.5.0 | Done |
 | 5 | Publishing | v0.6.0 | Planned |
-| 6 | Convenience | v0.7.0 | Planned |
+| 6 | Convenience | v0.7.0 | Implemented, not released; real-call and 30 minute tab measurements open |
 | 7 | Integrations | v0.8.0 | Planned |
 | 8 | Stabilization | v1.0.0 | Planned |
 

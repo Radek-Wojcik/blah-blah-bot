@@ -18,7 +18,7 @@
 - Drawbacks, accepted:
   - Chrome shows a "Disable developer mode extensions" warning at start and may switch such extensions off after a browser update; the user has to enable it again.
   - No automatic update: a new release means a new zip and a reload in `chrome://extensions`. The extension reports its version in `hello` and the application stores it with the paired client; the protocol version check refuses an old extension with `bad_version`.
-  - Only Chromium browsers with unpacked extension support (Chrome, Edge) work. Chrome 116 or newer.
+  - Only Chromium browsers with unpacked extension support can work in principle (Chrome, Edge); only Chrome 116 or newer is tested and supported in this release.
   - Loading by script (`--load-extension`) is not available to users of Chrome 137 or newer; the manual steps are unaffected.
 - A signed `.crx` for policy installation was not built: it would need a private key kept by the project and a managed browser.
 
