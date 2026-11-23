@@ -496,7 +496,7 @@ impl Lab {
             Trigger::Explicit,
             &[PublishTarget::Notion],
             anchors,
-            |store, prepared| flow::reexport_notion(store, prepared),
+            flow::reexport_notion,
         )
     }
 

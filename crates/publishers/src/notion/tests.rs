@@ -824,7 +824,11 @@ fn a_task_becomes_one_page_with_the_mapped_values_and_the_key() {
     let UpsertOutcome::Created(page) = done.outcome else {
         panic!("{:?}", done.outcome);
     };
-    assert_eq!(stored, [page.clone()], "the id is handed over at once");
+    assert_eq!(
+        stored,
+        std::slice::from_ref(&page),
+        "the id is handed over at once"
+    );
     assert!(page
         .url
         .as_deref()

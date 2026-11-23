@@ -229,7 +229,7 @@ fn the_bot_guild_roles_member_and_channel_are_read() {
 
     let member = bot.member(&fake.guild_id(), &me.id).unwrap();
     assert!(member.bot);
-    assert_eq!(member.roles, [bots_role.id.clone()]);
+    assert_eq!(member.roles, std::slice::from_ref(&bots_role.id));
 
     let channel = bot.channel(&fake.channel_id()).unwrap();
     assert_eq!(channel.name, "meetings");

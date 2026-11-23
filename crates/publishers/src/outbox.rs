@@ -1239,11 +1239,11 @@ impl Dispatcher {
         }
 
         // 3. Remaining text chunks, issue links and screenshots in the thread (or channel).
-        for idx in post.message_ids.len()..all_messages.len() {
+        for (idx, message) in all_messages.iter().enumerate().skip(post.message_ids.len()) {
             let dest = post.thread_id.as_deref().unwrap_or(&bot_cfg.channel);
             let n = discord_bot::nonce(&op.meeting_id, &op.op_key, idx);
             let posted = bot
-                .post_message(dest, &all_messages[idx], &n, &pacing)
+                .post_message(dest, message, &n, &pacing)
                 .map_err(|e| map_bot_err(e, post.message_ids.len()))?;
             post.message_ids.push(posted.id);
             persist(&post);
