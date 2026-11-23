@@ -134,12 +134,12 @@ Rust modules are crates in one Cargo workspace. Licenses of third-party parts ar
 
 - **Responsibility:**
   - Microphone capture and per-process loopback capture through WASAPI ([`wasapi`](https://github.com/HEnquist/wasapi-rs) crate, application loopback with process tree).
-  - Listing audio sessions to offer capturable applications.
+  - Listing audio sessions to offer capturable applications, and polling playback and microphone sessions (`SessionMonitor`): each session is tied to its application through the parent chain of its process (the new Teams plays from an `msedgewebview2` child of `ms-teams.exe`), and only the owners of new sessions and their parents are looked up.
   - Adding and removing sources during a recording. Every track has its own start offset on a shared session clock.
   - Receiving browser audio from `bridge`: a tab is a pushed track (`push.rs`) placed by sample count; missing frames become silence journaled as `stream_gap`, and the sender clock feeds drift correction and fills capture stalls longer than 1 s. `RoutingBackend` sends tab sources to a `TabSource` and everything else to the capture backend.
   - Segmented writing and the session journal (section 7.1).
   - Region screenshot overlay; PNG files with an offset in milliseconds from recording start.
-  - Meeting detection: a known conferencing process with an active audio session that also uses the microphone raises a "start recording?" prompt. Google Meet is detected by the extension.
+  - Meeting detection (`detect.rs`, pure rules, replayed from traces by `detect_trace.rs`): a known conferencing application (Discord, Teams, Zoom, Slack; a setting) that uses the microphone for the sustain time, and has the playback session the sensitivity asks for, raises one "start recording?" prompt per call (`Idle -> Candidate -> Prompted -> Cooldown`); the call ends when the microphone was unused for the end-of-call time; no prompt while the application is recorded or after the user opted out; browsers are excluded from this rule. Google Meet is detected by the extension and goes through the same engine. Sensitivity (low, balanced, default balanced) is a table of numbers in `Presets` ([ADR 0022](decisions/0022-meeting-detection.md)). Enumeration only: no audio is opened.
 - **Constraints:** no model inference, no network access except the local bridge. CPU and memory budgets are defined in [TESTING.md](TESTING.md).
 
 ### 4.4 `bridge` (Rust)
@@ -468,6 +468,8 @@ See [ADR 0005](decisions/0005-llm-backend.md).
 | Crash or power loss while recording | Journal replay; at most one segment lost; meeting recoverable |
 | Audio device removed or application closed mid-recording | Track ends, others continue; event recorded in the journal; tray notification |
 | Extension connection lost (service worker restart, network) | The tab stream waits 30 s for `resume`; frames lost on the way become silence journaled as `stream_gap`; a closed tab ends only its track |
+| Audio sessions cannot be read (no audio service, device removed) | Detection logs it, tries again after 5 s and re-reads the device list; recording is not affected |
+| Detection prompts for something that is not a call | "Not now" leaves it, "Never for <app>" switches the application off; the list is in Settings > Detection |
 | GPU busy | Job waits between stages; the user sees the reason |
 | Worker crash or timeout | Stage marked failed; retry resumes from that stage |
 | Invalid model output | Validation, bounded retries, then the window is flagged and skipped with a visible warning |

@@ -23,3 +23,4 @@ Each record states the context, the decision, its consequences and the alternati
 | [0017](0017-cycles-extraction-and-drafts.md) | Cycles, extraction, report modes and drafts | Accepted |
 | [0020](0020-bridge-protocol-and-pairing.md) | Bridge protocol version 2, pairing and pushed tab tracks | Accepted |
 | [0021](0021-extension-distribution.md) | Browser extension: distribution, identity and defaults | Proposed |
+| [0022](0022-meeting-detection.md) | Meeting detection: rules, sensitivity and the default | Proposed |
