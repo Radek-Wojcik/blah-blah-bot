@@ -2,10 +2,13 @@
 //! that can be captured, and the poll of playback and microphone sessions that feeds the
 //! meeting detector.
 
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
 use serde::Serialize;
 use wasapi::{initialize_mta, DeviceEnumerator, Direction};
 
-use crate::detect::{resolve_app, AppSession, Flow, Level, SessionState};
+use crate::detect::{resolve_app, AppSession, Flow, Level, ResolvedApp, SessionState};
 use crate::error::{RecorderError, Result};
 
 /// One audio session.
@@ -150,34 +153,53 @@ struct RawSession {
     peak: Level,
 }
 
-/// Sessions of all active devices of one direction, reading only what the detector needs: the
-/// owner, the state and the coarse peak. One activation per device.
-fn raw_sessions(enumerator: &DeviceEnumerator, direction: Direction) -> Result<Vec<RawSession>> {
+type Managers = Vec<(Flow, windows::Win32::Media::Audio::IAudioSessionManager2)>;
+
+/// The session manager of every active playback and microphone device.
+fn open_managers(enumerator: &DeviceEnumerator) -> Result<Managers> {
+    use windows::Win32::Media::Audio::IAudioSessionManager2;
+    use windows::Win32::System::Com::CLSCTX_ALL;
+
+    let mut out = Vec::new();
+    for direction in [Direction::Render, Direction::Capture] {
+        let devices = enumerator
+            .get_device_collection(direction)
+            .map_err(|e| RecorderError::audio("list audio devices", e))?;
+        for device in &devices {
+            let Ok(device) = device else { continue };
+            // SAFETY: plain COM call on an interface obtained from the system; COM is
+            // initialized on this thread.
+            let manager = unsafe {
+                device
+                    .as_immdevice()
+                    .Activate::<IAudioSessionManager2>(CLSCTX_ALL, None)
+            };
+            if let Ok(manager) = manager {
+                out.push((flow_of(direction), manager));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Sessions of all given managers, reading only what the detector needs: the owner, the
+/// state and the coarse peak. The second value is `false` when a manager failed (a device
+/// went away), so the caller opens them again.
+fn read_sessions(managers: &Managers) -> (Vec<RawSession>, bool) {
     use windows::core::Interface;
     use windows::Win32::Media::Audio::Endpoints::IAudioMeterInformation;
     use windows::Win32::Media::Audio::{
         AudioSessionStateActive, AudioSessionStateExpired, IAudioSessionControl2,
-        IAudioSessionManager2,
     };
-    use windows::Win32::System::Com::CLSCTX_ALL;
 
-    let flow = flow_of(direction);
-    let devices = enumerator
-        .get_device_collection(direction)
-        .map_err(|e| RecorderError::audio("list audio devices", e))?;
     let mut out = Vec::new();
-    for device in &devices {
-        let Ok(device) = device else { continue };
+    let mut ok = true;
+    for (flow, manager) in managers {
         // SAFETY: plain COM calls on interfaces obtained from the system; COM is initialized
         // on this thread.
         unsafe {
-            let Ok(manager) = device
-                .as_immdevice()
-                .Activate::<IAudioSessionManager2>(CLSCTX_ALL, None)
-            else {
-                continue;
-            };
             let Ok(list) = manager.GetSessionEnumerator() else {
+                ok = false;
                 continue;
             };
             for i in 0..list.GetCount().unwrap_or(0) {
@@ -198,27 +220,37 @@ fn raw_sessions(enumerator: &DeviceEnumerator, direction: Direction) -> Result<V
                     .and_then(|m| m.GetPeakValue().ok());
                 out.push(RawSession {
                     pid: control2.GetProcessId().unwrap_or(0),
-                    flow,
+                    flow: *flow,
                     state,
                     peak: Level::from_peak(peak),
                 });
             }
         }
     }
-    Ok(out)
+    (out, ok)
 }
 
 /// Longest parent chain whose processes are refreshed.
 const CHAIN: usize = 8;
+/// The list of devices is read again this often (a device may be plugged in or removed).
+const DEVICES_EVERY: Duration = Duration::from_secs(30);
+/// The application of a process is looked up again this often.
+const APPS_EVERY: Duration = Duration::from_secs(300);
 
 /// Polls playback and microphone sessions and ties each to its application. Meant to be kept
-/// by one thread and polled about once a second: it keeps its process table between polls and
-/// refreshes only the owners of the sessions and their parents, not every process.
+/// by one thread (create it there) and polled about once a second. The session managers of
+/// the devices are kept between polls, and the application of a process is looked up once
+/// when its session first appears, from a refresh of that process and its parents only (not
+/// of every process); the answer is kept until the session is gone.
 pub struct SessionMonitor {
     enumerator: DeviceEnumerator,
+    managers: Managers,
+    managers_at: Option<Instant>,
     sys: sysinfo::System,
     known: Vec<String>,
     own_pid: u32,
+    apps: HashMap<u32, Option<ResolvedApp>>,
+    apps_at: Instant,
 }
 
 impl SessionMonitor {
@@ -229,39 +261,64 @@ impl SessionMonitor {
         Ok(Self {
             enumerator: DeviceEnumerator::new()
                 .map_err(|e| RecorderError::audio("device enumerator", e))?,
+            managers: Vec::new(),
+            managers_at: None,
             sys: sysinfo::System::new(),
             known,
             own_pid: std::process::id(),
+            apps: HashMap::new(),
+            apps_at: Instant::now(),
         })
     }
 
     /// Change the applications that session owners are mapped to.
     pub fn set_known(&mut self, known: Vec<String>) {
-        self.known = known;
+        if known != self.known {
+            self.known = known;
+            self.apps.clear();
+        }
     }
 
     /// One poll. Sessions of this process and the system sounds session are left out.
     pub fn poll(&mut self) -> Result<Vec<AppSession>> {
-        let mut raw = raw_sessions(&self.enumerator, Direction::Render)?;
-        raw.extend(raw_sessions(&self.enumerator, Direction::Capture)?);
+        let now = Instant::now();
+        if self
+            .managers_at
+            .is_none_or(|t| now.duration_since(t) >= DEVICES_EVERY)
+        {
+            self.managers = open_managers(&self.enumerator)?;
+            self.managers_at = Some(now);
+        }
+        let (mut raw, ok) = read_sessions(&self.managers);
+        if !ok {
+            // A device went away: read the device list again at the next poll.
+            self.managers_at = None;
+        }
         raw.retain(|s| s.pid != 0 && s.pid != self.own_pid);
-        self.refresh(&raw);
 
-        let sys = &self.sys;
-        let lookup = |pid: u32| {
-            sys.process(sysinfo::Pid::from_u32(pid)).map(|p| {
-                (
-                    p.name().to_string_lossy().into_owned(),
-                    p.parent().map(sysinfo::Pid::as_u32),
-                )
-            })
-        };
+        if now.duration_since(self.apps_at) >= APPS_EVERY {
+            self.apps.clear();
+            self.apps_at = now;
+        }
+        let mut missing: Vec<u32> = raw
+            .iter()
+            .map(|s| s.pid)
+            .filter(|p| !self.apps.contains_key(p))
+            .collect();
+        missing.sort_unstable();
+        missing.dedup();
+        if !missing.is_empty() {
+            self.resolve(&missing);
+        }
+        // A pid that has no session now is looked up again when it comes back.
+        self.apps.retain(|pid, _| raw.iter().any(|s| s.pid == *pid));
+
         let mut out: Vec<AppSession> = raw
             .iter()
             .filter_map(|s| {
-                let app = resolve_app(s.pid, &self.known, lookup)?;
+                let app = self.apps.get(&s.pid)?.as_ref()?;
                 Some(AppSession {
-                    app: app.app,
+                    app: app.app.clone(),
                     pid: app.top_pid,
                     flow: s.flow,
                     state: s.state,
@@ -273,12 +330,10 @@ impl SessionMonitor {
         Ok(out)
     }
 
-    /// Refresh the session owners and, one level at a time, their parents.
-    fn refresh(&mut self, raw: &[RawSession]) {
+    /// Refresh `pids` and, one level at a time, their parents; then map each pid.
+    fn resolve(&mut self, pids: &[u32]) {
         let mut frontier: Vec<sysinfo::Pid> =
-            raw.iter().map(|s| sysinfo::Pid::from_u32(s.pid)).collect();
-        frontier.sort();
-        frontier.dedup();
+            pids.iter().map(|p| sysinfo::Pid::from_u32(*p)).collect();
         for _ in 0..CHAIN {
             if frontier.is_empty() {
                 break;
@@ -295,6 +350,19 @@ impl SessionMonitor {
             parents.sort();
             parents.dedup();
             frontier = parents;
+        }
+        let sys = &self.sys;
+        let lookup = |pid: u32| {
+            sys.process(sysinfo::Pid::from_u32(pid)).map(|p| {
+                (
+                    p.name().to_string_lossy().into_owned(),
+                    p.parent().map(sysinfo::Pid::as_u32),
+                )
+            })
+        };
+        for pid in pids {
+            self.apps
+                .insert(*pid, resolve_app(*pid, &self.known, lookup));
         }
     }
 }
