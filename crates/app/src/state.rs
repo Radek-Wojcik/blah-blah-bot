@@ -7,6 +7,7 @@ use recorder::screenshot::Frame;
 use recorder::session::{CaptureBackend, RoutingBackend, ToneBackend, WasapiBackend};
 use tauri::{AppHandle, Manager};
 
+use crate::briefing::{BriefingSource, CycleStoreSource};
 use crate::browser::{AppHost, Browser};
 use crate::cycles::ParticipantSync;
 use crate::detection::Detection;
@@ -33,6 +34,7 @@ pub struct AppState {
     browser: Arc<Browser>,
     browser_host: Arc<AppHost>,
     detection: Arc<Detection>,
+    briefing: Arc<dyn BriefingSource>,
     demo: bool,
 }
 
@@ -90,6 +92,7 @@ impl AppState {
         let settings = Arc::new(Mutex::new(loaded));
         let root_app = app.clone();
         let repos_settings = settings.clone();
+        let briefing_settings = settings.clone();
         let processing = Processing::new(
             app.clone(),
             store.clone(),
@@ -120,8 +123,20 @@ impl AppState {
             browser,
             browser_host,
             detection,
+            // Stage 5 reads issues back from GitHub: its source replaces this one line.
+            briefing: Arc::new(CycleStoreSource::new(move || {
+                briefing_settings
+                    .lock()
+                    .map(|s| s.cycle_repos.clone())
+                    .unwrap_or_default()
+            })),
             demo,
         })
+    }
+
+    /// Where the briefing gets its tasks and topics from.
+    pub fn briefing(&self) -> &Arc<dyn BriefingSource> {
+        &self.briefing
     }
 
     /// The bridge to the Chrome extension.

@@ -1,5 +1,6 @@
 //! Desktop shell: tray icon, windows, global hotkeys and IPC commands.
 
+mod briefing;
 mod browser;
 mod commands;
 mod cycle_commands;
@@ -235,6 +236,8 @@ pub fn run() {
             cycle_commands::add_cycle_repo,
             cycle_commands::pull_cycle_repo,
             cycle_commands::report_defaults,
+            briefing::get_briefing,
+            briefing::open_briefing,
             draft_commands::get_draft,
             draft_commands::update_draft_item,
             draft_commands::move_draft_item,
