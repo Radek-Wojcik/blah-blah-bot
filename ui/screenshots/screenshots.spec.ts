@@ -321,7 +321,9 @@ test.describe("static screenshots", () => {
     const botForm = page.getByRole("form", { name: "Bot token for cred:discord-bot/nomad" });
     await botForm
       .getByLabel("Bot token for cred:discord-bot/nomad")
-      .fill(["MTIzNDU2Nzg5MDEyMzQ1Njc4", "Gdemo1", "DemoBotSecretSignature0123456789abcdef"].join("."));
+      .fill(
+        ["MTIzNDU2Nzg5MDEyMzQ1Njc4", "Gdemo1", "DemoBotSecretSignature0123456789abcdef"].join("."),
+      );
     await botForm.getByRole("button", { name: "Store" }).click();
     await expect(botForm).toContainText("Bot token stored: bot MTIz...");
 

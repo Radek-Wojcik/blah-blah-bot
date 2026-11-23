@@ -763,7 +763,11 @@ test.describe("corrections to a published meeting", () => {
 
 test.describe("Stage 7: Notion and Discord bot integrations", () => {
   const NOTION_TOKEN = ["ntn", "demoSecretIntegrationToken0123456789"].join("_");
-  const BOT_TOKEN = ["MTIzNDU2Nzg5MDEyMzQ1Njc4", "Gdemo1", "DemoBotSecretSignature0123456789abcdef"].join(".");
+  const BOT_TOKEN = [
+    "MTIzNDU2Nzg5MDEyMzQ1Njc4",
+    "Gdemo1",
+    "DemoBotSecretSignature0123456789abcdef",
+  ].join(".");
 
   test("Notion mapping and idempotent re-export preserve status and skip trashed pages", async ({
     page,

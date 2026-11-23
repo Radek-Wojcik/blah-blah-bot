@@ -301,7 +301,11 @@ describe("when to publish", () => {
       "https://discord.com/oauth2/authorize?client_id=123456789012345678&scope=bot&permissions=309237746688",
     );
 
-    const botToken = ["MTIzNDU2Nzg5MDEyMzQ1Njc4", "Gdemo1", "DemoBotSecretSignature0123456789abcdef"].join(".");
+    const botToken = [
+      "MTIzNDU2Nzg5MDEyMzQ1Njc4",
+      "Gdemo1",
+      "DemoBotSecretSignature0123456789abcdef",
+    ].join(".");
     await type(input("Bot token for cred:discord-bot/nomad"), botToken);
     await submit("Bot token for cred:discord-bot/nomad");
     expect(host.textContent).toContain("Bot token stored: bot MTIz...");

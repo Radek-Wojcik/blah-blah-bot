@@ -754,7 +754,11 @@ describe("corrections", () => {
 });
 
 describe("Stage 7: Discord bot and Notion helpers", () => {
-  const FAKE_BOT_TOKEN = ["MTIzNDU2Nzg5MDEyMzQ1Njc4", "GhIjKl", "MnOpQrStUvWxYz0123456789abcdef"].join(".");
+  const FAKE_BOT_TOKEN = [
+    "MTIzNDU2Nzg5MDEyMzQ1Njc4",
+    "GhIjKl",
+    "MnOpQrStUvWxYz0123456789abcdef",
+  ].join(".");
   const FAKE_NOTION_TOKEN = ["ntn", "demo_fake_token_0123456789abcdef"].join("_");
 
   it("validates and masks Discord bot and Notion tokens without leaking them", () => {
