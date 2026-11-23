@@ -489,6 +489,8 @@ mod tests {
             repo: "owner/rover".into(),
             label: "cycle:NOMAD".into(),
             fetched_unix_ms: Some(1_794_000_000_000),
+            closed: Vec::new(),
+            links: Vec::new(),
             issues: vec![
                 cycle_store::OpenIssue {
                     number: 12,
@@ -647,6 +649,8 @@ mod tests {
             path: dest.to_string_lossy().into_owned(),
             remote: Some(origin.root().to_string_lossy().into_owned()),
             kind: RepoKind::Clone,
+            github_repo: None,
+            github_api: None,
         }];
         (origin, settings, clone)
     }
@@ -662,7 +666,7 @@ mod tests {
 
     #[test]
     fn refreshing_a_clone_pulls_new_tasks_and_a_plain_call_does_not() {
-        let tmp = testkit::target_tempdir("briefing-app");
+        let tmp = test_tmp::TestDir::new("briefing-app");
         let (origin, repos, _clone) = origin_and_clone(tmp.path());
         second_meeting(&origin);
 
@@ -682,7 +686,7 @@ mod tests {
 
     #[test]
     fn uncommitted_cycle_edits_stop_the_pull_and_nothing_is_lost() {
-        let tmp = testkit::target_tempdir("briefing-app");
+        let tmp = test_tmp::TestDir::new("briefing-app");
         let (origin, repos, clone) = origin_and_clone(tmp.path());
         second_meeting(&origin);
         // An edit made in the application and not committed.
@@ -705,7 +709,7 @@ mod tests {
 
     #[test]
     fn a_clone_whose_remote_is_gone_shows_its_last_state_and_says_so() {
-        let tmp = testkit::target_tempdir("briefing-app");
+        let tmp = test_tmp::TestDir::new("briefing-app");
         let (origin, repos, _clone) = origin_and_clone(tmp.path());
         let origin_dir = origin.root().to_path_buf();
         drop(origin);

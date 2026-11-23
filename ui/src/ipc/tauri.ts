@@ -22,6 +22,7 @@ export function createTauriBackend(): Backend {
       const bytes = await invoke<IpcBytes>("overlay_image");
       return URL.createObjectURL(bytesToBlob(bytes, "image/png"));
     },
+    overlayReady: () => invoke("overlay_ready"),
     overlayFinish: (region) => invoke("overlay_finish", { region }),
     processMeeting: (id, options) => invoke("process_meeting", { id, options: options ?? null }),
     queueState: () => invoke("queue_state"),
@@ -92,6 +93,32 @@ export function createTauriBackend(): Backend {
     acceptNewDraft: (meetingId) => invoke("accept_new_draft", { meetingId }),
     discardNewDraft: (meetingId) => invoke("discard_new_draft", { meetingId }),
     renderReport: (meetingId, variant) => invoke("render_report", { meetingId, variant }),
+    setStatusDecision: (meetingId, proposalId, decision, comment) =>
+      invoke("set_status_decision", { meetingId, proposalId, decision, comment }),
+    addStatusProposal: (meetingId, target, status, comment) =>
+      invoke("add_status_proposal", { meetingId, target, status, comment }),
+    publishingSecrets: () => invoke("publishing_secrets"),
+    setGithubToken: (token, api) => invoke("set_github_token", { token, api }),
+    clearGithubToken: (api) => invoke("clear_github_token", { api }),
+    testGithubAccess: (cycleId) => invoke("test_github_access", { cycleId }),
+    setGithubRepo: (repoId, githubRepo, githubApi) =>
+      invoke("set_github_repo", { repoId, githubRepo, githubApi }),
+    setTargetSecret: (reference, value) => invoke("set_target_secret", { reference, value }),
+    clearTargetSecret: (reference) => invoke("clear_target_secret", { reference }),
+    testDiscordWebhook: (reference) => invoke("test_discord_webhook", { reference }),
+    setTargetRule: (cycleId, target, mode) => invoke("set_target_rule", { cycleId, target, mode }),
+    publishPlan: (meetingId, targets) => invoke("publish_plan", { meetingId, targets }),
+    publishMeeting: (meetingId, targets) => invoke("publish_meeting", { meetingId, targets }),
+    confirmPublicRepo: (cycleId) => invoke("confirm_public_repo", { cycleId }),
+    outboxState: () => invoke("outbox_state"),
+    retryOutboxOp: (id) => invoke("retry_outbox_op", { id }),
+    cancelOutboxOp: (id) => invoke("cancel_outbox_op", { id }),
+    cycleTasks: (cycleId) => invoke("cycle_tasks", { cycleId }),
+    listCorrections: (meetingId) => invoke("list_corrections", { meetingId }),
+    addCorrection: (meetingId, text, item, issue, date) =>
+      invoke("add_correction", { meetingId, text, item, issue, date }),
+    publishCorrections: (meetingId, ids) => invoke("publish_corrections", { meetingId, ids }),
+    deleteCorrection: (meetingId, id) => invoke("delete_correction", { meetingId, id }),
     getSettings: () => invoke("get_settings"),
     saveSettings: (settings) => invoke("save_settings", { settings }),
     bridgeStatus: () => invoke("bridge_status"),
@@ -109,6 +136,7 @@ export function createTauriBackend(): Backend {
     onModelsChanged: (cb) => listen("models-changed", () => cb()),
     onDraftChanged: (cb) => listen("draft-changed", (e) => cb(e.payload as string)),
     onCyclesChanged: (cb) => listen("cycles-changed", () => cb()),
+    onOutboxChanged: (cb) => listen("outbox-changed", (e) => cb(e.payload as never)),
     onOpenBriefing: (cb) => listen("open-briefing", (e) => cb(e.payload as string)),
     onBridgeChanged: (cb) => listen("bridge-changed", (e) => cb(e.payload as never)),
     onDetectionPrompt: (cb) => listen("detection-prompt", (e) => cb(e.payload as never)),

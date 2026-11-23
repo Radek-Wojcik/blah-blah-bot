@@ -243,7 +243,7 @@ test.describe("draft editor on the mock backend", () => {
       page.getByRole("list", { name: "Items of Thruster tests" }).getByRole("listitem"),
     ).toHaveCount(3);
     // Quiet markers: inferred and unknown values, unverified quotes, one edited item.
-    await expect(page.getByText("unverified quote", { exact: true })).toHaveCount(2);
+    await expect(columns.getByText("unverified quote", { exact: true })).toHaveCount(2);
     await expect(page.getByRole("img", { name: "inferred" }).first()).toHaveAttribute(
       "title",
       "inferred",
@@ -468,7 +468,9 @@ test.describe("draft editor on the mock backend", () => {
     );
     await expect(pre).not.toContainText("[ ]");
     await page.getByRole("button", { name: "Copy" }).click();
-    await expect(page.getByRole("status")).toHaveText("Copied");
+    await expect(page.getByRole("region", { name: "Report" }).getByRole("status")).toHaveText(
+      "Copied",
+    );
     expect(await page.evaluate(() => navigator.clipboard.readText())).toContain("# Meeting NOMAD");
     await page.getByRole("button", { name: "Items", exact: true }).click();
     await expect(page.getByLabel("Sections", { exact: true })).toBeVisible();

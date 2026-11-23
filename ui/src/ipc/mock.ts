@@ -17,6 +17,7 @@ import { createMockBridge } from "./mock-bridge";
 import { createMockBriefing } from "./mock-briefing";
 import { createMockDetection } from "./mock-detection";
 import { createMockDrafts } from "./mock-drafts";
+import { createMockPublishing, type MockHooks } from "./mock-publish";
 import { fail } from "./mock-util";
 import { isLocalHost, missingForKind, urlHost, validateLlmSettings } from "../llm";
 import { validateVoiceSettings } from "../speakers";
@@ -123,6 +124,8 @@ export interface MockOptions {
   jobStepMs?: number;
   /** Start with a newer draft next to the edited one of the demo meeting (the banner). */
   newDraft?: boolean;
+  /** Start with the network off: publishing waits until it is back. */
+  offline?: boolean;
   /**
    * Make the screenshot overlay fail the way a bad capture would: `blank` refuses the image
    * like the real backend does, `black` serves an all-black picture, `broken` serves bytes that
@@ -142,6 +145,7 @@ export interface MockOptions {
 
 /** In-memory backend that serves the fictional demo cycle. No audio devices, files or network. */
 export function createMockBackend(opts: MockOptions = {}): Backend {
+  const startedAt = Date.now();
   const settings: Settings = {
     recordingsDir: "Documents\\BlahBlahBot\\recordings",
     recordHotkey: "Ctrl+Alt+R",
@@ -185,7 +189,23 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
   const models = demoModels();
   let jobs: JobView[] = demoJobs();
   const transcripts = new Map<string, TranscriptData>([["m5", demoTranscript("m5")]]);
-  const drafts = createMockDrafts(cycles, (id) => transcripts.has(id));
+  const lock: { is: (meetingId: string) => boolean } = { is: () => false };
+  const drafts = createMockDrafts(
+    cycles,
+    (id) => transcripts.has(id),
+    (id) => lock.is(id),
+  );
+  const publishing = createMockPublishing({
+    cycles,
+    drafts,
+    stepMs,
+    now: () => DEMO_NOW + (Date.now() - startedAt),
+    screenshotCount: (id) => meetings.find((m) => m.id === id)?.screenshotCount ?? 0,
+    onUnlocked: (id) => drafts.touch(id),
+  });
+  lock.is = publishing.isLocked;
+  if (opts.offline) publishing.hooks.setOffline(true);
+  (globalThis as { __bbbMock?: MockHooks }).__bbbMock = publishing.hooks;
   drafts.create("m5", reports.get("m5")!);
   if (opts.newDraft) drafts.leaveNewDraft("m5");
   /** The backend each job was started with; a job without an entry has none. */
@@ -594,6 +614,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#101a33"/><stop offset="1" stop-color="#3a1030"/></linearGradient></defs><rect width="1600" height="900" fill="url(#g)"/><g fill="#00f0ff" opacity=".5"><rect x="120" y="120" width="560" height="320"/><rect x="760" y="200" width="680" height="480"/></g></svg>';
       return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
     },
+    overlayReady: async () => {},
     overlayFinish: async (region) => {
       if (region && state.status === "recording") {
         state = { ...state, screenshotCount: state.screenshotCount + 1 };
@@ -843,6 +864,8 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         path: r.path,
         remote: r.remote,
         kind: r.kind,
+        githubRepo: r.githubRepo ?? null,
+        githubApi: r.githubApi ?? null,
       })),
       lastReport: cycles.lastReport(),
       bridge: bridge.settings(),
@@ -936,6 +959,11 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       if (result.saved) emitCycles();
       return result;
     },
+    setTargetRule: async (cycleId, target, mode) => {
+      const targets = cycles.setTargetRule(cycleId, target, mode);
+      emitCycles();
+      return targets;
+    },
     listTemplates: async (cycleId) => cycles.listTemplates(cycleId),
     getTemplate: async (cycleId, name) => cycles.getTemplate(cycleId, name),
     saveTemplate: async (cycleId, template) => {
@@ -951,6 +979,8 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     },
     pullCycleRepo: async (repoId) => {
       const result = cycles.pullRepo(repoId);
+      // A pull also reads the state of the issues again.
+      publishing.refreshIssues(repoId);
       emitCycles();
       return result;
     },
@@ -960,5 +990,8 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
 
     // ----- drafts -----
     ...drafts.methods,
+
+    // ----- publishing -----
+    ...publishing.methods,
   };
 }

@@ -109,14 +109,16 @@ impl PipelineRunner {
     }
 
     /// The step before `extract`: context and named transcript, from the cycle loaded by
-    /// [`Self::load_cycle_for`].
+    /// [`Self::load_cycle_for`]. Returns the progress message to report once the caller has
+    /// released the store: the progress callback may lock the store itself (the application
+    /// reads the queue state from it), and the lock is not reentrant.
     fn prepare_context(
         &self,
         store: &Store,
         data: &context::CycleData,
         meeting_id: &str,
         meeting_root: &std::path::Path,
-    ) -> Result<(), RunError> {
+    ) -> Result<Option<String>, RunError> {
         let env = ContextEnv {
             meeting_root,
             utc_offset_minutes: self.utc_offset_minutes,
@@ -130,14 +132,11 @@ impl PipelineRunner {
             for w in &warnings {
                 tracing::warn!(meeting = meeting_id, "context: {w}");
             }
-            (self.progress)(
-                meeting_id,
-                Stage::Extract,
-                0.0,
-                &format!("Context ready ({local_drafts} earlier drafts)"),
-            );
+            return Ok(Some(format!(
+                "Context ready ({local_drafts} earlier drafts)"
+            )));
         }
-        Ok(())
+        Ok(None)
     }
 }
 
@@ -153,7 +152,7 @@ impl StageRunner for PipelineRunner {
         } else {
             None
         };
-        let (job, details, choice) = {
+        let (job, details, choice, context_ready) = {
             let store = self
                 .store
                 .lock()
@@ -171,14 +170,21 @@ impl StageRunner for PipelineRunner {
                 .map_err(|e| RunError::new(e.to_string()))?;
             // The context is built by the application, not the worker, right before the
             // first language-model stage.
+            let mut context_ready = None;
             if stage == Stage::Extract {
                 let Some(data) = &cycle else {
                     return Ok(());
                 };
-                self.prepare_context(&store, data, meeting_id, &settings.meeting_root)?;
+                context_ready =
+                    self.prepare_context(&store, data, meeting_id, &settings.meeting_root)?;
             }
-            (job, details, choice)
+            (job, details, choice, context_ready)
         };
+        // Outside the store lock: reporting reads the queue state from the store.
+        if let Some(message) = context_ready {
+            tracing::info!(stage = stage.as_str(), "context ready");
+            (self.progress)(meeting_id, Stage::Extract, 0.0, &message);
+        }
 
         match worker::step_name(stage) {
             Some(step) => {
@@ -195,6 +201,7 @@ impl StageRunner for PipelineRunner {
                     // exists.
                     worker::ensure_environment(&settings.worker)?;
                 }
+                tracing::info!(stage = stage.as_str(), step, "starting the worker");
                 let mut cfg = settings.worker.clone();
                 if let Some(resolve) = &self.key_resolver {
                     cfg.llm_api_key = options.llm.as_ref().and_then(resolve);
@@ -215,6 +222,7 @@ impl StageRunner for PipelineRunner {
                         }
                     },
                 )?;
+                tracing::info!(stage = stage.as_str(), step, "the worker finished");
                 if stage == Stage::Extract {
                     ensure_something_was_extracted(
                         &settings.meeting_root.join(&details.meeting.dir),

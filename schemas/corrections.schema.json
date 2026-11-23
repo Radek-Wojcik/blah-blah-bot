@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Radek-Wojcik/blah-blah-bot/schemas/corrections.schema.json",
+  "title": "Corrections to a published meeting",
+  "description": "Notes written after a meeting was published, so that the following meetings work from correct information. The published draft itself never changes. Written by the application to work/corrections.json of the meeting.",
+  "type": "object",
+  "required": ["version", "meeting_id", "corrections"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 1 },
+    "meeting_id": { "type": "string", "minLength": 1 },
+    "corrections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "date", "text", "item", "issue"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^c[0-9]+$" },
+          "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "The day the correction was written" },
+          "text": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "item": { "type": ["string", "null"], "pattern": "^i[0-9]+$", "description": "The item of the meeting this corrects, when it is about one" },
+          "issue": { "type": ["string", "null"], "pattern": "^#[0-9]+$", "description": "An issue this corrects, for example #12; when absent and an item is given, the issue made from that item is used" }
+        }
+      }
+    }
+  }
+}

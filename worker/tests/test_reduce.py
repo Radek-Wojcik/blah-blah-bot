@@ -148,6 +148,42 @@ def test_summary_is_reduced_in_groups_for_many_windows(tmp_path):
     assert "Part 0 was discussed" in first_prompt and "Part 8 was" not in first_prompt
 
 
+def summary_requests(fake):
+    return [
+        (r["messages"][0]["content"], r["messages"][1]["content"])
+        for r in fake.requests
+        if r["response_format"]["json_schema"]["name"] == "summary"
+    ]
+
+
+def test_the_summary_prompt_names_the_people_who_have_a_name(tmp_path):
+    transcript = long_transcript(35, SPECIAL)
+    named = long_transcript(35, SPECIAL)
+    # Two voices: one named by the user, one not.
+    named["speakers"][1]["label"] = "Radek Wójcik"
+    named["speakers"].append(
+        {"id": "mic:SPEAKER_01", "label": "Speaker 2", "kind": "voice", "track": "mic"}
+    )
+    for seg in named["segments"][::2]:
+        seg["speaker"] = "mic:SPEAKER_00"
+    for seg in named["segments"][1::4]:
+        seg["speaker"] = "mic:SPEAKER_01"
+    with FakeLlm(handler()) as fake:
+        run_both(tmp_path, fake, transcript=transcript, files={"transcript.named.json": named})
+        calls = summary_requests(fake)
+    assert calls
+    for system, user in calls:
+        assert 'never replace a name by a general word like "participant"' in system
+        assert "People in the meeting (use these names): Radek Wójcik\n" in user
+
+
+def test_the_summary_prompt_has_no_people_line_without_names(tmp_path):
+    with FakeLlm(handler()) as fake:
+        run_both(tmp_path, fake)
+        calls = summary_requests(fake)
+    assert calls and all("People in the meeting" not in user for _system, user in calls)
+
+
 def test_summary_failure_falls_back_to_first_sentences_with_a_warning(tmp_path):
     with FakeLlm(handler(summary=lambda b, n: {"nope": 1})) as fake:
         m = run_both(tmp_path, fake)

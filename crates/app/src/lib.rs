@@ -9,13 +9,19 @@ mod detection;
 mod draft_commands;
 mod hotkeys;
 mod ipc;
+mod issue_sync;
 mod llm;
 mod logging;
 mod overlay;
 mod processing;
 mod processing_commands;
+mod publish_commands;
+mod publish_secrets;
+mod publishing;
 mod recording;
 mod recording_dto;
+#[cfg(test)]
+mod release_check;
 mod secrets;
 mod settings;
 mod sources;
@@ -26,7 +32,7 @@ use std::time::Duration;
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 
 use state::AppState;
 
@@ -141,6 +147,25 @@ pub fn run() {
             handle.state::<AppState>().start_detection(handle.clone());
             // Jobs interrupted by a crash continue; nothing else starts on its own.
             handle.state::<AppState>().processing().resume_interrupted();
+            // Publishing operations interrupted by a crash or by a lost network are taken up
+            // again by their own thread; the UI is told after every change.
+            {
+                let publishing = handle.state::<AppState>().publishing().clone();
+                let (to_ui, to_cycles) = (handle.clone(), handle.clone());
+                publishing.connect(
+                    move |state| {
+                        if let Err(e) = to_ui.emit(publishing::EVENT_OUTBOX, state) {
+                            tracing::warn!(error = %e, "could not emit the outbox state");
+                        }
+                    },
+                    move |_| {
+                        if let Err(e) = to_cycles.emit(cycle_commands::EVENT_CYCLES, ()) {
+                            tracing::warn!(error = %e, "could not emit the cycles change");
+                        }
+                    },
+                );
+                publishing.start();
+            }
             if let Ok(root) = handle.state::<AppState>().recordings_root() {
                 handle
                     .state::<AppState>()
@@ -239,6 +264,26 @@ pub fn run() {
             cycle_commands::report_defaults,
             briefing::get_briefing,
             briefing::open_briefing,
+            publish_commands::publishing_secrets,
+            publish_commands::set_github_token,
+            publish_commands::clear_github_token,
+            publish_commands::test_github_access,
+            publish_commands::set_github_repo,
+            publish_commands::set_target_rule,
+            publish_commands::set_target_secret,
+            publish_commands::clear_target_secret,
+            publish_commands::test_discord_webhook,
+            publish_commands::publish_plan,
+            publish_commands::publish_meeting,
+            publish_commands::confirm_public_repo,
+            publish_commands::outbox_state,
+            publish_commands::retry_outbox_op,
+            publish_commands::cancel_outbox_op,
+            publish_commands::cycle_tasks,
+            publish_commands::list_corrections,
+            publish_commands::add_correction,
+            publish_commands::publish_corrections,
+            publish_commands::delete_correction,
             draft_commands::get_draft,
             draft_commands::update_draft_item,
             draft_commands::move_draft_item,
@@ -248,8 +293,11 @@ pub fn run() {
             draft_commands::set_report_mode,
             draft_commands::accept_new_draft,
             draft_commands::discard_new_draft,
+            draft_commands::set_status_decision,
+            draft_commands::add_status_proposal,
             draft_commands::render_report,
             overlay::overlay_image,
+            overlay::overlay_ready,
             overlay::overlay_finish,
         ])
         .run(tauri::generate_context!());

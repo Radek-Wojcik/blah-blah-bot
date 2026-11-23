@@ -24,4 +24,31 @@ pub fn init(log_dir: &Path) {
     let registry = registry.with(fmt::layer().with_writer(std::io::stderr));
 
     let _ = registry.try_init();
+    log_panics();
+}
+
+/// Records every panic in the log: where it happened and the kind of its payload, never its
+/// text (it can hold a token, a webhook or a path). Without this a panic in a background
+/// thread leaves no trace in the file log.
+fn log_panics() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let kind = match info.payload().downcast_ref::<&str>() {
+            Some(_) => "str",
+            None if info.payload().is::<String>() => "string",
+            None => "other",
+        };
+        let place = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_default();
+        let thread = std::thread::current();
+        tracing::error!(
+            thread = thread.name().unwrap_or("unnamed"),
+            location = %place,
+            payload = kind,
+            "a thread panicked (panic text withheld)"
+        );
+        previous(info);
+    }));
 }

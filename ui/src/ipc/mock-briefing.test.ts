@@ -31,7 +31,7 @@ describe("the mock briefing", () => {
     expect(b.openCount).toBe(7);
     expect(b.done).toHaveLength(1);
     // Open topics only.
-    expect(b.topics.map((t) => t.id)).toEqual(["t-1", "t-3"]);
+    expect(b.topics.map((t) => t.id)).toEqual(["t-1", "t-4"]);
   });
 
   it("pulls a clone only on refresh and moves its date", async () => {

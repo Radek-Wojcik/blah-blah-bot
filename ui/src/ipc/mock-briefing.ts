@@ -8,7 +8,7 @@
 import type { Unsubscribe } from "./backend";
 import { MOCK_TODAY, type CycleStore } from "./mock-cycles";
 import { fail } from "./mock-util";
-import type { Briefing, BriefingGroup, BriefingTask, CycleParticipant } from "./types";
+import type { Briefing, BriefingGroup, BriefingTask, CycleParticipant, Topic } from "./types";
 
 /** A task as a source reports it: before grouping. */
 interface RawTask {
@@ -77,6 +77,13 @@ const NOMAD_OPEN: RawTask[] = [
     meeting: "2026-11-06",
   },
 ];
+
+const DEMO_BRIEFING_TOPIC: Topic = {
+  id: "t-4",
+  text: "Agree on the date of the first field test",
+  status: "open",
+  openedIn: "2026-11-13",
+};
 
 const NOMAD_DONE: RawTask[] = [
   {
@@ -203,7 +210,12 @@ export function createMockBriefing(cycles: CycleStore) {
         openCount: groups.reduce((n, g) => n + g.tasks.length, 0),
         overdueCount: groups.reduce((n, g) => n + g.overdueCount, 0),
         done: demo ? groupRaw(NOMAD_DONE, details.cycle.participants).flatMap((g) => g.tasks) : [],
-        topics: details.topics.filter((t) => t.status === "open"),
+        // The demo cycle has one more open topic here than in the cycle store, which the
+        // publishing mock shares and whose topic list its tests fix.
+        topics: [
+          ...details.topics.filter((t) => t.status === "open"),
+          ...(demo ? [DEMO_BRIEFING_TOPIC] : []),
+        ],
         hasRemote: current.remote !== null,
         stateAsOf: current.stateAsOf,
         offline: current.offline,

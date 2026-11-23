@@ -7,13 +7,13 @@
 use std::path::Path;
 
 use cycle_store::{
-    Certainty, Cycle, Draft, Item, ItemType, Language, Participant, ReportMode, Section, Source,
-    Template, Variant, Warning, WarningCode,
+    Certainty, Cycle, Decision, Draft, Item, ItemType, Language, Participant, ProposedStatus,
+    ReportMode, Section, Source, StatusProposal, Template, Variant, Warning, WarningCode,
 };
 use queue::draft::{self as ops, DraftError, DraftFiles, ItemPatch, NewItem};
 use serde::{Deserialize, Deserializer, Serialize};
 use store::Store;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::cycles::{self, Located, ReportChoice};
 use crate::ipc::{IpcError, IpcResult};
@@ -130,6 +130,34 @@ impl From<&Warning> for WarningDto {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct StatusProposalDto {
+    pub id: String,
+    pub target: String,
+    pub status: ProposedStatus,
+    pub reason: String,
+    pub comment: Option<String>,
+    pub source: Option<SourceDto>,
+    pub decision: Decision,
+    pub edited: bool,
+}
+
+impl From<&StatusProposal> for StatusProposalDto {
+    fn from(p: &StatusProposal) -> Self {
+        Self {
+            id: p.id.clone(),
+            target: p.target.clone(),
+            status: p.status,
+            reason: p.reason.clone(),
+            comment: p.comment.clone(),
+            source: p.source.as_ref().map(Into::into),
+            decision: p.decision,
+            edited: p.edited,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DraftDto {
     pub meeting_id: String,
     pub cycle: String,
@@ -141,6 +169,9 @@ pub struct DraftDto {
     pub sections: Vec<SectionDto>,
     pub summary: String,
     pub items: Vec<ItemDto>,
+    /// Absent while the draft has no status proposals.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub status_proposals: Vec<StatusProposalDto>,
     pub warnings: Vec<WarningDto>,
 }
 
@@ -157,6 +188,7 @@ impl From<&Draft> for DraftDto {
             sections: d.sections.iter().map(Into::into).collect(),
             summary: d.summary.clone(),
             items: d.items.iter().map(Into::into).collect(),
+            status_proposals: d.status_proposals.iter().map(Into::into).collect(),
             warnings: d.warnings.iter().map(Into::into).collect(),
         }
     }
@@ -183,6 +215,9 @@ pub struct DraftView {
     pub transcript_present: bool,
     /// Set when the template could not be used and the built-in layout was rendered instead.
     pub report_warning: Option<String>,
+    /// The draft is read-only: the meeting is published, or operations for it are queued.
+    /// Cancelling them in the outbox unlocks it.
+    pub locked: bool,
 }
 
 fn double_option<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
@@ -240,9 +275,28 @@ pub fn ensure_draft_idle(store: &Store, meeting_id: &str) -> IpcResult<()> {
     Ok(())
 }
 
-/// [`ensure_draft_idle`] for the command layer.
+/// `published` while operations of the meeting are in the outbox: the draft is what was
+/// frozen for publishing and stays as it is until they are cancelled.
+pub fn ensure_draft_unlocked(store: &Store, meeting_id: &str) -> IpcResult<()> {
+    match publishers::flow::lock_reason(store, meeting_id)? {
+        Some(why) => Err(IpcError::new("published", why)),
+        None => Ok(()),
+    }
+}
+
+/// [`ensure_draft_idle`] and [`ensure_draft_unlocked`] for the command layer: every command
+/// that changes the draft starts with it.
 fn idle(state: &AppState, meeting_id: &str) -> IpcResult<()> {
-    state.with_store_ipc(|s| ensure_draft_idle(s, meeting_id))
+    state.with_store_ipc(|s| {
+        ensure_draft_idle(s, meeting_id)?;
+        ensure_draft_unlocked(s, meeting_id)
+    })
+}
+
+/// The view with its `locked` flag.
+fn with_lock(state: &AppState, meeting_id: &str, mut view: DraftView) -> IpcResult<DraftView> {
+    view.locked = state.with_store(|s| publishers::flow::is_locked(s, meeting_id))?;
+    Ok(view)
 }
 
 /// Draft errors with stable codes: `no_draft` until the reduce stage has written one.
@@ -250,7 +304,7 @@ pub fn draft_error(e: DraftError) -> IpcError {
     match e {
         DraftError::NotReady => IpcError::new("no_draft", e.to_string()),
         DraftError::NoNewDraft => IpcError::new("no_new_draft", e.to_string()),
-        DraftError::NoItem(_) | DraftError::NoSection(_) => {
+        DraftError::NoItem(_) | DraftError::NoSection(_) | DraftError::NoProposal(_) => {
             IpcError::new("not_found", e.to_string())
         }
         DraftError::Invalid(_) => IpcError::new("invalid", e.to_string()),
@@ -285,7 +339,7 @@ fn participants_of(located: Option<&Located>) -> Vec<Participant> {
 
 /// Renders the draft with its template. A template that is missing or cannot render falls
 /// back to the built-in layout; the second value then says why.
-fn render(
+pub(crate) fn render(
     located: Option<&Located>,
     draft: &Draft,
     variant: Variant,
@@ -335,6 +389,7 @@ fn view_of(
             .collect(),
         transcript_present: meeting_dir.join("work").join("transcript.json").is_file(),
         report_warning,
+        locked: false,
     })
 }
 
@@ -451,6 +506,46 @@ pub fn add_item(
             },
         )
         .map(|_| ())
+    })
+}
+
+/// Decides a status change. `comment` is the text posted with it: `None` leaves it as it is
+/// and an empty text clears it.
+pub fn set_decision(
+    repos: &[CycleRepoSetting],
+    meeting_dir: &Path,
+    proposal_id: &str,
+    decision: Decision,
+    comment: Option<String>,
+) -> IpcResult<DraftView> {
+    edit(repos, meeting_dir, |d| {
+        ops::set_status_decision(d, proposal_id, decision, comment.map(Some))
+    })
+}
+
+/// Adds a status change by hand. A topic must exist in the cycle; an issue is written `#12`.
+pub fn add_proposal(
+    repos: &[CycleRepoSetting],
+    meeting_dir: &Path,
+    target: &str,
+    status: ProposedStatus,
+    comment: Option<String>,
+) -> IpcResult<DraftView> {
+    let target = target.trim();
+    if !target.starts_with('#') {
+        let draft = DraftFiles::new(meeting_dir).load().map_err(draft_error)?;
+        if let Some(located) = cycles::locate(repos, &draft.cycle)? {
+            let topics = located.repo.load_topics(&draft.cycle)?;
+            if !topics.iter().any(|t| t.id == target) {
+                return Err(IpcError::new(
+                    "invalid",
+                    format!("{target} is not a topic of the cycle (issues are written #12)"),
+                ));
+            }
+        }
+    }
+    edit(repos, meeting_dir, |d| {
+        ops::add_status_proposal(d, target, status, comment).map(|_| ())
     })
 }
 
@@ -584,6 +679,7 @@ fn changed(app: &AppHandle, meeting_id: &str) {
 }
 
 fn after(app: &AppHandle, meeting_id: &str, view: IpcResult<DraftView>) -> IpcResult<DraftView> {
+    let view = view.and_then(|v| with_lock(&app.state::<AppState>(), meeting_id, v));
     if view.is_ok() {
         changed(app, meeting_id);
     }
@@ -592,7 +688,8 @@ fn after(app: &AppHandle, meeting_id: &str, view: IpcResult<DraftView>) -> IpcRe
 
 #[tauri::command]
 pub fn get_draft(state: State<'_, AppState>, meeting_id: String) -> IpcResult<DraftView> {
-    load_view(&state.cycle_repos(), &meeting_dir(&state, &meeting_id)?)
+    let view = load_view(&state.cycle_repos(), &meeting_dir(&state, &meeting_id)?)?;
+    with_lock(&state, &meeting_id, view)
 }
 
 #[tauri::command]
@@ -708,6 +805,40 @@ pub fn discard_new_draft(
     let dir = meeting_dir(&state, &meeting_id)?;
     idle(&state, &meeting_id)?;
     let view = discard_new(&state.cycle_repos(), &dir);
+    after(&app, &meeting_id, view)
+}
+
+/// Approves or rejects a status change of an open issue or topic, with the text to post
+/// (`None` keeps it, an empty text clears it). Nothing is written back before approval, and
+/// nothing approves one by itself.
+#[tauri::command]
+pub fn set_status_decision(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    meeting_id: String,
+    proposal_id: String,
+    decision: Decision,
+    comment: Option<String>,
+) -> IpcResult<DraftView> {
+    let dir = meeting_dir(&state, &meeting_id)?;
+    idle(&state, &meeting_id)?;
+    let view = set_decision(&state.cycle_repos(), &dir, &proposal_id, decision, comment);
+    after(&app, &meeting_id, view)
+}
+
+/// Adds a status change by hand; it waits for approval like the others.
+#[tauri::command]
+pub fn add_status_proposal(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    meeting_id: String,
+    target: String,
+    status: ProposedStatus,
+    comment: Option<String>,
+) -> IpcResult<DraftView> {
+    let dir = meeting_dir(&state, &meeting_id)?;
+    idle(&state, &meeting_id)?;
+    let view = add_proposal(&state.cycle_repos(), &dir, &target, status, comment);
     after(&app, &meeting_id, view)
 }
 

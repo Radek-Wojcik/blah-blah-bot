@@ -18,6 +18,8 @@ pub enum Schema {
     Meeting,
     /// `work/context.json`
     Context,
+    /// `work/corrections.json`
+    Corrections,
 }
 
 impl Schema {
@@ -28,6 +30,7 @@ impl Schema {
             Schema::Topics => include_str!("../../../schemas/topics.schema.json"),
             Schema::Meeting => include_str!("../../../schemas/meeting.schema.json"),
             Schema::Context => include_str!("../../../schemas/cycle-context.schema.json"),
+            Schema::Corrections => include_str!("../../../schemas/corrections.schema.json"),
         }
     }
 
@@ -36,11 +39,13 @@ impl Schema {
         static TOPICS: OnceLock<Validator> = OnceLock::new();
         static MEETING: OnceLock<Validator> = OnceLock::new();
         static CONTEXT: OnceLock<Validator> = OnceLock::new();
+        static CORRECTIONS: OnceLock<Validator> = OnceLock::new();
         let cell = match self {
             Schema::Cycle => &CYCLE,
             Schema::Topics => &TOPICS,
             Schema::Meeting => &MEETING,
             Schema::Context => &CONTEXT,
+            Schema::Corrections => &CORRECTIONS,
         };
         cell.get_or_init(|| {
             let doc: Value =

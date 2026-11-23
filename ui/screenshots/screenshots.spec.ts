@@ -257,6 +257,131 @@ test.describe("static screenshots", () => {
       clip: { x: 250, y: Math.max(0, box!.y - 130), width: 1020, height: 330 },
     });
   });
+
+  // Stage 5. Run only these with: npx playwright test --project=screenshots -g "status approval|publishing panel|rendered report|Discord message|token setup"
+  test("status approval", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 1000 });
+    await page.goto("/?view=main&backend=mock&rate=0&page=draft&meeting=m5");
+    const changes = page.getByRole("region", { name: "Status changes" });
+    await changes.getByRole("button", { name: "Approve #12" }).click();
+    await changes.getByRole("button", { name: "Reject #11" }).click();
+    await changes.getByLabel("Comment for #12").fill("Checked on the drawing server.");
+    await changes.getByLabel("Comment for #12").blur();
+    await expect(changes.getByRole("status")).toContainText("1 of 3 approved, 1 rejected");
+    await settle(page);
+    await changes.screenshot({ path: path.join(OUT, "status-approval.png") });
+  });
+
+  test("publishing panel", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 1700 });
+    await page.goto("/?view=main&backend=mock&rate=0&jobms=60&page=draft&meeting=m5");
+    const changes = page.getByRole("region", { name: "Status changes" });
+    for (const target of ["#12", "#11", "t-1"])
+      await changes.getByRole("button", { name: `Approve ${target}` }).click();
+    const panel = page.getByRole("region", { name: "Publishing" });
+    await panel.getByRole("button", { name: "Publish", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Publish to a public repository?" });
+    await dialog.getByRole("checkbox").check();
+    await dialog.getByRole("button", { name: "Publish to a public repository" }).click();
+    await expect(panel.getByText("Published: everything was sent.")).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(panel.getByRole("listitem", { name: "Conflict in topic t-1" })).toBeVisible();
+    await settle(page);
+    await panel.screenshot({ path: path.join(OUT, "publishing-panel.png") });
+  });
+
+  test("publishing plan before publishing", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 1700 });
+    await page.goto("/?view=main&backend=mock&rate=0&jobms=60&page=draft&meeting=m5");
+    const changes = page.getByRole("region", { name: "Status changes" });
+    for (const target of ["#12", "#11", "t-1"])
+      await changes.getByRole("button", { name: `Approve ${target}` }).click();
+    const panel = page.getByRole("region", { name: "Publishing" });
+    // The Discord message goes out on its own once the draft is complete; GitHub waits.
+    await panel
+      .getByRole("radiogroup", { name: "Discord publishing rule" })
+      .getByRole("radio", { name: "Automatic" })
+      .click();
+    await expect(panel.getByRole("listitem", { name: "Topic t-1 changed" })).toBeVisible();
+    await settle(page);
+    await panel.screenshot({ path: path.join(OUT, "publishing-plan.png") });
+  });
+
+  test("corrections to a published meeting", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 1900 });
+    await page.goto("/?view=main&backend=mock&rate=0&jobms=60&page=draft&meeting=m5");
+    const panel = page.getByRole("region", { name: "Publishing" });
+    await panel.getByRole("button", { name: "Publish", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Publish to a public repository?" });
+    await dialog.getByRole("checkbox").check();
+    await dialog.getByRole("button", { name: "Publish to a public repository" }).click();
+    await expect(panel.getByText("Published: everything was sent.")).toBeVisible({
+      timeout: 20_000,
+    });
+    const corrections = page.getByRole("region", { name: "Corrections" });
+    const add = async (text: string, item?: string) => {
+      await corrections.getByRole("button", { name: "Add correction" }).click();
+      const form = corrections.getByRole("form", { name: "New correction" });
+      await form.getByLabel("Correction text").fill(text);
+      if (item) await form.getByLabel("Correction about").selectOption(item);
+      await form.getByRole("button", { name: "Add correction" }).click();
+    };
+    // The first one is about a task that became an issue and is published; the second waits.
+    await add("The ground station schedule moved from Thursday to Friday.", "i03");
+    await corrections.getByRole("button", { name: "Publish correction c1" }).click();
+    await expect(corrections.getByText("and commented on the issue")).toBeVisible({
+      timeout: 20_000,
+    });
+    await add("The test range is booked for 12 December, not 5 December.");
+    await corrections.getByRole("button", { name: "Add correction" }).click();
+    await corrections.getByLabel("Correction text").fill("The supplier confirmed the delivery.");
+    await settle(page);
+    await corrections.screenshot({ path: path.join(OUT, "corrections.png") });
+  });
+
+  test("example report as rendered Markdown", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 1000 });
+    await page.goto("/?view=main&backend=mock&rate=0&page=draft&meeting=m5");
+    await page.getByRole("button", { name: "Rendered report" }).click();
+    await page.getByRole("button", { name: "Preview", exact: true }).click();
+    const report = page.getByRole("article", { name: "Report preview" });
+    await expect(report.getByRole("heading", { level: 2 })).toBeVisible();
+    await settle(page);
+    await report.screenshot({ path: path.join(OUT, "report-rendered.png") });
+  });
+
+  test("example Discord message", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 1000 });
+    await page.goto("/?view=main&backend=mock&rate=0&page=draft&meeting=m5");
+    await page.getByRole("button", { name: "Rendered report" }).click();
+    await page.getByLabel("Report format").selectOption("chat");
+    await page.getByRole("button", { name: "Preview", exact: true }).click();
+    const message = page.getByRole("region", { name: "Discord message preview" });
+    await expect(message).toContainText("Blah Blah Bot");
+    await settle(page);
+    await message.screenshot({ path: path.join(OUT, "discord-message.png") });
+  });
+
+  test("token setup", async ({ page }) => {
+    // Tall enough for the whole page: an element taller than the window is stitched badly.
+    await page.setViewportSize({ width: 1280, height: 2300 });
+    await page.goto("/?view=main&backend=mock&rate=0&page=settings");
+    const publishing = page.getByRole("region", { name: "Publishing" });
+    // The GitHub token is stored; the webhook is typed (masked) and not stored yet.
+    const webhook = publishing.getByRole("form", { name: "Webhook for cred:discord/nomad" });
+    await webhook.getByRole("button", { name: "Clear" }).click();
+    await expect(webhook).toContainText("No webhook stored");
+    await webhook
+      .getByLabel("Webhook for cred:discord/nomad")
+      .fill("https://discord.com/api/webhooks/000000000000000007/demo-token");
+    await expect(
+      publishing.getByRole("form", { name: "GitHub token for api.github.com" }),
+    ).toContainText("Token stored");
+    await webhook.getByLabel("Webhook for cred:discord/nomad").blur();
+    await settle(page);
+    await publishing.screenshot({ path: path.join(OUT, "token-setup.png") });
+  });
 });
 
 test("record flow GIF", async ({ page }) => {
@@ -433,6 +558,64 @@ test("draft editing GIF", async ({ page }) => {
     ...frames,
   ]);
   expect(fs.statSync(path.join(OUT, "draft-editing.gif")).size).toBeLessThan(1_500_000);
+});
+
+test("approve statuses and publish GIF", async ({ page }) => {
+  const frames: string[] = [];
+  const dir = freshDir("gif");
+  const shot = async (wait = 350) => {
+    await page.waitForTimeout(wait);
+    const file = path.join(dir, `f${String(frames.length).padStart(2, "0")}.png`);
+    await page.screenshot({ path: file });
+    frames.push(file);
+  };
+  await page.setViewportSize({ width: 1000, height: 820 });
+  await page.goto("/?view=main&backend=mock&rate=0&jobms=900&page=draft&meeting=m5");
+  const changes = page.getByRole("region", { name: "Status changes" });
+  await expect(changes.getByRole("listitem")).toHaveCount(3);
+  const top = (locator: ReturnType<Page["locator"]>) =>
+    locator.evaluate((el) => el.scrollIntoView({ block: "start" }));
+  await top(changes.getByRole("heading", { name: "Status changes" }));
+  await shot();
+  // Each status change shows its quote; the user decides.
+  await changes.getByRole("button", { name: "Approve #12" }).click();
+  await shot();
+  await changes.getByRole("button", { name: "Approve #11" }).click();
+  await shot();
+  await changes.getByRole("button", { name: "Approve t-1" }).click();
+  await expect(changes.getByRole("status")).toContainText("3 of 3 approved");
+  await shot();
+  // The publishing panel: what will happen, then Publish, with the public repository asked once.
+  const panel = page.getByRole("region", { name: "Publishing" });
+  await top(panel.getByRole("heading", { name: "Publishing" }));
+  await shot();
+  // Before it is published the plan shows each topic of topics.yaml, before and after.
+  await top(panel.getByRole("heading", { name: "topics.yaml: before and after" }));
+  await shot();
+  await panel.getByRole("button", { name: "Publish", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Publish to a public repository?" });
+  await expect(dialog).toBeVisible();
+  await shot();
+  await dialog.getByRole("checkbox").check();
+  await shot();
+  await dialog.getByRole("button", { name: "Publish to a public repository" }).click();
+  await top(panel.getByRole("heading", { name: "Outbox" }));
+  // The outbox runs one operation at a time.
+  for (let i = 0; i < 4; i++) await shot(1_700);
+  await expect(panel.getByText("Published: everything was sent.")).toBeVisible({
+    timeout: 30_000,
+  });
+  await shot(600);
+  await top(panel.getByRole("heading", { name: "topics.yaml", exact: true }));
+  await shot(600);
+  fs.mkdirSync(OUT, { recursive: true });
+  execFileSync("python", [
+    path.join(here, "make-gif.py"),
+    path.join(OUT, "approve-and-publish.gif"),
+    "1300",
+    ...frames,
+  ]);
+  expect(fs.statSync(path.join(OUT, "approve-and-publish.gif")).size).toBeLessThan(3_000_000);
 });
 
 // Stage 6. Run only this one with: npx playwright test --project=screenshots -g "detect and record"

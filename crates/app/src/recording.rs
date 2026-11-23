@@ -440,7 +440,7 @@ mod tests {
         use recorder::session::ToneBackend;
         let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
         let recorder = Recorder::new(store.clone(), Arc::new(ToneBackend), true);
-        let root = testkit::target_tempdir("app");
+        let root = test_tmp::TestDir::new("recording");
         let report = ReportSettings {
             cycle_id: Some("NOMAD".into()),
             report_mode: Some("by-type".into()),
@@ -473,7 +473,7 @@ mod tests {
             }),
         ));
         let recorder = Recorder::new(store.clone(), backend, true);
-        let root = testkit::target_tempdir("app-tab");
+        let root = test_tmp::TestDir::new("app-tab");
         // Not recording: a tab is refused.
         assert_eq!(
             recorder.add_tab("t1", "Tab: example.org").unwrap_err().code,

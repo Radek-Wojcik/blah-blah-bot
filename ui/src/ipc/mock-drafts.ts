@@ -23,6 +23,8 @@ type DraftMethods = Pick<
   | "acceptNewDraft"
   | "discardNewDraft"
   | "renderReport"
+  | "setStatusDecision"
+  | "addStatusProposal"
   | "onDraftChanged"
 >;
 
@@ -40,11 +42,15 @@ export interface MockDrafts {
   create(meetingId: string, report: RecordingReport): void;
   /** Leaves a newer draft next to the edited one (a re-run of `reduce`). */
   leaveNewDraft(meetingId: string): void;
+  /** Tells the views that the draft changed without an edit (it was unlocked). */
+  touch(meetingId: string): void;
 }
 
 export function createMockDrafts(
   cycles: CycleStore,
   hasTranscript: (meetingId: string) => boolean,
+  /** Operations for the meeting are in the outbox: its draft is read-only. */
+  isLocked: (meetingId: string) => boolean = () => false,
 ): MockDrafts {
   const drafts = new Map<string, Held>();
   const listeners = new Set<{ cb: (id: string) => void }>();
@@ -79,6 +85,15 @@ export function createMockDrafts(
     return { text: renderReport(d, people, DEFAULT_TEMPLATE_TEXT, d.language, variant), warning };
   }
 
+  /** Like `ensure_draft_unlocked`: every change of the draft starts with it. */
+  function unlocked(id: string) {
+    if (isLocked(id))
+      fail(
+        "published",
+        "the meeting is published or queued for publishing: its draft is read-only until the operations are cancelled",
+      );
+  }
+
   function view(id: string): DraftView {
     const h = held(id);
     const { text, warning } = render(h.draft, "markdown");
@@ -92,12 +107,14 @@ export function createMockDrafts(
       })),
       transcriptPresent: hasTranscript(id),
       reportWarning: warning,
+      locked: isLocked(id),
     };
   }
 
   /** Applies a change to a copy and stores it only when it did not throw. */
   function edit(id: string, change: (d: Draft) => void): DraftView {
     const h = held(id);
+    unlocked(id);
     const copy = structuredClone(h.draft);
     change(copy);
     h.draft = copy;
@@ -154,6 +171,7 @@ export function createMockDrafts(
     },
     setDraftSections: async (id, sections) => edit(id, (d) => ops.setSections(d, sections)),
     setReportMode: async (id, mode, template, meetingType) => {
+      unlocked(id);
       const draft = held(id).draft;
       const checked = cycles.validateReport({ cycleId: draft.cycle, mode, template, meetingType });
       const cycle = cycles.cycle(draft.cycle);
@@ -163,6 +181,7 @@ export function createMockDrafts(
       return edit(id, (d) => ops.setModeAndTemplate(d, mode, layoutTemplate, checked.meetingType));
     },
     acceptNewDraft: async (id) => {
+      unlocked(id);
       const h = held(id);
       if (h.newDraft === null) fail("no_new_draft", "there is no newer draft to accept");
       h.draft = h.newDraft;
@@ -171,6 +190,7 @@ export function createMockDrafts(
       return view(id);
     },
     discardNewDraft: async (id) => {
+      unlocked(id);
       held(id).newDraft = null;
       emit(id);
       return view(id);
@@ -180,6 +200,20 @@ export function createMockDrafts(
         fail("invalid", "the variant is markdown or chat");
       return render(held(id).draft, variant).text;
     },
+    setStatusDecision: async (id, proposalId, decision, comment) =>
+      edit(id, (d) => ops.setStatusDecision(d, proposalId, decision, comment)),
+    addStatusProposal: async (id, target, status, comment) =>
+      edit(
+        id,
+        (d) =>
+          void ops.addStatusProposal(
+            d,
+            target,
+            status,
+            comment,
+            cycles.topics(d.cycle).map((t) => t.id),
+          ),
+      ),
     onDraftChanged: (cb): Promise<Unsubscribe> => {
       const entry = { cb };
       listeners.add(entry);
@@ -199,6 +233,7 @@ export function createMockDrafts(
       drafts.set(id, { draft: layout(base, report), newDraft: null });
       emit(id);
     },
+    touch: (id) => emit(id),
     leaveNewDraft: (id) => {
       const h = held(id);
       h.newDraft = demoNewDraft(id, h.draft.cycle);

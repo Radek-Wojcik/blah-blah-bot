@@ -12,13 +12,17 @@ use crate::browser::{AppHost, Browser};
 use crate::cycles::ParticipantSync;
 use crate::detection::Detection;
 use crate::ipc::{IpcError, IpcResult};
+use crate::overlay::Preview;
 use crate::processing::Processing;
+use crate::publishing::{AppEnv, Publishing};
 use crate::recording::Recorder;
 use crate::settings::{CycleRepoSetting, Settings};
 
 /// A desktop capture waiting for the user to choose a region, with the moment it was taken.
 pub struct PendingShot {
-    pub frame: Frame,
+    pub frame: Arc<Frame>,
+    /// The PNG shown in the overlay, encoded while the overlay opens.
+    pub preview: Arc<Preview>,
     pub offset_ms: f64,
 }
 
@@ -30,6 +34,7 @@ pub struct AppState {
     default_recordings: PathBuf,
     pub recorder: Recorder,
     processing: Arc<Processing>,
+    publishing: Arc<Publishing>,
     pub pending_shot: Mutex<Option<PendingShot>>,
     browser: Arc<Browser>,
     browser_host: Arc<AppHost>,
@@ -111,9 +116,30 @@ impl AppState {
                     .unwrap_or_default()
             },
         );
+        let env_settings = settings.clone();
+        let env_app = app.clone();
+        let publishing = Publishing::new(
+            store.clone(),
+            Arc::new(AppEnv::new(
+                move || {
+                    env_settings
+                        .lock()
+                        .map(|s| s.cycle_repos.clone())
+                        .unwrap_or_default()
+                },
+                move || {
+                    env_app
+                        .state::<AppState>()
+                        .recordings_root()
+                        .unwrap_or_default()
+                },
+                Arc::new(crate::secrets::Credentials),
+            )),
+        );
         Ok(Self {
             recorder: Recorder::new(store.clone(), backend, demo),
             processing,
+            publishing,
             store,
             settings,
             settings_path,
@@ -199,6 +225,10 @@ impl AppState {
 
     pub fn processing(&self) -> &Arc<Processing> {
         &self.processing
+    }
+
+    pub fn publishing(&self) -> &Arc<Publishing> {
+        &self.publishing
     }
 
     pub fn mark_interrupted(&self) -> IpcResult<Vec<String>> {

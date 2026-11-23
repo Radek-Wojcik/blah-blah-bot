@@ -121,7 +121,7 @@ Rust modules are crates in one Cargo workspace. Licenses of third-party parts ar
 
 - **Responsibility:** process lifetime, tray icon, recording widget, main window, global hotkeys, IPC commands exposed to the UI, single-instance lock.
 - **Interfaces:** Tauri commands and events; calls into every other crate.
-- **IPC conventions:** commands are snake_case and return `Result<T, IpcError>` with a stable `code` and a `message`; payloads are camelCase JSON; events (`recording-state`, `meetings-changed`) carry the complete new state. See [ADR 0014](decisions/0014-recorder-ipc-and-screenshot-overlay.md).
+- **IPC conventions:** commands are snake_case and return `Result<T, IpcError>` with a stable `code` and a `message`; payloads are camelCase JSON; events (`recording-state`, `meetings-changed`, `outbox-changed`) carry the complete new state. See [ADR 0014](decisions/0014-recorder-ipc-and-screenshot-overlay.md).
 - **Briefing:** `briefing.rs` builds the briefing screen of a cycle (open tasks by person, open topics) from a `BriefingSource` (`tasks(cycle)`, `topics(cycle)`); the command `get_briefing(cycleId, refresh)` pulls a cloned repository first when asked and answers with the state of the last successful pull and its date when it cannot. `AppState` holds the source, so the one that Stage 5 brings (issues read back from GitHub) replaces `CycleStoreSource` in one line. See section 4.9 and [ADR 0017](decisions/0017-cycles-extraction-and-drafts.md).
 - **Environment switches** for development and tests: `BBB_DEMO` replaces audio capture with generated tones, `BBB_DATA_DIR` keeps all data in one folder, `BBB_LOG` sets the log filter.
 
@@ -188,34 +188,43 @@ Each step is a separate process invocation with file inputs and outputs, so a cr
 
 ### 4.8 `store` (Rust, SQLite)
 
-- **Responsibility:** local state: meetings, tracks, segments, job stages, drafts, voice profiles, outbox of pending publish operations, settings, cached issues.
+- **Responsibility:** local state: meetings, tracks, segments, job stages, voice profiles, the outbox of publish operations and the record of what was published, settings. Drafts are files in the meeting folder; cached issues are files inside the clone's `.git`.
+- **Publishing tables (schema version 5):** `outbox` (one row per outgoing operation: meeting, target, kind, an idempotency key unique per meeting, a JSON payload without secrets, state, attempts, next attempt time, last error, result, the operation it follows), `publications` (folder, commit, report address and snapshot of a published meeting) and `repo_confirmations` (repositories the user confirmed publishing to). The crate owns the outbox state machine (section 4.10); what an operation does is the business of `publishers`.
 - **Not stored here:** secrets (section 10) and anything that must be shared with the team (section 6).
 
 ### 4.9 `cycle-store` (Rust)
 
 - **Responsibility:** the cycle repository: a local clone of a remote or a local-only repository, `git pull --rebase` before the `extract` stage, parsing and validating cycle files, building the context passed to the reasoner, the draft types and the deterministic report renderer, offline fallback with a visible "state as of" date.
-- **Implemented API areas:** repository (`Repo`: open, initialize a local repository, clone, pull with uncommitted edits set aside, status, list cycles with their validation issues, load and save a cycle, topics and templates); `cycle` and `topics` (parse, validate against `schemas/cycle.schema.json` and `schemas/topics.schema.json`, write in a stable key order); `template` (front matter sections, placeholders, validation); `context` (`work/context.json`: cycle, open topics, open issues and the items of previous meetings, newest first, at most 80); `briefing` (the tasks of the open issues and of the `meeting.json` files merged, grouped by person, sorted by due date, marked overdue against a date that the caller passes in, and the open topics); `draft` and `render` (meeting draft types and the template engine for the report and the per-target variants); `issues` (open-issue list with a cache and a fetch function).
+- **Implemented API areas:** repository (`Repo`: open, initialize a local repository, clone, pull with uncommitted edits set aside, status, list cycles with their validation issues, load and save a cycle, topics and templates); `cycle` and `topics` (parse, validate against `schemas/cycle.schema.json` and `schemas/topics.schema.json`, write in a stable key order); `template` (front matter sections, placeholders, validation); `context` (`work/context.json`: cycle, open topics, open issues, the items of previous meetings, newest first, at most 80, and the corrections to them, at most 30); `briefing` (the tasks of the open issues and of the `meeting.json` files merged, grouped by person, sorted by due date, marked overdue against a date that the caller passes in, and the open topics); `draft` and `render` (meeting draft types and the template engine for the report and the per-target variants); `issues` (issue records, the hidden markers that link an issue to its item, and the cache of open and closed issues with those links); and, for publishing, `corrections` (the notes written after a meeting was published, their file and marker), `publish` (the off-index commit and push, for a meeting and for one new file) and `topics::merge` (per-topic merge of `topics.yaml`).
 - **Cache and state:** the date of the last successful pull and the last error are kept in `.git/bbb-cache.json`; the open-issue list of a cycle in `.git/bbb-issues-<ID>.json`. Both are inside `.git`, so they never appear in the working tree or in a commit.
 - **Offline behaviour:** the working tree is the cache. A failed pull (no network, no upstream, a conflict) leaves the clone as it was, aborts an interrupted rebase and records the reason; the interface shows "state as of <date>". A local-only repository has nothing to pull. Without the `git` CLI cycle repositories cannot be used.
 - **Briefing rules:** a GitHub login is mapped to the cycle's participant (ignoring case), a login that matches nobody and a participant who left the cycle get a group of their own, tasks nobody owns come last. A task of a meeting that points to an issue (`relates_to` of `#12`) is the same task as the issue and is shown once, with the issue's title and assignee and the meeting's due date. A task that points to an issue that is no longer open, or to a closed topic, counts as done; the first rule applies only when the issue list was really read, because an issue cache that was never filled says nothing. A task repeated in a later meeting is shown once. Only open topics are listed. "Today" is the UTC date of the briefing; a task due today is not overdue.
-- **Open issues:** the crate can fetch them from the GitHub REST API (pull requests excluded, up to 500) and falls back to the cached list. The application currently builds the context from the cache only and has no setting for a GitHub token, so fetching is not yet wired in; issues are read only.
-- **Technology:** git CLI invoked as a subprocess; GitHub REST API for issues.
+- **Issue state:** the cache `.git/bbb-issues-<ID>.json` holds the open issues, the numbers of closed ones and the links between issues and items (from the markers). Before the briefing and on a manual pull the application refreshes it through `publishers` (all states, sorted by update, at most five pages, pull requests excluded; anonymously for a public repository when no token is stored) and falls back to the last cache when that fails. The context builder drops an item whose issue is closed and gives an item with an open issue its issue number.
+- **Technology:** git CLI invoked as a subprocess; the GitHub REST API is called from `publishers`.
 
 ### 4.10 `publishers` (Rust)
 
-| Target | Mechanism | Notes |
+| Target | Mechanism | Status |
 |---|---|---|
-| GitHub report | Commit of new files into the meeting folder, then push | Only new files are added, which avoids merge conflicts |
-| GitHub Issues | REST API: create, assign, label, close, comment | Due date in the organization "Target date" issue field when available, otherwise in the issue body |
-| Discord (default) | Webhook with `allowed_mentions` | 2000 characters per message, 10 embeds, 10 files per message; long reports and many screenshots are split |
-| Discord (optional) | Bot token | Member lookup by nickname, threads, editing published messages |
-| Notion | Notion API, one database page per task | One-way: tasks are created, not synchronized back |
+| GitHub report | Commit of the new meeting folder and the merged `topics.yaml` built off the index with Git plumbing, then push; a rejected push is rebuilt on the new tip | Built (Stage 5), tested against local bare remotes |
+| GitHub Issues | REST API: create with label and assignee, close, reopen, comment; due date in the organization "Target date" issue field when available, otherwise in the issue body | Built; the issue field path is unverified against a real organization |
+| Discord (default) | Webhook with `allowed_mentions` per message | Built; 2000 characters, 10 files and 8 MiB per message, long reports and many screenshots are split |
+| Discord (optional) | Bot token | Stage 7, not built |
+| Notion | Notion API, one database page per task | Stage 7, not built |
 
-Each target has its own template and its own rule: publish automatically, or wait for approval in the draft view. Failed or offline operations go to the outbox and are retried.
+Each target has its own template and its own rule (`auto`, `on-approval`, `off`; the user chooses it per cycle and target, `on-approval` is used until then, [ADR 0019](decisions/0019-default-publish-rule-per-target.md)). The design and its reasons are in [ADR 0018](decisions/0018-publishing.md); in short:
+
+- **Modules.** `http` (one blocking `ureq` client: https only, no redirects, error classification, redaction), `github` (repository reference, access check, issues, status write-back, issue listing), `discord` (rendering, mentions, splitting, multipart upload, rate limits), `webhook` (validation), `rules` (per-target rules), `gate` (public-repository check), `plan` (the operations of a meeting, pure), `correction` (the operations of a correction, pure), `flow` (snapshot, publish start, lock, corrections), `outbox` (the dispatcher) and, behind the `test-support` feature, `testing` (fake GitHub, fake Discord and a lab with a bare remote).
+- **Publish flow.** Publish, or the `auto` rule after `reduce`, freezes a snapshot (`work/publish/<n>/`: draft with decisions, `report.md`, `transcript.md`, screenshots) and turns the plan into outbox rows: the commit first, then one issue per task and one write-back per approved status change, then the Discord post. The dispatcher thread runs them.
+- **Outbox.** States `queued`, `running`, `done`, `failed`, `cancelled`. A transient failure (no network, timeout, 5xx, 429, a push that kept being rejected) returns the operation to `queued` with a backoff of 30 s doubling to 30 min, or the wait the server named; after 8 attempts or on a permanent failure (400, 401, 403 that is not a rate limit, 404, 422, bad configuration) it is `failed` until the user retries or cancels. A request that gets no answer pauses the other operations of that target for the tick, so one dead host costs one timeout. An operation interrupted by a crash is queued again at the next start. Every operation is idempotent: the commit looks for its folder in the tip, an issue for its marker, a status change for its comment marker, a Discord post resumes after the messages already sent.
+- **Lock.** Once an operation of a meeting is queued, its draft is read-only until all are cancelled.
+- **Corrections.** What changes after a meeting was published is written as a correction (`work/corrections.json`, `schemas/corrections.schema.json`), outside the locked draft. Publishing one adds a new file `corrections.md`, `corrections-2.md`, ... to the folder of the meeting (`cycle_store::add_file`, the same off-index commit and push) and a comment on the issue it is about, as two more outbox kinds (`commit_correction`, `comment_correction`, database schema version 6), under the rule of the `github` target and with the same public-repository gate. The context of later meetings carries them in an optional `corrections` list, read from `corrections*.md` in the repository folders and from the local files (`queue::context` stages them with the local draft).
+- **Public-repository gate.** A public repository, or one whose visibility cannot be read, needs a one-time confirmation; the check runs when the plan is built, when publishing starts and again before each operation reaches the repository.
 
 ### 4.11 `secrets` (Rust)
 
 - **Responsibility:** GitHub token, Discord webhook URLs and bot token, Notion token, cloud API keys, Hugging Face token. Stored in Windows Credential Manager. Configuration files hold references to entries, never values.
+- **Entries:** `github-token@<api host>` (found again only for that host), `target:<name>` for the secrets a cycle file refers to as `cred:<name>` (a Discord webhook), and the Hugging Face and model keys as before. The `target:` namespace is separate, so a `cred:` reference written in a shared repository cannot reach an application secret. A webhook is validated when saved (Discord host, `/api/webhooks/<id>/<token>`), values are never returned to the interface, and every stored or logged error text is scrubbed.
 
 ## 5. Model loading order on a 12 GB GPU
 
@@ -265,9 +274,11 @@ meetings/
       meeting.json      # structured items, machine-readable
       img/
         0001-00-12-41.png
+      corrections.md    # only when the meeting was corrected afterwards;
+      corrections-2.md  # one new file per correction, never changed
 ```
 
-A second meeting on the same day gets the suffix `-2`. `meeting.json` is what the next meeting's context is built from; `report.md` is generated from it and is never parsed back.
+A second meeting on the same day gets the suffix `-2` (then `-3`), chosen against the remote when the commit is built. A correction to a published meeting is a new file in its folder (`corrections.md`, then `corrections-2.md`, ...) and the existing files are never changed. `meeting.json` is what the next meeting's context is built from; `report.md` is generated from it and is never parsed back. `transcript.md` has an anchor per line (`t-hh-mm-ss`) that issues and the report link to, and leaves out passages the user excluded. The publisher writes only into the meeting folder and merges `topics.yaml`; the meeting goes to `<targets.github.path>/<ID>/<folder>` (`meetings` by default), a path the cycle file validates and the publisher checks again before it touches Git.
 
 `cycle.yaml` (abridged):
 
@@ -293,7 +304,7 @@ report:
   by_type:                     # meeting type -> template name
     budget: budget-review
 targets:
-  github: { path: meetings, publish: auto }   # publish: auto | on-approval | off
+  github: { path: meetings, publish: on-approval }   # publish: auto | on-approval | off
   discord: { webhook: cred:discord/nomad, publish: on-approval, template: short }
   notion: { database: cred:notion/nomad-db, publish: on-approval }
 ```
@@ -304,15 +315,15 @@ Only `id` and `name` are required; unknown keys are rejected. The full field ref
 
 - One issue per task, labeled `cycle:<id>`.
 - Assignee from the participant's GitHub login.
-- Due date: the "Target date" issue field for repositories owned by an organization; otherwise a `Due: YYYY-MM-DD` line in the body.
-- A hidden marker in the body links the issue to the meeting and the transcript position.
-- Closing an issue on GitHub marks the task as done at the next pull. Status changes approved in the draft view are written back through the API (close, reopen, comment).
+- Due date: the "Target date" issue field for repositories owned by an organization when the organization defines it; otherwise, and on any error, a `Due: YYYY-MM-DD` line in the body.
+- A hidden marker in the body, `<!-- bbb:v1 cycle=<id> meeting=<meeting id> item=<item id> t=<ms> -->`, links the issue to the meeting and the transcript position, and is how a retry finds an issue it may already have created.
+- Closing an issue on GitHub marks the task as done at the next briefing or pull (the cache keeps closed numbers and the links of issues to items). Status changes proposed from the transcript and approved in the draft view are written back through the API (close, reopen, comment with the reason, the quote and a transcript link); a comment carries its own marker so it is not posted twice. Proposals for topics change `topics.yaml` in the meeting commit.
 
 ### 6.4 Extraction schema
 
 Two schemas under `schemas/` describe the result.
 
-**`extraction.schema.json`** is what the model returns for one transcript window (map step): a `summary` of the window and a list of `items`. The server constrains the output to it and the worker validates it again. An item:
+**`extraction.schema.json`** is what the model returns for one transcript window (map step): a `summary` of the window, a list of `items` and a list of `status_changes` (open issues or topics of the prompt that the window reports as finished, each with `target`, `reason`, `time` and a verbatim `quote`; required, possibly empty). The server constrains the output to it and the worker validates it again. An item:
 
 ```json
 {
@@ -328,14 +339,18 @@ Two schemas under `schemas/` describe the result.
 }
 ```
 
-**`meeting.schema.json`** is the draft (`work/draft.json`, later `meeting.json`): `version`, `meeting_id`, `cycle`, `date`, the resolved output `language` (`pl` or `en`), `mode`, `template`, `meeting_type`, `sections` (`id`, `title`, `description`), `summary`, `items` and `warnings`. An item of the draft has:
+**`meeting.schema.json`** is the draft (`work/draft.json`, later `meeting.json`): `version`, `meeting_id`, `cycle`, `date`, the resolved output `language` (`pl` or `en`), `mode`, `template`, `meeting_type`, `sections` (`id`, `title`, `description`), `summary`, `items`, `status_proposals` (optional) and `warnings`. An item of the draft has:
 
 - `id`, `type`, `text`, `assignee` (a participant id or `null`), `due` (`YYYY-MM-DD` or `null`), `section` (a section id or `null`), `relates_to` (an open topic or issue id, or `null`) and `edited` (set when the user changed the item);
 - `type`: `task`, `decision`, `topic`, `note`, `idea`, `budget`;
 - `certainty`: `stated`, `inferred` or `unknown`, separately for `assignee` and `due`;
 - `source`, or `null` for an item added by hand: `track`, `speaker`, `t_start_ms`, `t_end_ms`, the `quote`, `verified` (the quote was found in the transcript near the stated time) and `match` (similarity from 0 to 1 to the best matching transcript text). The time range comes from the matched transcript segments, not from the model.
 
-`warnings` carry a `code` (`window_skipped`, `quote_unverified`, `assignee_unknown`, `summary_failed`), a message and an optional time range. Status proposals for issues and topics are not part of the Stage 4 schema; they arrive with publishing (Stage 5).
+A status proposal has `id` (`s1`, `s2`, ...), `target` (an issue such as `#12` or a topic id), `status` (`done`, or `open` for one added by hand), `reason`, `comment` (text posted with the change, `null` until the user writes one), `source` (as for items, `null` when added by hand), `decision` (`proposed`, `approved`, `rejected`) and `edited`. `reduce` creates them from `status_changes` for targets that are open in the context, one per target, all `proposed`; only the user changes the decision. A draft without proposals does not carry the key, so it stays byte-identical to a Stage 4 draft.
+
+A published draft is not edited. Notes written after it was published are kept apart in `work/corrections.json` (`corrections.schema.json`: `version`, `meeting_id` and a list of corrections with `id` `c1`.., `date`, `text`, `item` and `issue`, both optional), published as `corrections*.md`, and handed to later meetings as the optional `corrections` list of the context (`meeting`, `date`, `text`, `item` as text, `issue`).
+
+`warnings` carry a `code` (`window_skipped`, `quote_unverified`, `assignee_unknown`, `summary_failed`), a message and an optional time range.
 
 Schemas are versioned files under `schemas/` and are the contract between the Python worker, the Rust core and the UI.
 
@@ -369,7 +384,7 @@ stateDiagram-v2
     failed --> queued: retry from failed stage
 ```
 
-Each stage writes its output to the meeting's working folder and records completion in the database. Stages are idempotent and resumable. Stage 3 adds `speaker_id` and `clips`, Stage 4 adds `extract` and `reduce`, so the pipeline runs `asr`, `diarize`, `merge`, `speaker_id`, `clips`, `audio_cleanup`, `vision`, `extract` and `reduce`. `extract` and `reduce` take their backend from `options.llm` of the job (`managed`, `external` or `cloud`); a managed backend passes the GPU gate, the others do not, and a cloud backend runs only when the store holds the user's confirmation for that endpoint (the supervisor refuses otherwise, and the worker too). A job whose meeting has no cycle, or whose options name no backend, marks both stages done with a note instead of failing, so older jobs and cycle-less meetings still finish. Before `extract` the application writes `work/context.json` and `work/transcript.named.json` (participant names instead of generic speaker labels). `speaker_id` and `clips` run in the application process (crates `speakers` and `queue`), not in the worker: the embeddings are part of the diarization output, so no model is loaded and no GPU is needed. Only `clips` reads the audio and therefore counts as audio-dependent.
+Publishing is not a job stage: it runs from the outbox after the draft is ready (section 4.10), and the draft of a published meeting is read-only. Each stage writes its output to the meeting's working folder and records completion in the database. Stages are idempotent and resumable. Stage 3 adds `speaker_id` and `clips`, Stage 4 adds `extract` and `reduce`, so the pipeline runs `asr`, `diarize`, `merge`, `speaker_id`, `clips`, `audio_cleanup`, `vision`, `extract` and `reduce`. `extract` and `reduce` take their backend from `options.llm` of the job (`managed`, `external` or `cloud`); a managed backend passes the GPU gate, the others do not, and a cloud backend runs only when the store holds the user's confirmation for that endpoint (the supervisor refuses otherwise, and the worker too). A job whose meeting has no cycle, or whose options name no backend, marks both stages done with a note instead of failing, so older jobs and cycle-less meetings still finish. Before `extract` the application writes `work/context.json` and `work/transcript.named.json` (participant names instead of generic speaker labels). The extraction prompt lists the speakers of each window as named, unnamed (`Speaker 2`, a source) or the person who recorded the meeting (`You`) and tells the model to call named people by their names and never by a general word such as "participant"; unnamed speakers keep their generic label, so no name is invented. The reduce prompt that writes the meeting summary is given the same names. A voice named in the Voices screen after the draft was written changes the next run of `extract`, not the draft that exists. `speaker_id` and `clips` run in the application process (crates `speakers` and `queue`), not in the worker: the embeddings are part of the diarization output, so no model is loaded and no GPU is needed. Only `clips` reads the audio and therefore counts as audio-dependent.
 
 ### 7.3 Audio retention
 
@@ -420,7 +435,7 @@ One template engine serves all modes:
 | Auto | The model proposes sections for this meeting; the user can change them |
 | By type | A set of templates keyed by meeting type (technical, budget, casual) |
 
-Choosing a mode is required before recording starts (the report mode gate); the cycle supplies the default, and a recording cannot start without a cycle and a mode. The `by-type` mode asks for the meeting type at the gate; a type without a mapping uses the cycle's default template. The mode can be changed after recording while the draft is not published, because the layout is rendered from the same items; in `fixed` mode items are grouped by type and the sections cannot be edited. Format is further adjusted by a Markdown template with placeholders such as `{tasks}`, `{decisions}` and `{section:<id>}` (see [CYCLES.md](CYCLES.md)), a natural-language instruction stored in the cycle, and manual editing of the draft: text, assignee and due date, adding and deleting items, renaming, adding, removing and reordering sections, and moving items between sections. A separate template per publishing target is declared in `cycle.yaml` and used by the publishers (Stage 5). When the worker produces a new draft while the existing one has user edits, the new one is kept aside (`work/draft.new.json`) and the user accepts or discards it.
+Choosing a mode is required before recording starts (the report mode gate); the cycle supplies the default, and a recording cannot start without a cycle and a mode. The `by-type` mode asks for the meeting type at the gate; a type without a mapping uses the cycle's default template. The mode can be changed after recording while the draft is not published, because the layout is rendered from the same items; in `fixed` mode items are grouped by type and the sections cannot be edited. Format is further adjusted by a Markdown template with placeholders such as `{tasks}`, `{decisions}` and `{section:<id>}` (see [CYCLES.md](CYCLES.md)), a natural-language instruction stored in the cycle, and manual editing of the draft: text, assignee and due date, adding and deleting items, renaming, adding, removing and reordering sections, and moving items between sections. A separate template per publishing target is declared in `cycle.yaml` and used by the publishers. When the worker produces a new draft while the existing one has user edits, the new one is kept aside (`work/draft.new.json`) and the user accepts or discards it.
 
 ### 7.7 Trust signals
 
@@ -428,7 +443,8 @@ Kept visually quiet so they do not dominate the report:
 
 - every task, decision and topic links to its transcript position and quote;
 - fields the model inferred (a trailing `?`; `?` alone for unknown ones), and items whose quote could not be verified (`unverified quote`), carry a small marker in the draft view and in the rendered report;
-- the published report links to the full transcript in the repository.
+- the published report links to the full transcript in the repository, and issues link to the passage they came from;
+- nothing is written back to an issue or a topic without the user's approval of that proposal.
 
 ## 8. Model backends
 
@@ -456,10 +472,12 @@ See [ADR 0005](decisions/0005-llm-backend.md).
 ## 10. Privacy and security
 
 - **Local by default.** No telemetry. Network access is limited to the configured cycle repository, publishing targets, model downloads and, when chosen, a cloud model.
-- **Secrets** live in Windows Credential Manager. They never appear in configuration files, logs, the database or the repository.
+- **Secrets** live in Windows Credential Manager. They never appear in configuration files, logs, the database or the repository. The GitHub token is bound to its API host and reaches Git only through its environment; a Discord webhook URL is validated and bound to a `target:` entry; error texts are scrubbed before they are stored.
 - **Audio** is deleted after processing (section 7.3).
 - **Voice profiles** stay on the machine (section 7.4).
-- **Transcripts** contain personal data. Before the first publication to a public repository the application shows a warning and requires confirmation.
+- **Transcripts** contain personal data. Before the first publication to a repository that is public, or whose visibility cannot be read, the application shows a warning and requires a confirmation per repository. The check is made when the plan is built, when publishing starts and again right before each operation reaches the repository.
+- **Published data cannot be recalled.** A pushed commit stays in the history, an issue assignment notifies its assignee and a Discord mention notifies its target, so nothing goes out on its own unless the cycle's rule for that target says `auto`.
+- **Discord mentions.** Only user and role ids listed in `cycle.yaml` can notify anybody; `@everyone`, `@here` and mention syntax from the transcript are neutralized.
 - **Bridge** accepts only local, paired connections (ADR 0020); the settings hold only a hash of each extension's secret.
 - **Model weights** are downloaded on first use with the user's own Hugging Face token where a model is gated. Nothing is redistributed with the application.
 - **Paths** are resolved from the user profile and settings. No absolute paths are compiled in.
@@ -477,10 +495,14 @@ See [ADR 0005](decisions/0005-llm-backend.md).
 | Worker crash or timeout | Stage marked failed; retry resumes from that stage |
 | Invalid model output | Validation, bounded retries, then the window is flagged and skipped with a visible warning |
 | No network at briefing | Cached clone and cached issues, with a "state as of" date |
-| No network at publishing | Operation stored in the outbox and retried |
-| Push rejected | `pull --rebase` and retry; meeting folders contain only new files |
-| Conflict in `topics.yaml` | Last write wins per topic; differences shown in the UI |
-| Discord limit exceeded | Message and attachments split automatically |
+| No network at publishing | Operations stay in the outbox and are retried with a backoff; the other targets continue; the interface shows the paused target |
+| Push rejected | The commit is rebuilt on the new tip and pushed again (three tries per run), then the outbox retries; meeting folders contain only new files, and the clone's working tree is never touched |
+| Conflict in `topics.yaml` | Last write wins per topic; the overridden remote versions are recorded in the result of the operation |
+| Request answered but lost | Retries are idempotent: the commit finds its folder, an issue its marker, a comment its marker; a Discord post resumes after the messages already sent |
+| Rate limit (429, or 403 with a wait) | The wait the server names is honoured; a short Discord wait is slept through, a longer one goes to the outbox |
+| Permanent error (bad token, no permission, missing repository) | The operation is `failed` with a message without secrets and waits for a retry or a cancel |
+| Application closed while an operation runs | The operation is queued again at the next start |
+| Discord limit exceeded | The built-in short message is cut to one message of 2000 characters that ends with the link to the report; a template of the cycle is split at 2000 characters; screenshots in batches of 10 files and 8 MiB, at most three such messages |
 
 ## 12. Third-party components and licenses
 

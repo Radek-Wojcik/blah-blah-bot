@@ -6,12 +6,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-### Fixed
-
-- Region screenshot (Ctrl+Alt+S) showed a black screen over every monitor. The desktop was captured correctly; the cause was in the display path. The content security policy did not allow the page to reach the IPC protocol, so Tauri fell back to the postMessage interface, which returns binary results as an array of numbers; the overlay built its image from that array as if it were bytes, the PNG could not be decoded and the black page background was all that was left. The policy now allows the IPC protocol, binary results are converted correctly in both modes, and the frozen desktop is encoded with fast compression off the main thread.
-- The overlay no longer stays as a black sheet when something goes wrong: a capture that is all black, cannot be decoded or does not arrive within 20 seconds is reported in a message and the overlay closes itself. Escape, a click and a right click close it in every state.
-- The overlay window is read back after it is placed over the monitors and placed again when the system changed its position or size.
-
 ### Stage 6 (convenience)
 
 Briefing, call detection, a Chrome extension for browser tabs and the whole-browser fallback. Tested on the mock backend, on recorded session traces, over real loopback sockets and in a scripted Chrome; not yet run on real calls.
@@ -29,7 +23,7 @@ Briefing, call detection, a Chrome extension for browser tabs and the whole-brow
 - Settings, Detection: on and off, sensitivity, watched programs, opt-out and its undo.
 - Source picker grouped as Microphone, Applications and Browser; captured tabs (`Tab: <title> (<host>)`, grouped as they are in Chrome) and `Chrome (whole browser)` as the fallback with the reason it is offered; a warning when a tab and the whole browser are both chosen; a tab captured during a recording joins it. Only the site name of a tab is stored with a recording.
 - Briefing screen (`?page=briefing`, opened from the cycle list and from the report mode gate): open tasks by person with overdue marks, tasks without an owner, open topics, finished tasks kept apart, "state as of" when the repository cannot be updated. The data comes through a `BriefingSource` trait, so the source can be replaced.
-- Tests under `target/` only (`testkit::target_tempdir`, `target/e2e-tmp`); scripted Chrome tests for the extension; a mock end-to-end test of the briefing, a detected call, a recording with a tab and the process prompt.
+- Tests under `target/` only (`test_tmp::TestDir` under `target/test-tmp`, `target/e2e-tmp`); scripted Chrome tests for the extension; a mock end-to-end test of the briefing, a detected call, a recording with a tab and the process prompt.
 
 #### Measured
 
@@ -43,6 +37,53 @@ Briefing, call detection, a Chrome extension for browser tabs and the whole-brow
 - The default sensitivity (balanced), ADR 0021 and ADR 0022 are proposals.
 - Only Chrome is supported. The extension is installed in developer mode, so Chrome shows a warning and may switch it off after an update; there is no automatic update.
 - A call in a browser other than Meet, and a call in an application that closes its microphone while muted, are not detected. A short microphone test in a watched application can raise a prompt.
+
+## [0.6.0] - 2026-11-22
+
+### Fixed
+
+- The first `extract` of any meeting that belongs to a cycle could hang forever in the state running without starting a worker (v0.5.0): the queue reported progress while it held the database lock and the application callback locked it again. Progress is now reported after the lock is released, a panic in the queue marks the stage as failed with a fixed message, the queue driver can be restarted after a panic, and the panic hook logs the location only. A regression test covers it.
+- The built-in short Discord message printed an empty `Tasks` heading for a meeting without tasks (the link under it counted as content). A heading followed only by placeholders that came out empty is now removed in every template and variant, so neither the short message nor the report shows an empty section.
+- A speaker the user named in the Voices screen was called "participant" ("uczestnik") in the summary. The extraction prompt now lists the speakers of each window as named, unnamed or the person who recorded the meeting, tells the model to call named people by their names and to keep generic labels such as `Speaker 2`, and the summary prompt gets the same names; quotes verify against the same lines as before. A name given after the draft was written applies to the next run of `extract`, not to the existing draft.
+- Region screenshot (Ctrl+Alt+S) showed a black screen over every monitor. The desktop was captured correctly; the cause was in the display path. The content security policy did not allow the page to reach the IPC protocol, so Tauri fell back to the postMessage interface, which returns binary results as an array of numbers; the overlay built its image from that array as if it were bytes, the PNG could not be decoded and the black page background was all that was left. The policy now allows the IPC protocol, binary results are converted correctly in both modes, and the frozen desktop is encoded with fast compression off the main thread. The overlay window now stays hidden until its page has decoded the frozen desktop, so the live desktop remains on screen until then, and it closes before the region is cropped and saved, which happen off the window thread. A capture that is all black, cannot be decoded or does not arrive within 20 seconds is reported in a message and the overlay closes itself (Escape and a click close it in every state), and the window is placed again when the system moved or resized it.
+
+### Stage 5
+
+Publishing. Tested against fake servers and local Git repositories, and run once against a real test repository and a real test Discord webhook, including a publish from the application window.
+
+#### Added
+
+- Publishing to the cycle repository: the report, the transcript with a time anchor per line, the meeting data and the screenshots are committed as new files under `<path>/<ID>/<date>` (`meetings` unless `targets.github.path` says otherwise; a suffix `-2`, `-3` for a second meeting on a date) and pushed. The commit is built from the remote's tip with Git plumbing and a temporary index, so the working copy is never touched; a push refused because of a concurrent commit is built again on the new tip, up to three times per run. `topics.yaml` is merged per topic (last write wins, overridden remote versions are recorded).
+- GitHub issues: one per task with the label `cycle:<id>`, the assignee from the participant's GitHub login, the due date, a link to the report and to the transcript passage, the quote and a hidden marker that keeps a retry from creating a duplicate. The due date goes into the organization issue field "Target date" when there is one, otherwise a `Due:` line in the body.
+- Status proposals: `extract` returns `status_changes` and `reduce` turns them into `status_proposals` of the draft, which you approve, reject or comment on. An approved proposal closes or reopens the issue with a comment (or changes the topic in `topics.yaml`). Nothing is approved automatically.
+- Issue state is read before the briefing and on a manual pull (all states, with the links of issues to items): an item whose issue was closed counts as done, an item with an open issue carries its number in the context.
+- Discord webhook publisher: per-target template (a built-in short one by default) and `{report_link}`, mentions of participants' Discord users and roles with an explicit `allowed_mentions` on every message, `@everyone` and `@here` neutralized, the built-in message kept to one message of 2000 characters that ends with the link to the full report (a template of your own is split instead), screenshots in batches of at most 10 files and 8 MiB, rate limits honoured, a retry resumes after the messages already sent.
+- Rules per target (`auto`, `on-approval`, `off`) and an outbox in the local database (schema version 5, with a migration): operations are retried with a backoff or the wait a service names, survive a restart, are idempotent, pause per target when a host is unreachable, and can be retried or cancelled by the user. A frozen snapshot is what gets published, and the draft of a meeting with queued or finished operations is read-only.
+- Public-repository warning: a repository that is public, or whose visibility cannot be read, needs a confirmation once per repository, checked when the plan is built, when publishing starts and before each operation reaches the repository.
+- Secrets for publishing: a GitHub token per API host and the Discord webhooks that cycle files refer to as `cred:` references, stored in the Windows Credential Manager in a namespace of their own, validated when saved, never returned to the interface and scrubbed from every stored or logged error.
+- `targets.github.issues` in `cycle.yaml` (default `true`); optional `status_proposals` in `meeting.json`, `previous_items[].issue` in the context and `status_changes` in the extraction answer (schema versions unchanged).
+- Publishing screens: status changes with approve, reject and comment in the draft editor, the publishing panel (rules per target, what will happen, outbox with retry and cancel, `topics.yaml` differences, the public-repository dialog), previews of the report as GitHub and of the summary as Discord show them, and the token and webhook setup in the settings. Screenshots and a GIF of them were taken on the mock backend with fake services.
+- The rule of each target is chosen explicitly, with a switch (Off, On approval, Automatic) that explains what each position does: in the cycle editor where the GitHub or Discord target is switched on (it shows and saves On approval until another is picked), in the publishing panel and in the settings; it writes `targets.<name>.publish` only (`set_target_rule`), and the interface says that status changes are never written back automatically. The public-repository check holds under every rule.
+- `targets.github.path` places the meeting folder in the repository (validated: relative, no `..`, no drive letter, no `.git`).
+- The publishing panel shows `topics.yaml` before and after per topic before publishing, with a fallback to topic names when it cannot compare.
+- Corrections to a published meeting. The draft stays locked after publishing, and what changes afterwards is written as a correction: a text, a date and an optional item or issue, kept in `work/corrections.json` (new `schemas/corrections.schema.json`). **Add correction** in the draft editor writes it; **Publish** (or the Automatic rule) adds a new file `corrections.md`, `corrections-2.md`, ... to the meeting's folder in the repository, never changing an existing one, and, for a note about an item or an issue, a comment on that issue, once. It goes through the same outbox, rules and public-repository check as the meeting (database schema version 6, with a migration: two more kinds of outbox operation). Later meetings are given the corrections: an optional `corrections` list in the cycle context, read from the repository files and the local notes, shown by the extraction prompt only when there are some. Commands `list_corrections`, `add_correction`, `publish_corrections` and `delete_correction`.
+- ADR 0018 (publishing) and ADR 0019 (default publish rule per target, explicit choice and corrections, accepted); documentation of the publishing setup in the README and of the publishing rules in `docs/CYCLES.md`.
+- Tests: the Git side against local bare remotes, the outbox state machine, the publish plan and rules, both publishers against stateful fake GitHub and Discord servers with fault injection, a whole-loop test and resilience tests (no network and recovery, rejected push, lost answers without duplicates, rate limits, a crash while an operation runs, no secret in any file, log or the database), worker tests for status proposals, and release checks for a real test repository and webhook that are ignored by default.
+
+#### Changed
+
+- The extraction answer must contain `status_changes` (possibly empty); answers without it are retried. Existing `windows.json` files still reduce.
+- Open issues are read through the new HTTP layer (no redirects, redaction) and, with a token, also from private repositories.
+- Publishing commits only the meeting folder and `topics.yaml`; edits of `cycle.yaml` and templates stay in the working tree.
+- An issue whose assignee GitHub refuses with 422 (a login that does not exist) is made without the assignee instead of failing; the outcome says that the assignee was dropped.
+- After a push, the clone catches up when its `topics.yaml` was never committed (a cycle created in the clone) or lacks the topics the meeting added; before, the branch stayed behind and the next briefing did not see the meeting.
+
+#### Known issues
+
+- The whole flow was checked once against a private test repository and a test Discord webhook (`full_loop_demo_meeting`, `docs/TESTING.md`): the commit, the issues with assignee, due date and marker, an issue closed by a status change, the post, a correction to the published meeting (a new file in its folder and a comment on its issue) and the next briefing. A public repository, GitHub Enterprise and the rest of this list were not.
+- Still unverified: the organization issue field "Target date", the Discord upload limits for webhooks (a conservative 8 MiB per message is used), whether GitHub scrolls to the transcript anchors and the quality of status proposals from a real model.
+- A meeting cannot be published twice or edited after publishing; what changes afterwards is a correction, which is a new file and a comment, never a rewrite. A Discord message can be posted twice when a request times out after Discord stored it.
+- The Discord bot and Notion publishers are not part of this stage.
 
 ## [0.5.0] - 2026-11-16
 

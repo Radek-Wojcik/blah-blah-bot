@@ -102,6 +102,9 @@ pub fn process_meeting(
     id: String,
     options: Option<ProcessOptions>,
 ) -> IpcResult<()> {
+    // A published meeting keeps the draft that was published: running the pipeline again
+    // would replace it.
+    state.with_store_ipc(|s| crate::draft_commands::ensure_draft_unlocked(s, &id))?;
     let mut job = JobOptions::default();
     let mut requested = None;
     if let Some(o) = options {
@@ -132,6 +135,7 @@ pub fn queue_state(state: State<'_, AppState>) -> IpcResult<QueueState> {
 
 #[tauri::command]
 pub fn retry_job(state: State<'_, AppState>, id: String) -> IpcResult<()> {
+    state.with_store_ipc(|s| crate::draft_commands::ensure_draft_unlocked(s, &id))?;
     state.processing().retry(&id)
 }
 

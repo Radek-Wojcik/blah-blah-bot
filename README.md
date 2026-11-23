@@ -6,7 +6,7 @@ Local meeting recorder for Windows that turns calls into GitHub issues and Disco
 ![Platform: Windows](https://img.shields.io/badge/platform-Windows-blue)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
-> **Project status:** Stage 3 (speakers and voice profiles) is released as v0.4.0. Stage 4 (cycles and reports) is implemented and waiting for its release: the application now also keeps cycles in a Git repository and turns a processed transcript into an editable draft report with tasks, decisions, topics, notes, ideas and budgets, each linked to a quote. Publishing to GitHub and Discord comes in the next stage. Stage 1 still has one open measurement (microphone buffer flags, see below). Stage 6 (convenience) is implemented on its own branch and not released: a briefing, call detection with a prompt and a Chrome extension for browser tabs. It is tested on the mock backend, on recorded session traces and in a scripted Chrome; real calls, a real tab for 30 minutes and a working day of detection are not measured yet (see Stage 6 measurements). There is no installer; build from source.
+> **Project status:** Stage 5 (publishing) is released as v0.6.0. The application keeps cycles in a Git repository and turns a processed transcript into an editable draft report with tasks, decisions, topics, notes, ideas and budgets, each linked to a quote. It commits the report to the cycle repository, creates GitHub issues, writes approved status changes back and posts to Discord through a webhook; it was run once against a real test repository and a real test webhook, and otherwise tested against fake servers and local Git repositories. Stage 1 still has one open measurement (microphone buffer flags, see below). Stage 6 (convenience) is implemented on its own branch and not released: a briefing, call detection with a prompt and a Chrome extension for browser tabs. It is tested on the mock backend, on recorded session traces and in a scripted Chrome; real calls, a real tab for 30 minutes and a working day of detection are not measured yet (see Stage 6 measurements). There is no installer; build from source.
 
 ## What works today
 
@@ -30,6 +30,11 @@ Local meeting recorder for Windows that turns calls into GitHub issues and Disco
 - **Draft editor.** Edit the text, assignee and due date of an item, add or delete items, rename, add and reorder sections, and move items between sections. Each item shows its source: the quote, the time and a jump to the transcript. A new draft never overwrites edits you made; you accept or discard it.
 - **Output language.** `auto`, `pl` or `en` per cycle and per meeting; `auto` follows the dominant language of the transcript.
 - **Language model backends.** A managed `llama-server` (default), an external OpenAI-compatible server, or a cloud endpoint chosen for one meeting only. The cloud is never a default and never a fallback: each meeting needs a confirmation that states the endpoint host and how much text will be sent.
+- **Publish to the repository.** The report, the full transcript with time anchors, the meeting data and the screenshots are committed as new files under `meetings/<cycle>/<date>` and pushed. The commit is built without touching your working copy, a push that a colleague's commit made fail is built again on the new state, and `topics.yaml` is merged per topic.
+- **Tasks as GitHub issues.** One issue per task with the label `cycle:<id>`, the assignee from the participant's GitHub login, the due date, a link to the report and to the passage of the transcript, and a hidden marker. A retry never creates a second issue. A due date goes into the organization's "Target date" field when it has one, otherwise into the body.
+- **Status proposals.** When a meeting reports that an open issue or topic is finished, the draft proposes closing it, with the quote. Nothing is closed unless you approve it, and approved changes are written back as a close plus a comment. An issue closed on GitHub counts as done in the next briefing.
+- **Discord summary.** A short message (always one, with a link to the full report) or your own template, with mentions of the participants' Discord users and roles and screenshots attached. Only the ids from `cycle.yaml` can notify anybody; `@everyone` and `@here` never do.
+- **Rules per target and an outbox.** Each target publishes automatically, on your approval, or never. Operations that fail because there is no network, or because a service asks to wait, stay in a queue that survives a restart and are retried; a published meeting's draft becomes read-only.
 - **Briefing.** Before a meeting the briefing of a cycle lists its open tasks grouped by person (a GitHub login is matched to a participant of the cycle), sorted by due date with overdue ones marked, the tasks without an owner, and the open topics. When the clone of the cycle repository cannot be updated, the screen says "State as of <date>" and why.
 - **Meeting detection.** When a known conferencing application (Discord, Teams, Zoom or Slack; the list is a setting) keeps the microphone open for a few seconds, a small prompt asks "Record this call?" once per call: Record, Not now, or Never for this application. Browsers are not watched through their audio; Google Meet is reported by the extension. Sensitivity is low, balanced (default) or high, and no audio is opened to detect a call. Tested on session traces, not yet on real calls.
 - **Browser tabs.** A Chrome extension sends the audio of a tab to the application on your computer while a recording runs; the tab stays audible and becomes its own track (`Tab: <site>`). A group of tabs is captured with one click per tab and the popup shows which tab is still missing. A Google Meet call in a tab is reported to the detector with the site name only. Installation steps are below.
@@ -39,7 +44,7 @@ Local meeting recorder for Windows that turns calls into GitHub issues and Disco
 
 ## Screenshots
 
-Taken from demo mode with fictional data. The extension popup is the real popup page with a stubbed browser API and fictional tabs.
+Taken from demo mode with fictional data. The publishing images (status changes, publishing panel, publishing flow, report and Discord message here, and the token setup below) show the mock backend with fake GitHub and Discord servers: no real repository or channel was involved. The extension popup is the real popup page with a stubbed browser API and fictional tabs.
 
 | | |
 |---|---|
@@ -50,8 +55,11 @@ Taken from demo mode with fictional data. The extension popup is the real popup 
 | ![Labeling screen with a recognized, a suggested and two unknown voices, each with sample clips](docs/img/speakers-label.png) | ![Animated naming of voices: play a clip, create a participant, accept a suggestion, pick a name](docs/img/naming-voices.gif) |
 | ![Voice profile management: participants, reset, delete and the matching thresholds](docs/img/speakers-profiles.png) | ![Cycle settings: participants, glossary, report defaults and publishing targets](docs/img/cycle-settings.png) |
 | ![Report mode gate before recording: cycle, report mode, template and report language](docs/img/report-mode-gate.png) | ![Draft editor with the source of an item opened: quote, time and a jump to the transcript](docs/img/draft-source-popover.png) |
-| ![Animated draft editing: open the source of an item, change the report mode and move an item to another section](docs/img/draft-editing.gif) | ![Briefing of a cycle: open tasks by person, overdue marks and open topics](docs/img/briefing.png) |
-| ![Animated detection: a prompt for a Discord call, Record, a browser tab added, Stop and the process prompt](docs/img/detect-and-record.gif) | ![Popup of the Chrome extension: connected, a group of three tabs, two captured and one waiting for a click](docs/img/extension-popup.png) |
+| ![Animated draft editing: open the source of an item, change the report mode and move an item to another section](docs/img/draft-editing.gif) | ![Status changes: one approved with a comment, one rejected, one waiting, and the count of decisions](docs/img/status-approval.png) |
+| ![Publishing panel after a publication: rules per target, what was published, the outbox with links, and a topic changed by someone else shown as a difference](docs/img/publishing-panel.png) | ![Animated flow: approve a status change, press Publish, confirm the public repository and watch the outbox finish](docs/img/approve-and-publish.gif) |
+| ![The rendered report as GitHub shows it, with unchecked task checkboxes and a link to the full transcript](docs/img/report-rendered.png) | ![The summary as Discord shows it: sections with tasks and their assignees, and a link to the full transcript](docs/img/discord-message.png) |
+| ![Briefing of a cycle: open tasks by person, overdue marks and open topics](docs/img/briefing.png) | ![Animated detection: a prompt for a Discord call, Record, a browser tab added, Stop and the process prompt](docs/img/detect-and-record.gif) |
+| ![Popup of the Chrome extension: connected, a group of three tabs, two captured and one waiting for a click](docs/img/extension-popup.png) | |
 
 ## Requirements and getting started
 
@@ -61,7 +69,7 @@ Taken from demo mode with fictional data. The extension popup is the real popup 
 | Build tools | Rust 1.85 or newer, Node.js 22 or newer |
 | GPU | NVIDIA with 12 GB VRAM (reference: RTX 3080); peak use measured at 8.5 GB in Stage 2 and 9.7 GB (absolute) during extraction of a 10 hour transcript |
 | Browser tabs | Chrome 116 or newer (tested on Chrome 136) with the extension from the release zip; other browsers are not supported |
-| Cycle repositories | The `git` command line on the PATH (the application runs it for clone and pull); credentials come from the Git credential manager |
+| Cycle repositories | The `git` command line on the PATH (the application runs it for clone, pull and publishing; Git 2.31 or newer when a GitHub token is used for pushing); credentials come from the Git credential manager |
 | Processing tools | [uv](https://docs.astral.sh/uv/) on the PATH; about 7.4 GB for the Python environment (created on first use); models downloaded on first use; a Hugging Face token and accepted terms for the speaker model |
 | Disk | about 115 MB per track per recorded hour |
 
@@ -89,7 +97,7 @@ The extension asks for `tabCapture`, `offscreen`, `activeTab`, `storage`, `tabGr
 
 ## Cycles and report modes
 
-**Create a cycle.** Open the cycles screen, add a repository (clone it from an address, or point to an existing folder) or use the default local repository, enter a cycle id and a name, and create the cycle. The cycle gets `cycle.yaml`, an empty `topics.yaml` and a default template. Then edit its participants, glossary, report defaults and templates; the application validates the files before it writes them. A cycle repository is plain Markdown and YAML, so it can also be edited by hand. Changes made in the application are written to the working tree and are not committed yet (that arrives with publishing).
+**Create a cycle.** Open the cycles screen, add a repository (clone it from an address, or point to an existing folder) or use the default local repository, enter a cycle id and a name, and create the cycle. The cycle gets `cycle.yaml`, an empty `topics.yaml` and a default template. Then edit its participants, glossary, report defaults and templates; the application validates the files before it writes them. A cycle repository is plain Markdown and YAML, so it can also be edited by hand. Changes made in the application are written to the working tree and are not committed by the application; publishing commits only the new meeting folder and `topics.yaml`, so commit edits of `cycle.yaml` and templates yourself.
 
 | Mode | Sections | Chosen |
 |---|---|---|
@@ -99,6 +107,66 @@ The extension asks for `tabCapture`, `offscreen`, `activeTab`, `storage`, `tabGr
 | `by-type` | The template that `report.by_type` maps the meeting type to | Meeting type at the gate |
 
 Templates are Markdown with placeholders. The common ones are `{title}`, `{date}`, `{participants}`, `{summary}`, `{sections}`, `{section:<id>}`, `{tasks}`, `{decisions}` and `{transcript_link}`; an unknown placeholder is an error, never silently dropped. The full list, the front matter and the file layout are in [docs/CYCLES.md](docs/CYCLES.md).
+
+## Publishing setup
+
+Publishing has been tested against fake GitHub and Discord servers and local Git repositories only. It has not yet been run against a real repository or channel; that check is the next step before the release, so treat the first real publication with care (use a private test repository and a test channel first). Everything below describes what the application does against those fakes; how real GitHub and Discord react is unverified.
+
+**1. GitHub token (for issues, and for pushing over https).**
+
+1. On GitHub, open Settings, Developer settings, Personal access tokens, Fine-grained tokens, and generate a token.
+2. Resource owner: the user or organization that owns the cycle repository (an organization may have to approve the token). Repository access: only the cycle repository.
+3. Repository permissions: **Contents: Read and write** (the commit and push), **Issues: Read and write** (create, close, comment, label, assign) and **Metadata: Read** (added automatically). Nothing else is needed.
+4. In the application open **Settings** and scroll to **Publishing**. Under **GitHub token**, type the token into the masked field **GitHub token for api.github.com** and press **Store**; the card then reads **Token stored**. **Clear** removes it, and typing a new value replaces it. The token is stored in the Windows Credential Manager, bound to the GitHub API host it was entered for, and is never shown again, written to a file or logged. It is handed to Git through its environment, never on the command line.
+5. Under **GitHub repository of a cycle repository**, each cycle repository has the fields **GitHub repository of `<id>`** (`owner/name`) and **API address of `<id>`**. Leave both empty when the address of the repository is on github.com: it is taken from there. Fill them for a GitHub Enterprise Server repository, a remote that is not on github.com, or to link a local repository, and press **Save link**. **Test access** checks the token, the repository, its visibility and the push permission.
+
+![Settings, Publishing: a stored GitHub token, the repository links of two cycle repositories and an empty, masked Discord webhook field](docs/img/token-setup.png)
+
+Without a token the application still pushes with the credentials of your Git credential manager, and reads the issues of a public repository anonymously; creating issues needs the token. A repository without a remote only gets a local commit.
+
+The organization issue field "Target date" is used for due dates in organization repositories when it exists. That path has not been verified against a real organization; whenever it does not work, the due date is written as a `Due: YYYY-MM-DD` line in the issue body.
+
+**2. Discord webhook.**
+
+1. In Discord, open the channel settings, Integrations, Webhooks, create a webhook for the channel and copy its URL.
+2. On the **Cycles** page press **Edit** on the cycle, and in the **Targets** section tick **Post a summary to a channel** under Discord. Give it a **Webhook reference**, never the URL, for example `cred:discord/nomad`. In `cycle.yaml` this is `discord: { webhook: cred:discord/nomad, publish: on-approval }`.
+3. In **Settings**, **Publishing**, **Discord webhook**, paste the URL into **Webhook for cred:discord/nomad** and press **Store**; the card then reads **Webhook stored** with the address masked. Only `https://discord.com/api/webhooks/<id>/<token>` (and the `discordapp.com`, `canary.discord.com` and `ptb.discord.com` hosts) is accepted. **Test webhook** only checks that the webhook exists; it posts nothing.
+4. To mention people, give the participants of the cycle a **Discord id** with its kind (user or role); in `cycle.yaml` that is `discord: { user_id: "123456789012345678" }` or `{ role_id: "..." }` in quotes (turn on Developer Mode in Discord and copy the id).
+
+**3. Rules per target: you choose.** Each target of each cycle has a rule, chosen with a switch of three positions, and under the switch each position is explained by what it does to you:
+
+| Rule | What it means |
+|---|---|
+| **Off** | Nothing is ever published to this target, not even when you press Publish. |
+| **On approval** | Nothing leaves this computer until you have looked at the draft and press Publish. This is what is used until you choose another rule. |
+| **Automatic** | Published as soon as the draft is complete, without a click. It cannot be taken back, and the people it names are notified. A public or unconfirmed repository still waits for your confirmation. |
+
+The switch is in the **Targets** section of the cycle (when you tick **Commit reports to the repository** or **Post a summary to a channel** it shows **On approval**, and the cycle is saved with that unless you pick another), in the **Publishing** panel of a draft, and in **Settings**, **Publishing**, **When to publish**, for every cycle. In the panel and in Settings a change is saved to `cycle.yaml` at once and nothing else in the file changes. In `cycle.yaml` it is `targets.github.publish` and `targets.discord.publish` with `on-approval`, `auto` or `off`. Nothing is ever published automatically unless you set it so ([ADR 0019](docs/decisions/0019-default-publish-rule-per-target.md)). Status changes are never written back automatically, with any rule: only a decision you approved is, and only when you press Publish. Unticking **Create issues for tasks and write back approved status changes** (`targets.github.issues: false`) makes the GitHub target commit the report only.
+
+**4. Approve status changes and publish.**
+
+1. From the **Queue** press **Open draft** on a processed meeting. Edit the draft as usual; **Rendered report** shows the report, with a **Format** menu (GitHub Markdown or Chat for Discord and Notion) and a **Preview** toggle that renders it the way GitHub or Discord would.
+2. In **Status changes** each place where an open issue or topic was said to be done comes with its quote and a jump to the transcript. Press **Approve** or **Reject**; the button then reads **Approved** or **Rejected**, and pressing it again takes the decision back. A comment is posted with the change. **+ Add a status change** adds one by hand for an issue or topic that the model did not find. Nothing is written back before you approve it.
+3. In **Publishing**, tick **Publish to GitHub** and **Publish to Discord** as wanted. **What will happen** lists every operation: the files of the commit, each issue with its assignee and due date, each close and the Discord post. **topics.yaml: before and after** shows, per topic, what the remote has (as of the last time it was fetched) and what the commit will write, and marks a topic that a colleague changed since your last pull, which your version replaces; when the comparison is not possible the topics are only named, with a note. Press **Publish**.
+4. If the repository is public, or its visibility cannot be read, the dialog **Publish to a public repository?** asks once; tick **I understand that `<repo>` is public and I want to publish to it** and press **Publish to a public repository**, or **Cancel** to publish nothing.
+5. The **Outbox** shows each operation as **Waiting**, **Running**, **Done** or failed, with links to the commit and the issues. **Retry now** and **Cancel** act on one operation, **Retry all now** on all that wait. When everything is sent the list reads **What was published** and the draft is marked **Draft locked**. **topics.yaml** shows, per topic, what was changed and, when a colleague changed the same topic meanwhile, both versions: the last write wins and the other stays visible.
+
+![The publishing panel before publishing: the rule switch of each target, what will happen, and topics.yaml before and after with a topic that a colleague changed marked](docs/img/publishing-plan.png)
+
+**5. Corrections after publishing.** Once a meeting is published, its draft is locked: what was published is what you approved. When something changes afterwards (a task is done, a date moves, a decision is reversed), open the draft and use **Corrections** under the **Publishing** panel:
+
+1. Press **Add correction**, write **What changed**, optionally choose the item it is **About** and an **Issue** (`#12`), check the **Date** (today) and press **Add correction**. The note is kept with the meeting and already counts for the next meeting: its briefing and extraction are given it as current information, replacing what the earlier items say.
+2. To publish it, press **Publish** next to it (or **Publish all**). It follows the rule of the GitHub target: with **Automatic** it is published when you add it, with **On approval** when you press Publish, with **Off** never. The public-repository confirmation applies as for the meeting.
+3. Publishing adds a new file to the folder of the meeting in the repository, `corrections.md` and then `corrections-2.md`, and so on. Nothing that was published is changed. If the correction is about an item that became an issue (or names an issue) it is also posted as a comment on that issue, once. The row then reads **Published as corrections.md in the meeting folder, and commented on the issue**, with a link.
+4. A correction that was queued is part of the record and cannot be edited or deleted. One that was never queued has **Delete**.
+
+![The corrections of a published meeting: one published as corrections.md with a comment on its issue, one waiting for Publish, and the form for a new one](docs/img/corrections.png)
+
+**6. Public repositories.** A transcript contains personal data and cannot be taken back from a Git history. If the repository is public, or its visibility cannot be read, nothing is published to it until you confirm that repository once, also under **Automatically**. The check is repeated right before anything is sent, so an operation queued earlier cannot slip into a repository that has since become public.
+
+**7. Offline and retries.** Publishing never blocks on the network. Operations wait in a queue stored in the local database and are retried with a growing delay (or the delay a service asks for); a dead Discord does not hold back the report. Failures that need you (a wrong token, a missing permission, a repository that does not exist) stop with a message that contains no secret, and you retry or cancel them. Closing the application does not lose them. While operations of a meeting are queued, and after it is published, its draft cannot be edited. Publishing a meeting a second time is not supported; use a correction.
+
+**Limits.** A Discord message holds 2000 characters: the built-in summary is cut to one message with the link to the full report on GitHub, a template of your own is split; screenshots go in separate messages of at most 10 files and 8 MiB (a conservative choice), at most three of them, and the rest is left to the report. A pushed commit, an issue assignment and a Discord mention cannot be recalled by the application. The meeting goes to `<folder>/<cycle>/<date>`, where the folder is the field **Folder for meeting reports** (`targets.github.path`, `meetings` by default).
 
 ## Configuration reference
 
@@ -112,7 +180,8 @@ Templates are Markdown with placeholders. The common ones are `{title}`, `{date}
 | `report.default_mode`, `report.default_template` | Mode and template offered before recording |
 | `report.instruction` | A sentence given to the extraction, for example "Group tasks by person" |
 | `report.by_type` | Meeting type to template name, for `by-type` mode |
-| `targets.github`, `targets.discord`, `targets.notion` | Publishing targets and rules (`auto`, `on-approval` or `off`); secrets are only `cred:` references to the Windows Credential Manager. Used by the publishers in a later stage |
+| `targets.github`, `targets.discord` | Publishing targets and rules (`auto`, `on-approval` or `off`, default `on-approval`); `targets.github.issues: false` publishes the report only; secrets are only `cred:` references to the Windows Credential Manager |
+| `targets.notion` | Accepted and validated; the Notion publisher arrives in a later stage |
 
 Every key is described in [docs/CYCLES.md](docs/CYCLES.md); the schema is `schemas/cycle.schema.json`.
 
@@ -296,7 +365,8 @@ Prototype results on the reference machine (RTX 3080 with 12 GB, Windows 10 buil
 - Speaker separation is measured on synthetic meetings only; on 2 to 4 speakers the error rate was above the 15% target in Stage 0 and is to be confirmed on real recordings.
 - Voice recognition is measured on synthetic voices only. Participants of a cycle belong to that cycle; a meeting without a cycle still uses the local list. A meeting processed after its audio was deleted has no sample clips, so voices are named from the transcript.
 - The Python environment is large (about 7.4 GB) and the first model downloads take a while.
-- The cloud backend is tested only against a mock server. Open issues of a cycle are read from a cache; fetching them needs a GitHub token that the application cannot configure yet. Edits to cycle files are not committed or pushed until publishing arrives. Extraction quality was measured on synthetic transcripts only (Gemma 4 12B: task recall 86.0%; lower in Polish and mixed meetings, 43.5% to 100% per meeting), and Qwen3 14B misses the extraction thresholds on this set. In mixed-language meetings the task text is written in the report language. The new screens are tested on the mock backend, not yet end to end in the real application.
+- The cloud backend is tested only against a mock server. Open issues of a cycle are read from GitHub into a cache; without a token only public repositories can be read. Edits to `cycle.yaml` and templates are not committed by the application. Extraction quality was measured on synthetic transcripts only (Gemma 4 12B: task recall 86.0%; lower in Polish and mixed meetings, 43.5% to 100% per meeting), and Qwen3 14B misses the extraction thresholds on this set. In mixed-language meetings the task text is written in the report language. The new screens are tested on the mock backend, not yet end to end in the real application.
+- Stage 5 was run once against a real test repository and a real test webhook (one meeting, one correction) and is otherwise tested against fake servers and local Git repositories. The organization issue field "Target date", the Discord upload limits for webhooks and the quality of the status proposals of a real model are unverified. A meeting cannot be published twice.
 
 ## Roadmap
 
@@ -307,8 +377,8 @@ Prototype results on the reference machine (RTX 3080 with 12 GB, Windows 10 buil
 | 2 | Processing pipeline | v0.3.0 | Done |
 | 3 | Speakers and voice profiles | v0.4.0 | Done |
 | 4 | Cycles and reports | v0.5.0 | Done |
-| 5 | Publishing | v0.6.0 | Planned |
-| 6 | Convenience | v0.7.0 | Implemented, not released; real-call and 30 minute tab measurements open |
+| 5 | Publishing | v0.6.0 | Done (the organization field "Target date" is unverified) |
+| 6 | Convenience | v0.7.0 | In progress, not released; real-call and 30 minute tab measurements open |
 | 7 | Integrations | v0.8.0 | Planned |
 | 8 | Stabilization | v1.0.0 | Planned |
 

@@ -90,6 +90,20 @@ Targets for the reference machine (RTX 3080 12 GB, 32 GB RAM). Stage 0 measures 
 | Due-date accuracy | 85% or more |
 | Quote validity | 95% or more |
 
+**Status proposals (measured, not yet gated)**
+
+There is no threshold policy for status proposals yet. The values below are proposed from the first measurement (`stage5-status-gemma-4-12b-q4.json`) and are recorded in the result file, but no run is judged against them until a decision makes them targets. A wrong proposal costs the user a click, so precision comes first.
+
+| Measure | Proposed value |
+|---|---|
+| Proposal precision (only "done" is proposed; a proposal for a blocked, reopened, in progress or unmentioned target is wrong) | 90% or more |
+| Proposal recall | 80% or more |
+| Share of proposals whose quote is verified | 95% or more |
+| Schema validity (up to two retries) | 100% |
+| Meetings without a finished target that get a proposal | 0% |
+
+After the extraction prompt of the 0.5.0 release was merged with the status lines, both measurements were repeated on the same model (`stage5-status-gemma-4-12b-q4-merged.json`, `stage4-extraction-gemma-4-12b-q4-with-status.json`): proposal precision 100% and recall 85.7% as before, and on the four meetings pl-0, pl-1, en-0 and mixed-0 task recall 94.7% and precision 92.7% (88.3% and 93.3% with the 0.5.0 prompt alone).
+
 **Processing time**
 
 | Measure | Target |
@@ -129,8 +143,8 @@ The `extraction` set is used to compare language models and prompts under identi
 
 ## 9. Publishing tests
 
-- Mock HTTP servers emulate the GitHub, Discord and Notion endpoints used by the publishers, including error and rate-limit responses.
-- Before each release the publishers run against a dedicated test repository, a test Discord webhook and a test Notion database. Credentials for these exist only on the release machine.
+- Mock HTTP servers emulate the GitHub and Discord endpoints used by the publishers, including error and rate-limit responses (Notion arrives with its publisher in Stage 7); the Git side runs against local bare remotes. Details are in section 14.
+- Before each release the publishers run against a dedicated test repository and a test Discord webhook (and, from Stage 7, a test Notion database). Credentials for these exist only on the release machine, in the Windows Credential Manager.
 - Limits are tested at the boundary: message length, number of embeds, number and size of attachments.
 
 ## 10. Continuous integration
@@ -211,6 +225,73 @@ Extract and reduce with the real model through `llama-server` are covered by the
 
 **Still open, by hand.** Not automated and not yet done: (1) the 30 minute continuity run with an idle machine (`npm run measure` without `BBB_MEASURE_MINUTES`), and then the same with a real tab (a tone page, then a call); (2) a tab captured by a real click and by Alt+Shift+R, three tabs of a group one by one; (3) whole-browser capture of Chrome and the double-recording warning with a tab; (4) an 8 hour working day recorded with `record_session_trace`, its anonymized trace added and scored; (5) real Discord, Teams (new and classic), Zoom and Meet calls, a mute and a device check, to confirm or correct the hand-made traces; (6) Windows 11. Results go to `benchmarks/results/`, and ADR 0021 and 0022 stay Proposed until then.
 
-Test data of new tests lives under `target/`: Rust tests take their folders from `testkit::target_tempdir` (`target/tmp`, removed also when a test fails), never from the system temporary folder.
+Test data of new tests lives under `target/`: Rust tests take their folders from `test_tmp::TestDir` (`target/test-tmp`, removed also when a test fails), never from the system temporary folder.
 
 The fake worker in `crates/queue/tests/stage4_fake_worker.rs` is a small Python script started in place of `python -m bbb_worker`; it needs only a Python 3 interpreter on `PATH`, no models and no GPU. Cloud is tested against a mock server only; no test sends text to a hosted service.
+
+## 14. Stage 5 test commands
+
+| What | Command | Runs |
+|---|---|---|
+| Unit tests for the Git side against local bare remotes in temporary folders: new files only, folder suffixes `-2` and `-3`, a push refused by a concurrent commit and built again on the new tip, three tries then left for later, `topics.yaml` merged per topic with a recorded conflict, an unrelated uncommitted file left alone and the branch fast-forwarded, a repository without a remote, an answer lost after the push (idempotent), a remote that is not there and then is, the token only in the environment of Git and never in its arguments, Git output scrubbed; issue markers, the issue cache and closed or linked issues in the context; the published transcript with its anchors (`cycle-store`, `queue`) | `cargo test -p cycle-store -p queue` | CI |
+| Status proposals: `status_changes` in the extraction answer (verified and unverified quotes, unknown targets dropped, one proposal per target, an older `windows.json` without the field), the schemas and the shared fixtures from both sides | `cd worker && uv sync --frozen --only-group dev && uv run --no-sync pytest` | CI |
+| Rules of the targets (`auto`, `on-approval`, `off` and their defaults), the publish plan, the public-repository check, the frozen snapshot and the draft lock, the outbox dispatcher (claim, execute, backoff and `Retry-After`, offline pause, crash recovery, progress of a Discord post), against a local bare Git remote, a fake GitHub and a fake Discord webhook (`publishers`); the outbox state machine, a Discord post held for the issues of its meeting, operations enqueued again after a cancel (`store`); status decisions in the draft (`queue`); planning, publishing, the lock, the `auto` rule, the tasks of a cycle and the check for a public repository through the command layer (`app`) | `cargo test -p publishers -p store -p queue -p app` | CI |
+| The whole loop on a demo-like cycle (approved status changes, report, transcript, screenshots and `topics.yaml` in the remote, issues with assignee, due date and report link, an issue closed on the fake GitHub that is done in the next context, a Discord message with mentions and issue links) | `cargo test -p publishers --test full_loop` | CI |
+| Faults: no network at publishing and recovery through the outbox, a push rejected by a concurrent commit and built again on the new tip, a remote that keeps changing, an answer lost after an issue or a comment was created (no duplicate), a rate limit, a crash while an operation runs, and a scan of the database file, the snapshots, the working tree, the history of both repositories, the log of the dispatcher and the outbox rows for the mock token and webhook | `cargo test -p publishers --test resilience` | CI |
+| Status changes, the publishing panel with the rule switch (Off, On approval, Automatic, also under Automatic with the public-repository check and in the settings), `topics.yaml` before and after in the plan and its fallback, the outbox, the public-repository dialog, the report and Discord previews and the token setup (components and the mock backend, with the fake publishing lab of the mock) | `cd ui && npm test && npm run test:e2e` | CI |
+| The images and the GIF of publishing in the README (`status-approval.png`, `publishing-plan.png`, `publishing-panel.png`, `report-rendered.png`, `discord-message.png`, `token-setup.png`, `approve-and-publish.gif`), regenerated on the mock backend | `cd ui && npx playwright test --project=screenshots -g "status approval|publishing plan|publishing panel|rendered report|Discord message|token setup|approve statuses"` | Locally, when the screens change |
+| Status proposals with the real model: twelve synthetic meetings (six English, six Polish) with open issues and topics in the context; the transcript says that a target is done, blocked, reopened, in progress or not mentioned, and two meetings have nothing finished. Runs the production `extract` and `reduce` steps and writes `benchmarks/results/stage5-status-<name>.json` (precision and recall of the proposals, valid quotes, schema validity, false positives per kind and on the meetings without a finished target) | `cd benchmarks && uv run python -m bbb_bench.proto.stage5_status --model <GGUF> --name <run name> --llama-server <llama-server.exe>` | Locally, when the model or the extraction prompt changes; GPU needed |
+| Corrections to a published meeting, Git side: one new file added to a meeting folder (`corrections.md`, `corrections-2.md`, ... when a name is taken), the meeting's files untouched, idempotent after a lost answer, a push refused by a colleague and built again, a remote that is offline and recovers, a remote that has not caught up with the meeting (transient), a meeting that is not in the repository, unsafe names refused, a repository without a remote; the corrections file, its schema and the published note with its marker; the corrections in the context (published files, local notes, both folders of one meeting, a note of another meeting skipped, the cap, absent when none) (`cycle-store`, `queue`) | `cargo test -p cycle-store -p queue` | CI |
+| Corrections, the outbox side: the plan for each rule (`auto`, `on-approval`, `off`), the meeting that is not in the repository, issues off or the repository not on GitHub, a queued or cancelled commit of the meeting, the public-repository check; the comment on an issue once, by marker, with mentions defused (`publishers`); the migration of an outbox of schema version 5 to 6 with rows, ids and links kept (`store`) | `cargo test -p publishers -p store` | CI |
+| Corrections against the fakes: the file next to the meeting and the comment on the issue, the second correction as `corrections-2.md`, the same correction queued twice, the context of the next meeting from this clone and from a colleague's, the rules, a repository that became public (also when a correction is already queued), the comment waiting for an issue that is still being made, no network and recovery, lost answers without a second file or comment, a colleague pushing meanwhile, a cancelled correction queued again, no secret in the files, rows or history; add, list, publish and delete through the command layer (`app`) | `cargo test -p publishers --test corrections && cargo test -p app --lib publishing` | CI |
+| Corrections in the worker: the optional `corrections` list in the context schema (fixture shared with Rust), the prompt block that is there only when there are corrections, capped, clipped and unable to close the transcript block | `cd worker && uv run --no-sync pytest tests/test_corrections_context.py tests/test_contracts_cycles.py` | CI |
+| The rule choice and the corrections in the UI: the three rules explained in the cycle editor, the panel and the settings, On approval shown and saved until another is picked; the Corrections panel (add, publish, publish all, delete, retry, offline, Automatic and Off, the public-repository dialog) on the mock backend | `cd ui && npm test && npm run test:e2e` | CI |
+| TLS with the real network: the production HTTP agent (and the agent of the issue sync) does a handshake through the system certificate store (Schannel on Windows) with an unauthenticated HEAD of `https://github.com` and `https://discord.com`; no token and no webhook. The normal tests only assert the agent's TLS setup, because the fakes speak plain `http` on loopback | `cargo test -p publishers -p cycle-store https_handshake -- --ignored` | Locally, when the HTTP layer changes, and before a release; reaches the Internet |
+| Release check against the real services: a test GitHub repository (token and push rights, an issue created once, closed with a comment and read back, a commit pushed to a new branch that is removed again) and a test Discord webhook (the webhook exists, one message is posted); `full_loop_demo_meeting` runs the whole Publish flow of a demo meeting (see below) | `BBB_RELEASE_CHECK=yes BBB_RC_REPO=<owner/name> BBB_RC_DISCORD_REF=<cred:...> cargo test -p app release_check -- --ignored --test-threads=1 --nocapture` | Locally before a release |
+
+Every test is written against fakes: the "network" is loopback ports that the tests start, the "remote" is a bare repository in a scratch folder under `target/test-tmp` (a `test_tmp::TestDir`, removed when the test ends), and "offline" is a closed port or a renamed folder. No normal test talks to a real host.
+
+**The fakes.** `crates/publishers/src/testing/` (feature `test-support`, used by this crate's tests and by `app`) holds hand-written servers on `TcpListener` and a lab that wires them together:
+
+| Fake | What it models |
+|---|---|
+| Fake GitHub | Repositories with visibility, push permission and owner type; issues with labels, assignees, comments, state, paging and `Link` headers; the organization issue-field endpoints; primary and secondary rate limits |
+| Fake Discord webhook | The 2000 character, 10 file and size limits, `allowed_mentions` checks, `?wait=true`, multipart bodies, 429 with `retry_after` |
+| Fault injection (both) | A given status for the next N requests, a dropped connection, a delay, "offline" as a closed port |
+| Lab | A bare remote, a clone, a file database and a manual clock, so backoff and `Retry-After` are tested without waiting |
+
+No HTTP mocking crate is used (it would pull `tokio` and `hyper` into the build). The fake GitHub implements the organization issue field as the documentation describes it, which is not proof that a real organization behaves the same way: the real check is in the release check below.
+
+**The unit level.** Besides the rows above, `cargo test -p publishers` covers: error classification (408, 5xx, 429, a 403 that is a rate limit, other 4xx), `Retry-After` and rate-limit reset parsing, redaction of tokens, authorization values and webhook URLs, webhook address validation, message splitting at exactly 2000 and 2001 characters, in multibyte text and in one long line, 10 and 11 files, the size boundary and a skipped oversized file, mention rendering for users, roles and unknown ids, `@everyone` neutralized, `allowed_mentions` per message, the multipart body, resuming after the messages already sent, the issue body and marker, the plan for each rule, the plan of `topics.yaml` per topic (a topic added, changed and replaced, a remote never fetched, an unreadable file), the meeting folder under `targets.github.path` (nested paths, suffixes, links, refused paths), and the built-in Discord message that stays one message of at most 2000 UTF-16 units however long the meeting is.
+
+**Resilience.** `crates/publishers/tests/resilience.rs` covers: no network for every target and recovery; a dead Discord that does not hold back the report or the issues; a push rejected by a concurrent commit; a remote that keeps changing; an answer lost after an issue was created (no duplicate), after a crash too; a status change written once when answers are lost; Discord's 429 waiting for the time named; a GitHub rate limit pausing only that operation and a permanent error stopping at once; a crash while an operation runs; and the scan for secrets. `crates/publishers/tests/full_loop.rs` runs a demo-like meeting through all targets, an issue closed on the fake GitHub that is done in the next context, and a second meeting on the same day.
+
+**The release check.** The tests of `crates/app/src/release_check.rs` are `#[ignore]`d and refuse to run unless `BBB_RELEASE_CHECK=yes` is set. They use a throwaway repository and webhook that exist only for this purpose:
+
+| Variable | Meaning |
+|---|---|
+| `BBB_RELEASE_CHECK` | Must be `yes`; without it every check stops at once. |
+| `BBB_RC_REPO` | The GitHub test repository, `owner/name`. It needs Issues and a token with write access. A public repository is refused unless `BBB_RC_ALLOW_PUBLIC=yes`. |
+| `BBB_RC_GITHUB_API` | Optional API address (GitHub Enterprise Server); the public GitHub when absent. |
+| `BBB_RC_DISCORD_REF` | The `cred:` reference of the test webhook, for example `cred:discord/release-check`. |
+
+The secrets are not variables: the GitHub token (`github-token@<host>`) and the webhook (`target:<reference>`) are the entries that the application stores in the Windows Credential Manager from its publishing settings. Enter them there, on the release machine, never in a chat or a file. The checks leave a closed issue labelled `cycle:RC<time>` in the test repository, because an issue cannot be deleted through the API.
+
+**The full loop on the real services.** `full_loop_demo_meeting` (in `crates/app/src/release_check/full_loop.rs`) does what the Publish button does, end to end, with the application's own parts: the cycle commands (`create_cycle`, `save_cycle`), `Publishing::publish` with the dispatcher thread and the outbox, the credential store for the token and the webhook, the issue refresh and the context of the next briefing. Everything it creates lives in a temporary folder (a clone of the test repository made with the stored token, a database file, the recordings), so the data of the installation is not touched. It runs with the same variables as the other checks (`BBB_RELEASE_CHECK`, `BBB_RC_REPO`, `BBB_RC_DISCORD_REF`, optionally `BBB_RC_GITHUB_API`):
+
+```
+BBB_RELEASE_CHECK=yes BBB_RC_REPO=<owner/name> BBB_RC_DISCORD_REF=<cred:...> cargo test -p app full_loop_demo_meeting -- --ignored --test-threads=1 --nocapture
+```
+
+What it does and verifies:
+
+- A new cycle `RC<time>` with two participants (the owner of the test repository, for a real assignment, and a login that does not exist), the `github` target (issues on, `on-approval`) and the `discord` target (the webhook reference).
+- An earlier meeting with one task is published; its issue is the one the demo meeting closes. The demo meeting has an approved draft with two tasks (one with a due date), one approved status change that closes that issue, one new topic and one screenshot (a small synthetic PNG), and a transcript with the quotes. Pressing Publish again queues nothing.
+- On GitHub: the commit with `meeting.json`, `report.md`, `transcript.md`, the screenshot (byte for byte) and `topics.yaml` is the tip of `main` (read through a second, independent clone); the issues have the label `cycle:RC<time>`, the `Due:` line, the marker, the links to the report and the transcript anchor; the owner is assigned, and the issue for the login that does not exist is made without an assignee and reported as such; the earlier issue is closed as completed with the comment of the status change and its marker.
+- On Discord: the post is `done` in the outbox with all of its messages accepted.
+- A correction to the demo meeting: written (it waits under `on-approval`), published, and read back through the independent clone as a new `corrections.md` next to `meeting.json`, whose own files are unchanged; a comment with the correction and its marker on the issue of the item (the issue stays open); asked again, nothing is queued twice; and the correction is in the context of the next briefing with the text of the item and its issue number.
+- The next briefing: after the issue list has caught up (GitHub's lists trail a write by a moment), the context holds the open tasks with their issue numbers and the new topic, and no longer holds the task whose issue was closed; the task list of the cycle shows it as done.
+- No token and no webhook (value or token part) in the tracing output, the database file, the snapshots and every file of the temporary folder, the history and config of both clones, the outbox rows and the state sent to the UI.
+
+What stays behind: three commits on `main` (the earlier meeting, the demo meeting and its correction) in folders of a cycle that exists only for this run, and closed issues labelled `cycle:RC<time>`. The issues the run created are closed again when the test ends, also when a step fails. The same check runs against the fakes with every test run (`the_full_loop_check_passes_against_the_fakes`), so the check itself cannot rot.
+

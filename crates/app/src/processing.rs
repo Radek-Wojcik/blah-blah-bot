@@ -16,7 +16,7 @@ use queue::{GateDecision, GpuGate, Next, Stage, StepOutcome, Supervisor, STAGES}
 use serde::{Deserialize, Serialize};
 use speakers::Thresholds;
 use store::{LlmKind, StageStatus, Store};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::cycles::{PullLedger, RepoCycleSource};
 use crate::ipc::{IpcError, IpcResult};
@@ -644,8 +644,15 @@ impl Processing {
         let spawned = std::thread::Builder::new()
             .name("queue-driver".into())
             .spawn(move || {
-                this.drive();
+                // A panic must not leave the flag set: no driver would ever start again.
+                let outcome =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| this.drive()));
                 this.driver_running.store(false, Ordering::SeqCst);
+                if outcome.is_err() {
+                    tracing::error!("the queue driver stopped after a panic");
+                    this.emit_queue();
+                    return;
+                }
                 // A job added while the driver was finishing must not be left behind.
                 if this.has_runnable() {
                     this.kick();
@@ -689,7 +696,15 @@ impl Processing {
             for id in ids {
                 self.prepare_step(&id);
                 match self.supervisor.step(&id) {
-                    Ok(StepOutcome::Ran { .. }) => progressed = true,
+                    Ok(StepOutcome::Ran { stage }) => {
+                        progressed = true;
+                        // The draft is complete: what the cycle publishes by itself goes now.
+                        if matches!(stage, Stage::Reduce) {
+                            if let Some(state) = self.app.try_state::<crate::state::AppState>() {
+                                state.publishing().draft_completed(&id);
+                            }
+                        }
+                    }
                     Ok(StepOutcome::Failed { stage, error }) => {
                         tracing::error!(meeting = %id, stage = stage.as_str(), %error, "stage failed");
                         progressed = true;

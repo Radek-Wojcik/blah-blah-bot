@@ -2,13 +2,13 @@
 
 use std::path::Path;
 
-/// A temporary directory under the build output folder, removed when dropped.
-pub struct TempDir(tempfile::TempDir);
+/// A temporary directory under `target/test-tmp`, removed when dropped.
+pub struct TempDir(test_tmp::TestDir);
 
 impl TempDir {
-    /// Create a new empty directory under `target/tmp`.
+    /// Create a new empty directory under `target/test-tmp`.
     pub fn new(label: &str) -> Self {
-        Self(testkit::target_tempdir(&format!("recorder-{label}")))
+        Self(test_tmp::TestDir::new(&format!("recorder-{label}")))
     }
 
     pub fn path(&self) -> &Path {

@@ -1,16 +1,17 @@
 //! Builds `work/context.json` (`schemas/cycle-context.schema.json`): what the extraction
 //! needs to know about the cycle. Nothing here reads the application database.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
+use crate::corrections::{self, CorrectionsFile};
 use crate::cycle::Cycle;
 use crate::draft::{Draft, ItemType, LanguageSetting, ReportMode};
 use crate::error::{CycleError, Result, ValidationIssue};
-use crate::issues::OpenIssue;
+use crate::issues::{IssueLink, OpenIssue};
 use crate::schema::{self, Schema};
 use crate::template::Template;
 use crate::time::is_iso_date;
@@ -18,6 +19,8 @@ use crate::topics::{Topic, TopicStatus};
 
 /// Default cap on the items of earlier meetings put into the context.
 pub const DEFAULT_MAX_PREVIOUS_ITEMS: usize = 80;
+/// Default cap on the corrections of earlier meetings put into the context.
+pub const DEFAULT_MAX_CORRECTIONS: usize = 30;
 
 /// Inputs of [`build_context`].
 pub struct ContextRequest<'a> {
@@ -31,6 +34,10 @@ pub struct ContextRequest<'a> {
     /// Numbers of issues known to be closed (`12` or `#12`); items relating to them are
     /// dropped from the previous items.
     pub closed_issue_ids: &'a [String],
+    /// The issues created from items of earlier meetings. An item whose issue is closed is
+    /// done and dropped from the previous items; one whose issue is open carries it as
+    /// `issue`.
+    pub issue_links: &'a [IssueLink],
     /// `YYYY-MM-DD`.
     pub meeting_date: &'a str,
     /// Overrides the cycle's default mode.
@@ -47,6 +54,7 @@ pub struct ContextRequest<'a> {
     /// A meeting never to include (the one being processed).
     pub exclude_meeting_id: Option<&'a str>,
     pub max_previous_items: usize,
+    pub max_corrections: usize,
 }
 
 impl<'a> ContextRequest<'a> {
@@ -57,6 +65,7 @@ impl<'a> ContextRequest<'a> {
             topics: &[],
             issues: &[],
             closed_issue_ids: &[],
+            issue_links: &[],
             meeting_date,
             mode: None,
             meeting_type: None,
@@ -65,6 +74,7 @@ impl<'a> ContextRequest<'a> {
             previous_dirs: &[],
             exclude_meeting_id: None,
             max_previous_items: DEFAULT_MAX_PREVIOUS_ITEMS,
+            max_corrections: DEFAULT_MAX_CORRECTIONS,
         }
     }
 }
@@ -124,9 +134,11 @@ pub fn build_context(req: &ContextRequest<'_>) -> Result<Context> {
         .collect();
 
     let closed = ClosedThings::new(req.topics, req.closed_issue_ids);
-    let previous_items = collect_previous_items(req, &closed, &mut warnings);
+    let earlier = read_earlier(req, &mut warnings);
+    let previous_items = collect_previous_items(req, &earlier, &closed);
+    let corrections = collect_corrections(req, &earlier, &mut warnings);
 
-    let value = json!({
+    let mut value = json!({
         "version": 1,
         "cycle": cycle.id,
         "name": cycle.name,
@@ -146,6 +158,10 @@ pub fn build_context(req: &ContextRequest<'_>) -> Result<Context> {
         "open_issues": open_issues,
         "previous_items": previous_items,
     });
+    // Only when there are some: a cycle without corrections gets the context it always had.
+    if !corrections.is_empty() {
+        value["corrections"] = Value::Array(corrections);
+    }
 
     let issues = schema::validate(Schema::Context, &value);
     if !issues.is_empty() {
@@ -228,11 +244,13 @@ struct Earlier {
     date: String,
     dir_name: String,
     draft: Draft,
+    /// Every folder that holds this meeting: the repository's and the application's own copy.
+    folders: Vec<PathBuf>,
 }
 
 fn read_earlier(req: &ContextRequest<'_>, warnings: &mut Vec<String>) -> Vec<Earlier> {
     let mut found: Vec<Earlier> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
     for dir in req.previous_dirs {
         let Ok(entries) = fs::read_dir(dir) else {
             continue;
@@ -253,14 +271,21 @@ fn read_earlier(req: &ContextRequest<'_>, warnings: &mut Vec<String>) -> Vec<Ear
                 Ok(draft) => {
                     if req.exclude_meeting_id == Some(draft.meeting_id.as_str())
                         || draft.date.as_str() > req.meeting_date
-                        || !seen.insert(draft.meeting_id.clone())
                     {
                         continue;
                     }
+                    // A meeting in two places is used once, but both folders are read for its
+                    // corrections: the repository's copy lacks the ones not yet published.
+                    if let Some(&at) = index.get(&draft.meeting_id) {
+                        found[at].folders.push(folder.clone());
+                        continue;
+                    }
+                    index.insert(draft.meeting_id.clone(), found.len());
                     found.push(Earlier {
                         date: draft.date.clone(),
                         dir_name,
                         draft,
+                        folders: vec![folder.clone()],
                     });
                 }
                 Err(message) => warnings.push(format!("skipped {}: {message}", file.display())),
@@ -291,25 +316,142 @@ fn read_meeting(file: &Path) -> std::result::Result<Draft, String> {
 
 fn collect_previous_items(
     req: &ContextRequest<'_>,
+    earlier_meetings: &[Earlier],
     closed: &ClosedThings,
-    warnings: &mut Vec<String>,
 ) -> Vec<Value> {
     let mut out = Vec::new();
-    for earlier in read_earlier(req, warnings) {
+    for earlier in earlier_meetings {
         for item in earlier.draft.items.iter().filter(|i| !closed.is_closed(i)) {
+            let link = req
+                .issue_links
+                .iter()
+                .find(|l| l.meeting == earlier.draft.meeting_id && l.item == item.id);
+            // The issue of the item was closed (by a person or by an approved status
+            // change): the item is done.
+            if link.is_some_and(|l| !l.open) {
+                continue;
+            }
             if out.len() >= req.max_previous_items {
                 return out;
             }
-            out.push(json!({
+            let mut value = json!({
                 "meeting": earlier.draft.date,
                 "type": item.item_type,
                 "text": item.text,
                 "assignee": item.assignee,
                 "due": item.due,
-            }));
+            });
+            if let Some(l) = link {
+                value["issue"] = json!(format!("#{}", l.number));
+            }
+            out.push(value);
         }
     }
     out
+}
+
+/// The corrections written after the earlier meetings were published, newest first: the ones
+/// published as `corrections*.md` in a folder of the meeting and the local
+/// `corrections.json` (a note not yet published is just as true), one entry per correction id.
+/// A published file that names another meeting or cycle than the folder it is in is skipped.
+fn collect_corrections(
+    req: &ContextRequest<'_>,
+    earlier_meetings: &[Earlier],
+    warnings: &mut Vec<String>,
+) -> Vec<Value> {
+    struct Entry {
+        meeting_id: String,
+        meeting: String,
+        date: String,
+        id: String,
+        text: String,
+        item: Option<String>,
+        issue: Option<String>,
+    }
+    let mut entries: Vec<Entry> = Vec::new();
+    for earlier in earlier_meetings {
+        let meeting_id = &earlier.draft.meeting_id;
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut push = |entry: Entry| {
+            if seen.insert(entry.id.clone()) {
+                entries.push(entry);
+            }
+        };
+        for folder in &earlier.folders {
+            for p in corrections::read_published(folder) {
+                if p.marker.meeting != *meeting_id || p.marker.cycle != req.cycle.id {
+                    warnings.push(format!(
+                        "skipped a correction in {}: it belongs to another meeting",
+                        folder.display()
+                    ));
+                    continue;
+                }
+                push(Entry {
+                    meeting_id: meeting_id.clone(),
+                    meeting: earlier.draft.date.clone(),
+                    date: p.marker.date.clone().unwrap_or_default(),
+                    id: p.marker.id,
+                    text: p.text,
+                    item: p.marker.about,
+                    issue: p.marker.issue.map(|n| format!("#{n}")),
+                });
+            }
+            let file = folder.join(corrections::CORRECTIONS_FILE);
+            match CorrectionsFile::read(&file) {
+                Ok(Some(f)) if f.meeting_id == *meeting_id => {
+                    for c in f.corrections {
+                        push(Entry {
+                            meeting_id: meeting_id.clone(),
+                            meeting: earlier.draft.date.clone(),
+                            date: c.date,
+                            id: c.id,
+                            text: c.text,
+                            item: c.item,
+                            issue: c.issue,
+                        });
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => warnings.push(format!("skipped {}: {e}", file.display())),
+            }
+        }
+    }
+    // Newest first: by the day written, then by meeting (newer first) and id.
+    entries.sort_by(|a, b| {
+        b.date
+            .cmp(&a.date)
+            .then_with(|| b.meeting.cmp(&a.meeting))
+            .then_with(|| b.id.cmp(&a.id))
+    });
+    entries.truncate(req.max_corrections);
+    entries
+        .into_iter()
+        .map(|e| {
+            // The text of the item that is corrected, so the model need not match ids.
+            let item_text = e.item.as_deref().and_then(|id| {
+                earlier_meetings
+                    .iter()
+                    .find(|m| m.draft.meeting_id == e.meeting_id)
+                    .and_then(|m| m.draft.items.iter().find(|i| i.id == id))
+                    .map(|i| i.text.clone())
+            });
+            // An item's own issue, when the note names only the item.
+            let issue = e.issue.or_else(|| {
+                let id = e.item.as_deref()?;
+                req.issue_links
+                    .iter()
+                    .find(|l| l.meeting == e.meeting_id && l.item == id)
+                    .map(|l| format!("#{}", l.number))
+            });
+            json!({
+                "meeting": e.meeting,
+                "date": e.date,
+                "text": e.text,
+                "item": item_text,
+                "issue": issue,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -514,7 +656,7 @@ mod tests {
 
     #[test]
     fn previous_items_are_newest_first_deduped_and_capped() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("context");
         let root = dir.path().join("meetings").join("NOMAD");
         write_meeting(
             &root,
@@ -590,7 +732,7 @@ mod tests {
 
     #[test]
     fn default_cap_is_eighty_items() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("context");
         let items: Vec<_> = (0..100)
             .map(|n| item(&format!("i{n}"), ItemType::Note, &format!("note {n}")))
             .collect();
@@ -606,7 +748,7 @@ mod tests {
 
     #[test]
     fn done_and_closed_things_are_dropped() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("context");
         let mut linked_topic = item("a", ItemType::Task, "follow up on battery");
         linked_topic.relates_to = Some("t-2".into());
         let mut linked_issue = item("b", ItemType::Task, "send the invoice");
@@ -660,8 +802,61 @@ mod tests {
     }
 
     #[test]
+    fn items_with_a_closed_issue_are_done_and_those_with_an_open_issue_carry_it() {
+        let dir = test_tmp::TestDir::new("context");
+        write_meeting(
+            dir.path(),
+            "2026-11-13",
+            "20261113-140501",
+            "2026-11-13",
+            vec![
+                item("i1", ItemType::Task, "order the battery"),
+                item("i2", ItemType::Task, "send the invoice"),
+                item("i3", ItemType::Task, "no issue for this one"),
+            ],
+        );
+        // An issue of another meeting with the same item id must not match.
+        let links = vec![
+            IssueLink {
+                number: 41,
+                meeting: "20261113-140501".into(),
+                item: "i1".into(),
+                open: true,
+            },
+            IssueLink {
+                number: 42,
+                meeting: "20261113-140501".into(),
+                item: "i2".into(),
+                open: false,
+            },
+            IssueLink {
+                number: 43,
+                meeting: "20260101-000000".into(),
+                item: "i3".into(),
+                open: false,
+            },
+        ];
+        let c = cycle();
+        let dirs = vec![dir.path().to_path_buf()];
+        let mut req = ContextRequest::new(&c, "2026-11-20");
+        req.previous_dirs = &dirs;
+        req.issue_links = &links;
+        let ctx = build_context(&req).unwrap();
+        let items = ctx.value["previous_items"].as_array().unwrap();
+        let texts: Vec<_> = items.iter().map(|i| i["text"].as_str().unwrap()).collect();
+        assert_eq!(texts, ["order the battery", "no issue for this one"]);
+        assert_eq!(items[0]["issue"], "#41");
+        assert!(items[1].get("issue").is_none());
+
+        // Without links nothing changes: all three are still open business.
+        req.issue_links = &[];
+        let ctx = build_context(&req).unwrap();
+        assert_eq!(ctx.value["previous_items"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
     fn invalid_meeting_files_are_skipped_with_a_warning() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("context");
         write_meeting(
             dir.path(),
             "2026-11-13",
@@ -687,5 +882,168 @@ mod tests {
         );
         assert_eq!(ctx.warnings.len(), 2, "{:?}", ctx.warnings);
         assert!(ctx.warnings.iter().all(|w| w.starts_with("skipped ")));
+    }
+
+    fn correction(id: &str, date: &str, text: &str, item: Option<&str>) -> corrections::Correction {
+        corrections::Correction {
+            id: id.into(),
+            date: date.into(),
+            text: text.into(),
+            item: item.map(String::from),
+            issue: None,
+        }
+    }
+
+    fn write_published_correction(folder: &Path, name: &str, c: &corrections::Correction) {
+        let md = corrections::render_markdown("NOMAD", "20261113-140501", "2026-11-13", c).unwrap();
+        fs::write(folder.join(name), md).unwrap();
+    }
+
+    #[test]
+    fn corrections_of_earlier_meetings_reach_the_context() {
+        let dir = test_tmp::TestDir::new("context");
+        write_meeting(
+            dir.path(),
+            "2026-11-13",
+            "20261113-140501",
+            "2026-11-13",
+            vec![item("i1", ItemType::Task, "order the battery")],
+        );
+        let folder = dir.path().join("2026-11-13");
+        write_published_correction(
+            &folder,
+            "corrections.md",
+            &correction(
+                "c1",
+                "2026-11-16",
+                "The battery was ordered on Friday.",
+                Some("i1"),
+            ),
+        );
+        write_published_correction(
+            &folder,
+            "corrections-2.md",
+            &correction("c2", "2026-11-18", "The supplier is another one.", None),
+        );
+        // A copy that names another meeting is not trusted.
+        let other = corrections::render_markdown(
+            "NOMAD",
+            "20260101-000000",
+            "2026-01-01",
+            &correction("c1", "2026-11-19", "Not for this meeting.", None),
+        )
+        .unwrap();
+        fs::write(folder.join("corrections-3.md"), other).unwrap();
+        let links = vec![IssueLink {
+            number: 41,
+            meeting: "20261113-140501".into(),
+            item: "i1".into(),
+            open: true,
+        }];
+        let c = cycle();
+        let dirs = vec![dir.path().to_path_buf()];
+        let mut req = ContextRequest::new(&c, "2026-11-20");
+        req.previous_dirs = &dirs;
+        req.issue_links = &links;
+        let ctx = build_context(&req).unwrap();
+        let list = ctx.value["corrections"].as_array().unwrap();
+        assert_eq!(list.len(), 2);
+        // Newest first; the item is given as text, and its issue is found through the link.
+        assert_eq!(list[0]["text"], "The supplier is another one.");
+        assert!(list[0]["item"].is_null());
+        assert_eq!(list[1]["meeting"], "2026-11-13");
+        assert_eq!(list[1]["date"], "2026-11-16");
+        assert_eq!(list[1]["item"], "order the battery");
+        assert_eq!(list[1]["issue"], "#41");
+        assert!(ctx.warnings.iter().any(|w| w.contains("another meeting")));
+    }
+
+    #[test]
+    fn a_local_correction_counts_and_the_same_id_is_used_once() {
+        // The repository's folder and the application's own copy of one meeting.
+        let repo = test_tmp::TestDir::new("context");
+        let local = test_tmp::TestDir::new("context");
+        for root in [repo.path(), local.path()] {
+            write_meeting(
+                root,
+                "2026-11-13",
+                "20261113-140501",
+                "2026-11-13",
+                vec![item("i1", ItemType::Task, "order the battery")],
+            );
+        }
+        write_published_correction(
+            &repo.path().join("2026-11-13"),
+            "corrections.md",
+            &correction("c1", "2026-11-16", "Published.", None),
+        );
+        let mut file = corrections::CorrectionsFile::new("20261113-140501");
+        file.corrections
+            .push(correction("c1", "2026-11-16", "Published.", None));
+        file.corrections
+            .push(correction("c2", "2026-11-17", "Not published yet.", None));
+        file.write(
+            &local
+                .path()
+                .join("2026-11-13")
+                .join(corrections::CORRECTIONS_FILE),
+        )
+        .unwrap();
+        let c = cycle();
+        let dirs = vec![repo.path().to_path_buf(), local.path().to_path_buf()];
+        let mut req = ContextRequest::new(&c, "2026-11-20");
+        req.previous_dirs = &dirs;
+        let ctx = build_context(&req).unwrap();
+        let texts: Vec<_> = ctx.value["corrections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["text"].as_str().unwrap())
+            .collect();
+        assert_eq!(texts, ["Not published yet.", "Published."]);
+        // The meeting itself is still listed once.
+        assert_eq!(ctx.value["previous_items"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn without_corrections_the_context_has_no_such_key_and_the_cap_holds() {
+        let dir = test_tmp::TestDir::new("context");
+        write_meeting(
+            dir.path(),
+            "2026-11-13",
+            "20261113-140501",
+            "2026-11-13",
+            vec![item("i1", ItemType::Task, "order the battery")],
+        );
+        let c = cycle();
+        let dirs = vec![dir.path().to_path_buf()];
+        let mut req = ContextRequest::new(&c, "2026-11-20");
+        req.previous_dirs = &dirs;
+        assert!(build_context(&req)
+            .unwrap()
+            .value
+            .get("corrections")
+            .is_none());
+
+        let mut file = corrections::CorrectionsFile::new("20261113-140501");
+        for n in 1..=5 {
+            file.corrections.push(correction(
+                &format!("c{n}"),
+                "2026-11-16",
+                &format!("note {n}"),
+                None,
+            ));
+        }
+        file.write(
+            &dir.path()
+                .join("2026-11-13")
+                .join(corrections::CORRECTIONS_FILE),
+        )
+        .unwrap();
+        req.max_corrections = 3;
+        let ctx = build_context(&req).unwrap();
+        let notes = ctx.value["corrections"].as_array().unwrap();
+        assert_eq!(notes.len(), 3);
+        assert_eq!(notes[0]["text"], "note 5");
     }
 }

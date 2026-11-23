@@ -2346,6 +2346,586 @@ textarea {
   box-shadow: 0 0 0 1px rgba(252, 238, 10, 0.35);
 }
 
+/* ---------- Publishing: secrets, status changes, the publishing panel, tasks ---------- */
+.secret-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  margin-bottom: var(--gap);
+}
+/* The browser's own "show password" button would echo a secret; there is none for these fields. */
+.secret-form input::-ms-reveal,
+.secret-form input::-ms-clear {
+  display: none;
+}
+.secret-result {
+  margin: 0;
+  color: var(--green);
+  font-size: 0.85em;
+}
+.status-count {
+  margin: 0 0 8px;
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  color: var(--cyan);
+}
+.proposals {
+  list-style: none;
+  margin: 0 0 var(--gap);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.proposal {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--line);
+  background: var(--panel-2);
+}
+.proposal-approved {
+  border-left-color: var(--green);
+}
+.proposal-rejected {
+  border-left-color: var(--muted);
+  opacity: 0.8;
+}
+.proposal-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.proposal-target {
+  font-family: var(--font-mono);
+  color: var(--cyan);
+}
+.proposal-title {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.badge-decision-proposed {
+  color: var(--yellow);
+  margin-left: auto;
+}
+.badge-decision-approved {
+  color: var(--green);
+  margin-left: auto;
+}
+.badge-decision-rejected {
+  color: var(--muted);
+  margin-left: auto;
+}
+.proposal-reason,
+.proposal-meta,
+.proposal-effect {
+  margin: 0;
+  font-size: 0.85em;
+}
+.proposal-meta,
+.proposal-effect {
+  color: var(--muted);
+}
+.proposal-quote {
+  margin: 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--magenta);
+  font-style: italic;
+  line-height: 1.4;
+}
+.proposal-comment {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 0.65em;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+.proposal-comment textarea {
+  font-size: 0.85rem;
+  letter-spacing: normal;
+  text-transform: none;
+}
+.proposal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.proposal-verb {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.75em;
+}
+.proposal-add select,
+.proposal-add input {
+  flex: 1 1 160px;
+}
+.banner-locked {
+  border-left-color: var(--magenta);
+  background: rgba(255, 42, 109, 0.06);
+}
+.banner-offline {
+  border-left-color: var(--yellow);
+}
+.chip-locked {
+  color: var(--magenta);
+}
+.notice-warn {
+  border-left-color: var(--yellow);
+  color: var(--text);
+}
+.publish-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 8px;
+}
+.publish-head .sub-head {
+  margin: 0;
+}
+.targets-list {
+  list-style: none;
+  margin: 0 0 var(--gap);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.target-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 16px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--line);
+  background: var(--panel-2);
+}
+.target-row .check {
+  flex: 1 1 240px;
+}
+.target-what {
+  display: block;
+  color: var(--muted);
+}
+.target-rule-help {
+  flex: 1 1 100%;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8em;
+}
+.plan-lines {
+  margin: 0 0 8px;
+  padding-left: 1.2em;
+  line-height: 1.5;
+  font-size: 0.9em;
+}
+.publish-actions {
+  margin: var(--gap) 0;
+}
+.outbox,
+.topics-diff {
+  margin-top: var(--gap);
+}
+.outbox-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin-bottom: 8px;
+}
+.outbox-head .sub-head {
+  margin: 0;
+}
+.outbox-headline {
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  color: var(--cyan);
+}
+.ops {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.op {
+  padding: 6px 10px;
+  border-left: 2px solid var(--line);
+  background: var(--panel-2);
+}
+.op-done {
+  border-left-color: var(--green);
+}
+.op-failed {
+  border-left-color: var(--magenta);
+}
+.op-running {
+  border-left-color: var(--cyan);
+}
+.op-cancelled {
+  opacity: 0.6;
+}
+.op-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.op-label {
+  flex: 1 1 260px;
+  overflow-wrap: anywhere;
+}
+.op-line {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.8em;
+}
+.op-error {
+  color: var(--magenta);
+}
+.op-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+.conflicts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.conflict {
+  padding: 8px 10px;
+  border-left: 2px solid var(--yellow);
+  background: var(--panel-2);
+}
+.conflict-id {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 6px;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+.diff {
+  margin: 0;
+  padding: 4px 8px;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  overflow-wrap: anywhere;
+}
+.diff-del {
+  background: rgba(255, 42, 109, 0.12);
+  color: var(--text);
+}
+.diff-add {
+  background: rgba(5, 255, 161, 0.1);
+  color: var(--text);
+}
+.diff-label {
+  display: block;
+  color: var(--muted);
+  font-size: 0.75em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.tasks-list {
+  list-style: none;
+  margin: 0 0 var(--gap);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.task {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--line);
+  background: var(--panel-2);
+}
+.task-done {
+  border-left-color: var(--green);
+}
+.task-done .task-title {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+.task-title {
+  flex: 1 1 240px;
+  overflow-wrap: anywhere;
+}
+
+/* The rendered report (what GitHub shows) and the chat message (what Discord shows). */
+.md {
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.md p {
+  margin: 0 0 0.6em;
+}
+.md ul,
+.md ol {
+  margin: 0 0 0.8em;
+  padding-left: 1.4em;
+}
+.md li {
+  margin: 0.2em 0;
+}
+.md-tasks {
+  list-style: none;
+  padding-left: 0.2em;
+}
+.md-tasks input {
+  margin-right: 0.5em;
+  vertical-align: middle;
+}
+.md blockquote {
+  margin: 0 0 0.8em;
+  padding-left: 0.9em;
+  border-left: 3px solid var(--line);
+  color: var(--muted);
+}
+.md code {
+  padding: 0.1em 0.35em;
+  background: rgba(255, 255, 255, 0.08);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+.md-code {
+  margin: 0 0 0.8em;
+  padding: 10px 12px;
+  overflow: auto;
+  background: rgba(255, 255, 255, 0.05);
+}
+.md-ref {
+  color: var(--cyan);
+  text-decoration: underline dotted;
+}
+.md a {
+  color: var(--cyan);
+}
+.md hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 1em 0;
+}
+.md-github {
+  max-width: 90ch;
+  padding: 18px 24px;
+  border: 1px solid var(--line);
+  background: #0d1117;
+  color: #e6edf3;
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+.md-github .md-h {
+  margin: 1em 0 0.5em;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: normal;
+  text-transform: none;
+  color: #e6edf3;
+}
+.md-github .md-h:first-child {
+  margin-top: 0;
+}
+.md-github .md-h1 {
+  font-size: 1.7em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid #30363d;
+}
+.md-github .md-h2 {
+  font-size: 1.35em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid #30363d;
+}
+.md-github .md-h3 {
+  font-size: 1.1em;
+}
+.md-github a,
+.md-github .md-ref {
+  color: #58a6ff;
+}
+.discord-message {
+  display: flex;
+  gap: 12px;
+  max-width: 70ch;
+  padding: 14px 16px;
+  background: #313338;
+  color: #dbdee1;
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+.discord-avatar {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: #5865f2;
+  color: #fff;
+  font-weight: 700;
+}
+.discord-body {
+  min-width: 0;
+}
+.discord-author {
+  margin: 0 0 2px;
+  font-size: 0.95em;
+}
+.discord-author strong {
+  color: #fff;
+}
+.discord-tag {
+  padding: 0 4px;
+  border-radius: 3px;
+  background: #5865f2;
+  color: #fff;
+  font-size: 0.65em;
+  vertical-align: middle;
+}
+.md-discord .md-h {
+  margin: 0.6em 0 0.3em;
+  letter-spacing: normal;
+  text-transform: none;
+  color: #fff;
+  font-weight: 700;
+}
+.md-discord .md-h:first-child {
+  margin-top: 0;
+}
+.md-discord .md-h1 {
+  font-size: 1.4em;
+}
+.md-discord .md-h2 {
+  font-size: 1.2em;
+}
+.md-discord .md-h3 {
+  font-size: 1.05em;
+}
+.md-discord a,
+.md-discord .md-ref {
+  color: #00a8fc;
+}
+.rule-switch {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+}
+.field-label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 0.75em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.target-rule-warn {
+  flex: 1 1 100%;
+  margin: 0;
+  padding: 4px 8px;
+  border-left: 2px solid var(--yellow);
+  color: var(--text);
+  font-size: 0.8em;
+}
+.conflict-plain {
+  border-left-color: var(--line);
+}
+.rule-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 6px 16px;
+  margin-bottom: 12px;
+}
+
+/* The rule of a target: the switch and what each position does. */
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.rule-choice {
+  display: flex;
+  flex: 1 1 100%;
+  flex-direction: column;
+  gap: 6px;
+}
+.rule-options {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8em;
+  color: var(--muted);
+}
+.rule-option {
+  padding: 3px 8px;
+  border-left: 2px solid var(--line);
+}
+.rule-option-on {
+  border-left-color: var(--cyan);
+  color: var(--text);
+}
+.rule-chosen {
+  color: var(--cyan);
+}
+
+/* Corrections to a published meeting. */
+.corrections {
+  list-style: none;
+  margin: var(--gap) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.correction {
+  padding: 8px 10px;
+  border-left: 2px solid var(--line);
+  background: var(--panel-2);
+}
+.correction-published {
+  border-left-color: var(--green);
+}
+.correction-failed {
+  border-left-color: var(--magenta);
+}
+.correction-running {
+  border-left-color: var(--cyan);
+}
+.correction-text {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.correction-form {
+  margin: var(--gap) 0;
+}
+.form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+.form-row > label {
+  flex: 1 1 180px;
+}
+
 /* Settings > Browser extension: the one-time pairing code. */
 .pair-code {
   font-family: var(--font-mono);

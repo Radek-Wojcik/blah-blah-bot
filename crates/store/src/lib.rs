@@ -1,4 +1,5 @@
-//! Local SQLite state: meetings, tracks, segments and screenshots.
+//! Local SQLite state: meetings, tracks, segments and screenshots, processing jobs, voice
+//! profiles, cycle settings and the publishing outbox.
 //!
 //! Paths stored here are relative to the recordings root, so the database never contains
 //! absolute paths. The schema is versioned with `PRAGMA user_version` and migrated forward
@@ -7,10 +8,17 @@
 mod cycles;
 mod jobs;
 mod migrations;
+mod outbox;
+mod publications;
 mod voices;
 
 pub use cycles::{LlmChoice, LlmKind, ReportSettings, SyncOutcome};
 pub use jobs::{JobRow, StageRow, StageStatus};
+pub use outbox::{
+    retry_delay_ms, Failure, NewOp, OpState, OutboxKind, OutboxOp, OutboxTarget, BACKOFF_BASE_MS,
+    BACKOFF_MAX_MS, MAX_ATTEMPTS, RETRY_AFTER_MAX_MS,
+};
+pub use publications::{repo_key, Publication, RepoConfirmation};
 pub use voices::{
     blob_to_embedding, cycle_participant_key, embedding_to_blob, ClipRow, Participant,
     ParticipantInfo, SampleRow, VoiceDecision, VoiceRow,

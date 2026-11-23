@@ -41,6 +41,12 @@ pub struct RenderOptions {
     pub variant: Variant,
     /// Target of `{transcript_link}`.
     pub transcript_link: String,
+    /// Target of `{report_link}`: where the full report is published.
+    pub report_link: String,
+    /// Discord: an assignee with a Discord id is written as a mention (`<@id>` for a user,
+    /// `<@&id>` for a role) instead of `@Name`, and mention syntax in text that came from the
+    /// model or the transcript is defused, so only the mentions made here can reach anybody.
+    pub discord_mentions: bool,
 }
 
 impl Default for RenderOptions {
@@ -49,6 +55,8 @@ impl Default for RenderOptions {
             title: String::new(),
             variant: Variant::Markdown,
             transcript_link: "transcript.md".to_string(),
+            report_link: "report.md".to_string(),
+            discord_mentions: false,
         }
     }
 }
@@ -138,16 +146,30 @@ pub fn neutralise_mentions(text: &str) -> String {
 
 /// One item as a Markdown bullet line.
 pub fn item_line(item: &Item, participants: &[Participant], variant: Variant) -> String {
+    let opts = RenderOptions {
+        variant,
+        ..RenderOptions::default()
+    };
+    item_line_with(item, participants, &opts)
+}
+
+/// [`item_line`] with the options of a render (variant and Discord mentions).
+pub fn item_line_with(item: &Item, participants: &[Participant], opts: &RenderOptions) -> String {
     let text = item.text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let text = if opts.discord_mentions {
+        defuse_discord_mentions(&text)
+    } else {
+        text
+    };
     let mut line = String::from("- ");
     if item.item_type == ItemType::Task {
-        if variant == Variant::Markdown {
+        if opts.variant == Variant::Markdown {
             line.push_str("[ ] ");
         }
         line.push_str(&text);
         line.push_str(&format!(
             " ({}, {})",
-            assignee_label(item, participants),
+            assignee_label(item, participants, opts.discord_mentions),
             due_label(item)
         ));
     } else {
@@ -160,19 +182,40 @@ pub fn item_line(item: &Item, participants: &[Participant], variant: Variant) ->
     neutralise_mentions(&line)
 }
 
-fn assignee_label(item: &Item, participants: &[Participant]) -> String {
+/// Puts a zero-width space inside `<@`, so text that came from a model or a transcript cannot
+/// form a Discord user, role or channel mention.
+pub fn defuse_discord_mentions(text: &str) -> String {
+    text.replace("<@", "<\u{200b}@")
+}
+
+/// Whether `id` can be written inside `<@...>`: a Discord snowflake, digits only.
+pub fn is_discord_id(id: &str) -> bool {
+    (1..=25).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_digit())
+}
+
+fn discord_mention(person: &Participant) -> Option<String> {
+    let d = person.discord.as_ref()?;
+    match (d.user_id.as_deref(), d.role_id.as_deref()) {
+        (Some(u), None) if is_discord_id(u) => Some(format!("<@{u}>")),
+        (None, Some(r)) if is_discord_id(r) => Some(format!("<@&{r}>")),
+        _ => None,
+    }
+}
+
+fn assignee_label(item: &Item, participants: &[Participant], discord: bool) -> String {
     match &item.assignee {
         None => "@?".to_string(),
         Some(id) => {
-            let name = participants
-                .iter()
-                .find(|p| &p.id == id)
-                .map_or(id.as_str(), |p| p.name.as_str());
+            let person = participants.iter().find(|p| &p.id == id);
             let mark = if item.certainty.assignee == CertaintyLevel::Stated {
                 ""
             } else {
                 "?"
             };
+            if let Some(mention) = person.filter(|_| discord).and_then(discord_mention) {
+                return format!("{mention}{mark}");
+            }
+            let name = person.map_or(id.as_str(), |p| p.name.as_str());
             format!("@{name}{mark}")
         }
     }
@@ -199,9 +242,18 @@ struct Renderer<'a> {
 }
 
 impl Renderer<'_> {
+    /// Text that came from the model, the transcript or the cycle files.
+    fn plain(&self, text: &str) -> String {
+        if self.opts.discord_mentions {
+            defuse_discord_mentions(text)
+        } else {
+            text.to_string()
+        }
+    }
+
     fn list<'i>(&self, items: impl Iterator<Item = &'i Item>) -> String {
         items
-            .map(|i| item_line(i, self.participants, self.opts.variant))
+            .map(|i| item_line_with(i, self.participants, self.opts))
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -251,7 +303,7 @@ impl Renderer<'_> {
                         .filter(|i| self.section_index(i) == Some(idx)),
                 );
                 if !list.is_empty() {
-                    blocks.push(format!("## {}\n\n{list}", section.title));
+                    blocks.push(format!("## {}\n\n{list}", self.plain(&section.title)));
                 }
             }
         }
@@ -265,8 +317,9 @@ impl Renderer<'_> {
             return String::new();
         }
         format!(
-            "## {}\n\n{summary}",
-            BuiltinSection::Summary.heading(self.draft.language)
+            "## {}\n\n{}",
+            BuiltinSection::Summary.heading(self.draft.language),
+            self.plain(summary)
         )
     }
 
@@ -287,15 +340,15 @@ impl Renderer<'_> {
 
     fn expand(&self, p: &Placeholder) -> String {
         match p {
-            Placeholder::Title => self.opts.title.clone(),
+            Placeholder::Title => self.plain(&self.opts.title),
             Placeholder::Date => self.draft.date.clone(),
             Placeholder::Participants => self
                 .participants
                 .iter()
-                .map(|p| p.name.as_str())
+                .map(|p| self.plain(&p.name))
                 .collect::<Vec<_>>()
                 .join(", "),
-            Placeholder::Summary => self.draft.summary.trim().to_string(),
+            Placeholder::Summary => self.plain(self.draft.summary.trim()),
             Placeholder::SummarySection => self.summary_section(),
             Placeholder::Sections => self.sections_block(),
             Placeholder::Section(id) => self.section_list(id),
@@ -306,6 +359,7 @@ impl Renderer<'_> {
             Placeholder::Ideas => self.of_type(ItemType::Idea),
             Placeholder::Budgets => self.of_type(ItemType::Budget),
             Placeholder::TranscriptLink => self.opts.transcript_link.clone(),
+            Placeholder::ReportLink => self.opts.report_link.clone(),
         }
     }
 }
@@ -343,7 +397,16 @@ pub fn render(
     for token in &tokens {
         match token {
             Token::Text(t) => out.push_str(t),
-            Token::Placeholder(p) => out.push_str(&renderer.expand(p)),
+            Token::Placeholder(p) => {
+                let text = renderer.expand(p);
+                if text.trim().is_empty() {
+                    // Remembered for `tidy`: a heading that only empty placeholders follow
+                    // is an empty section, whatever static text comes after them.
+                    out.push(EMPTY_MARK);
+                } else {
+                    out.push_str(&text);
+                }
+            }
         }
     }
     // Item text, the summary and section titles come from a model that the transcript can
@@ -351,15 +414,28 @@ pub fn render(
     Ok(neutralise_mentions(&tidy(&out)))
 }
 
+/// Stands in the text for a placeholder that expanded to nothing; `tidy` removes it.
+const EMPTY_MARK: char = '\u{e000}';
+
 fn heading_level(line: &str) -> Option<usize> {
     let hashes = line.bytes().take_while(|&b| b == b'#').count();
     ((1..=6).contains(&hashes) && line[hashes..].starts_with(' ')).then_some(hashes)
 }
 
 /// Removes empty headings (level 2 and deeper), trailing spaces and extra blank lines, and
-/// puts one blank line around every heading.
+/// puts one blank line around every heading. A heading is empty when nothing but blank lines
+/// follows it before the next heading or `---`, or when the first block under it is made of
+/// placeholders that expanded to nothing (`## Tasks\n{tasks}\n\n[Full report](...)`: the link
+/// is not the content of the tasks section).
 fn tidy(text: &str) -> String {
-    let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
+    // Lines that hold nothing but marks of empty placeholders.
+    let raw: Vec<&str> = text.lines().collect();
+    let marked: Vec<bool> = raw
+        .iter()
+        .map(|l| l.contains(EMPTY_MARK) && l.chars().all(|c| c == EMPTY_MARK || c.is_whitespace()))
+        .collect();
+    let cleaned: Vec<String> = raw.iter().map(|l| l.replace(EMPTY_MARK, "")).collect();
+    let lines: Vec<&str> = cleaned.iter().map(|l| l.trim_end()).collect();
     // Mark which lines sit inside a code fence: headings there are not headings.
     let mut in_fence = false;
     let fenced: Vec<bool> = lines
@@ -381,10 +457,31 @@ fn tidy(text: &str) -> String {
         }
     };
 
+    // A line that is blank for real, not just because an empty placeholder stood on it.
+    let plain_blank = |j: usize| lines[j].is_empty() && !marked[j];
+    let first_block_is_empty = |i: usize| {
+        let mut j = i + 1;
+        while j < lines.len() && plain_blank(j) {
+            j += 1;
+        }
+        let start = j;
+        while j < lines.len() && !plain_blank(j) {
+            if !marked[j] {
+                return false;
+            }
+            j += 1;
+        }
+        j > start
+    };
+
     let mut keep = vec![true; lines.len()];
     for (i, kept) in keep.iter_mut().enumerate() {
         let Some(level) = level_at(i) else { continue };
         if level < 2 {
+            continue;
+        }
+        if first_block_is_empty(i) {
+            *kept = false;
             continue;
         }
         let mut has_content = false;
@@ -821,6 +918,199 @@ mod tests {
             md,
             "Weekly sync|2026-11-13|Alex Example, Sam Sample|We agreed on the mount.|../transcript.md\n"
         );
+    }
+
+    fn discord_people() -> Vec<Participant> {
+        use crate::cycle::DiscordRef;
+        let mut p = people();
+        p[0].discord = Some(DiscordRef {
+            user_id: Some("111111111111111111".into()),
+            role_id: None,
+        });
+        p[1].discord = Some(DiscordRef {
+            user_id: None,
+            role_id: Some("222222222222222222".into()),
+        });
+        p
+    }
+
+    fn discord_opts() -> RenderOptions {
+        RenderOptions {
+            variant: Variant::Chat,
+            discord_mentions: true,
+            ..opts()
+        }
+    }
+
+    #[test]
+    fn discord_assignees_become_user_and_role_mentions() {
+        let p = discord_people();
+        let o = discord_opts();
+        let user = task("1", "Design", Some("alex"), None, Stated, Unknown);
+        assert_eq!(
+            item_line_with(&user, &p, &o),
+            "- Design (<@111111111111111111>, due ?)"
+        );
+        let role = task("2", "Order", Some("sam"), None, Inferred, Unknown);
+        assert_eq!(
+            item_line_with(&role, &p, &o),
+            "- Order (<@&222222222222222222>?, due ?)"
+        );
+        // Not a participant, or a participant without a Discord id: the name, no mention.
+        let stranger = task("3", "Ping", Some("zed"), None, Stated, Unknown);
+        assert_eq!(item_line_with(&stranger, &p, &o), "- Ping (@zed, due ?)");
+        let plain = task("4", "Ping", Some("alex"), None, Stated, Unknown);
+        assert_eq!(
+            item_line_with(&plain, &people(), &o),
+            "- Ping (@Alex Example, due ?)"
+        );
+        // Without the option the name is used even when an id exists.
+        assert_eq!(
+            item_line(&user, &p, Variant::Chat),
+            "- Design (@Alex Example, due ?)"
+        );
+    }
+
+    #[test]
+    fn a_malformed_discord_id_is_never_written_into_a_mention() {
+        use crate::cycle::DiscordRef;
+        let mut p = people();
+        p[0].discord = Some(DiscordRef {
+            user_id: Some("1> @everyone <@2".into()),
+            role_id: None,
+        });
+        let t = task("1", "Do", Some("alex"), None, Stated, Unknown);
+        let line = item_line_with(&t, &p, &discord_opts());
+        assert_eq!(line, "- Do (@Alex Example, due ?)");
+        assert!(!is_discord_id(""));
+        assert!(!is_discord_id("12a"));
+        assert!(is_discord_id("123456789012345678"));
+    }
+
+    #[test]
+    fn discord_mention_syntax_in_model_text_is_defused() {
+        let p = discord_people();
+        let mut d = fixed_draft(Language::En);
+        d.summary = "Hello <@999999999999999999> and <@&888888888888888888>".into();
+        d.items
+            .push(item("n2", ItemType::Note, "cc <@777777777777777777>"));
+        let md = render(&d, &p, "{summary}\n{notes}\n{tasks}", &discord_opts()).unwrap();
+        assert!(!md.contains("<@9"), "{md}");
+        assert!(!md.contains("<@&8"), "{md}");
+        assert!(!md.contains("<@7"), "{md}");
+        assert!(md.contains("<\u{200b}@999999999999999999>"));
+        // The mention made from the cycle file survives.
+        assert!(md.contains("<@111111111111111111>"), "{md}");
+        // Markdown rendering is not affected by the option being off.
+        let md = render(&d, &p, "{summary}", &opts()).unwrap();
+        assert!(md.contains("<@999999999999999999>"));
+    }
+
+    #[test]
+    fn report_link_placeholder() {
+        let o = RenderOptions {
+            report_link: "https://example.test/r/report.md".into(),
+            ..opts()
+        };
+        let md = render(&draft(vec![]), &people(), "[Report]({report_link})", &o).unwrap();
+        assert_eq!(md, "[Report](https://example.test/r/report.md)\n");
+        assert!(crate::template::PLACEHOLDERS.contains(&"report_link"));
+    }
+
+    #[test]
+    fn short_template_renders_a_compact_message() {
+        use crate::template::SHORT_TEMPLATE_TEXT;
+        let o = RenderOptions {
+            report_link: "https://example.test/r".into(),
+            ..discord_opts()
+        };
+        let md = render(
+            &fixed_draft(Language::En),
+            &discord_people(),
+            SHORT_TEMPLATE_TEXT,
+            &o,
+        )
+        .unwrap();
+        assert_eq!(
+            md,
+            "**Weekly sync** · 2026-11-13\n\nWe agreed on the mount.\n\n## Decisions\n\n- Use aluminium\n\n## Tasks\n\n- Design the mount (<@111111111111111111>, due 2026-11-20)\n\n[Full report](https://example.test/r)\n"
+        );
+    }
+
+    fn short_message(items: Vec<Item>) -> String {
+        use crate::template::SHORT_TEMPLATE_TEXT;
+        let o = RenderOptions {
+            report_link: "https://example.test/r".into(),
+            ..discord_opts()
+        };
+        render(&draft(items), &discord_people(), SHORT_TEMPLATE_TEXT, &o).unwrap()
+    }
+
+    #[test]
+    fn short_template_has_no_heading_for_a_section_without_items() {
+        // No tasks: the link below the heading must not keep an empty "Tasks" heading alive.
+        let md = short_message(vec![item("d1", ItemType::Decision, "Use aluminium")]);
+        assert_eq!(
+            md,
+            "**Weekly sync** · 2026-11-13\n\nWe agreed on the mount.\n\n## Decisions\n\n- Use aluminium\n\n[Full report](https://example.test/r)\n"
+        );
+        assert!(!md.contains("Tasks"), "{md}");
+
+        // No decisions: the other way round.
+        let md = short_message(vec![task(
+            "t1",
+            "Design the mount",
+            Some("alex"),
+            None,
+            Stated,
+            Unknown,
+        )]);
+        assert!(!md.contains("Decisions"), "{md}");
+        assert!(md.contains("## Tasks\n\n- Design the mount"), "{md}");
+
+        // Neither: no section heading at all, the summary and the link remain.
+        let md = short_message(vec![item("n1", ItemType::Note, "Wheels are 20 cm")]);
+        assert_eq!(
+            md,
+            "**Weekly sync** · 2026-11-13\n\nWe agreed on the mount.\n\n[Full report](https://example.test/r)\n"
+        );
+        assert!(!md.contains("##"), "{md}");
+    }
+
+    #[test]
+    fn a_heading_followed_only_by_empty_placeholders_is_removed_in_any_template() {
+        let o = opts();
+        let d = draft(vec![item("n1", ItemType::Note, "Wheels are 20 cm")]);
+        let body = "## Tasks\n{tasks}\n\n## Work\n\n{tasks}\n{decisions}\n\nfooter\n\n## Notes\n{notes}\n\n[link](x)\n";
+        let md = render(&d, &people(), body, &o).unwrap();
+        assert_eq!(
+            md,
+            "footer\n\n## Notes\n\n- Wheels are 20 cm\n\n[link](x)\n"
+        );
+        // A heading with static text of its own is not empty.
+        let md = render(&d, &people(), "## Tasks\nnone yet {tasks}\n", &o).unwrap();
+        assert_eq!(md, "## Tasks\n\nnone yet\n");
+        // One empty and one filled placeholder under the same heading keep it.
+        let md = render(&d, &people(), "## Mixed\n{tasks}\n{notes}\n", &o).unwrap();
+        assert_eq!(md, "## Mixed\n\n- Wheels are 20 cm\n");
+    }
+
+    #[test]
+    fn the_default_template_has_no_empty_headings_in_either_variant() {
+        let d = draft(vec![item("d1", ItemType::Decision, "Use aluminium")]);
+        for variant in [Variant::Markdown, Variant::Chat] {
+            let o = RenderOptions { variant, ..opts() };
+            let md = render(&d, &people(), DEFAULT_TEMPLATE_TEXT, &o).unwrap();
+            assert_eq!(
+                md,
+                "# Weekly sync\n\n2026-11-13 · Alex Example, Sam Sample\n\n## Summary\n\nWe agreed on the mount.\n\n## Decisions\n\n- Use aluminium\n\n---\n[Full transcript](transcript.md)\n"
+            );
+        }
+        // No items and no summary: only the title line and the transcript link are left.
+        let mut empty = draft(vec![]);
+        empty.summary = String::new();
+        let md = render(&empty, &people(), DEFAULT_TEMPLATE_TEXT, &opts()).unwrap();
+        assert!(!md.contains("##"), "{md}");
     }
 
     #[test]

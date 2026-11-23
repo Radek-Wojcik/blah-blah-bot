@@ -720,7 +720,7 @@ mod tests {
 
     #[test]
     fn meeting_files_give_their_tasks_newest_first_and_skip_broken_ones() {
-        let dir = testkit::target_tempdir("briefing");
+        let dir = test_tmp::TestDir::new("briefing");
         let root = dir.path();
         let mut a = item("i1", ItemType::Task, "Design the mount");
         a.assignee = Some("alex".into());

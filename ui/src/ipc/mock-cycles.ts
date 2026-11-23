@@ -3,6 +3,7 @@
  * the rules and issue paths of `cycle.schema.json` and `cycle.rs`, templates, the report mode
  * gate and participants. No files and no Git.
  */
+import { githubPathProblem } from "../cycles";
 import { DEFAULT_TEMPLATE_TEXT, PLACEHOLDERS, validateTemplateDto } from "./mock-render";
 import { IDENTIFIER, fail } from "./mock-util";
 import type {
@@ -13,7 +14,9 @@ import type {
   CycleListItem,
   CycleParticipant,
   CycleRepoView,
+  CycleTargets,
   LastReport,
+  PublishMode,
   PullResult,
   ReportChoice,
   ReportDefaults,
@@ -34,7 +37,6 @@ const PUBLISH = ["auto", "on-approval", "off"];
 const GITHUB_LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]*$/;
 const SNOWFLAKE = /^[0-9]{1,25}$/;
 const CREDENTIAL = /^cred:[A-Za-z0-9][A-Za-z0-9_./-]*$/;
-const GITHUB_PATH = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;
 
 const BAD_ID = "must start with a letter or digit and contain only letters, digits, - and _";
 
@@ -109,8 +111,8 @@ export function validateCycle(c: CycleDto, templates: string[]): CycleIssue[] {
   }
   const t = c.targets;
   if (t.github) {
-    if (!GITHUB_PATH.test(t.github.path))
-      add("targets.github.path", "a relative folder such as meetings (letters, digits, . _ - /)");
+    const pathProblem = githubPathProblem(t.github.path);
+    if (pathProblem) add("targets.github.path", pathProblem);
     if (!PUBLISH.includes(t.github.publish)) add("targets.github.publish", "unknown publish rule");
   }
   if (t.discord) {
@@ -237,6 +239,9 @@ export type RecordingReport = {
 
 export const DEFAULT_REPO_ID = "local";
 
+/** The fictional GitHub repository the demo cycle repository publishes to. */
+export const DEMO_GITHUB_REPO = "demo-org/nomad-cycles";
+
 /** The id a name or an address is turned into, e.g. `https://x/team-cycles.git` to `team-cycles`. */
 export function slug(source: string, taken: string[], fallback: string): string {
   const last =
@@ -286,6 +291,18 @@ export interface CycleStore {
   addParticipant(cycleId: string, name: string): string;
   renameParticipant(cycleId: string, id: string, name: string): void;
   removeParticipant(cycleId: string, id: string): void;
+  /** The topics of the cycle as `topics.yaml` of the local clone has them. */
+  topics(cycleId: string): Topic[];
+  setTopics(cycleId: string, topics: Topic[]): void;
+  /** The registered repository a cycle lives in. */
+  repoOf(cycleId: string): CycleRepoView;
+  /**
+   * Sets `targets.<target>.publish` and nothing else, as `set_target_rule` does: a cycle without
+   * a GitHub target gets one with the default folder; Discord needs a target with a webhook.
+   */
+  setTargetRule(cycleId: string, target: string, mode: PublishMode): CycleTargets;
+  /** Links a repository to a GitHub repository (`owner/name`) and API address; empty clears. */
+  setGithubRepo(repoId: string, githubRepo?: string, githubApi?: string): CycleRepoView;
 }
 
 export function createCycleStore(): CycleStore {
@@ -305,6 +322,8 @@ export function createCycleStore(): CycleStore {
       path: "C:\\Users\\demo\\AppData\\Roaming\\BlahBlahBot\\clones\\team-cycles",
       remote: "https://git.example.org/team/team-cycles.git",
       kind: "clone",
+      githubRepo: DEMO_GITHUB_REPO,
+      githubApi: null,
       available: true,
       stateAsOf: "2026-11-12",
       offline: false,
@@ -320,12 +339,6 @@ export function createCycleStore(): CycleStore {
     templates: templatesOf(DEFAULT_TEMPLATE, BUDGET_REVIEW),
     topics: [
       { id: "t-1", text: "Decide the rover wheel size", status: "open", openedIn: "2026-11-06" },
-      {
-        id: "t-3",
-        text: "Agree on the date of the first field test",
-        status: "open",
-        openedIn: "2026-11-13",
-      },
       {
         id: "t-2",
         text: "Order the battery",
@@ -644,6 +657,39 @@ export function createCycleStore(): CycleStore {
     removeParticipant: (cycleId, id) => {
       const e = entryOf(cycleId);
       e.cycle.participants = e.cycle.participants.filter((p) => p.id !== id);
+    },
+    topics: (cycleId) => structuredClone(entryOf(cycleId).topics),
+    setTargetRule: (cycleId, target, mode) => {
+      const e = entryOf(cycleId);
+      if (!PUBLISH.includes(mode)) fail("invalid", `${String(mode)} is not a publish rule`);
+      if (target === "github") {
+        e.cycle.targets.github = { path: "meetings", ...e.cycle.targets.github, publish: mode };
+      } else if (target === "discord") {
+        const discord = e.cycle.targets.discord;
+        if (!discord)
+          fail(
+            "no_target",
+            "this cycle has no Discord target: add one in the cycle settings first",
+          );
+        else discord.publish = mode;
+      } else {
+        fail("invalid", `${target} is not a target with a publishing rule (github or discord)`);
+      }
+      return structuredClone(e.cycle.targets);
+    },
+    setTopics: (cycleId, topics) => void (entryOf(cycleId).topics = structuredClone(topics)),
+    repoOf: (cycleId) => ({ ...repoOf(entryOf(cycleId).repoId) }),
+    setGithubRepo: (repoId, githubRepo, githubApi) => {
+      const repo = repoOf(repoId);
+      const name = (githubRepo ?? "").trim();
+      const api = (githubApi ?? "").trim();
+      if (name !== "" && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(name))
+        fail("invalid", "the GitHub repository must be written owner/name");
+      if (api !== "" && !/^https:\/\/[^/\s]+(\/[^\s]*)?$/.test(api))
+        fail("invalid", "the API address must start with https://");
+      repo.githubRepo = name === "" ? null : name;
+      repo.githubApi = api === "" ? null : api.replace(/\/+$/, "");
+      return { ...repo };
     },
   };
   return store;

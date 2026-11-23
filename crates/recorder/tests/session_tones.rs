@@ -15,12 +15,12 @@ use recorder::session::{Session, SessionError, SourceSpec, ToneBackend};
 use recorder::timeline::SAMPLE_RATE;
 use recorder::wav::read_samples;
 
-/// A temporary folder under `target/tmp`, removed when dropped.
-struct TempDir(tempfile::TempDir);
+/// A temporary folder under `target/test-tmp`, removed when dropped.
+struct TempDir(test_tmp::TestDir);
 
 impl TempDir {
     fn new(label: &str) -> Self {
-        Self(testkit::target_tempdir(&format!("recorder-it-{label}")))
+        Self(test_tmp::TestDir::new(&format!("recorder-it-{label}")))
     }
     fn path(&self) -> &Path {
         self.0.path()

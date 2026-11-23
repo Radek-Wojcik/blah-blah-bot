@@ -690,7 +690,7 @@ mod tests {
         ));
         let recorder = Arc::new(Recorder::new(store.clone(), backend, true));
         let _ = host.recorder.set(recorder.clone());
-        let root = testkit::target_tempdir("app-browser");
+        let root = test_tmp::TestDir::new("app-browser");
 
         let hub = browser.hub().clone();
         let conn = connect(&hub);
@@ -798,7 +798,7 @@ mod tests {
         recorder: Arc<Recorder>,
         hub: Arc<Hub>,
         conn: u64,
-        root: tempfile::TempDir,
+        root: test_tmp::TestDir,
     }
 
     fn rig(name: &str, settings: &BridgeSettings) -> Rig {
@@ -818,7 +818,7 @@ mod tests {
             recorder,
             hub,
             conn,
-            root: testkit::target_tempdir(name),
+            root: test_tmp::TestDir::new(name),
         }
     }
 

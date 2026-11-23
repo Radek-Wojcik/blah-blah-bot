@@ -22,8 +22,9 @@ use sha2::{Digest, Sha256};
 use cycle_store::schema::{self, is_identifier};
 use cycle_store::time::is_iso_date;
 use cycle_store::{
-    Certainty, CertaintyLevel, Draft, Item, ItemType, Language, Participant, RenderOptions,
-    ReportMode, Schema, Section, ValidationIssue, Variant,
+    Certainty, CertaintyLevel, Decision, Draft, Item, ItemType, Language, Participant,
+    ProposedStatus, RenderOptions, ReportMode, Schema, Section, StatusProposal, ValidationIssue,
+    Variant,
 };
 use serde_json::Value;
 
@@ -44,6 +45,8 @@ pub enum DraftError {
     NoItem(String),
     #[error("no such section: {0}")]
     NoSection(String),
+    #[error("no such status change: {0}")]
+    NoProposal(String),
     #[error("{0}")]
     Invalid(String),
     #[error("{0}")]
@@ -228,10 +231,15 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
-/// Whether an item of the draft is marked as edited. This is only one of the signs of user
-/// edits; see [`DraftFiles::has_user_edits`] for the whole check.
+/// Whether an item of the draft is marked as edited, or a status change was decided or
+/// edited. This is only one of the signs of user edits; see [`DraftFiles::has_user_edits`]
+/// for the whole check.
 pub fn has_edited_items(draft: &Draft) -> bool {
     draft.items.iter().any(|i| i.edited)
+        || draft
+            .status_proposals
+            .iter()
+            .any(|p| p.edited || p.decision != Decision::Proposed)
 }
 
 // ----- item operations -------------------------------------------------------------------
@@ -403,6 +411,89 @@ pub fn add_item(draft: &mut Draft, new: NewItem) -> Result<String, DraftError> {
         section: new.section,
         relates_to: None,
         source: None,
+        edited: true,
+    });
+    Ok(id)
+}
+
+// ----- status changes --------------------------------------------------------------------
+
+fn proposal_mut<'a>(draft: &'a mut Draft, id: &str) -> Result<&'a mut StatusProposal, DraftError> {
+    draft
+        .status_proposals
+        .iter_mut()
+        .find(|p| p.id == id)
+        .ok_or_else(|| DraftError::NoProposal(id.to_string()))
+}
+
+/// Decides a proposed status change. Nothing is written back to GitHub or `topics.yaml`
+/// before it is `Approved`, and nothing ever approves one by itself. `comment` follows the
+/// double option of the item patch: `None` leaves the text as it is, `Some(None)` (or an
+/// empty text) clears it, `Some(Some(text))` replaces it; a changed text marks the proposal
+/// as edited.
+pub fn set_status_decision(
+    draft: &mut Draft,
+    id: &str,
+    decision: Decision,
+    comment: Option<Option<String>>,
+) -> Result<(), DraftError> {
+    let proposal = proposal_mut(draft, id)?;
+    if let Some(text) = comment {
+        let text = text.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+        if text != proposal.comment {
+            proposal.comment = text;
+            proposal.edited = true;
+        }
+    }
+    proposal.decision = decision;
+    Ok(())
+}
+
+/// Adds a status change by hand, for an open issue (`#12`) or a topic id: no source, not yet
+/// approved. One change per target. Returns the new id (`s1`, `s2`, ...).
+pub fn add_status_proposal(
+    draft: &mut Draft,
+    target: &str,
+    status: ProposedStatus,
+    comment: Option<String>,
+) -> Result<String, DraftError> {
+    let target = target.trim();
+    let issue = target
+        .strip_prefix('#')
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+    // A bare number would be taken for a topic id here and for an issue elsewhere.
+    let bare_number = !target.is_empty() && target.bytes().all(|b| b.is_ascii_digit());
+    if !issue && (bare_number || !is_identifier(target)) {
+        return Err(DraftError::Invalid(
+            "the target is an issue number such as #12 or the id of a topic".into(),
+        ));
+    }
+    if draft.status_proposals.iter().any(|p| p.target == target) {
+        return Err(DraftError::Invalid(format!(
+            "{target} has a status change already"
+        )));
+    }
+    let comment = comment
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty());
+    let next = draft
+        .status_proposals
+        .iter()
+        .filter_map(|p| p.id.strip_prefix('s')?.parse::<u32>().ok())
+        .max()
+        .unwrap_or(0)
+        + 1;
+    let id = format!("s{next}");
+    draft.status_proposals.push(StatusProposal {
+        id: id.clone(),
+        target: target.to_string(),
+        status,
+        reason: comment
+            .clone()
+            .unwrap_or_else(|| "Added by hand.".to_string()),
+        comment,
+        source: None,
+        decision: Decision::Proposed,
         edited: true,
     });
     Ok(id)
@@ -1246,5 +1337,85 @@ mod tests {
         )
         .unwrap();
         assert!(md.contains("unverified"), "{md}");
+    }
+
+    fn with_proposals() -> Draft {
+        let mut d = draft();
+        d.status_proposals = vec![StatusProposal {
+            id: "s1".into(),
+            target: "#12".into(),
+            status: ProposedStatus::Done,
+            reason: "It was reported finished.".into(),
+            comment: None,
+            source: None,
+            decision: Decision::Proposed,
+            edited: false,
+        }];
+        d
+    }
+
+    #[test]
+    fn deciding_a_status_change_keeps_everything_else() {
+        let mut d = with_proposals();
+        assert!(!has_edited_items(&d) || d.items.iter().any(|i| i.edited));
+        let before = d.status_proposals[0].clone();
+        set_status_decision(&mut d, "s1", Decision::Approved, None).unwrap();
+        let p = &d.status_proposals[0];
+        assert_eq!(p.decision, Decision::Approved);
+        assert_eq!(
+            (&p.reason, &p.comment, p.edited),
+            (&before.reason, &before.comment, false)
+        );
+        assert!(has_edited_items(&d), "a decision is a user edit");
+
+        set_status_decision(
+            &mut d,
+            "s1",
+            Decision::Approved,
+            Some(Some("  Done on Friday ".into())),
+        )
+        .unwrap();
+        assert_eq!(
+            d.status_proposals[0].comment.as_deref(),
+            Some("Done on Friday")
+        );
+        assert!(d.status_proposals[0].edited);
+        set_status_decision(&mut d, "s1", Decision::Rejected, Some(Some("   ".into()))).unwrap();
+        assert_eq!(d.status_proposals[0].comment, None);
+        assert_eq!(d.status_proposals[0].decision, Decision::Rejected);
+        assert!(matches!(
+            set_status_decision(&mut d, "s9", Decision::Approved, None),
+            Err(DraftError::NoProposal(_))
+        ));
+    }
+
+    #[test]
+    fn a_status_change_added_by_hand_waits_for_approval() {
+        let mut d = draft();
+        let id = add_status_proposal(
+            &mut d,
+            " #7 ",
+            ProposedStatus::Done,
+            Some("Closed in the meeting".into()),
+        )
+        .unwrap();
+        assert_eq!(id, "s1");
+        let p = &d.status_proposals[0];
+        assert_eq!(
+            (p.target.as_str(), p.decision, p.edited),
+            ("#7", Decision::Proposed, true)
+        );
+        assert_eq!(p.comment.as_deref(), Some("Closed in the meeting"));
+        assert!(p.source.is_none());
+        let topic = add_status_proposal(&mut d, "t-2", ProposedStatus::Open, None).unwrap();
+        assert_eq!(topic, "s2");
+        assert_eq!(d.status_proposals[1].reason, "Added by hand.");
+        for bad in ["", "#", "#x", "12", "two words", "#7"] {
+            assert!(
+                add_status_proposal(&mut d, bad, ProposedStatus::Done, None).is_err(),
+                "{bad:?}"
+            );
+        }
+        assert!(schema::validate(Schema::Meeting, &d.to_value()).is_empty());
     }
 }

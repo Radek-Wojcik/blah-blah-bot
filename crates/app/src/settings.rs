@@ -25,6 +25,13 @@ pub struct CycleRepoSetting {
     #[serde(default)]
     pub remote: Option<String>,
     pub kind: RepoKind,
+    /// `owner/name` on GitHub, when it cannot be read from `remote` (a GitHub Enterprise
+    /// server, or a local repository that issues are published to).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_repo: Option<String>,
+    /// Base address of the GitHub API of that repository; the public GitHub when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_api: Option<String>,
 }
 
 /// The report choice of the last recording that started, offered again next time.
@@ -270,8 +277,8 @@ mod tests {
     use super::*;
 
     /// A settings path in a fresh folder under `target/tmp`; the folder goes with the guard.
-    fn temp(name: &str) -> (tempfile::TempDir, PathBuf) {
-        let dir = testkit::target_tempdir(&format!("app-settings-{name}"));
+    fn temp(name: &str) -> (test_tmp::TestDir, PathBuf) {
+        let dir = test_tmp::TestDir::new(&format!("app-settings-{name}"));
         let path = dir.path().join("settings.json");
         (dir, path)
     }
@@ -294,6 +301,8 @@ mod tests {
                 path: "D:/Cycles".into(),
                 remote: None,
                 kind: RepoKind::Local,
+                github_repo: None,
+                github_api: None,
             }],
             last_report: Some(LastReport {
                 cycle_id: "NOMAD".into(),
@@ -377,6 +386,8 @@ mod tests {
             path: "X".into(),
             remote: None,
             kind: RepoKind::Local,
+            github_repo: None,
+            github_api: None,
         });
         current.last_report = Some(LastReport {
             cycle_id: "A".into(),

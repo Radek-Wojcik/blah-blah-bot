@@ -21,7 +21,7 @@ import {
   sectionsError,
   usesSections,
 } from "../draft";
-import { errorMessage } from "../hooks";
+import { errorMessage, useCycleFacts, useOutbox } from "../hooks";
 import { isIpcError } from "../ipc/tauri";
 import type {
   DraftItem,
@@ -32,8 +32,13 @@ import type {
   ReportDefaults,
   ReportMode,
 } from "../ipc/types";
+import { lockedByOps, opsOf } from "../publish";
 import { MODE_HELP, MODE_NAMES, REPORT_MODES } from "../report-gate";
+import { MarkdownView } from "./MarkdownView";
 import { BuildDraftDialog } from "./ProcessDialogs";
+import { CorrectionsPanel } from "./CorrectionsPanel";
+import { PublishPanel } from "./PublishPanel";
+import { StatusProposals } from "./StatusProposals";
 
 type Pane = "items" | "report";
 
@@ -95,7 +100,19 @@ export function DraftEditor(props: {
     };
   }, [backend, meetingId, load]);
 
+  // Publishing locks the draft and cancelling the operations unlocks it: neither changes the
+  // draft itself, so the view is loaded again when the outbox says the lock changed.
+  const outbox = useOutbox();
+  const lockedByOutbox = outbox === null ? null : lockedByOps(opsOf(outbox, meetingId));
+  const seenLock = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (lockedByOutbox === null) return;
+    if (seenLock.current !== null && seenLock.current !== lockedByOutbox) load();
+    seenLock.current = lockedByOutbox;
+  }, [lockedByOutbox, load]);
+
   const cycleId = view?.draft.cycle;
+  const { tasks, topics } = useCycleFacts(cycleId);
   useEffect(() => {
     if (!cycleId) return;
     let cancelled = false;
@@ -204,6 +221,7 @@ export function DraftEditor(props: {
 
   const { draft } = view;
   const people = view.participants;
+  const locked = view.locked;
   const movable = usesSections(draft);
 
   const changeMode = (mode: ReportMode) => {
@@ -247,12 +265,14 @@ export function DraftEditor(props: {
           <span className="banner-actions">
             <button
               className="btn btn-small btn-record"
+              disabled={locked}
               onClick={() => void apply(backend.acceptNewDraft(meetingId))}
             >
               Accept new draft
             </button>
             <button
               className="btn btn-small btn-ghost"
+              disabled={locked}
               onClick={() => void apply(backend.discardNewDraft(meetingId))}
             >
               Discard new draft
@@ -261,6 +281,15 @@ export function DraftEditor(props: {
         </div>
       )}
       {view.reportWarning && <p className="notice">{view.reportWarning}</p>}
+      {locked && (
+        <div className="banner banner-locked" role="status">
+          <span>
+            <strong>This draft is locked.</strong> The meeting was published or queued for
+            publishing, so the draft stays as it was sent. Cancel the queued operations in the
+            publishing panel below to edit it again.
+          </span>
+        </div>
+      )}
 
       <div className="draft-bar">
         <span className="chip">{draft.cycle}</span>
@@ -271,6 +300,7 @@ export function DraftEditor(props: {
           <select
             aria-label="Report mode"
             value={draft.mode}
+            disabled={locked}
             onChange={(e) => changeMode(e.target.value as ReportMode)}
           >
             {REPORT_MODES.map((m) => (
@@ -286,6 +316,7 @@ export function DraftEditor(props: {
             <select
               aria-label="Template"
               value={draft.template ?? ""}
+              disabled={locked}
               onChange={(e) =>
                 void apply(backend.setReportMode(meetingId, "template", e.target.value))
               }
@@ -305,6 +336,7 @@ export function DraftEditor(props: {
             <select
               aria-label="Meeting type"
               value={draft.meetingType ?? ""}
+              disabled={locked}
               onChange={(e) =>
                 void apply(backend.setReportMode(meetingId, "by-type", undefined, e.target.value))
               }
@@ -361,7 +393,7 @@ export function DraftEditor(props: {
         >
           Rendered report
         </button>
-        {pane === "items" && draft.mode !== "fixed" && (
+        {pane === "items" && draft.mode !== "fixed" && !locked && (
           <button
             className="btn btn-small"
             aria-expanded={editingSections}
@@ -372,7 +404,7 @@ export function DraftEditor(props: {
         )}
       </div>
 
-      {pane === "items" && editingSections && draft.mode !== "fixed" && (
+      {pane === "items" && editingSections && draft.mode !== "fixed" && !locked && (
         <SectionsEditor
           draft={draft}
           onSave={async (sections) => {
@@ -398,7 +430,8 @@ export function DraftEditor(props: {
                 column={col}
                 draft={draft}
                 people={people}
-                movable={movable}
+                movable={movable && !locked}
+                locked={locked}
                 dragId={dragId}
                 sourceOf={sourceOf}
                 transcriptPresent={view.transcriptPresent}
@@ -417,7 +450,7 @@ export function DraftEditor(props: {
               />
             ))}
           </div>
-          {!movable && (
+          {!movable && !locked && (
             <AddItemForm
               label="Add an item"
               types={ITEM_TYPES}
@@ -428,6 +461,34 @@ export function DraftEditor(props: {
       )}
 
       {pane === "report" && <ReportPane meetingId={meetingId} view={view} />}
+
+      {(draft.statusProposals?.length ?? 0) > 0 || !locked ? (
+        <StatusProposals
+          proposals={draft.statusProposals ?? []}
+          locked={locked}
+          tasks={tasks}
+          topics={topics}
+          transcriptPresent={view.transcriptPresent}
+          onDecide={(id, decision, comment) =>
+            apply(backend.setStatusDecision(meetingId, id, decision, comment))
+          }
+          onAdd={(target, status, comment) =>
+            apply(backend.addStatusProposal(meetingId, target, status, comment || undefined))
+          }
+          onJump={(ms) => onOpenTranscript(ms)}
+        />
+      ) : null}
+
+      <PublishPanel
+        meetingId={meetingId}
+        cycleId={draft.cycle}
+        draftVersion={view}
+        hasNewDraft={view.hasNewDraft}
+      />
+
+      {locked && (
+        <CorrectionsPanel meetingId={meetingId} cycleId={draft.cycle} items={draft.items} />
+      )}
     </>
   );
 }
@@ -437,6 +498,8 @@ function SectionColumn(props: {
   draft: DraftView["draft"];
   people: DraftView["participants"];
   movable: boolean;
+  /** The draft is read-only: nothing can be edited, added or removed. */
+  locked: boolean;
   dragId: string | null;
   sourceOf: string | null;
   transcriptPresent: boolean;
@@ -454,7 +517,7 @@ function SectionColumn(props: {
   onDrop: (over: DraftItem | null) => void;
   onError: (message: string | null) => void;
 }) {
-  const { column, draft, movable, dragId } = props;
+  const { column, draft, movable, locked, dragId } = props;
   const [over, setOver] = useState(false);
   const droppable = movable && column.id !== null && dragId !== null;
   return (
@@ -489,6 +552,7 @@ function SectionColumn(props: {
             draft={draft}
             people={props.people}
             movable={movable}
+            locked={locked}
             dragging={dragId === item.id}
             sourceOpen={props.sourceOf === item.id}
             transcriptPresent={props.transcriptPresent}
@@ -507,12 +571,14 @@ function SectionColumn(props: {
           />
         ))}
       </ul>
-      <AddItemForm
-        label={`Add item to ${column.title}`}
-        types={column.type ? [column.type] : ITEM_TYPES}
-        onAdd={props.onAdd}
-        compact
-      />
+      {!locked && (
+        <AddItemForm
+          label={`Add item to ${column.title}`}
+          types={column.type ? [column.type] : ITEM_TYPES}
+          onAdd={props.onAdd}
+          compact
+        />
+      )}
     </section>
   );
 }
@@ -532,6 +598,7 @@ function ItemCard(props: {
   draft: DraftView["draft"];
   people: DraftView["participants"];
   movable: boolean;
+  locked: boolean;
   dragging: boolean;
   sourceOpen: boolean;
   transcriptPresent: boolean;
@@ -549,7 +616,7 @@ function ItemCard(props: {
   onDropOn: () => void;
   onError: (message: string | null) => void;
 }) {
-  const { item, draft, people, movable, sourceOpen } = props;
+  const { item, draft, people, movable, locked, sourceOpen } = props;
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(item.text);
   // Set when Escape or a save already ended the edit, so the blur that follows does nothing.
@@ -626,7 +693,9 @@ function ItemCard(props: {
         )}
       </div>
 
-      {editing ? (
+      {locked ? (
+        <p className="seg-text item-text">{item.text}</p>
+      ) : editing ? (
         <textarea
           className="seg-edit"
           aria-label={`Text of the item: ${item.text}`}
@@ -661,6 +730,7 @@ function ItemCard(props: {
               <select
                 aria-label={`Assignee of: ${item.text}`}
                 value={item.assignee ?? ""}
+                disabled={locked}
                 onChange={(e) => void props.onUpdate({ assignee: e.target.value || null })}
               >
                 <option value="">Unassigned</option>
@@ -683,6 +753,7 @@ function ItemCard(props: {
                 key={`${item.id}:${item.due}`}
                 label={`Due date of: ${item.text}`}
                 value={item.due}
+                disabled={locked}
                 onCommit={(due) => void props.onUpdate({ due })}
               />
               <Mark level={item.certainty.due} />
@@ -702,7 +773,7 @@ function ItemCard(props: {
             Source
           </button>
         )}
-        {targets.length > 0 && (
+        {targets.length > 0 && !locked && (
           <select
             className="move-select"
             aria-label={`Move to section: ${item.text}`}
@@ -717,14 +788,16 @@ function ItemCard(props: {
             ))}
           </select>
         )}
-        <button
-          className="icon-btn"
-          aria-label={`Delete: ${item.text}`}
-          title="Delete the item"
-          onClick={props.onDelete}
-        >
-          ×
-        </button>
+        {!locked && (
+          <button
+            className="icon-btn"
+            aria-label={`Delete: ${item.text}`}
+            title="Delete the item"
+            onClick={props.onDelete}
+          >
+            ×
+          </button>
+        )}
       </div>
 
       {sourceOpen && item.source && (
@@ -784,6 +857,7 @@ function ItemCard(props: {
 function DueField(props: {
   label: string;
   value: string | null;
+  disabled?: boolean;
   onCommit: (due: string | null) => void;
 }) {
   const [text, setText] = useState(props.value ?? "");
@@ -793,12 +867,13 @@ function DueField(props: {
         type="date"
         aria-label={props.label}
         value={text}
+        disabled={props.disabled}
         onChange={(e) => {
           setText(e.target.value);
           if (isIsoDate(e.target.value)) props.onCommit(e.target.value);
         }}
       />
-      {props.value !== null && (
+      {props.value !== null && !props.disabled && (
         <button
           className="icon-btn"
           type="button"
@@ -990,6 +1065,7 @@ function ReportPane({ meetingId, view }: { meetingId: string; view: DraftView })
   const [variant, setVariant] = useState<RenderVariant>("markdown");
   const [chat, setChat] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [rendered, setRendered] = useState(false);
   const markdown = view.reportMarkdown;
 
   useEffect(() => {
@@ -1030,14 +1106,38 @@ function ReportPane({ meetingId, view }: { meetingId: string; view: DraftView })
           </select>
         </label>
         <span className="chip">{MODE_LABELS[view.draft.mode]}</span>
+        <span className="pane-toggle" role="group" aria-label="Report view">
+          <button
+            className={rendered ? "btn btn-small btn-ghost" : "btn btn-small btn-stop"}
+            aria-pressed={!rendered}
+            onClick={() => setRendered(false)}
+          >
+            Text
+          </button>
+          <button
+            className={rendered ? "btn btn-small btn-stop" : "btn btn-small btn-ghost"}
+            aria-pressed={rendered}
+            onClick={() => setRendered(true)}
+          >
+            Preview
+          </button>
+        </span>
         {copied && <span role="status">{copied}</span>}
         <button className="btn btn-small" onClick={copy}>
           Copy
         </button>
       </div>
-      <pre className="report-pre" aria-label="Rendered report" tabIndex={0}>
-        {text}
-      </pre>
+      {rendered ? (
+        <MarkdownView
+          source={text}
+          variant={variant === "chat" ? "discord" : "github"}
+          label={variant === "chat" ? "Discord message preview" : "Report preview"}
+        />
+      ) : (
+        <pre className="report-pre" aria-label="Rendered report" tabIndex={0}>
+          {text}
+        </pre>
+      )}
     </section>
   );
 }

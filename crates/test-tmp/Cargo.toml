@@ -1,6 +1,6 @@
 [package]
-name = "testkit"
-description = "Test helpers: temporary folders kept under the build output folder"
+name = "test-tmp"
+description = "Scratch folders for tests: kept under target/test-tmp, removed on drop, loud when a folder cannot be removed. Used only as a dev-dependency"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

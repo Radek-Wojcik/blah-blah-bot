@@ -13,7 +13,10 @@ import type {
   DraftSource,
   ItemType,
   NewDraftItem,
+  ProposedStatus,
   ReportMode,
+  StatusDecision,
+  StatusProposal,
 } from "./types";
 
 function src(
@@ -56,6 +59,16 @@ function item(
     edited: false,
     ...extra,
   };
+}
+
+function proposal(
+  id: string,
+  target: string,
+  status: ProposedStatus,
+  reason: string,
+  source: DraftSource | null,
+): StatusProposal {
+  return { id, target, status, reason, comment: null, source, decision: "proposed", edited: false };
 }
 
 const level = (assignee: CertaintyLevel, due: CertaintyLevel) => ({ assignee, due });
@@ -237,6 +250,50 @@ export function demoDraft(meetingId: string, cycle = "NOMAD"): Draft {
         edited: true,
       }),
     ],
+    statusProposals: [
+      proposal(
+        "s1",
+        "#12",
+        "done",
+        "Alex said the antenna mount drawings are finished and uploaded.",
+        src(
+          "alex",
+          4 * MIN + 10_000,
+          4 * MIN + 22_000,
+          "The antenna mount drawings are finished and uploaded.",
+          true,
+          0.97,
+        ),
+      ),
+      proposal(
+        "s2",
+        "#11",
+        "done",
+        "Kasia confirmed that the spare valves were ordered.",
+        src(
+          "kasia",
+          4 * MIN + 40_000,
+          4 * MIN + 50_000,
+          "The spare valves are on order, the confirmation came in yesterday.",
+          false,
+          0.43,
+        ),
+      ),
+      proposal(
+        "s3",
+        "t-1",
+        "done",
+        "The team settled the rover wheel size.",
+        src(
+          "jan",
+          5 * MIN + 5_000,
+          5 * MIN + 14_000,
+          "So we go with the two hundred eighty millimetre wheels.",
+          true,
+          0.94,
+        ),
+      ),
+    ],
     warnings: [
       {
         code: "window_skipped",
@@ -415,7 +472,76 @@ export function setModeAndTemplate(
 }
 
 export function hasUserEdits(draft: Draft): boolean {
-  return draft.items.some((i) => i.edited);
+  return (
+    draft.items.some((i) => i.edited) ||
+    (draft.statusProposals ?? []).some((p) => p.edited || p.decision !== "proposed")
+  );
+}
+
+function findProposal(draft: Draft, id: string): StatusProposal {
+  return (
+    (draft.statusProposals ?? []).find((p) => p.id === id) ??
+    fail("not_found", `no such status change: ${id}`)
+  );
+}
+
+/**
+ * Decides a proposed status change (`set_status_decision`): `comment` undefined keeps the text,
+ * an empty one clears it, and a changed text marks the proposal as edited.
+ */
+export function setStatusDecision(
+  draft: Draft,
+  id: string,
+  decision: StatusDecision,
+  comment?: string,
+): void {
+  const p = findProposal(draft, id);
+  if (comment !== undefined) {
+    const text = comment.trim() === "" ? null : comment.trim();
+    if (text !== p.comment) {
+      p.comment = text;
+      p.edited = true;
+    }
+  }
+  p.decision = decision;
+}
+
+const ISSUE_TARGET = /^#[0-9]+$/;
+
+/**
+ * Adds a status change by hand (`add_status_proposal`): an issue is written `#12`, anything else
+ * is the id of a topic. One change per target; it waits for approval.
+ */
+export function addStatusProposal(
+  draft: Draft,
+  target: string,
+  status: ProposedStatus,
+  comment?: string,
+  topics: string[] = [],
+): string {
+  const t = target.trim();
+  if (!ISSUE_TARGET.test(t)) {
+    if (/^[0-9]+$/.test(t) || !IDENTIFIER.test(t))
+      fail("invalid", "the target is an issue number such as #12 or the id of a topic");
+    if (!topics.includes(t))
+      fail("invalid", `${t} is not a topic of the cycle (issues are written #12)`);
+  }
+  const list = (draft.statusProposals ??= []);
+  if (list.some((p) => p.target === t)) fail("invalid", `${t} has a status change already`);
+  const text = comment === undefined || comment.trim() === "" ? null : comment.trim();
+  const next = Math.max(0, ...list.map((p) => Number(p.id.slice(1)) || 0)) + 1;
+  const id = `s${next}`;
+  list.push({
+    id,
+    target: t,
+    status,
+    reason: text ?? "Added by hand.",
+    comment: text,
+    source: null,
+    decision: "proposed",
+    edited: false,
+  });
+  return id;
 }
 
 /** The newer draft a re-run of `reduce` leaves next to an edited one: other summary, one more item. */

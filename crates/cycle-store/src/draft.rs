@@ -128,6 +128,44 @@ pub struct Warning {
     pub t_end_ms: Option<i64>,
 }
 
+/// The status an open issue or topic is proposed to get.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProposedStatus {
+    Done,
+    Open,
+}
+
+/// What the user decided about a status proposal. Nothing is written back to GitHub or the
+/// topics file before it is `Approved`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Decision {
+    #[default]
+    Proposed,
+    Approved,
+    Rejected,
+}
+
+/// A proposed status change of an open issue or topic, with the evidence for it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StatusProposal {
+    /// `s1`, `s2`, ...
+    pub id: String,
+    /// An open issue (`#12`) or a topic id.
+    pub target: String,
+    pub status: ProposedStatus,
+    /// Why the model thinks the status changed.
+    pub reason: String,
+    /// Text posted with the change; `None` until the user writes one.
+    pub comment: Option<String>,
+    /// `None` for proposals added by hand.
+    pub source: Option<Source>,
+    #[serde(default)]
+    pub decision: Decision,
+    pub edited: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Draft {
     pub version: u32,
@@ -142,6 +180,10 @@ pub struct Draft {
     pub sections: Vec<Section>,
     pub summary: String,
     pub items: Vec<Item>,
+    /// Left out of the file while empty, so a draft without proposals keeps the exact bytes
+    /// it had before proposals existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub status_proposals: Vec<StatusProposal>,
     pub warnings: Vec<Warning>,
 }
 
@@ -219,7 +261,21 @@ pub(crate) mod fixtures {
             sections: vec![],
             summary: "We agreed on the mount.".into(),
             items,
+            status_proposals: vec![],
             warnings: vec![],
+        }
+    }
+
+    pub fn proposal(id: &str, target: &str, status: ProposedStatus) -> StatusProposal {
+        StatusProposal {
+            id: id.into(),
+            target: target.into(),
+            status,
+            reason: "It was reported finished.".into(),
+            comment: None,
+            source: Some(source(true)),
+            decision: Decision::Proposed,
+            edited: false,
         }
     }
 }
@@ -239,6 +295,60 @@ mod tests {
         let value = d.to_value();
         assert!(schema::validate(Schema::Meeting, &value).is_empty());
         assert_eq!(Draft::from_value(&value).unwrap(), d);
+    }
+
+    #[test]
+    fn a_draft_without_proposals_has_no_proposals_key() {
+        let d = draft(vec![item("i1", ItemType::Note, "x")]);
+        assert!(d.to_value().get("status_proposals").is_none());
+        // And a document that lacks the key loads with none.
+        let loaded = Draft::from_value(&d.to_value()).unwrap();
+        assert!(loaded.status_proposals.is_empty());
+    }
+
+    #[test]
+    fn proposals_round_trip_and_validate() {
+        let mut d = draft(vec![item("i1", ItemType::Note, "x")]);
+        let mut p = proposal("s1", "#12", ProposedStatus::Done);
+        p.decision = Decision::Approved;
+        p.comment = Some("Merged today.".into());
+        let mut by_hand = proposal("s2", "topic-3", ProposedStatus::Open);
+        by_hand.source = None;
+        by_hand.edited = true;
+        d.status_proposals = vec![p, by_hand];
+        let value = d.to_value();
+        assert!(
+            schema::validate(Schema::Meeting, &value).is_empty(),
+            "{value}"
+        );
+        assert_eq!(value["status_proposals"][0]["decision"], "approved");
+        assert_eq!(value["status_proposals"][1]["source"], Value::Null);
+        assert_eq!(Draft::from_value(&value).unwrap(), d);
+    }
+
+    #[test]
+    fn broken_proposals_are_rejected_with_a_path() {
+        let mut d = draft(vec![]);
+        d.status_proposals = vec![proposal("s1", "#12", ProposedStatus::Done)];
+        for (key, bad) in [
+            ("id", serde_json::json!("p1")),
+            ("status", serde_json::json!("closed")),
+            ("decision", serde_json::json!("maybe")),
+            ("target", serde_json::json!("")),
+        ] {
+            let mut value = d.to_value();
+            value["status_proposals"][0][key] = bad;
+            let issues = Draft::from_value(&value).unwrap_err();
+            assert!(
+                issues
+                    .iter()
+                    .any(|i| i.path.starts_with("status_proposals[0]")),
+                "{key}: {issues:?}"
+            );
+        }
+        let mut value = d.to_value();
+        value["status_proposals"][0]["extra"] = serde_json::json!(true);
+        assert!(Draft::from_value(&value).is_err());
     }
 
     #[test]
