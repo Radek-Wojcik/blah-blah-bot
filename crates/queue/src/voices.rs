@@ -136,11 +136,85 @@ fn to_sample(r: SampleRow) -> Sample {
     }
 }
 
+fn participant_slug(name: &str) -> String {
+    let mut out = String::new();
+    let mut dash = false;
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            dash = false;
+        } else if !dash && !out.is_empty() {
+            out.push('-');
+            dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    if out.is_empty() {
+        "participant".into()
+    } else {
+        out
+    }
+}
+
+/// Auto-enroll or link a global (`cycle_id IS NULL`) participant into `cycle_id` when their
+/// global voice profile matches a speaker in a meeting of `cycle_id`.
+fn link_global_participant_to_cycle(
+    store: &Store,
+    cycle_id: &str,
+    global_participant_id: &str,
+    now_ms: i64,
+) -> Result<String, store::StoreError> {
+    let Some(global_p) = store.get_participant(global_participant_id)? else {
+        return Ok(global_participant_id.to_string());
+    };
+    let target_id = if let Some(existing) =
+        store.find_participant_by_name_in(Some(cycle_id), &global_p.name)?
+    {
+        existing.id
+    } else {
+        let existing_ids: HashSet<String> = store
+            .participants_for_cycle(cycle_id)?
+            .into_iter()
+            .map(|p| p.id)
+            .collect();
+        let base = participant_slug(&global_p.name);
+        let mut candidate_key = store::cycle_participant_key(cycle_id, &base);
+        let mut n = 2u32;
+        while existing_ids.contains(&candidate_key) {
+            candidate_key = store::cycle_participant_key(cycle_id, &format!("{base}-{n}"));
+            n += 1;
+        }
+        store.create_participant_in(Some(cycle_id), &candidate_key, &global_p.name, now_ms)?;
+        candidate_key
+    };
+
+    if store.samples_of(&target_id)?.is_empty() {
+        for sample in store.samples_of(global_participant_id)? {
+            store.put_sample(&target_id, &sample, now_ms)?;
+        }
+    }
+    if let Some(clip) = global_p.sample_clip_file.as_deref() {
+        let needs_clip = store
+            .get_participant(&target_id)?
+            .is_some_and(|p| p.sample_clip_file.is_none());
+        if needs_clip {
+            store.set_participant_sample_clip(&target_id, Some(clip))?;
+        }
+    }
+    Ok(target_id)
+}
+
 /// Stage `speaker_id`: one embedding per detected voice, matched against the profiles.
 ///
 /// A match at or above the accept threshold and clearly ahead of the runner-up names the
 /// voice automatically; a weaker one becomes a suggestion; everything else stays unknown.
 /// The user's earlier decisions are kept when the stage is repeated.
+///
+/// For a meeting in a cycle `C`, voices are matched against cycle `C`'s profiles first, and
+/// any remaining unclaimed voices are matched against global (`cycle_id IS NULL`) profiles
+/// (auto-enrolling/linking a matched global participant into cycle `C`).
 pub fn run_speaker_id(
     store: &Store,
     meeting_id: &str,
@@ -151,7 +225,6 @@ pub fn run_speaker_id(
         .get_meeting(meeting_id)
         .map_err(err)?
         .ok_or_else(|| RunError::new("the meeting no longer exists"))?;
-    // A meeting is matched against the voices of its own cycle only.
     let cycle_id = store
         .get_report_settings(meeting_id)
         .map_err(err)?
@@ -196,10 +269,93 @@ pub fn run_speaker_id(
         }
     }
 
-    let decisions: HashMap<String, Decision> =
+    let mut decisions: HashMap<String, Decision> =
         assign_unique(&candidates, &profiles, &settings.thresholds)
             .into_iter()
             .collect();
+
+    if let Some(cycle) = cycle_id.as_deref() {
+        let unclaimed: Vec<Candidate> = candidates
+            .iter()
+            .filter(|c| {
+                !matches!(
+                    decisions.get(&c.voice_id),
+                    Some(Decision::Auto { .. } | Decision::Suggest { .. })
+                )
+            })
+            .cloned()
+            .collect();
+        if !unclaimed.is_empty() {
+            let claimed_names: HashSet<String> = decisions
+                .values()
+                .filter_map(|d| match d {
+                    Decision::Auto { participant_id, .. }
+                    | Decision::Suggest { participant_id, .. } => store
+                        .get_participant(participant_id)
+                        .ok()
+                        .flatten()
+                        .map(|p| p.name.to_lowercase()),
+                    Decision::Unknown => None,
+                })
+                .collect();
+            let global_profiles: Vec<ProfileRef> = load_profiles_for(store, None)
+                .map_err(err)?
+                .into_iter()
+                .filter(|p| {
+                    store
+                        .get_participant(&p.participant_id)
+                        .ok()
+                        .flatten()
+                        .is_none_or(|part| !claimed_names.contains(&part.name.to_lowercase()))
+                })
+                .collect();
+            if !global_profiles.is_empty() {
+                let now = crate::supervisor::now_ms();
+                for (voice_id, decision) in
+                    assign_unique(&unclaimed, &global_profiles, &settings.thresholds)
+                {
+                    let mapped = match decision {
+                        Decision::Auto {
+                            participant_id,
+                            score,
+                        } => {
+                            let linked = link_global_participant_to_cycle(
+                                store,
+                                cycle,
+                                &participant_id,
+                                now,
+                            )
+                            .map_err(err)?;
+                            Decision::Auto {
+                                participant_id: linked,
+                                score,
+                            }
+                        }
+                        Decision::Suggest {
+                            participant_id,
+                            score,
+                        } => {
+                            let linked = link_global_participant_to_cycle(
+                                store,
+                                cycle,
+                                &participant_id,
+                                now,
+                            )
+                            .map_err(err)?;
+                            Decision::Suggest {
+                                participant_id: linked,
+                                score,
+                            }
+                        }
+                        Decision::Unknown => Decision::Unknown,
+                    };
+                    if !matches!(mapped, Decision::Unknown) {
+                        decisions.insert(voice_id, mapped);
+                    }
+                }
+            }
+        }
+    }
     for row in &mut rows {
         match decisions.get(&row.voice_id) {
             Some(Decision::Auto {
@@ -386,6 +542,99 @@ pub fn clips_dir(meeting_dir: &Path) -> PathBuf {
     meeting_dir.join("clips")
 }
 
+/// Hidden folder under `<recordings_root>` where 1 retained preview clip per enrolled
+/// participant is kept.
+pub const VOICE_SAMPLES_DIR: &str = ".voice-samples";
+
+fn safe_clip_filename(participant_id: &str) -> String {
+    let stem: String = participant_id
+        .chars()
+        .map(|c| {
+            if matches!(c, ':' | '/' | '\\' | '*' | '?' | '"' | '<' | '>' | '|') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    format!("{stem}.wav")
+}
+
+/// Relative path (under `<recordings_root>`) of a participant's retained preview clip.
+pub fn participant_sample_clip_rel(participant_id: &str) -> String {
+    format!("{VOICE_SAMPLES_DIR}/{}", safe_clip_filename(participant_id))
+}
+
+/// Absolute path of a participant's retained preview clip under `meeting_root`.
+pub fn participant_sample_clip_path(meeting_root: &Path, participant_id: &str) -> PathBuf {
+    meeting_root
+        .join(VOICE_SAMPLES_DIR)
+        .join(safe_clip_filename(participant_id))
+}
+
+/// Preserve 1 best sample clip file under `<recordings_root>/.voice-samples/<participant_id>.wav`
+/// and record its path via `Store::set_participant_sample_clip` for every confirmed voice of
+/// `meeting_id` before temporary meeting clips are cleaned up.
+pub fn preserve_confirmed_clips(
+    store: &Store,
+    meeting_id: &str,
+    meeting_root: &Path,
+) -> Result<usize, store::StoreError> {
+    let voices = store.list_meeting_voices(meeting_id)?;
+    if voices.is_empty() {
+        return Ok(0);
+    }
+    let clips = store.list_clips(meeting_id)?;
+    if clips.is_empty() {
+        return Ok(0);
+    }
+    let mut best_by_participant: BTreeMap<String, &ClipRow> = BTreeMap::new();
+    for v in &voices {
+        let confirmed = v.confirmed || is_merged_with_confirmed(&voices, &v.voice_id);
+        if !confirmed {
+            continue;
+        }
+        let Some(participant_id) = effective_participant(&voices, &v.voice_id) else {
+            continue;
+        };
+        let Some(candidate) = clips
+            .iter()
+            .filter(|c| c.voice_id == v.voice_id && meeting_root.join(&c.file).is_file())
+            .max_by_key(|c| {
+                (
+                    c.end_ms.saturating_sub(c.start_ms),
+                    std::cmp::Reverse(c.idx),
+                )
+            })
+        else {
+            continue;
+        };
+        let replace = match best_by_participant.get(&participant_id) {
+            None => true,
+            Some(existing) => {
+                candidate.end_ms.saturating_sub(candidate.start_ms)
+                    > existing.end_ms.saturating_sub(existing.start_ms)
+            }
+        };
+        if replace {
+            best_by_participant.insert(participant_id, candidate);
+        }
+    }
+
+    let mut preserved = 0;
+    let samples_dir = meeting_root.join(VOICE_SAMPLES_DIR);
+    for (participant_id, clip) in best_by_participant {
+        let src = meeting_root.join(&clip.file);
+        let rel = participant_sample_clip_rel(&participant_id);
+        let dst = meeting_root.join(&rel);
+        if fs::create_dir_all(&samples_dir).is_ok() && fs::copy(&src, &dst).is_ok() {
+            store.set_participant_sample_clip(&participant_id, Some(&rel))?;
+            preserved += 1;
+        }
+    }
+    Ok(preserved)
+}
+
 /// Stage `clips`: a few clear, non-overlapping samples of each detected voice, cut from the
 /// full audio. When the audio is already gone the stage does nothing: the user then names
 /// voices without listening, or by their transcript text.
@@ -465,6 +714,7 @@ pub fn run_clips(
                 .map_err(err)?;
         }
     }
+    let _ = preserve_confirmed_clips(store, meeting_id, meeting_root);
     Ok(total)
 }
 
@@ -506,7 +756,9 @@ pub fn all_voices_confirmed(voices: &[VoiceRow]) -> bool {
 }
 
 /// Delete the clips of meetings whose voices are all confirmed, or whose clips are older than
-/// the limit. Returns the number of meetings cleaned.
+/// the limit. Before removing temporary meeting clips, preserves 1 best sample clip per
+/// confirmed participant under `<recordings_root>/.voice-samples/<participant_id>.wav`.
+/// Returns the number of meetings cleaned.
 pub fn sweep_clips(
     store: &Store,
     meeting_root: &Path,
@@ -515,6 +767,7 @@ pub fn sweep_clips(
 ) -> Result<usize, store::StoreError> {
     let mut cleaned = 0;
     for (meeting_id, oldest) in store.meetings_with_clips()? {
+        preserve_confirmed_clips(store, &meeting_id, meeting_root)?;
         let confirmed = all_voices_confirmed(&store.list_meeting_voices(&meeting_id)?);
         let expired = now_ms - oldest >= i64::from(clip_max_days) * 86_400_000;
         if confirmed || expired {
@@ -523,6 +776,49 @@ pub fn sweep_clips(
         }
     }
     Ok(cleaned)
+}
+
+fn remove_participant_sample_clip_file(
+    store: &Store,
+    participant_id: &str,
+    meeting_root: &Path,
+) -> Result<(), store::StoreError> {
+    let mut to_remove = Vec::new();
+    if let Some(p) = store.get_participant(participant_id)? {
+        if let Some(rel) = p.sample_clip_file {
+            to_remove.push(rel);
+        }
+    }
+    let default_rel = participant_sample_clip_rel(participant_id);
+    if !to_remove.contains(&default_rel) {
+        to_remove.push(default_rel);
+    }
+    remove_files(meeting_root, &to_remove);
+    store.set_participant_sample_clip(participant_id, None)?;
+    Ok(())
+}
+
+/// Forget a participant's voice profile, delete `<recordings_root>/.voice-samples/<participant_id>.wav`
+/// and clear `sample_clip_file`, keeping the participant row itself.
+pub fn reset_profile(
+    store: &Store,
+    participant_id: &str,
+    meeting_root: &Path,
+) -> Result<usize, store::StoreError> {
+    remove_participant_sample_clip_file(store, participant_id, meeting_root)?;
+    store.reset_profile(participant_id)
+}
+
+/// Delete a participant and their voice profile, removing `<recordings_root>/.voice-samples/<participant_id>.wav`
+/// and clearing `sample_clip_file`.
+pub fn delete_participant_profile(
+    store: &Store,
+    participant_id: &str,
+    meeting_root: &Path,
+) -> Result<bool, store::StoreError> {
+    remove_participant_sample_clip_file(store, participant_id, meeting_root)?;
+    store.reset_profile(participant_id)?;
+    store.delete_participant(participant_id)
 }
 
 // ----- naming voices and learning -----
@@ -1092,7 +1388,7 @@ mod tests {
             let pcm = read_pcm(&root.join(&c.file)).unwrap();
             assert_eq!(pcm.len() as u64, (c.end_ms - c.start_ms) * 16);
         }
-        // Confirming the voices removes the clips.
+        // Confirming the voices preserves 1 preview clip and removes the temporary meeting clips.
         s.put_meeting_voices("m", &[voice("t:S0", vec![1.0, 0.0], 12_000)])
             .unwrap();
         assert_eq!(sweep_clips(&s, &root, 30, 200).unwrap(), 0);
@@ -1100,6 +1396,22 @@ mod tests {
         assert_eq!(sweep_clips(&s, &root, 30, 202).unwrap(), 1);
         assert!(s.list_clips("m").unwrap().is_empty());
         assert!(!root.join(&clips[0].file).exists());
+
+        // The retained preview clip exists under .voice-samples/ola.wav and is recorded in SQLite.
+        let ola = s.get_participant("ola").unwrap().unwrap();
+        assert_eq!(
+            ola.sample_clip_file.as_deref(),
+            Some(".voice-samples/ola.wav")
+        );
+        assert!(root.join(".voice-samples/ola.wav").is_file());
+
+        // Resetting the profile removes the preview clip file and clears sample_clip_file.
+        reset_profile(&s, "ola", &root).unwrap();
+        assert!(!root.join(".voice-samples/ola.wav").exists());
+        assert_eq!(
+            s.get_participant("ola").unwrap().unwrap().sample_clip_file,
+            None
+        );
     }
 
     #[test]
@@ -1146,6 +1458,7 @@ mod tests {
             sample_count: 0,
             speech_ms: 0,
             cycle_id: None,
+            sample_clip_file: None,
         }];
         let sp = |id: &str, label: &str| Speaker {
             id: id.into(),
@@ -1242,5 +1555,91 @@ mod tests {
         assert_eq!(ids(Some("TEAM")), ["TEAM:ola"]);
         assert_eq!(ids(None), ["legacy"]);
         assert_eq!(load_profiles(&s).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn speaker_id_matches_global_profile_into_cycle_meeting_and_auto_links_participant() {
+        let s = Store::open_in_memory().unwrap();
+        s.create_meeting(&Meeting {
+            id: "m-cycle".into(),
+            title: "Cycle meeting".into(),
+            started_unix_ms: 1,
+            duration_ms: None,
+            state: MeetingState::Stopped,
+            dir: "m-cycle".into(),
+        })
+        .unwrap();
+        s.set_report_settings(
+            "m-cycle",
+            &store::ReportSettings {
+                cycle_id: Some("NOMAD".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // Enroll a global (`cycle_id IS NULL`) participant with a voice sample and preview clip.
+        s.create_participant("global-ewa", "Ewa Global", 1).unwrap();
+        s.put_sample(
+            "global-ewa",
+            &SampleRow {
+                source_key: "enroll".into(),
+                embedding: vec![1.0, 0.0, 0.0],
+                speech_ms: 20_000,
+            },
+            1,
+        )
+        .unwrap();
+        s.set_participant_sample_clip("global-ewa", Some(".voice-samples/global-ewa.wav"))
+            .unwrap();
+
+        let dir = tempdir("global-match");
+        let work = dir.join("work").join("diarize");
+        fs::create_dir_all(&work).unwrap();
+        fs::write(
+            work.join("t.json"),
+            serde_json::json!({
+                "track": "t",
+                "speakers": ["SPEAKER_00"],
+                "turns": [
+                    {"start_ms": 0, "end_ms": 12000, "speaker": "SPEAKER_00"}
+                ],
+                "embeddings": [[0.99, 0.05, 0.0]]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        s.upsert_track(
+            "m-cycle",
+            &Track {
+                name: "t".into(),
+                source: "system".into(),
+                pid: None,
+                offset_ms: 0.0,
+                ended: true,
+                end_offset_ms: None,
+                total_samples: None,
+            },
+        )
+        .unwrap();
+
+        run_speaker_id(&s, "m-cycle", &dir, &VoiceSettings::default()).unwrap();
+        let voices = s.list_meeting_voices("m-cycle").unwrap();
+        assert_eq!(voices.len(), 1);
+        assert_eq!(voices[0].decision, VoiceDecision::Auto);
+        assert_eq!(
+            voices[0].assigned_participant.as_deref(),
+            Some("NOMAD:ewa-global")
+        );
+
+        let cycle_participants = participants_for_meeting(&s, "m-cycle").unwrap();
+        assert_eq!(cycle_participants.len(), 1);
+        assert_eq!(cycle_participants[0].id, "NOMAD:ewa-global");
+        assert_eq!(cycle_participants[0].name, "Ewa Global");
+        assert_eq!(cycle_participants[0].sample_count, 1);
+        assert_eq!(
+            cycle_participants[0].sample_clip_file.as_deref(),
+            Some(".voice-samples/global-ewa.wav")
+        );
     }
 }

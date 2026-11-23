@@ -1,6 +1,6 @@
 //! Runs stages one at a time and records every transition.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -62,6 +62,17 @@ pub trait GpuGate: Send + Sync {
     fn check(&self, stage: Stage) -> GateDecision;
 }
 
+/// Options for stepping or driving a job.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DriveOptions {
+    /// When true, bypass any future `scheduled_unix_ms` and the `GpuGate` check so the user's
+    /// "Force process" action starts the job immediately even when the GPU is busy.
+    pub force_gpu: bool,
+    /// Current timestamp (Unix ms) to compare against `scheduled_unix_ms`; `None` uses
+    /// [`now_ms`].
+    pub now_unix_ms: Option<i64>,
+}
+
 /// Result of one [`Supervisor::step`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -72,6 +83,11 @@ pub enum StepOutcome {
     Failed { stage: Stage, error: String },
     /// The GPU is not available for this stage yet.
     Waiting { stage: Stage, reason: String },
+    /// The job is scheduled for a future timestamp and will not start yet.
+    Scheduled {
+        meeting_id: String,
+        scheduled_unix_ms: i64,
+    },
     /// Another stage is running; only one model process may exist.
     Busy,
     /// The job is blocked by an earlier failure.
@@ -128,6 +144,8 @@ pub struct Supervisor {
     running: Mutex<()>,
     /// Why each job is waiting, for the queue screen.
     waiting: Mutex<HashMap<String, String>>,
+    /// Jobs explicitly forced by the user to bypass schedule and GPU guard checks.
+    forced: Mutex<HashSet<String>>,
     listener: Mutex<Option<Listener>>,
     /// A stage that crashed this many times in a row is marked failed instead of retried.
     max_attempts: u32,
@@ -146,6 +164,7 @@ impl Supervisor {
             gate,
             running: Mutex::new(()),
             waiting: Mutex::new(HashMap::new()),
+            forced: Mutex::new(HashSet::new()),
             listener: Mutex::new(None),
             max_attempts,
         }
@@ -176,6 +195,45 @@ impl Supervisor {
         Ok(self
             .store()?
             .create_job(meeting_id, &names, options, now_ms())?)
+    }
+
+    /// Create or update a job's schedule timestamp (Unix ms).
+    pub fn set_schedule(
+        &self,
+        meeting_id: &str,
+        scheduled_unix_ms: Option<i64>,
+    ) -> Result<bool, QueueError> {
+        if scheduled_unix_ms.is_some() {
+            self.clear_force(meeting_id);
+        }
+        Ok(self
+            .store()?
+            .set_job_schedule(meeting_id, scheduled_unix_ms)?)
+    }
+
+    /// Mark a job as forced so it bypasses any future `scheduled_unix_ms` and the `GpuGate`.
+    pub fn force_job(&self, meeting_id: &str) {
+        if let Ok(mut f) = self.forced.lock() {
+            f.insert(meeting_id.to_string());
+        }
+        if let Ok(store) = self.store() {
+            let _ = store.set_job_schedule(meeting_id, None);
+        }
+    }
+
+    /// Clear the forced flag for a job.
+    pub fn clear_force(&self, meeting_id: &str) {
+        if let Ok(mut f) = self.forced.lock() {
+            f.remove(meeting_id);
+        }
+    }
+
+    /// Whether a job is currently marked as forced.
+    pub fn is_forced(&self, meeting_id: &str) -> bool {
+        self.forced
+            .lock()
+            .map(|f| f.contains(meeting_id))
+            .unwrap_or(false)
     }
 
     /// Run after a start: stages left `running` by a crash go back to pending, unless they
@@ -269,6 +327,15 @@ impl Supervisor {
 
     /// Run at most one stage of the job.
     pub fn step(&self, meeting_id: &str) -> Result<StepOutcome, QueueError> {
+        self.step_with(meeting_id, DriveOptions::default())
+    }
+
+    /// Run at most one stage of the job with explicit [`DriveOptions`].
+    pub fn step_with(
+        &self,
+        meeting_id: &str,
+        opts: DriveOptions,
+    ) -> Result<StepOutcome, QueueError> {
         let job = self
             .store()?
             .get_job(meeting_id)?
@@ -276,11 +343,28 @@ impl Supervisor {
         let stage = match next_step(&job) {
             Next::Finished => {
                 self.set_waiting(meeting_id, None);
+                self.clear_force(meeting_id);
                 return Ok(StepOutcome::Finished);
             }
             Next::Failed { stage } => return Ok(StepOutcome::Blocked { stage }),
             Next::Run { stage } => stage,
         };
+
+        let forced = opts.force_gpu || self.is_forced(meeting_id);
+        let now = opts.now_unix_ms.unwrap_or_else(now_ms);
+        if let Some(scheduled_unix_ms) = job.scheduled_unix_ms {
+            if scheduled_unix_ms > now {
+                if forced {
+                    self.store()?.set_job_schedule(meeting_id, None)?;
+                } else {
+                    self.set_waiting(meeting_id, None);
+                    return Ok(StepOutcome::Scheduled {
+                        meeting_id: meeting_id.to_string(),
+                        scheduled_unix_ms,
+                    });
+                }
+            }
+        }
 
         let kind = match self.plan(meeting_id, &job, stage)? {
             Plan::Run(kind) => kind,
@@ -316,7 +400,7 @@ impl Supervisor {
             return Ok(StepOutcome::Busy);
         };
 
-        if stage.needs_gpu(kind) {
+        if !forced && stage.needs_gpu(kind) {
             if let GateDecision::Wait(reason) = self.gate.check(stage) {
                 self.set_waiting(meeting_id, Some(reason.clone()));
                 self.emit(QueueEvent::Waiting {
@@ -396,8 +480,17 @@ impl Supervisor {
     /// Step until the job finishes, fails or has to wait. The caller decides when to try
     /// again after a wait.
     pub fn drive(&self, meeting_id: &str) -> Result<StepOutcome, QueueError> {
+        self.drive_with(meeting_id, DriveOptions::default())
+    }
+
+    /// Step with [`DriveOptions`] until the job finishes, fails, is scheduled or has to wait.
+    pub fn drive_with(
+        &self,
+        meeting_id: &str,
+        opts: DriveOptions,
+    ) -> Result<StepOutcome, QueueError> {
         loop {
-            match self.step(meeting_id)? {
+            match self.step_with(meeting_id, opts)? {
                 StepOutcome::Ran { .. } => continue,
                 StepOutcome::Finished => {
                     self.emit(QueueEvent::Finished {
@@ -828,5 +921,89 @@ mod tests {
         sup.step("m1").unwrap();
         assert_eq!(runner.peak.load(Ordering::SeqCst), 1);
         assert_eq!(runner.nested.lock().unwrap()[0], StepOutcome::Busy);
+    }
+
+    #[test]
+    fn scheduled_job_waits_until_its_time_or_until_forced() {
+        let (sup, runner, _) = setup(true);
+        sup.set_schedule("m1", Some(20_000)).unwrap();
+
+        let out = sup
+            .drive_with(
+                "m1",
+                DriveOptions {
+                    force_gpu: false,
+                    now_unix_ms: Some(10_000),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            out,
+            StepOutcome::Scheduled {
+                meeting_id: "m1".into(),
+                scheduled_unix_ms: 20_000
+            }
+        );
+        assert!(runner.calls.lock().unwrap().is_empty());
+
+        // Once the scheduled timestamp is reached, the job runs normally.
+        let out = sup
+            .drive_with(
+                "m1",
+                DriveOptions {
+                    force_gpu: false,
+                    now_unix_ms: Some(20_000),
+                },
+            )
+            .unwrap();
+        assert_eq!(out, StepOutcome::Finished);
+        assert_eq!(*runner.calls.lock().unwrap(), STAGES[..7].to_vec());
+    }
+
+    #[test]
+    fn force_gpu_bypasses_busy_gpu_gate_and_future_schedule() {
+        let (sup, runner, _) = setup(false);
+        sup.set_schedule("m1", Some(99_999_999)).unwrap();
+
+        // Without force, it is held back by the future schedule.
+        assert!(matches!(
+            sup.step_with(
+                "m1",
+                DriveOptions {
+                    force_gpu: false,
+                    now_unix_ms: Some(1_000),
+                }
+            )
+            .unwrap(),
+            StepOutcome::Scheduled { .. }
+        ));
+
+        // With `force_gpu: true` in DriveOptions, it runs even though the GPU gate returns Wait.
+        let out = sup
+            .step_with(
+                "m1",
+                DriveOptions {
+                    force_gpu: true,
+                    now_unix_ms: Some(1_000),
+                },
+            )
+            .unwrap();
+        assert_eq!(out, StepOutcome::Ran { stage: Stage::Asr });
+        assert_eq!(
+            sup.store()
+                .unwrap()
+                .get_job("m1")
+                .unwrap()
+                .unwrap()
+                .scheduled_unix_ms,
+            None
+        );
+
+        // And per-job `force_job` on the supervisor drives the rest to completion on a busy GPU.
+        sup.force_job("m1");
+        assert!(sup.is_forced("m1"));
+        assert_eq!(sup.drive("m1").unwrap(), StepOutcome::Finished);
+        assert!(!sup.is_forced("m1"));
+        assert_eq!(*runner.calls.lock().unwrap(), STAGES[..7].to_vec());
     }
 }

@@ -18,8 +18,11 @@ pub mod transcript;
 pub mod voices;
 pub mod worker;
 
-pub use stage::{audio_is_expendable, next_step, progress, Next, Stage, AUDIO_DEPENDENT, STAGES};
+pub use stage::{
+    audio_is_expendable, next_step, progress, progress_with_live, stage_weight, Next, Stage,
+    AUDIO_DEPENDENT, STAGES,
+};
 pub use supervisor::{
-    now_ms, GateDecision, GpuGate, QueueError, QueueEvent, RunError, StageRunner, StepOutcome,
-    Supervisor,
+    now_ms, DriveOptions, GateDecision, GpuGate, QueueError, QueueEvent, RunError, StageRunner,
+    StepOutcome, Supervisor,
 };
