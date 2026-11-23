@@ -662,6 +662,116 @@ mod tests {
         }
     }
 
+    /// A meeting of TEAM whose diarized voice is stored but not named yet; returns the voice id.
+    fn meeting_with_an_unnamed_voice(lab: &Lab) -> String {
+        lab.meeting("m1", NOON, Some("TEAM"));
+        fs::write(lab.work("m1").join("transcript.json"), TRANSCRIPT).unwrap();
+        let raw: RawTranscript = serde_json::from_str(TRANSCRIPT).unwrap();
+        let voice = raw
+            .speakers
+            .iter()
+            .find(|s| s.id.contains(':'))
+            .expect("the fixture has a diarized speaker")
+            .clone();
+        lab.store
+            .put_meeting_voices(
+                "m1",
+                &[VoiceRow {
+                    voice_id: voice.id.clone(),
+                    track: voice.track.clone().unwrap_or_default(),
+                    label: "SPEAKER_00".into(),
+                    embedding: vec![1.0],
+                    speech_ms: 9_000,
+                    decision: VoiceDecision::Unknown,
+                    score: None,
+                    matched_participant: None,
+                    assigned_participant: None,
+                    confirmed: false,
+                    merged_into: None,
+                }],
+            )
+            .unwrap();
+        voice.id
+    }
+
+    fn named_labels(lab: &Lab) -> Vec<(String, String)> {
+        let named: RawTranscript =
+            serde_json::from_slice(&fs::read(lab.work("m1").join(NAMED_TRANSCRIPT_FILE)).unwrap())
+                .unwrap();
+        named
+            .speakers
+            .into_iter()
+            .map(|s| (s.id, s.label))
+            .collect()
+    }
+
+    #[test]
+    fn a_voice_the_user_named_reaches_the_model_even_when_the_cycle_does_not_list_the_person() {
+        let lab = lab();
+        let voice = meeting_with_an_unnamed_voice(&lab);
+        // Created by the Voices screen: a participant of the store that cycle.yaml does not list.
+        lab.store
+            .create_participant("team:radek-wojcik", "Radek Wójcik", 1)
+            .unwrap();
+        lab.store
+            .set_voice_assignment("m1", &voice, Some("team:radek-wojcik"))
+            .unwrap();
+
+        let out = prepare_context(&lab.store, &source(), &lab.env(), "m1").unwrap();
+        assert!(matches!(
+            out,
+            ContextOutcome::Written {
+                named_transcript: true,
+                ..
+            }
+        ));
+        // The model reads the name on the lines; the participant list is the cycle's own.
+        let labels = named_labels(&lab);
+        assert!(
+            labels.contains(&(voice.clone(), "Radek Wójcik".into())),
+            "{labels:?}"
+        );
+        assert!(
+            labels.contains(&("user".into(), "You".into())),
+            "{labels:?}"
+        );
+        let ctx = read(&lab.work("m1").join(CONTEXT_FILE));
+        let ids: Vec<&str> = ctx["participants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["alex"]);
+    }
+
+    #[test]
+    fn an_unnamed_voice_stays_a_generic_label_and_naming_it_later_is_picked_up() {
+        let lab = lab();
+        let voice = meeting_with_an_unnamed_voice(&lab);
+        let dir = lab.root.path().join("m1");
+
+        // Before the user names it: the generic, language-neutral label, never a role.
+        assert!(write_named_transcript(&lab.store, "m1", &dir).unwrap());
+        let before = named_labels(&lab);
+        assert!(
+            before.contains(&(voice.clone(), "Speaker 1".into())),
+            "{before:?}"
+        );
+
+        // The Voices screen names the voice; the next run of the extraction writes the name.
+        lab.store
+            .create_participant("team:radek-wojcik", "Radek Wójcik", 2)
+            .unwrap();
+        lab.store
+            .set_voice_assignment("m1", &voice, Some("team:radek-wojcik"))
+            .unwrap();
+        assert!(write_named_transcript(&lab.store, "m1", &dir).unwrap());
+        let after = named_labels(&lab);
+        assert!(after.contains(&(voice, "Radek Wójcik".into())), "{after:?}");
+        assert_eq!(after.len(), before.len());
+    }
+
     #[test]
     fn without_a_transcript_there_is_no_named_transcript() {
         let lab = lab();

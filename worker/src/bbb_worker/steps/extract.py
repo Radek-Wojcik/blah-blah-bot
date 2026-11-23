@@ -213,7 +213,9 @@ def extract_window(
     again: the window is halved (at most MAX_SPLIT_DEPTH times) and the halves are merged
     into one record. A window that stays invalid is recorded as skipped."""
     system = prompts.extract_system(language)
-    user = prompts.extract_user(context, windows.render_window(window))
+    user = prompts.extract_user(
+        context, windows.render_window(window), windows.roster(window.lines)
+    )
     try:
         done = llm_client.complete_json(
             backend,
