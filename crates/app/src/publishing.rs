@@ -58,6 +58,8 @@ pub struct AppEnv {
     root: Box<dyn Fn() -> PathBuf + Send + Sync>,
     secrets: Arc<dyn SecretStore + Send + Sync>,
     notify: OnceLock<Notify>,
+    notion_api: String,
+    discord_api: String,
 }
 
 impl AppEnv {
@@ -71,7 +73,21 @@ impl AppEnv {
             root: Box::new(root),
             secrets,
             notify: OnceLock::new(),
+            notion_api: publishers::notion::DEFAULT_API.to_string(),
+            discord_api: publishers::discord_bot::DEFAULT_API.to_string(),
         }
+    }
+
+    #[cfg(test)]
+    pub fn with_notion_api(mut self, api: impl Into<String>) -> Self {
+        self.notion_api = api.into();
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_discord_api(mut self, api: impl Into<String>) -> Self {
+        self.discord_api = api.into();
+        self
     }
 
     /// Where notices go; set once.
@@ -118,6 +134,25 @@ impl Env for AppEnv {
 
     fn discord_bot_token(&self, reference: &str) -> Option<String> {
         secrets::resolve_cred(self.secrets.as_ref(), reference)
+    }
+
+    fn notion_api(&self) -> String {
+        self.notion_api.clone()
+    }
+
+    fn discord_api(&self) -> String {
+        self.discord_api.clone()
+    }
+
+    #[cfg(test)]
+    fn sleep(&self, _duration: Duration) {}
+
+    #[cfg(test)]
+    fn pacing(&self) -> publishers::discord::Pacing {
+        publishers::discord::Pacing {
+            sleep: Box::new(|_| {}),
+            ..publishers::discord::Pacing::default()
+        }
     }
 
     fn snapshot_root(&self) -> PathBuf {
@@ -656,17 +691,21 @@ impl Publishing {
     // ----- plan and publish -------------------------------------------------------------------
 
     fn targets_dto(plan: &PublishPlan) -> Vec<TargetDto> {
-        [PublishTarget::Github, PublishTarget::Discord]
-            .into_iter()
-            .map(|t| {
-                let mode = plan.rules.mode(t);
-                TargetDto {
-                    target: t.as_str(),
-                    mode: mode.map(mode_name),
-                    available: plan.rules.allows(t, Trigger::Explicit),
-                }
-            })
-            .collect()
+        [
+            PublishTarget::Github,
+            PublishTarget::Discord,
+            PublishTarget::Notion,
+        ]
+        .into_iter()
+        .map(|t| {
+            let mode = plan.rules.mode(t);
+            TargetDto {
+                target: t.as_str(),
+                mode: mode.map(mode_name),
+                available: plan.rules.allows(t, Trigger::Explicit),
+            }
+        })
+        .collect()
     }
 
     fn plan_dto(&self, loaded: &Loaded, plan: &PublishPlan) -> IpcResult<PlanDto> {
@@ -700,7 +739,11 @@ impl Publishing {
         let loaded = self.load(meeting_id)?;
         let mut wanted = parse_targets(targets)?;
         if wanted.is_empty() {
-            wanted = vec![PublishTarget::Github, PublishTarget::Discord];
+            wanted = vec![
+                PublishTarget::Github,
+                PublishTarget::Discord,
+                PublishTarget::Notion,
+            ];
         }
         let material = self.material(&loaded)?;
         let plan = self.with_store(|s| {
@@ -751,15 +794,59 @@ impl Publishing {
         })
     }
 
+    /// Re-exports the tasks of a published meeting to Notion: mapped properties are updated on
+    /// existing pages while keeping the status a person set in Notion, and trashed pages are
+    /// not recreated.
+    pub fn reexport_notion(&self, meeting_id: &str) -> IpcResult<PublishResultDto> {
+        let loaded = self.load(meeting_id)?;
+        if !self.with_store(|s| flow::is_locked(s, meeting_id))? {
+            return Err(IpcError::new(
+                "not_published",
+                "only a published meeting can be re-exported to Notion: publish it first",
+            ));
+        }
+        self.ensure_publishable(meeting_id, &loaded)?;
+        let wanted = [PublishTarget::Notion];
+        let material = self.material(&loaded)?;
+        let preview = self.with_store(|s| {
+            flow::preview(
+                s,
+                &self.prepared(&loaded, &material, Trigger::Explicit, &wanted),
+            )
+        })?;
+        if let Some(block) = preview.blocks.first() {
+            return Err(start_error(StartError::Blocked(vec![block.clone()])));
+        }
+        let outcome = {
+            let store = lock(&self.store);
+            flow::reexport_notion(
+                &store,
+                &self.prepared(&loaded, &material, Trigger::Explicit, &wanted),
+            )
+            .map_err(start_error)?
+        };
+        self.wake();
+        self.env.outbox_changed();
+        let queued = outcome.ops.iter().filter(|(_, created)| *created).count();
+        Ok(PublishResultDto {
+            plan: self.plan_dto(&loaded, &outcome.plan)?,
+            queued,
+        })
+    }
+
     /// The `auto` rules for a draft that was just completed: what the cycle sets to `auto`
     /// is queued, never a status change, and only when nothing waits for the user (a newer
     /// draft, a repository that was not confirmed).
     pub fn auto_publish(&self, meeting_id: &str) -> IpcResult<usize> {
         let loaded = self.load(meeting_id)?;
         let rules = TargetRules::of(&loaded.ctx.cycle);
-        let any_auto = [PublishTarget::Github, PublishTarget::Discord]
-            .into_iter()
-            .any(|t| rules.allows(t, Trigger::Auto));
+        let any_auto = [
+            PublishTarget::Github,
+            PublishTarget::Discord,
+            PublishTarget::Notion,
+        ]
+        .into_iter()
+        .any(|t| rules.allows(t, Trigger::Auto));
         if !any_auto {
             return Ok(0);
         }
