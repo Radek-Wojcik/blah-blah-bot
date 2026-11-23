@@ -527,6 +527,49 @@ fn multipart_body_golden() {
 }
 
 #[test]
+fn the_webhook_request_is_the_shared_message_body_posted_with_wait() {
+    let dc = FakeDiscord::start();
+    let hook = hook_of(&dc);
+    let url = format!("{}?wait=true", hook.url());
+
+    let plain = OutMessage {
+        content: "hi".into(),
+        allowed_mentions: json!({"parse": []}),
+        embeds: vec![],
+        files: vec![],
+    };
+    let (content_type, body) = message_request_body(&plain);
+    assert_eq!(content_type, "application/json");
+    assert_eq!(body, plain.payload().to_string().into_bytes());
+    assert_eq!(
+        request_for(&hook, &plain),
+        Request::post_json(&url, &plain.payload())
+    );
+
+    let with_files = OutMessage {
+        files: vec![Attachment::new("one.png", b"PNGDATA".to_vec())],
+        ..plain.clone()
+    };
+    let payload = with_files.payload();
+    let boundary = pick_boundary(payload.to_string().as_bytes(), &with_files.files);
+    let (content_type, body) = message_request_body(&with_files);
+    assert_eq!(
+        content_type,
+        format!("multipart/form-data; boundary={boundary}")
+    );
+    assert_eq!(body, multipart_body(&boundary, &payload, &with_files.files));
+    assert_eq!(
+        request_for(&hook, &with_files),
+        Request::new(Method::Post, &url).bytes(&content_type, body)
+    );
+    // A payload extended by the caller (the bot adds a nonce) goes through the same path.
+    let mut extended = payload.clone();
+    extended["nonce"] = json!("n1");
+    let (_, extended_body) = payload_request_body(&extended, &with_files.files);
+    assert!(String::from_utf8_lossy(&extended_body).contains("\"nonce\":\"n1\""));
+}
+
+#[test]
 fn the_boundary_does_not_occur_in_the_data() {
     let first = "bbb-boundary-0000";
     let files = vec![Attachment::new("a.png", first.as_bytes().to_vec())];

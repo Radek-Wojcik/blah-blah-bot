@@ -276,7 +276,7 @@ fn quoted_param(header: &str, key: &str) -> Option<String> {
 }
 
 /// Reads `payload_json` and the `files[n]` parts of a multipart body.
-fn parse_multipart(content_type: &str, body: &[u8]) -> Option<(Value, Vec<StoredFile>)> {
+pub(super) fn parse_multipart(content_type: &str, body: &[u8]) -> Option<(Value, Vec<StoredFile>)> {
     let boundary = content_type
         .split(';')
         .filter_map(|p| p.trim().strip_prefix("boundary="))
