@@ -114,6 +114,102 @@ test.describe("static screenshots", () => {
     await page.screenshot({ path: path.join(OUT, "briefing.png") });
   });
 
+  // Stage 6. The popup page of the extension with a stubbed `chrome` API and fictional tabs; it
+  // needs `npm run build` in extension/ first. Run with: -g "extension popup"
+  test("extension popup", async ({ page }) => {
+    const unpacked = path.resolve(here, "../../target/extension/unpacked");
+    expect(
+      fs.existsSync(path.join(unpacked, "popup.html")),
+      "run npm run build in extension/",
+    ).toBe(true);
+    const types: Record<string, string> = {
+      ".html": "text/html",
+      ".js": "text/javascript",
+    };
+    await page.route("https://extension.test/**", async (route) => {
+      const name = new URL(route.request().url()).pathname.replace(/^\//, "");
+      const file = path.join(unpacked, name);
+      if (!file.startsWith(unpacked) || !fs.existsSync(file)) return route.fulfill({ status: 404 });
+      return route.fulfill({
+        status: 200,
+        contentType: types[path.extname(file)] ?? "application/octet-stream",
+        body: fs.readFileSync(file),
+      });
+    });
+    await page.addInitScript(() => {
+      const group = {
+        groupId: 1,
+        title: "ORBIT",
+        summary: "2/3 tabs",
+        tabs: [
+          {
+            tabId: 11,
+            label: "meet.example.org",
+            host: "meet.example.org",
+            status: "captured",
+            active: true,
+          },
+          {
+            tabId: 12,
+            label: "docs.example.org",
+            host: "docs.example.org",
+            status: "captured",
+            active: false,
+          },
+          { tabId: 13, label: "Tab 3", host: "", status: "waiting", active: false },
+        ],
+        next: 13,
+      };
+      const status = {
+        paired: true,
+        clientState: "ready",
+        appRecording: true,
+        streams: [
+          {
+            tabId: 11,
+            streamId: "s1",
+            status: "streaming",
+            track: "tab:s1",
+            framesSent: 9000,
+            framesDropped: 0,
+            pendingFrames: 0,
+          },
+          {
+            tabId: 12,
+            streamId: "s2",
+            status: "streaming",
+            track: "tab:s2",
+            framesSent: 8800,
+            framesDropped: 0,
+            pendingFrames: 0,
+          },
+        ],
+        meetTabs: [],
+        version: "0.6.0",
+      };
+      (window as unknown as { chrome: unknown }).chrome = {
+        tabs: { query: async () => [{ id: 11, url: "https://meet.example.org/orbit-sync" }] },
+        storage: { local: { get: async () => ({}), set: async () => undefined } },
+        runtime: {
+          sendMessage: async (msg: { type: string }) =>
+            msg.type === "group-view" ? { ok: true, group } : { ok: true, status },
+        },
+      };
+    });
+    await page.setViewportSize({ width: 324, height: 520 });
+    await page.goto("https://extension.test/popup.html");
+    await expect(page.locator("#groupTabs li")).toHaveCount(3);
+    await expect(page.locator("#line")).toContainText("Connected. The application is recording.");
+    await settle(page);
+    const height = await page.evaluate(() =>
+      Math.ceil(document.getElementById("unpairBtn")!.getBoundingClientRect().bottom + 12),
+    );
+    await page.screenshot({
+      path: path.join(OUT, "extension-popup.png"),
+      clip: { x: 0, y: 0, width: 324, height },
+    });
+  });
+
   test("draft with the source popover", async ({ page }) => {
     // Tall enough that the whole draft is in view and nothing scrolls.
     await page.setViewportSize({ width: 1280, height: 1250 });
@@ -337,4 +433,43 @@ test("draft editing GIF", async ({ page }) => {
     ...frames,
   ]);
   expect(fs.statSync(path.join(OUT, "draft-editing.gif")).size).toBeLessThan(1_500_000);
+});
+
+// Stage 6. Run only this one with: npx playwright test --project=screenshots -g "detect and record"
+test("detect and record GIF", async ({ page }) => {
+  const frames: string[] = [];
+  const dir = freshDir("gif");
+  const shot = async (wait = 450) => {
+    await page.waitForTimeout(wait);
+    const file = path.join(dir, `f${String(frames.length).padStart(2, "0")}.png`);
+    await page.screenshot({ path: file });
+    frames.push(file);
+  };
+  await page.setViewportSize({ width: 340, height: 600 });
+  // The mock raises a prompt for a fictional Discord call 2.5 seconds after it starts.
+  await page.goto("/?view=widget&backend=mock&tabs=1&detectms=2500");
+  await shot(300);
+  const prompt = page.getByRole("alertdialog", { name: "Record this call?" });
+  await expect(prompt).toBeVisible();
+  await shot();
+  await prompt.getByRole("button", { name: "Record" }).click();
+  await expect(page.getByText("Recording", { exact: true })).toBeVisible();
+  await shot(700);
+  await page
+    .getByLabel("Add source")
+    .selectOption({ label: "Tab: Budget sheet (sheets.example.org)" });
+  await shot();
+  await page.waitForTimeout(900);
+  await shot();
+  await page.getByRole("button", { name: "Stop" }).click();
+  await expect(page.getByRole("dialog", { name: "Process now or later?" })).toBeVisible();
+  await shot();
+  fs.mkdirSync(OUT, { recursive: true });
+  execFileSync("python", [
+    path.join(here, "make-gif.py"),
+    path.join(OUT, "detect-and-record.gif"),
+    "1100",
+    ...frames,
+  ]);
+  expect(fs.statSync(path.join(OUT, "detect-and-record.gif")).size).toBeLessThan(10_000_000);
 });
