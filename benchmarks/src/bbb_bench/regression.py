@@ -334,7 +334,7 @@ def merge_gpu_steps(gpu_dir: Path, fresh: list[dict[str, Any]]) -> list[dict[str
     merged = sorted(rows.values(), key=lambda r: order.get(r["id"], len(order)))
     gpu_dir.mkdir(parents=True, exist_ok=True)
     (gpu_dir / "gpu-steps.json").write_text(
-        json.dumps(merged, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        json.dumps(merged, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n"
     )
     return merged
 
@@ -1330,9 +1330,11 @@ def main(argv: list[str] | None = None) -> int:
     report = build_report(args.logs, args.gpu_results, args.baselines, args.hygiene_count, accepted)
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / f"{PROTOTYPE}.json").write_text(
-        json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n"
     )
-    (args.out / f"{PROTOTYPE}.md").write_text(render_markdown(report) + "\n", encoding="utf-8")
+    (args.out / f"{PROTOTYPE}.md").write_text(
+        render_markdown(report) + "\n", encoding="utf-8", newline="\n"
+    )
     rec = report["recommendation"]
     print(
         f"{PROTOTYPE}: {rec['verdict']} "
