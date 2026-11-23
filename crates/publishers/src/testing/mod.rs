@@ -11,5 +11,7 @@ pub mod notion;
 pub mod server;
 
 pub use discord::FakeDiscord;
+pub use discord_bot::FakeDiscordBot;
 pub use github::{FakeGithub, Visibility};
+pub use notion::FakeNotion;
 pub use server::{FakeServer, Fault, Recorded, Reply};
