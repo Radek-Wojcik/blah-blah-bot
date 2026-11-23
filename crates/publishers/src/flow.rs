@@ -20,8 +20,10 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use cycle_store::{Correction, Draft, Topic};
-use store::{OpState, OutboxOp, Publication, Store, StoreError};
+use cycle_store::{Correction, DiscordMode, Draft, Topic};
+use store::{
+    ExternalRef, OpState, OutboxKind, OutboxOp, Publication, RefTarget, Store, StoreError,
+};
 
 use crate::correction::{self, CorrectionPlan, CorrectionPlanInput};
 use crate::gate::{self, RepoVisibility};
@@ -29,6 +31,7 @@ use crate::github::Github;
 use crate::outbox::{Env, RepoContext};
 use crate::plan::{
     self, Block, PlanInput, PublishPlan, RepoFacts, SnapshotRef, TopicsPlan, COMMIT_KEY,
+    DISCORD_KEY, DISCORD_POST_REF_KEY,
 };
 use crate::rules::{PublishTarget, Trigger};
 
@@ -263,16 +266,23 @@ fn plan_input<'a>(
     facts: &'a RepoFacts,
     snapshot: &'a SnapshotRef,
     existing: &'a [OutboxOp],
+    existing_refs: &'a [ExternalRef],
     topics: &'a [cycle_store::Topic],
 ) -> PlanInput<'a> {
-    let webhook = p
+    let discord_mode = p.ctx.cycle.targets.discord.as_ref().and_then(|d| d.mode());
+    let webhook =
+        matches!(discord_mode, Some(DiscordMode::Webhook(r)) if p.env.webhook(r).is_some());
+    let discord_bot_token_set = matches!(
+        discord_mode,
+        Some(DiscordMode::Bot(b)) if p.env.discord_bot_token(&b.token).is_some()
+    );
+    let notion_token_set = p
         .ctx
         .cycle
         .targets
-        .discord
+        .notion
         .as_ref()
-        .and_then(|d| d.webhook.as_deref())
-        .is_some_and(|reference| p.env.webhook(reference).is_some());
+        .is_some_and(|n| p.env.notion_token(&n.token).is_some());
     PlanInput {
         meeting_id: p.meeting_id,
         draft: p.draft,
@@ -280,6 +290,9 @@ fn plan_input<'a>(
         local_topics: topics,
         repo: facts,
         discord_webhook_set: webhook,
+        discord_bot_token_set,
+        notion_token_set,
+        existing_refs,
         anchors: p.anchors,
         snapshot,
         existing,
@@ -322,9 +335,17 @@ fn attach_topics(p: &Prepared<'_>, local: &[Topic], plan: &mut PublishPlan) {
 pub fn preview(store: &Store, p: &Prepared<'_>) -> Result<PublishPlan, StoreError> {
     let facts = repo_facts(p.env, store, p.ctx)?;
     let existing = store.list_ops(Some(p.meeting_id))?;
+    let existing_refs = store.list_external_refs(p.meeting_id)?;
     let topics = p.ctx.repo.load_topics(&p.ctx.cycle.id).unwrap_or_default();
     let snapshot = SnapshotRef::default();
-    let mut plan = plan::build(&plan_input(p, &facts, &snapshot, &existing, &topics));
+    let mut plan = plan::build(&plan_input(
+        p,
+        &facts,
+        &snapshot,
+        &existing,
+        &existing_refs,
+        &topics,
+    ));
     attach_topics(p, &topics, &mut plan);
     Ok(plan)
 }
@@ -383,9 +404,132 @@ pub fn publish(store: &Store, p: &Prepared<'_>) -> Result<Outcome, StartError> {
         }
     };
     let facts = repo_facts(p.env, store, p.ctx)?;
+    let existing_refs = store.list_external_refs(p.meeting_id)?;
     let topics = p.ctx.repo.load_topics(&p.ctx.cycle.id).unwrap_or_default();
-    let mut plan = plan::build(&plan_input(p, &facts, &snapshot, &existing, &topics));
+    let mut plan = plan::build(&plan_input(
+        p,
+        &facts,
+        &snapshot,
+        &existing,
+        &existing_refs,
+        &topics,
+    ));
     attach_topics(p, &topics, &mut plan);
+    let started = start(
+        store,
+        &Start {
+            meeting_id: p.meeting_id,
+            cycle_id: &p.ctx.cycle.id,
+            snapshot_dir: &snapshot.dir,
+            repo_key: p.ctx.repo_key(),
+        },
+        &plan,
+        p.env.now_ms(),
+    );
+    match started {
+        Ok(ops) => Ok(Outcome {
+            plan,
+            ops,
+            snapshot_dir: snapshot.dir,
+        }),
+        Err(e) => {
+            if let Some(dir) = fresh {
+                let _ = fs::remove_dir_all(dir);
+            }
+            Err(e)
+        }
+    }
+}
+
+/// Re-exports the tasks of a meeting to Notion: mapped fields are updated on existing pages
+/// (preserving their status), trashed pages are left alone, and any new or missing-ref tasks
+/// are matched by key or created. When earlier `ExportNotion` operations are already `done`,
+/// fresh keys (`notion:<item>:r2`, `r3`, ...) are queued so the dispatcher runs them again.
+pub fn reexport_notion(store: &Store, p: &Prepared<'_>) -> Result<Outcome, StartError> {
+    let root = p.env.snapshot_root();
+    let existing = store.list_ops(Some(p.meeting_id))?;
+    let existing_refs = store.list_external_refs(p.meeting_id)?;
+    let publication = store.get_publication(p.meeting_id)?;
+    let (snapshot, fresh) = match publication {
+        Some(row) if root.join(&row.snapshot_dir).is_dir() => {
+            let files = list_files(&root.join(&row.snapshot_dir))
+                .map_err(|e| StartError::Files(e.to_string()))?;
+            (
+                SnapshotRef {
+                    dir: row.snapshot_dir,
+                    files,
+                },
+                None,
+            )
+        }
+        _ => {
+            let frozen = freeze(
+                &root.join(p.meeting_rel),
+                &SnapshotInput {
+                    draft: p.draft,
+                    report_md: p.report_md,
+                    transcript_md: p.transcript_md,
+                    images: p.images,
+                },
+            )
+            .map_err(|e| StartError::Files(e.to_string()))?;
+            (
+                SnapshotRef {
+                    dir: format!(
+                        "{}/{SNAPSHOT_DIR}/{}",
+                        p.meeting_rel.trim_end_matches('/'),
+                        frozen.n
+                    ),
+                    files: frozen.files,
+                },
+                Some(frozen.dir),
+            )
+        }
+    };
+    let facts = repo_facts(p.env, store, p.ctx)?;
+    let topics = p.ctx.repo.load_topics(&p.ctx.cycle.id).unwrap_or_default();
+    let mut input = plan_input(p, &facts, &snapshot, &existing, &existing_refs, &topics);
+    input.trigger = Trigger::Explicit;
+    input.targets = &[PublishTarget::Notion];
+    let mut plan = plan::build(&input);
+
+    // If an earlier Notion export for the same item is already done, pick the next unused key
+    // so the re-export actually runs while keeping in-flight/failed exports deduplicated.
+    for op in &mut plan.ops {
+        if op.kind != OutboxKind::ExportNotion {
+            continue;
+        }
+        let base = op.op_key.clone();
+        let active = existing.iter().find(|e| {
+            (e.op_key == base || e.op_key.starts_with(&format!("{base}:r")))
+                && matches!(
+                    e.state,
+                    OpState::Queued | OpState::Running | OpState::Failed
+                )
+        });
+        if let Some(in_flight) = active {
+            op.op_key = in_flight.op_key.clone();
+            continue;
+        }
+        let base_done = existing
+            .iter()
+            .any(|e| e.op_key == base && e.state == OpState::Done);
+        if base_done {
+            let mut run = 2u32;
+            loop {
+                let candidate = format!("{base}:r{run}");
+                let taken = existing
+                    .iter()
+                    .any(|e| e.op_key == candidate && e.state != OpState::Cancelled);
+                if !taken {
+                    op.op_key = candidate;
+                    break;
+                }
+                run += 1;
+            }
+        }
+    }
+
     let started = start(
         store,
         &Start {
@@ -433,12 +577,18 @@ pub fn correction_out_dir(meeting_rel: &str) -> String {
 }
 
 fn correction_input<'a>(
+    env: &dyn Env,
     p: &'a PreparedCorrection<'a>,
     facts: &'a RepoFacts,
     existing: &'a [OutboxOp],
     out_dir: &'a str,
     in_repository: bool,
+    discord_post_exists: bool,
 ) -> CorrectionPlanInput<'a> {
+    let discord_bot_token_set = matches!(
+        p.ctx.cycle.targets.discord.as_ref().and_then(|d| d.mode()),
+        Some(DiscordMode::Bot(b)) if env.discord_bot_token(&b.token).is_some()
+    );
     CorrectionPlanInput {
         meeting_id: p.meeting_id,
         meeting_date: p.meeting_date,
@@ -449,6 +599,8 @@ fn correction_input<'a>(
         trigger: p.trigger,
         out_dir,
         in_repository,
+        discord_post_exists,
+        discord_bot_token_set,
     }
 }
 
@@ -467,6 +619,22 @@ fn meeting_in_repository(
     Ok(landed || on_its_way)
 }
 
+/// A Discord bot post is stored in `external_refs` (`post`), or a `post_discord` operation is
+/// still live in the outbox.
+fn meeting_has_discord_post(
+    store: &Store,
+    meeting_id: &str,
+    existing: &[OutboxOp],
+) -> Result<bool, StoreError> {
+    let stored = store
+        .get_external_ref(meeting_id, RefTarget::Discord, DISCORD_POST_REF_KEY)?
+        .is_some();
+    let live = existing
+        .iter()
+        .any(|o| o.op_key == DISCORD_KEY && o.state != OpState::Cancelled);
+    Ok(stored || live)
+}
+
 /// What publishing the correction would do, without queueing anything. Asks GitHub for the
 /// visibility of the repository.
 pub fn preview_correction(
@@ -477,13 +645,16 @@ pub fn preview_correction(
     let facts = repo_facts(env, store, p.ctx)?;
     let existing = store.list_ops(Some(p.meeting_id))?;
     let in_repository = meeting_in_repository(store, p.meeting_id, &existing)?;
+    let discord_post_exists = meeting_has_discord_post(store, p.meeting_id, &existing)?;
     let out_dir = correction_out_dir(p.meeting_rel);
     Ok(correction::build(&correction_input(
+        env,
         p,
         &facts,
         &existing,
         &out_dir,
         in_repository,
+        discord_post_exists,
     )))
 }
 

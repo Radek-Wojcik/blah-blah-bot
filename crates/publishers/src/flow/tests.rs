@@ -47,6 +47,9 @@ fn plan_for(visibility: RepoVisibility, confirmed: bool, snapshot: &str) -> plan
             confirmed,
         },
         discord_webhook_set: false,
+        discord_bot_token_set: false,
+        notion_token_set: false,
+        existing_refs: &[],
         anchors: &BTreeMap::new(),
         snapshot: &SnapshotRef {
             dir: snapshot.into(),

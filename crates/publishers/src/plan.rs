@@ -23,10 +23,10 @@ use std::collections::BTreeMap;
 
 use cycle_store::topics::TopicsMerge;
 use cycle_store::{
-    Cycle, Decision, Draft, ItemType, ProposedStatus, PublishMode, Topic, TopicStatus,
+    Cycle, Decision, DiscordMode, Draft, ItemType, ProposedStatus, PublishMode, Topic, TopicStatus,
 };
 use serde::{Deserialize, Serialize};
-use store::{NewOp, OpState, OutboxKind, OutboxOp, OutboxTarget};
+use store::{ExternalRef, NewOp, OpState, OutboxKind, OutboxOp, OutboxTarget, RefTarget};
 
 use crate::gate::{self, RepoVisibility};
 use crate::github::RepoRef;
@@ -36,6 +36,8 @@ use crate::rules::{PublishTarget, TargetRules, Trigger};
 pub const COMMIT_KEY: &str = "commit";
 /// `op_key` of the Discord post.
 pub const DISCORD_KEY: &str = "discord";
+/// `ref_key` of the Discord post in `external_refs`.
+pub const DISCORD_POST_REF_KEY: &str = "post";
 
 pub fn issue_key(item_id: &str) -> String {
     format!("issue:{item_id}")
@@ -43,6 +45,16 @@ pub fn issue_key(item_id: &str) -> String {
 
 pub fn status_key(proposal_id: &str) -> String {
     format!("status:{proposal_id}")
+}
+
+/// `op_key` of exporting one task to Notion.
+pub fn notion_key(item_id: &str) -> String {
+    format!("notion:{item_id}")
+}
+
+/// `ref_key` of one task in `external_refs` for Notion.
+pub fn notion_ref_key(item_id: &str) -> String {
+    format!("task:{item_id}")
 }
 
 // ----- payloads -----------------------------------------------------------------------------
@@ -107,16 +119,61 @@ pub struct StatusPayload {
     pub anchor: Option<String>,
 }
 
+/// Bot settings stored in [`DiscordPayload`] when the cycle posts through a bot. Never holds
+/// a secret: `token` is a `cred:` reference.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscordBotPayload {
+    /// The `cred:` reference of the bot token, never the token.
+    pub token: String,
+    pub guild: String,
+    pub channel: String,
+    pub thread: bool,
+    pub edit_on_correction: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiscordPayload {
     pub cycle: String,
     pub date: String,
     pub snapshot: String,
-    /// The `cred:` reference of the webhook, not the webhook.
+    /// The `cred:` reference of the webhook (empty in bot mode), not the webhook.
+    #[serde(default)]
     pub reference: String,
+    /// Present when posting through a Discord bot instead of a webhook.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot: Option<DiscordBotPayload>,
     pub template: Option<String>,
     /// Screenshots of the snapshot (`img/...`).
     pub files: Vec<String>,
+}
+
+/// Frozen task fields exported to Notion. Never holds a secret: `token_ref` is a `cred:`
+/// reference.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotionPayload {
+    pub cycle: String,
+    pub cycle_name: String,
+    pub date: String,
+    pub item_id: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignee_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignee_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_ms: Option<u64>,
+    /// Only a quote that was found in the transcript.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quote: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<String>,
+    /// The `cred:` reference of the Notion integration token, never the token.
+    pub token_ref: String,
+    pub database: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_source: Option<String>,
 }
 
 // ----- input and output ---------------------------------------------------------------------
@@ -158,6 +215,12 @@ pub struct PlanInput<'a> {
     pub repo: &'a RepoFacts,
     /// A webhook is stored under the cycle's Discord reference.
     pub discord_webhook_set: bool,
+    /// A bot token is stored under the cycle's Discord bot reference.
+    pub discord_bot_token_set: bool,
+    /// A Notion integration token is stored under the cycle's Notion reference.
+    pub notion_token_set: bool,
+    /// External references already stored for this meeting (existing Notion pages, Discord post).
+    pub existing_refs: &'a [ExternalRef],
     /// Anchor in the published transcript, by item id and by proposal id.
     pub anchors: &'a BTreeMap<String, String>,
     pub snapshot: &'a SnapshotRef,
@@ -175,6 +238,16 @@ pub struct PlannedIssue {
     pub title: String,
     pub assignee: Option<String>,
     pub due: Option<String>,
+}
+
+/// One task that exporting to Notion creates a page for, or updates when it is already there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlannedNotionPage {
+    pub item_id: String,
+    pub title: String,
+    /// The page of an earlier export, when there is one.
+    pub existing_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -301,6 +374,12 @@ pub struct PlanSummary {
     /// falls back to `topics_added` and `topics_set`).
     pub topics: Option<TopicsPlan>,
     pub discord: bool,
+    /// How the message is sent (`webhook` or `bot`); `None` when Discord is not part of the plan.
+    pub discord_mode: Option<&'static str>,
+    /// Bot mode: the rest of the message goes into a thread under the summary.
+    pub discord_thread: bool,
+    /// The tasks exported to Notion, one page each.
+    pub notion: Vec<PlannedNotionPage>,
     /// Status changes that were not approved: they are not written back.
     pub proposals_pending: usize,
 }
@@ -313,6 +392,10 @@ pub enum Block {
     PublicRepoUnconfirmed { visibility: String },
     /// A Discord post was asked for and no webhook is stored for the reference.
     DiscordWebhookMissing,
+    /// A Discord bot post or edit was asked for and no bot token is stored for the reference.
+    DiscordBotTokenMissing,
+    /// A Notion export was asked for and no integration token is stored for the reference.
+    NotionTokenMissing,
     /// Nothing is left to publish.
     NothingToPublish,
     /// A correction needs the meeting in the repository, and it is not there (its commit has
@@ -325,6 +408,8 @@ impl Block {
         match self {
             Self::PublicRepoUnconfirmed { .. } => gate::PUBLIC_REPO_CODE,
             Self::DiscordWebhookMissing => "discord_webhook_missing",
+            Self::DiscordBotTokenMissing => "discord_bot_token_missing",
+            Self::NotionTokenMissing => "notion_token_missing",
             Self::NothingToPublish => "nothing_to_publish",
             Self::MeetingNotInRepository => "not_in_repository",
         }
@@ -337,6 +422,14 @@ impl Block {
             ),
             Self::DiscordWebhookMissing => {
                 "no Discord webhook is stored for this cycle: add it in the publishing settings"
+                    .into()
+            }
+            Self::DiscordBotTokenMissing => {
+                "no Discord bot token is stored for this cycle: add it in the publishing settings"
+                    .into()
+            }
+            Self::NotionTokenMissing => {
+                "no Notion token is stored for this cycle: add it in the publishing settings"
                     .into()
             }
             Self::NothingToPublish => {
@@ -582,10 +675,77 @@ pub fn build(input: &PlanInput<'_>) -> PublishPlan {
         }
     }
 
+    // ----- the Notion task export
+    if wants(PublishTarget::Notion) {
+        match input.cycle.targets.notion.as_ref() {
+            Some(target) if input.notion_token_set => {
+                let mut exported = 0usize;
+                for item in draft.items.iter().filter(|i| i.item_type == ItemType::Task) {
+                    let assignee = item
+                        .assignee
+                        .as_deref()
+                        .and_then(|id| input.cycle.participant(id));
+                    let source = item.source.as_ref();
+                    let ref_key = notion_ref_key(&item.id);
+                    let existing_url = input
+                        .existing_refs
+                        .iter()
+                        .find(|r| r.target == RefTarget::Notion && r.ref_key == ref_key)
+                        .and_then(|r| r.url.clone());
+                    let payload = NotionPayload {
+                        cycle: cycle_id.clone(),
+                        cycle_name: input.cycle.name.clone(),
+                        date: date.clone(),
+                        item_id: item.id.clone(),
+                        title: item.text.clone(),
+                        assignee_id: assignee.map(|p| p.id.clone()),
+                        assignee_name: assignee.map(|p| p.name.clone()),
+                        due: item.due.clone(),
+                        time_ms: source.map(|s| s.t_start_ms),
+                        quote: source.filter(|s| s.verified).map(|s| s.quote.clone()),
+                        anchor: anchor(&item.id),
+                        token_ref: target.token.clone(),
+                        database: target.database.clone(),
+                        data_source: target.data_source.clone(),
+                    };
+                    plan.summary.notion.push(PlannedNotionPage {
+                        item_id: item.id.clone(),
+                        title: item.text.clone(),
+                        existing_url,
+                    });
+                    plan.ops.push(NewOp {
+                        meeting_id: input.meeting_id.to_string(),
+                        target: OutboxTarget::Notion,
+                        kind: OutboxKind::ExportNotion,
+                        op_key: notion_key(&item.id),
+                        payload: to_json(&payload),
+                        after_op_key: after_commit.clone(),
+                    });
+                    exported += 1;
+                }
+                if exported == 0 {
+                    plan.notes
+                        .push("there are no tasks in the draft to export to Notion".into());
+                }
+            }
+            Some(_) if explicit => plan.blocks.push(Block::NotionTokenMissing),
+            Some(_) => plan
+                .notes
+                .push("no Notion token is stored: tasks are not exported to Notion".into()),
+            None => {}
+        }
+    }
+
     // ----- the Discord post
     if wants(PublishTarget::Discord) {
-        match input.cycle.targets.discord.as_ref() {
-            Some(target) if input.discord_webhook_set => {
+        let mode = input
+            .cycle
+            .targets
+            .discord
+            .as_ref()
+            .and_then(|t| t.mode().map(|m| (t, m)));
+        match mode {
+            Some((target, DiscordMode::Webhook(webhook_ref))) if input.discord_webhook_set => {
                 if !github && !live_commit && rules.github != PublishMode::Off {
                     plan.notes.push(
                         "the report is not published yet: the link in the message points to report.md"
@@ -593,6 +753,8 @@ pub fn build(input: &PlanInput<'_>) -> PublishPlan {
                     );
                 }
                 plan.summary.discord = true;
+                plan.summary.discord_mode = Some("webhook");
+                plan.summary.discord_thread = false;
                 let files = input
                     .snapshot
                     .files
@@ -609,17 +771,66 @@ pub fn build(input: &PlanInput<'_>) -> PublishPlan {
                         cycle: cycle_id,
                         date,
                         snapshot: input.snapshot.dir.clone(),
-                        reference: target.webhook.clone().unwrap_or_default(),
+                        reference: webhook_ref.to_string(),
+                        bot: None,
                         template: target.template.clone(),
                         files,
                     }),
                     after_op_key: after_commit,
                 });
             }
-            Some(_) if explicit => plan.blocks.push(Block::DiscordWebhookMissing),
-            Some(_) => plan
+            Some((_, DiscordMode::Webhook(_))) if explicit => {
+                plan.blocks.push(Block::DiscordWebhookMissing);
+            }
+            Some((_, DiscordMode::Webhook(_))) => plan
                 .notes
                 .push("no Discord webhook is stored: the message is not posted".into()),
+            Some((target, DiscordMode::Bot(bot))) if input.discord_bot_token_set => {
+                if !github && !live_commit && rules.github != PublishMode::Off {
+                    plan.notes.push(
+                        "the report is not published yet: the link in the message points to report.md"
+                            .into(),
+                    );
+                }
+                plan.summary.discord = true;
+                plan.summary.discord_mode = Some("bot");
+                plan.summary.discord_thread = bot.thread;
+                let files = input
+                    .snapshot
+                    .files
+                    .iter()
+                    .filter(|f| f.starts_with("img/"))
+                    .cloned()
+                    .collect();
+                plan.ops.push(NewOp {
+                    meeting_id: input.meeting_id.to_string(),
+                    target: OutboxTarget::Discord,
+                    kind: OutboxKind::PostDiscord,
+                    op_key: DISCORD_KEY.to_string(),
+                    payload: to_json(&DiscordPayload {
+                        cycle: cycle_id,
+                        date,
+                        snapshot: input.snapshot.dir.clone(),
+                        reference: String::new(),
+                        bot: Some(DiscordBotPayload {
+                            token: bot.token.clone(),
+                            guild: bot.guild.clone(),
+                            channel: bot.channel.clone(),
+                            thread: bot.thread,
+                            edit_on_correction: bot.edit_on_correction,
+                        }),
+                        template: target.template.clone(),
+                        files,
+                    }),
+                    after_op_key: after_commit,
+                });
+            }
+            Some((_, DiscordMode::Bot(_))) if explicit => {
+                plan.blocks.push(Block::DiscordBotTokenMissing);
+            }
+            Some((_, DiscordMode::Bot(_))) => plan
+                .notes
+                .push("no Discord bot token is stored: the message is not posted".into()),
             None => {}
         }
     }
