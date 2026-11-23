@@ -390,10 +390,8 @@ mod tests {
 
     #[test]
     fn a_migrated_database_opens_again_without_changes() {
-        let dir = std::env::temp_dir().join(format!("bbb-store-v5-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = test_tmp::TestDir::new("store-v5");
         let path = dir.join("v4.db");
-        let _ = std::fs::remove_file(&path);
         {
             let conn = Connection::open(&path).unwrap();
             for sql in &MIGRATIONS[..4] {
@@ -406,7 +404,6 @@ mod tests {
             assert_eq!(s.schema_version().unwrap(), LATEST);
             assert_eq!(count(&s, "outbox"), 0);
         }
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
