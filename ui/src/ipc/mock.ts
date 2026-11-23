@@ -59,7 +59,38 @@ const demoSources: SourceInfo[] = [
   { id: "mic:default", kind: "microphone", label: "Microphone (USB headset)", active: true },
   { id: "app:discord", kind: "application", label: "Discord", active: true },
   { id: "app:teams", kind: "application", label: "Microsoft Teams", active: false },
-  { id: "app:chrome", kind: "application", label: "Google Chrome", active: true },
+  { id: "app:chrome", kind: "browser", label: "Chrome (whole browser)", active: true },
+];
+
+/** The hints of the whole browser, as the application words them. */
+const HINT_NOT_CONNECTED =
+  "The browser extension is not connected. This records all sound from Chrome instead of single tabs.";
+const HINT_TAB_FAILED =
+  "A tab could not be captured. This records all sound from Chrome, including that tab.";
+const HINT_TABS_OK = "Records all sound from Chrome. Choose tabs instead to leave the others out.";
+
+/** Fictional tabs the extension has captured (`tabs=1` in the address). */
+const demoTabs: SourceInfo[] = [
+  {
+    id: "tab:s1",
+    kind: "browser_tab",
+    label: "Tab: ORBIT weekly sync (meet.example.org)",
+    active: true,
+    group: "Group 1",
+  },
+  {
+    id: "tab:s2",
+    kind: "browser_tab",
+    label: "Tab: Thruster plan (docs.example.org)",
+    active: true,
+    group: "Group 1",
+  },
+  {
+    id: "tab:s3",
+    kind: "browser_tab",
+    label: "Tab: Budget sheet (sheets.example.org)",
+    active: true,
+  },
 ];
 
 function meeting(
@@ -101,6 +132,11 @@ export interface MockOptions {
   bridgePairMs?: number;
   /** Raise a prompt for a fictional Discord call this many milliseconds after start. */
   detectMs?: number;
+  /**
+   * The extension has captured tabs: `ok`, or `failed` when a tab of the group could not be
+   * captured. Without it the extension is not connected and only the whole browser is offered.
+   */
+  browserTabs?: "ok" | "failed";
 }
 
 /** In-memory backend that serves the fictional demo cycle. No audio devices, files or network. */
@@ -323,8 +359,22 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     emitQueue();
   }
 
+  /** The sources the picker offers, with the hint of the whole browser. */
+  function sourceList(): SourceInfo[] {
+    const hint =
+      opts.browserTabs === "ok"
+        ? HINT_TABS_OK
+        : opts.browserTabs === "failed"
+          ? HINT_TAB_FAILED
+          : HINT_NOT_CONNECTED;
+    return [
+      ...demoSources.map((s) => (s.kind === "browser" ? { ...s, hint } : { ...s })),
+      ...(opts.browserTabs ? demoTabs.map((s) => ({ ...s })) : []),
+    ];
+  }
+
   function active(id: string, offsetMs: number): ActiveSource {
-    const src = demoSources.find((s) => s.id === id);
+    const src = sourceList().find((s) => s.id === id);
     if (!src) fail("source_not_found", `Unknown source ${id}`);
     return { id, label: src.label, kind: src.kind, status: "recording", offsetMs, level: 0.3 };
   }
@@ -472,7 +522,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       meetings = meetings.map((x) => (x.id === id ? { ...x, state: "recovered" } : x));
       emitMeetings();
     },
-    listSources: async () => demoSources.map((s) => ({ ...s })),
+    listSources: async () => sourceList(),
     recordingState: async () => structuredClone(state),
     startRecording: async (req) => {
       // The gate comes first, like in `start_recording`: no cycle and mode, no recording.

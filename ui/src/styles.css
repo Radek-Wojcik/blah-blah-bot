@@ -372,6 +372,42 @@ select {
   font-size: 0.72em;
   text-transform: uppercase;
 }
+.pick-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.pick-heading,
+.pick-subheading {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.68em;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+.pick-subheading {
+  letter-spacing: 0.1em;
+  padding-left: 0.6em;
+}
+.pick-item {
+  display: flex;
+  flex-direction: column;
+}
+.pick-hint {
+  margin: 2px 0 2px 1.9em;
+  color: var(--muted);
+  font-size: 0.72em;
+  line-height: 1.4;
+}
+.pick-warning {
+  margin: 0;
+  padding: 0.4em 0.6em;
+  border-left: 2px solid var(--yellow);
+  color: var(--yellow);
+  font-size: 0.75em;
+  line-height: 1.4;
+}
 .source-ended .source-label {
   color: var(--muted);
   text-decoration: line-through;

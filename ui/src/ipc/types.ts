@@ -32,15 +32,22 @@ export interface MeetingDetails {
   screenshots: ScreenshotInfo[];
 }
 
-export type SourceKind = "microphone" | "application";
+export type SourceKind = "microphone" | "application" | "browser_tab" | "browser";
 
-/** A source that can be recorded: a microphone or an application with an audio session. */
+/**
+ * A source that can be recorded: a microphone, an application with an audio session, a browser
+ * tab the extension has captured, or the whole browser.
+ */
 export interface SourceInfo {
   id: string;
   kind: SourceKind;
   label: string;
   /** True while the application is producing sound. */
   active: boolean;
+  /** Why the source is on offer, for the whole browser (the fallback for single tabs). */
+  hint?: string;
+  /** The browser tab group of a tab, for example `Group 1`. */
+  group?: string;
 }
 
 export type SourceStatus = "starting" | "recording" | "ended" | "error";

@@ -20,6 +20,8 @@ export function selectBackend(search: string = window.location.search): Backend 
   const pairms = params.get("pairms");
   // `detectms=N` makes the mock detect a Discord call N milliseconds after start.
   const detectms = params.get("detectms");
+  // `tabs=1` makes the mock extension offer captured tabs; `tabs=failed` adds a failed tab.
+  const tabs = params.get("tabs");
   return createMockBackend({
     recording: params.get("state") === "recording",
     // `newdraft=1` starts with a newer draft next to the edited one of the demo meeting.
@@ -28,6 +30,8 @@ export function selectBackend(search: string = window.location.search): Backend 
     ...(jobms === null ? {} : { jobStepMs: Number(jobms) }),
     ...(pairms === null ? {} : { bridgePairMs: Number(pairms) }),
     ...(detectms === null ? {} : { detectMs: Number(detectms) }),
+    ...(tabs === "1" ? { browserTabs: "ok" as const } : {}),
+    ...(tabs === "failed" ? { browserTabs: "failed" as const } : {}),
     ...(fault === "blank" || fault === "black" || fault === "broken"
       ? { overlayFault: fault }
       : {}),
