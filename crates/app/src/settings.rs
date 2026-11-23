@@ -163,6 +163,18 @@ impl DetectionSettings {
         }
     }
 
+    /// Opt out of prompts for `app` ("Never for ..."). Google Meet has its own toggle, so
+    /// opting out of it switches `meet` off instead of trapping `"meet"` in `opted_out`.
+    pub fn opt_out(&mut self, app: &str) {
+        let stem = recorder::detect::app_stem(app);
+        if stem == recorder::detect::MEET_APP {
+            self.meet = false;
+            self.opted_out.retain(|a| a != recorder::detect::MEET_APP);
+        } else if !stem.is_empty() && !self.opted_out.contains(&stem) {
+            self.opted_out.push(stem);
+        }
+    }
+
     /// Normalize the lists (stems, lowercase, no duplicates) and check them.
     pub fn normalized(mut self) -> Result<Self, String> {
         let clean = |list: &mut Vec<String>| {
@@ -177,6 +189,9 @@ impl DetectionSettings {
         };
         clean(&mut self.known_apps);
         clean(&mut self.opted_out);
+        if self.meet {
+            self.opted_out.retain(|a| a != recorder::detect::MEET_APP);
+        }
         if self.known_apps.len() > 64 || self.opted_out.len() > 64 {
             return Err("At most 64 applications in a list".into());
         }
@@ -509,5 +524,25 @@ mod tests {
         current.detection.opted_out.push("discord".into());
         let merged = Settings::default().keeping_managed_from(&current);
         assert_eq!(merged.detection, current.detection);
+    }
+
+    #[test]
+    fn opting_out_of_meet_toggles_meet_and_re_enabling_clears_legacy_opt_out() {
+        let mut d = DetectionSettings::default();
+        d.opt_out("meet");
+        assert!(!d.meet);
+        assert!(d.opted_out.is_empty());
+
+        d.opt_out("Discord.EXE");
+        assert_eq!(d.opted_out, ["discord"]);
+
+        let legacy = DetectionSettings {
+            meet: true,
+            opted_out: vec!["meet".into(), "zoom".into()],
+            ..DetectionSettings::default()
+        };
+        let normalized = legacy.normalized().unwrap();
+        assert!(normalized.meet);
+        assert_eq!(normalized.opted_out, ["zoom"]);
     }
 }

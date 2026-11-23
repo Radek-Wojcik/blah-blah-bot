@@ -61,10 +61,25 @@ export function appLabel(app: string): string {
   }
 }
 
+/** Whether Google Meet detection is active (accounting for legacy `"meet"` entries in `optedOut`). */
+export function meetWatched(s: DetectionSettings): boolean {
+  return s.meet && !s.optedOut.includes("meet");
+}
+
+/** Return settings with Google Meet toggled, clearing any legacy `"meet"` entry from `optedOut`. */
+export function withMeet(s: DetectionSettings, enabled: boolean): DetectionSettings {
+  return {
+    ...s,
+    meet: enabled,
+    optedOut: s.optedOut.filter((x) => x !== "meet"),
+  };
+}
+
 /** One line about the state of detection for the settings screen. */
 export function detectionSummary(s: DetectionSettings): string {
   if (!s.enabled) return "Off: no prompt is raised.";
-  const watched = s.knownApps.filter((a) => !s.optedOut.includes(a)).length + (s.meet ? 1 : 0);
+  const watched =
+    s.knownApps.filter((a) => !s.optedOut.includes(a)).length + (meetWatched(s) ? 1 : 0);
   return watched === 0
     ? "On, but no application is watched."
     : `On, watching ${watched} ${watched === 1 ? "application" : "applications"}.`;

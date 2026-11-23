@@ -380,9 +380,7 @@ pub async fn answer_detection(
             detection.answer(&key, Answer::Never);
             let app_name = prompt.app.clone();
             state.update_settings(|s| {
-                if !s.detection.opted_out.contains(&app_name) {
-                    s.detection.opted_out.push(app_name);
-                }
+                s.detection.opt_out(&app_name);
                 Ok(())
             })?;
             AnswerOutcome {
@@ -518,6 +516,46 @@ mod tests {
         assert_eq!(d.prompt().unwrap().key, "meet:9");
         d.answer("meet:9", Answer::NotNow);
         assert_eq!(d.prompt(), None);
+    }
+
+    #[test]
+    fn never_on_meet_disables_meet_and_re_enabling_restores_prompts() {
+        let mut settings = DetectionSettings {
+            sensitivity: Sensitivity::High,
+            ..DetectionSettings::default()
+        };
+        let d = Detection::new(&settings);
+        d.detector.lock().unwrap().meet(0, 9, true);
+        let events = feed(&d, 0, 10, &[]);
+        assert_eq!(events.len(), 1);
+        let prompt = d.prompt().unwrap();
+        assert_eq!(prompt.app, MEET_APP);
+
+        d.answer(&prompt.key, Answer::Never);
+        settings.opt_out(&prompt.app);
+        assert!(!settings.meet);
+        assert!(!settings.opted_out.contains(&MEET_APP.to_string()));
+        assert_eq!(d.prompt(), None);
+
+        assert!(d.apply(&settings).is_empty());
+        {
+            let mut det = d.detector.lock().unwrap();
+            det.meet(10_000, 9, false);
+            det.meet(10_000, 10, true);
+        }
+        assert!(feed(&d, 10_000, 10, &[]).is_empty());
+
+        // Even if legacy settings still hold `"meet"` in `opted_out`, turning `meet` back on
+        // removes it on normalization and prompts work again.
+        settings.meet = true;
+        settings.opted_out.push(MEET_APP.into());
+        let restored = settings.normalized().unwrap();
+        assert!(restored.meet);
+        assert!(!restored.opted_out.contains(&MEET_APP.to_string()));
+        assert!(d.apply(&restored).is_empty());
+        let events = feed(&d, 20_000, 10, &[]);
+        assert_eq!(events.len(), 1);
+        assert_eq!(d.prompt().unwrap().key, "meet:10");
     }
 
     #[test]

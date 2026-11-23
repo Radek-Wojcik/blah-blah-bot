@@ -566,9 +566,14 @@ impl Detector {
             Answer::Record => call.stage = Stage::Cooldown { extra_ms: 0 },
             Answer::NotNow => call.stage = Stage::Cooldown { extra_ms: extra },
             Answer::Never => {
-                let app = call.app.clone();
-                if !self.cfg.opted_out.contains(&app) {
-                    self.cfg.opted_out.push(app);
+                if call.source == Source::Meet || call.app == MEET_APP {
+                    self.cfg.meet = false;
+                    self.cfg.opted_out.retain(|a| a != MEET_APP);
+                } else {
+                    let app = call.app.clone();
+                    if !self.cfg.opted_out.contains(&app) {
+                        self.cfg.opted_out.push(app);
+                    }
                 }
                 self.calls.remove(key);
             }
@@ -1168,6 +1173,28 @@ mod tests {
         d.set_recorded(&[MEET_APP.to_string()]);
         d.meet(0, 1, true);
         assert!(prompts(&run(&mut d, 0, 120, &[])).is_empty());
+    }
+
+    #[test]
+    fn never_on_meet_switches_meet_off_and_can_be_re_enabled() {
+        let mut d = detector(Sensitivity::High);
+        d.meet(0, 7, true);
+        assert_eq!(prompts(&run(&mut d, 0, 10, &[])).len(), 1);
+        d.answer("meet:7", Answer::Never);
+        assert!(!d.config().meet);
+        assert!(!d.config().opted_out.contains(&MEET_APP.to_string()));
+        assert_eq!(d.prompt(), None);
+        // Continued presence or a new Meet tab does not prompt while meet is off.
+        d.meet(10_000, 7, false);
+        d.meet(10_000, 8, true);
+        assert!(prompts(&run(&mut d, 10_000, 60, &[])).is_empty());
+
+        // Switching meet back on restores Meet prompts.
+        let mut cfg = d.config().clone();
+        cfg.meet = true;
+        assert!(d.set_config(cfg).is_empty());
+        assert_eq!(prompts(&run(&mut d, 70_000, 10, &[])).len(), 1);
+        assert_eq!(d.prompt().map(|p| p.key), Some("meet:8".into()));
     }
 
     #[test]

@@ -1,6 +1,14 @@
 import { useEffect, useState } from "react";
 import { useBackend } from "../backend-context";
-import { SENSITIVITIES, appLabel, appProblem, detectionSummary, withApp } from "../detection";
+import {
+  SENSITIVITIES,
+  appLabel,
+  appProblem,
+  detectionSummary,
+  meetWatched,
+  withApp,
+  withMeet,
+} from "../detection";
 import { errorMessage } from "../hooks";
 import type { DetectionSettings as Settings } from "../ipc/types";
 
@@ -71,9 +79,9 @@ export function DetectionSettingsView() {
             <label className="check">
               <input
                 type="checkbox"
-                checked={settings.meet}
+                checked={meetWatched(settings)}
                 disabled={!settings.enabled}
-                onChange={(e) => save({ ...settings, meet: e.target.checked })}
+                onChange={(e) => save(withMeet(settings, e.target.checked))}
               />
               Google Meet calls reported by the browser extension
             </label>

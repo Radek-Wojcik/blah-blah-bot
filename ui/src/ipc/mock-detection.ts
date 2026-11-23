@@ -65,16 +65,18 @@ export function createMockDetection(opts: MockDetectionOptions) {
         };
         if (!["low", "balanced", "high"].includes(next.sensitivity))
           fail("invalid", "unknown sensitivity");
+        const optedOut = clean(next.optedOut).filter((a) => !(next.meet && a === "meet"));
         settings = {
           ...next,
           knownApps: clean(next.knownApps),
-          optedOut: clean(next.optedOut),
+          optedOut,
         };
         if (
           prompt &&
           (!settings.enabled ||
-            settings.optedOut.includes(prompt.app) ||
-            !settings.knownApps.includes(prompt.app))
+            (prompt.source === "meet"
+              ? !settings.meet || settings.optedOut.includes("meet")
+              : settings.optedOut.includes(prompt.app) || !settings.knownApps.includes(prompt.app)))
         )
           clear();
         return structuredClone(settings);
@@ -84,8 +86,16 @@ export function createMockDetection(opts: MockDetectionOptions) {
         if (!prompt || prompt.key !== key) return { started: false, needsReport: false };
         const app = prompt.app;
         let outcome: AnswerOutcome = { started: false, needsReport: false };
-        if (answer === "never" && !settings.optedOut.includes(app)) {
-          settings = { ...settings, optedOut: [...settings.optedOut, app] };
+        if (answer === "never") {
+          if (prompt.source === "meet" || app === "meet") {
+            settings = {
+              ...settings,
+              meet: false,
+              optedOut: settings.optedOut.filter((x) => x !== "meet"),
+            };
+          } else if (!settings.optedOut.includes(app)) {
+            settings = { ...settings, optedOut: [...settings.optedOut, app] };
+          }
         }
         if (answer === "record") {
           try {

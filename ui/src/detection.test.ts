@@ -4,8 +4,10 @@ import {
   appLabel,
   appProblem,
   detectionSummary,
+  meetWatched,
   normalizeApp,
   withApp,
+  withMeet,
 } from "./detection";
 import type { DetectionSettings } from "./ipc/types";
 
@@ -52,6 +54,25 @@ describe("detection helpers", () => {
     expect(detectionSummary({ ...base, optedOut: ["zoom"], meet: false })).toBe(
       "On, watching 1 application.",
     );
+    expect(detectionSummary({ ...base, optedOut: ["meet"], meet: true })).toBe(
+      "On, watching 2 applications.",
+    );
     expect(detectionSummary({ ...base, knownApps: [], meet: false })).toContain("no application");
+  });
+
+  it("handles Meet toggles and legacy meet entries in optedOut", () => {
+    const legacy: DetectionSettings = { ...base, meet: true, optedOut: ["meet", "zoom"] };
+    expect(meetWatched(legacy)).toBe(false);
+
+    const reenabled = withMeet(legacy, true);
+    expect(reenabled.meet).toBe(true);
+    expect(reenabled.optedOut).toEqual(["zoom"]);
+    expect(meetWatched(reenabled)).toBe(true);
+    expect(detectionSummary(reenabled)).toBe("On, watching 2 applications.");
+
+    const disabled = withMeet(reenabled, false);
+    expect(disabled.meet).toBe(false);
+    expect(disabled.optedOut).toEqual(["zoom"]);
+    expect(meetWatched(disabled)).toBe(false);
   });
 });
