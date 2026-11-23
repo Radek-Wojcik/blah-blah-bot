@@ -201,8 +201,11 @@ try {
             work_dir_mb = [math]::Round([double]$work / 1MB)
             worker_ws_mb = [math]::Round([double]$ws / 1MB)
         }
-        $samples.Add($s)
-        ($s.Values -join ",") | Add-Content -LiteralPath $samplesPath -Encoding ASCII
+        # Property objects (Measure-Object cannot read an ordered dictionary), and a culture-free
+        # CSV line: on a comma-decimal locale 110.7 would be written as "110,7" and split the column.
+        $samples.Add([pscustomobject]$s)
+        (($s.Values | ForEach-Object { [string]::Format([cultureinfo]::InvariantCulture, "{0}", $_) }) -join ",") |
+            Add-Content -LiteralPath $samplesPath -Encoding ASCII
         if ((Get-Date) -gt $deadline) {
             $timedOut = $true
             Write-Host "time limit of $TimeoutMinutes min reached, stopping the test" -ForegroundColor Red

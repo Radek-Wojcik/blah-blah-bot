@@ -95,6 +95,13 @@ def test_ten_hour_run_without_run_only_validates(tmp_path):
     assert not (rg.REPO / "target" / "regression" / "gpu-results" / "stage8-e2e-10h.json").exists()
 
 
+def test_ten_hour_run_samples_are_property_objects_with_culture_free_csv():
+    # A comma-decimal locale wrote "110,7" and broke Measure-Object on an ordered dictionary.
+    source = (SCRIPTS / "ten-hour-run.ps1").read_text(encoding="utf-8")
+    assert "$samples.Add([pscustomobject]$s)" in source
+    assert "[cultureinfo]::InvariantCulture" in source
+
+
 def test_ten_hour_run_refuses_missing_inputs():
     done = run_script(str(SCRIPTS / "ten-hour-run.ps1"))
     assert done.returncode == 1
