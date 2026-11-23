@@ -258,6 +258,50 @@ fn the_short_template_mentions_assignees_and_links_the_report() {
 }
 
 #[test]
+fn the_short_template_leaves_out_every_empty_section_heading() {
+    let people = people();
+    let link = "https://example.test/report.md";
+    let tail = format!("[Full report]({link})\n");
+
+    // Decisions only: no empty "Tasks" heading above the link.
+    let d = draft(
+        json!([item("i1", "decision", "Use aluminium", None)]),
+        "We agreed on the mount.",
+    );
+    let text = render_text(&spec(&d, &people, link)).unwrap();
+    assert_eq!(
+        text,
+        format!("**Weekly sync** \u{b7} 2026-11-13\n\nWe agreed on the mount.\n\n## Decisions\n\n- Use aluminium\n\n{tail}")
+    );
+
+    // Tasks only: no empty "Decisions" heading.
+    let d = draft(
+        json!([item("i1", "task", "Design the mount", Some("alex"))]),
+        "We agreed on the mount.",
+    );
+    let text = render_text(&spec(&d, &people, link)).unwrap();
+    assert!(!text.contains("Decisions"), "{text}");
+    assert!(text.contains("## Tasks\n\n- Design the mount"), "{text}");
+
+    // Neither (a meeting with only notes): the summary and the link, no heading at all.
+    let d = draft(
+        json!([item("i1", "note", "Wheels are 20 cm", None)]),
+        "We agreed on the mount.",
+    );
+    let text = render_text(&spec(&d, &people, link)).unwrap();
+    assert_eq!(
+        text,
+        format!("**Weekly sync** \u{b7} 2026-11-13\n\nWe agreed on the mount.\n\n{tail}")
+    );
+
+    // A cycle template that puts the link right after the heading of an empty list: same.
+    let mut s = spec(&d, &people, link);
+    s.template_body = Some("{summary}\n\n## Tasks\n{tasks}\n\n[Full report]({report_link})\n");
+    let text = render_text(&s).unwrap();
+    assert_eq!(text, format!("We agreed on the mount.\n\n{tail}"));
+}
+
+#[test]
 fn text_from_the_model_cannot_notify_anybody() {
     let d = draft(
         json!([

@@ -397,7 +397,16 @@ pub fn render(
     for token in &tokens {
         match token {
             Token::Text(t) => out.push_str(t),
-            Token::Placeholder(p) => out.push_str(&renderer.expand(p)),
+            Token::Placeholder(p) => {
+                let text = renderer.expand(p);
+                if text.trim().is_empty() {
+                    // Remembered for `tidy`: a heading that only empty placeholders follow
+                    // is an empty section, whatever static text comes after them.
+                    out.push(EMPTY_MARK);
+                } else {
+                    out.push_str(&text);
+                }
+            }
         }
     }
     // Item text, the summary and section titles come from a model that the transcript can
@@ -405,15 +414,28 @@ pub fn render(
     Ok(neutralise_mentions(&tidy(&out)))
 }
 
+/// Stands in the text for a placeholder that expanded to nothing; `tidy` removes it.
+const EMPTY_MARK: char = '\u{e000}';
+
 fn heading_level(line: &str) -> Option<usize> {
     let hashes = line.bytes().take_while(|&b| b == b'#').count();
     ((1..=6).contains(&hashes) && line[hashes..].starts_with(' ')).then_some(hashes)
 }
 
 /// Removes empty headings (level 2 and deeper), trailing spaces and extra blank lines, and
-/// puts one blank line around every heading.
+/// puts one blank line around every heading. A heading is empty when nothing but blank lines
+/// follows it before the next heading or `---`, or when the first block under it is made of
+/// placeholders that expanded to nothing (`## Tasks\n{tasks}\n\n[Full report](...)`: the link
+/// is not the content of the tasks section).
 fn tidy(text: &str) -> String {
-    let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
+    // Lines that hold nothing but marks of empty placeholders.
+    let raw: Vec<&str> = text.lines().collect();
+    let marked: Vec<bool> = raw
+        .iter()
+        .map(|l| l.contains(EMPTY_MARK) && l.chars().all(|c| c == EMPTY_MARK || c.is_whitespace()))
+        .collect();
+    let cleaned: Vec<String> = raw.iter().map(|l| l.replace(EMPTY_MARK, "")).collect();
+    let lines: Vec<&str> = cleaned.iter().map(|l| l.trim_end()).collect();
     // Mark which lines sit inside a code fence: headings there are not headings.
     let mut in_fence = false;
     let fenced: Vec<bool> = lines
@@ -435,10 +457,31 @@ fn tidy(text: &str) -> String {
         }
     };
 
+    // A line that is blank for real, not just because an empty placeholder stood on it.
+    let plain_blank = |j: usize| lines[j].is_empty() && !marked[j];
+    let first_block_is_empty = |i: usize| {
+        let mut j = i + 1;
+        while j < lines.len() && plain_blank(j) {
+            j += 1;
+        }
+        let start = j;
+        while j < lines.len() && !plain_blank(j) {
+            if !marked[j] {
+                return false;
+            }
+            j += 1;
+        }
+        j > start
+    };
+
     let mut keep = vec![true; lines.len()];
     for (i, kept) in keep.iter_mut().enumerate() {
         let Some(level) = level_at(i) else { continue };
         if level < 2 {
+            continue;
+        }
+        if first_block_is_empty(i) {
+            *kept = false;
             continue;
         }
         let mut has_content = false;
@@ -992,6 +1035,82 @@ mod tests {
             md,
             "**Weekly sync** · 2026-11-13\n\nWe agreed on the mount.\n\n## Decisions\n\n- Use aluminium\n\n## Tasks\n\n- Design the mount (<@111111111111111111>, due 2026-11-20)\n\n[Full report](https://example.test/r)\n"
         );
+    }
+
+    fn short_message(items: Vec<Item>) -> String {
+        use crate::template::SHORT_TEMPLATE_TEXT;
+        let o = RenderOptions {
+            report_link: "https://example.test/r".into(),
+            ..discord_opts()
+        };
+        render(&draft(items), &discord_people(), SHORT_TEMPLATE_TEXT, &o).unwrap()
+    }
+
+    #[test]
+    fn short_template_has_no_heading_for_a_section_without_items() {
+        // No tasks: the link below the heading must not keep an empty "Tasks" heading alive.
+        let md = short_message(vec![item("d1", ItemType::Decision, "Use aluminium")]);
+        assert_eq!(
+            md,
+            "**Weekly sync** · 2026-11-13\n\nWe agreed on the mount.\n\n## Decisions\n\n- Use aluminium\n\n[Full report](https://example.test/r)\n"
+        );
+        assert!(!md.contains("Tasks"), "{md}");
+
+        // No decisions: the other way round.
+        let md = short_message(vec![task(
+            "t1",
+            "Design the mount",
+            Some("alex"),
+            None,
+            Stated,
+            Unknown,
+        )]);
+        assert!(!md.contains("Decisions"), "{md}");
+        assert!(md.contains("## Tasks\n\n- Design the mount"), "{md}");
+
+        // Neither: no section heading at all, the summary and the link remain.
+        let md = short_message(vec![item("n1", ItemType::Note, "Wheels are 20 cm")]);
+        assert_eq!(
+            md,
+            "**Weekly sync** · 2026-11-13\n\nWe agreed on the mount.\n\n[Full report](https://example.test/r)\n"
+        );
+        assert!(!md.contains("##"), "{md}");
+    }
+
+    #[test]
+    fn a_heading_followed_only_by_empty_placeholders_is_removed_in_any_template() {
+        let o = opts();
+        let d = draft(vec![item("n1", ItemType::Note, "Wheels are 20 cm")]);
+        let body = "## Tasks\n{tasks}\n\n## Work\n\n{tasks}\n{decisions}\n\nfooter\n\n## Notes\n{notes}\n\n[link](x)\n";
+        let md = render(&d, &people(), body, &o).unwrap();
+        assert_eq!(
+            md,
+            "footer\n\n## Notes\n\n- Wheels are 20 cm\n\n[link](x)\n"
+        );
+        // A heading with static text of its own is not empty.
+        let md = render(&d, &people(), "## Tasks\nnone yet {tasks}\n", &o).unwrap();
+        assert_eq!(md, "## Tasks\n\nnone yet\n");
+        // One empty and one filled placeholder under the same heading keep it.
+        let md = render(&d, &people(), "## Mixed\n{tasks}\n{notes}\n", &o).unwrap();
+        assert_eq!(md, "## Mixed\n\n- Wheels are 20 cm\n");
+    }
+
+    #[test]
+    fn the_default_template_has_no_empty_headings_in_either_variant() {
+        let d = draft(vec![item("d1", ItemType::Decision, "Use aluminium")]);
+        for variant in [Variant::Markdown, Variant::Chat] {
+            let o = RenderOptions { variant, ..opts() };
+            let md = render(&d, &people(), DEFAULT_TEMPLATE_TEXT, &o).unwrap();
+            assert_eq!(
+                md,
+                "# Weekly sync\n\n2026-11-13 · Alex Example, Sam Sample\n\n## Summary\n\nWe agreed on the mount.\n\n## Decisions\n\n- Use aluminium\n\n---\n[Full transcript](transcript.md)\n"
+            );
+        }
+        // No items and no summary: only the title line and the transcript link are left.
+        let mut empty = draft(vec![]);
+        empty.summary = String::new();
+        let md = render(&empty, &people(), DEFAULT_TEMPLATE_TEXT, &opts()).unwrap();
+        assert!(!md.contains("##"), "{md}");
     }
 
     #[test]
