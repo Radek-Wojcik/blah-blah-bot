@@ -4,6 +4,7 @@ mod browser;
 mod commands;
 mod cycle_commands;
 mod cycles;
+mod detection;
 mod draft_commands;
 mod hotkeys;
 mod ipc;
@@ -135,6 +136,7 @@ pub fn run() {
             let settings = state.settings()?;
             app.manage(state);
             handle.state::<AppState>().start_browser(handle.clone());
+            handle.state::<AppState>().start_detection(handle.clone());
             // Jobs interrupted by a crash continue; nothing else starts on its own.
             handle.state::<AppState>().processing().resume_interrupted();
             if let Ok(root) = handle.state::<AppState>().recordings_root() {
@@ -184,6 +186,10 @@ pub fn run() {
             browser::start_pairing,
             browser::cancel_pairing,
             browser::unpair_client,
+            detection::get_detection_settings,
+            detection::save_detection_settings,
+            detection::detection_prompt,
+            detection::answer_detection,
             processing_commands::process_meeting,
             processing_commands::queue_state,
             processing_commands::retry_job,

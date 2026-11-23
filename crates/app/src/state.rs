@@ -9,6 +9,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::browser::{AppHost, Browser};
 use crate::cycles::ParticipantSync;
+use crate::detection::Detection;
 use crate::ipc::{IpcError, IpcResult};
 use crate::processing::Processing;
 use crate::recording::Recorder;
@@ -31,6 +32,8 @@ pub struct AppState {
     pub pending_shot: Mutex<Option<PendingShot>>,
     browser: Arc<Browser>,
     browser_host: Arc<AppHost>,
+    detection: Arc<Detection>,
+    demo: bool,
 }
 
 /// Keeps the stored participants of a cycle in step with `cycle.yaml`, locking the database
@@ -83,6 +86,7 @@ impl AppState {
         let browser = Browser::new(&loaded.bridge, browser_host.clone());
         let backend: Arc<dyn CaptureBackend> =
             Arc::new(RoutingBackend::new(devices, browser.tab_source()));
+        let detection = Detection::new(&loaded.detection);
         let settings = Arc::new(Mutex::new(loaded));
         let root_app = app.clone();
         let repos_settings = settings.clone();
@@ -115,6 +119,8 @@ impl AppState {
             pending_shot: Mutex::new(None),
             browser,
             browser_host,
+            detection,
+            demo,
         })
     }
 
@@ -129,6 +135,19 @@ impl AppState {
         match self.settings() {
             Ok(s) => self.browser.apply(&s.bridge),
             Err(e) => tracing::error!(error = %e, "bridge not started"),
+        }
+    }
+
+    /// Meeting detection.
+    pub fn detection(&self) -> &Arc<Detection> {
+        &self.detection
+    }
+
+    /// Start watching for calls once the application is set up (not in demo mode, which has
+    /// no real audio sessions).
+    pub fn start_detection(&self, app: AppHandle) {
+        if !self.demo {
+            self.detection.start(app);
         }
     }
 

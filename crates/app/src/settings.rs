@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use recorder::detect::Sensitivity;
 use serde::{Deserialize, Serialize};
 
 /// How a cycle repository came to be registered.
@@ -111,6 +112,79 @@ impl BridgeSettings {
     }
 }
 
+/// Meeting detection: which applications raise a "start recording?" prompt and how readily.
+/// The numbers behind each sensitivity live in `recorder::detect::Presets`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DetectionSettings {
+    /// Watch for calls at all.
+    pub enabled: bool,
+    /// `low`, `balanced` or `high`.
+    pub sensitivity: Sensitivity,
+    /// Conferencing applications whose use of the microphone counts as a call (executable
+    /// names without `.exe`, lowercase). Browsers are never detected this way.
+    pub known_apps: Vec<String>,
+    /// Applications the user chose "Never" for.
+    pub opted_out: Vec<String>,
+    /// Use the Google Meet reports of the browser extension.
+    pub meet: bool,
+}
+
+impl Default for DetectionSettings {
+    fn default() -> Self {
+        let d = recorder::detect::DetectConfig::default();
+        Self {
+            enabled: d.enabled,
+            sensitivity: d.sensitivity,
+            known_apps: d.known_apps,
+            opted_out: d.opted_out,
+            meet: d.meet,
+        }
+    }
+}
+
+impl DetectionSettings {
+    /// The detector's configuration.
+    pub fn to_config(&self) -> recorder::detect::DetectConfig {
+        recorder::detect::DetectConfig {
+            enabled: self.enabled,
+            sensitivity: self.sensitivity,
+            known_apps: self.known_apps.clone(),
+            opted_out: self.opted_out.clone(),
+            meet: self.meet,
+            ..recorder::detect::DetectConfig::default()
+        }
+    }
+
+    /// Normalize the lists (stems, lowercase, no duplicates) and check them.
+    pub fn normalized(mut self) -> Result<Self, String> {
+        let clean = |list: &mut Vec<String>| {
+            let mut out: Vec<String> = Vec::new();
+            for a in list.iter() {
+                let stem = recorder::detect::app_stem(a);
+                if !stem.is_empty() && !out.contains(&stem) {
+                    out.push(stem);
+                }
+            }
+            *list = out;
+        };
+        clean(&mut self.known_apps);
+        clean(&mut self.opted_out);
+        if self.known_apps.len() > 64 || self.opted_out.len() > 64 {
+            return Err("At most 64 applications in a list".into());
+        }
+        if let Some(bad) = self
+            .known_apps
+            .iter()
+            .chain(&self.opted_out)
+            .find(|a| a.len() > 64 || a.contains(['\\', '/', ':']))
+        {
+            return Err(format!("`{bad}` is not an executable name"));
+        }
+        Ok(self)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -125,6 +199,9 @@ pub struct Settings {
     pub last_report: Option<LastReport>,
     /// The bridge to the Chrome extension.
     pub bridge: BridgeSettings,
+    /// Meeting detection. Changed through the detection commands: a settings save from the
+    /// settings screen keeps the stored value.
+    pub detection: DetectionSettings,
 }
 
 impl Default for Settings {
@@ -136,6 +213,7 @@ impl Default for Settings {
             cycle_repos: Vec::new(),
             last_report: None,
             bridge: BridgeSettings::default(),
+            detection: DetectionSettings::default(),
         }
     }
 }
@@ -167,6 +245,7 @@ impl Settings {
         self.cycle_repos = current.cycle_repos.clone();
         self.last_report = current.last_report.clone();
         self.bridge.clients = current.bridge.clients.clone();
+        self.detection = current.detection.clone();
         self
     }
 
@@ -226,6 +305,11 @@ mod tests {
                 port: 18000,
                 clients: vec![client("c-1")],
                 ..BridgeSettings::default()
+            },
+            detection: DetectionSettings {
+                sensitivity: Sensitivity::High,
+                opted_out: vec!["zoom".into()],
+                ..DetectionSettings::default()
             },
         };
         s.save(&path).unwrap();
@@ -367,5 +451,52 @@ mod tests {
         // A file from before the bridge existed gets the defaults.
         let s: Settings = serde_json::from_str(r#"{"recordHotkey":"Ctrl+F1"}"#).unwrap();
         assert_eq!(s.bridge, BridgeSettings::default());
+    }
+
+    #[test]
+    fn detection_defaults_to_balanced_with_the_known_apps() {
+        let d = DetectionSettings::default();
+        assert!(d.enabled && d.meet);
+        assert_eq!(d.sensitivity, Sensitivity::Balanced);
+        assert_eq!(d.known_apps, recorder::detect::KNOWN_APPS);
+        assert!(d.opted_out.is_empty());
+        // A file from before detection existed gets the defaults; the camelCase names hold.
+        let s: Settings = serde_json::from_str(r#"{"recordHotkey":"Ctrl+F1"}"#).unwrap();
+        assert_eq!(s.detection, d);
+        let s: Settings = serde_json::from_str(
+            r#"{"detection":{"sensitivity":"low","knownApps":["zoom"],"optedOut":["slack"]}}"#,
+        )
+        .unwrap();
+        assert_eq!(s.detection.sensitivity, Sensitivity::Low);
+        assert_eq!(s.detection.known_apps, ["zoom"]);
+        assert_eq!(s.detection.opted_out, ["slack"]);
+        assert!(s.detection.enabled);
+    }
+
+    #[test]
+    fn detection_lists_are_normalized_and_checked() {
+        let d = DetectionSettings {
+            known_apps: vec![
+                " Zoom.EXE ".into(),
+                "zoom".into(),
+                "".into(),
+                "Slack".into(),
+            ],
+            ..DetectionSettings::default()
+        };
+        assert_eq!(d.normalized().unwrap().known_apps, ["zoom", "slack"]);
+        let bad = DetectionSettings {
+            known_apps: vec!["C:\\x\\app".into()],
+            ..DetectionSettings::default()
+        };
+        assert!(bad.normalized().is_err());
+    }
+
+    #[test]
+    fn a_settings_save_keeps_the_detection_settings() {
+        let mut current = Settings::default();
+        current.detection.opted_out.push("discord".into());
+        let merged = Settings::default().keeping_managed_from(&current);
+        assert_eq!(merged.detection, current.detection);
     }
 }
