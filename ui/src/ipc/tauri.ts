@@ -76,6 +76,8 @@ export function createTauriBackend(): Backend {
     addCycleRepo: (req) => invoke("add_cycle_repo", { req }),
     pullCycleRepo: (repoId) => invoke("pull_cycle_repo", { repoId }),
     reportDefaults: (cycleId) => invoke("report_defaults", { cycleId }),
+    getBriefing: (cycleId, refresh) => invoke("get_briefing", { cycleId, refresh }),
+    openBriefing: (cycleId) => invoke("open_briefing", { cycleId }),
     getDraft: (meetingId) => invoke("get_draft", { meetingId }),
     updateDraftItem: (meetingId, itemId, patch) =>
       invoke("update_draft_item", { meetingId, itemId, patch }),
@@ -107,6 +109,7 @@ export function createTauriBackend(): Backend {
     onModelsChanged: (cb) => listen("models-changed", () => cb()),
     onDraftChanged: (cb) => listen("draft-changed", (e) => cb(e.payload as string)),
     onCyclesChanged: (cb) => listen("cycles-changed", () => cb()),
+    onOpenBriefing: (cb) => listen("open-briefing", (e) => cb(e.payload as string)),
     onBridgeChanged: (cb) => listen("bridge-changed", (e) => cb(e.payload as never)),
     onDetectionPrompt: (cb) => listen("detection-prompt", (e) => cb(e.payload as never)),
     onDetectionCleared: (cb) => listen("detection-cleared", (e) => cb(e.payload as string)),

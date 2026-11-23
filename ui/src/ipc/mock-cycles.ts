@@ -321,6 +321,12 @@ export function createCycleStore(): CycleStore {
     topics: [
       { id: "t-1", text: "Decide the rover wheel size", status: "open", openedIn: "2026-11-06" },
       {
+        id: "t-3",
+        text: "Agree on the date of the first field test",
+        status: "open",
+        openedIn: "2026-11-13",
+      },
+      {
         id: "t-2",
         text: "Order the battery",
         status: "closed",

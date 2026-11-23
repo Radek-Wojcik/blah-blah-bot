@@ -5,6 +5,7 @@ import { formatDateTimeUtc, formatDuration } from "../format";
 import { errorMessage, useCycles, useMeetings, useRecordingState } from "../hooks";
 import type { MeetingSummary, Settings } from "../ipc/types";
 import { canProcess, jobStateLabel } from "../processing";
+import { BriefingView } from "./Briefing";
 import { BrowserExtension } from "./BrowserExtension";
 import { DetectionSettingsView } from "./DetectionSettings";
 import { CycleEditor } from "./CycleEditor";
@@ -17,7 +18,15 @@ import { SpeakersView } from "./Speakers";
 import { TranscriptView } from "./Transcript";
 
 type Page =
-  "meetings" | "queue" | "settings" | "transcript" | "speakers" | "draft" | "cycles" | "cycle";
+  | "meetings"
+  | "queue"
+  | "settings"
+  | "transcript"
+  | "speakers"
+  | "draft"
+  | "cycles"
+  | "cycle"
+  | "briefing";
 
 interface Route {
   page: Page;
@@ -29,7 +38,8 @@ interface Route {
 
 /**
  * `?page=queue`, `?page=transcript&meeting=m5&at=19000`, `?page=speakers&meeting=m5`,
- * `?page=draft&meeting=m5`, `?page=cycles` and `?page=cycle&cycle=NOMAD` open a page directly
+ * `?page=draft&meeting=m5`, `?page=cycles`, `?page=cycle&cycle=NOMAD` and
+ * `?page=briefing&cycle=NOMAD` open a page directly
  * (used by the screenshot script and the tests).
  */
 function initialRoute(): Route {
@@ -39,7 +49,7 @@ function initialRoute(): Route {
   const at = params.get("at");
   if ((page === "transcript" || page === "speakers" || page === "draft") && meetingId)
     return { page, meetingId, atMs: at === null ? null : Number(at) };
-  if (page === "cycle" && params.get("cycle"))
+  if ((page === "cycle" || page === "briefing") && params.get("cycle"))
     return { page, meetingId: null, cycleId: params.get("cycle") };
   if (page === "queue" || page === "settings" || page === "cycles")
     return { page, meetingId: null };
@@ -53,6 +63,19 @@ export function Main() {
   const inMeetings =
     page === "meetings" || page === "transcript" || page === "speakers" || page === "draft";
   const recording = useRecordingState();
+  const backend = useBackend();
+  // The recorder window asks for the briefing of a cycle (its report mode gate has a link).
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    let stopped = false;
+    void backend
+      .onOpenBriefing((cycleId) => setRoute({ page: "briefing", meetingId: null, cycleId }))
+      .then((u) => (stopped ? u() : (off = u)));
+    return () => {
+      stopped = true;
+      off?.();
+    };
+  }, [backend]);
   return (
     <div className="main">
       <nav className="panel sidebar" aria-label="Main navigation">
@@ -64,7 +87,9 @@ export function Main() {
             Meetings
           </button>
           <button
-            className={page === "cycles" || page === "cycle" ? "nav nav-on" : "nav"}
+            className={
+              page === "cycles" || page === "cycle" || page === "briefing" ? "nav nav-on" : "nav"
+            }
             onClick={() => setPage("cycles")}
           >
             Cycles
@@ -112,6 +137,14 @@ export function Main() {
           {page === "cycles" && (
             <CyclesView
               onOpenCycle={(id) => setRoute({ page: "cycle", meetingId: null, cycleId: id })}
+              onOpenBriefing={(id) => setRoute({ page: "briefing", meetingId: null, cycleId: id })}
+            />
+          )}
+          {page === "briefing" && route.cycleId && (
+            <BriefingView
+              key={route.cycleId}
+              cycleId={route.cycleId}
+              onBack={() => setPage("cycles")}
             />
           )}
           {page === "cycle" && route.cycleId && (

@@ -777,3 +777,62 @@ export interface NewDraftItem {
 
 /** `markdown`: GitHub (task checkboxes). `chat`: Discord and Notion (plain bullets). */
 export type RenderVariant = "markdown" | "chat";
+
+// ---------- Stage 6: the briefing ----------
+
+/** A task of the briefing. `source` tells whether it is an issue or a task of a meeting report. */
+export interface BriefingTask {
+  id: string;
+  text: string;
+  /** `YYYY-MM-DD`. */
+  due: string | null;
+  /** The due date is before `today` of the briefing. */
+  overdue: boolean;
+  source: "issue" | "meeting";
+  /** The issue number, of an issue or of the one a meeting task points to. */
+  issue: number | null;
+  url: string | null;
+  /** The folder of the meeting a task was raised in. */
+  meeting: string | null;
+}
+
+export type BriefingGroupKind = "participant" | "other" | "unassigned";
+
+/** The tasks of one person, sorted by due date. `other` is somebody who is not a participant. */
+export interface BriefingGroup {
+  kind: BriefingGroupKind;
+  participantId: string | null;
+  name: string;
+  github: string | null;
+  overdueCount: number;
+  tasks: BriefingTask[];
+}
+
+/** What `getBriefing` did to a cloned repository: `skippedDirty` means uncommitted cycle edits. */
+export type BriefingPull = "updated" | "upToDate" | "failed" | "skippedDirty";
+
+export interface Briefing {
+  cycleId: string;
+  cycleName: string;
+  /** The day overdue is counted against, `YYYY-MM-DD`. */
+  today: string;
+  groups: BriefingGroup[];
+  openCount: number;
+  overdueCount: number;
+  /** Tasks known to be done (their issue or topic is closed). */
+  done: BriefingTask[];
+  /** Open topics only. */
+  topics: Topic[];
+  /** The repository has a remote the state can be behind. */
+  hasRemote: boolean;
+  /** `YYYY-MM-DD` of the data shown; null for a local repository without issues. */
+  stateAsOf: string | null;
+  /** The last attempt to update the clone failed: what is shown is the state of `stateAsOf`. */
+  offline: boolean;
+  /** The data may be behind the remote. */
+  fromCache: boolean;
+  /** What this call did to the clone; null without `refresh` and for a repository that is not a clone. */
+  pull: BriefingPull | null;
+  error: string | null;
+  warnings: string[];
+}

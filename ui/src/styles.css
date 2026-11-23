@@ -2374,3 +2374,44 @@ textarea {
 .detect-text {
   margin: 0 0 10px;
 }
+
+/* Briefing: open tasks by person and open topics. */
+.brief-actions {
+  margin: 0 0 var(--gap);
+}
+.brief-status {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+.brief-stale {
+  color: var(--yellow);
+}
+.brief-summary {
+  margin: 0 0 var(--gap);
+}
+.brief-warnings {
+  margin: 0 0 var(--gap);
+  padding-left: 1.2em;
+  color: var(--yellow);
+  font-size: 0.85em;
+}
+.brief-groups {
+  list-style: none;
+  padding: 0;
+}
+.brief-overdue {
+  border-left-color: var(--magenta);
+}
+.brief-done {
+  margin-top: var(--gap);
+  color: var(--muted);
+}
+.brief-done summary {
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+.brief-done-text {
+  text-decoration: line-through;
+}

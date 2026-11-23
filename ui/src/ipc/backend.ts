@@ -1,6 +1,7 @@
 import type {
   AddRepoRequest,
   AnswerOutcome,
+  Briefing,
   BridgeStatus,
   CloudPreview,
   CycleDetails,
@@ -169,6 +170,14 @@ export interface Backend {
   pullCycleRepo(repoId: string): Promise<PullResult>;
   /** The cycle's default mode, template, type and language, the allowed choices and the last choice. */
   reportDefaults(cycleId: string): Promise<ReportDefaults>;
+  /**
+   * The briefing of a cycle: open tasks by person and open topics. With `refresh` a cloned
+   * repository is pulled first (never over uncommitted cycle edits); offline or after a failed
+   * pull the answer is the state of the last successful pull, with its date.
+   */
+  getBriefing(cycleId: string, refresh: boolean): Promise<Briefing>;
+  /** Show the main window on the briefing of a cycle (for the recorder window). */
+  openBriefing(cycleId: string): Promise<void>;
 
   /** Rejects with `no_draft` until the reduce stage has written the draft. */
   getDraft(meetingId: string): Promise<DraftView>;
@@ -206,6 +215,8 @@ export interface Backend {
   onDraftChanged(cb: (meetingId: string) => void): Promise<Unsubscribe>;
   /** A cycle, template or repository changed. */
   onCyclesChanged(cb: () => void): Promise<Unsubscribe>;
+  /** Payload: the cycle whose briefing `openBriefing` asked to show. */
+  onOpenBriefing(cb: (cycleId: string) => void): Promise<Unsubscribe>;
   onBridgeChanged(cb: (status: BridgeStatus) => void): Promise<Unsubscribe>;
   onDetectionPrompt(cb: (prompt: DetectionPrompt) => void): Promise<Unsubscribe>;
   /** Payload: the key of the call whose prompt was withdrawn. */

@@ -14,6 +14,7 @@ import {
 } from "./mock-demo";
 import { createCycleStore, type RecordingReport } from "./mock-cycles";
 import { createMockBridge } from "./mock-bridge";
+import { createMockBriefing } from "./mock-briefing";
 import { createMockDetection } from "./mock-detection";
 import { createMockDrafts } from "./mock-drafts";
 import { fail } from "./mock-util";
@@ -154,6 +155,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
   });
   // ----- cycles, report settings and drafts -----
   const cycles = createCycleStore();
+  const briefing = createMockBriefing(cycles);
   /** What each meeting was recorded with; a meeting without an entry has no cycle. */
   const reports = new Map<string, RecordingReport>([
     [
@@ -954,6 +956,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     },
     reportDefaults: async (cycleId) => cycles.reportDefaults(cycleId),
     onCyclesChanged: (cb) => subscribe(cycleListeners, cb),
+    ...briefing,
 
     // ----- drafts -----
     ...drafts.methods,
