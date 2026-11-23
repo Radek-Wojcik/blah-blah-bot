@@ -175,8 +175,8 @@ impl DetectionSettings {
         }
     }
 
-    /// Migrate legacy settings where `"meet"` was stored in `opted_out` instead of switching
-    /// `meet` off, so an unrelated save cannot silently re-enable Google Meet.
+    /// Migrate legacy settings where `"meet"` was stored in `opted_out` (instead of switching
+    /// `meet` off) or hand-edited into `known_apps`.
     pub fn migrate_legacy_meet(&mut self) {
         if self
             .opted_out
@@ -187,6 +187,8 @@ impl DetectionSettings {
             self.opted_out
                 .retain(|a| recorder::detect::app_stem(a) != recorder::detect::MEET_APP);
         }
+        self.known_apps
+            .retain(|a| recorder::detect::app_stem(a) != recorder::detect::MEET_APP);
     }
 
     /// Normalize the lists (stems, lowercase, no duplicates) and check them.
@@ -203,6 +205,13 @@ impl DetectionSettings {
         };
         clean(&mut self.known_apps);
         clean(&mut self.opted_out);
+        if self
+            .known_apps
+            .iter()
+            .any(|a| a == recorder::detect::MEET_APP)
+        {
+            return Err("Google Meet has its own toggle".into());
+        }
         self.migrate_legacy_meet();
         if self.known_apps.len() > 64 || self.opted_out.len() > 64 {
             return Err("At most 64 applications in a list".into());
@@ -572,15 +581,26 @@ mod tests {
         assert!(reenabled.meet);
         assert_eq!(reenabled.opted_out, ["zoom"]);
 
-        // Loading a legacy settings file migrates `"meet"` out of `opted_out` immediately.
+        // Reject `"meet"` / `"Meet.exe"` in `known_apps` on save (Google Meet has its own toggle).
+        for candidate in ["meet", "Meet.exe"] {
+            let with_meet = DetectionSettings {
+                known_apps: vec!["zoom".into(), candidate.into()],
+                ..DetectionSettings::default()
+            };
+            assert!(with_meet.normalized().is_err());
+        }
+
+        // Loading a legacy settings file migrates `"meet"` out of `opted_out` and strips a
+        // hand-edited `"meet"` entry from `known_apps`.
         let (_dir, path) = temp("legacy-meet");
         std::fs::write(
             &path,
-            r#"{"detection":{"meet":true,"optedOut":["meet","zoom"]}}"#,
+            r#"{"detection":{"meet":true,"knownApps":["zoom","Meet.exe"],"optedOut":["meet","zoom"]}}"#,
         )
         .unwrap();
         let loaded = Settings::load(&path);
         assert!(!loaded.detection.meet);
+        assert_eq!(loaded.detection.known_apps, ["zoom"]);
         assert_eq!(loaded.detection.opted_out, ["zoom"]);
     }
 }
