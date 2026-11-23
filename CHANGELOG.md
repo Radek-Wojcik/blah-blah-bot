@@ -4,15 +4,16 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] - 2026-11-22
 
 ### Fixed
 
+- The first `extract` of any meeting that belongs to a cycle could hang forever in the state running without starting a worker (v0.5.0): the queue reported progress while it held the database lock and the application callback locked it again. Progress is now reported after the lock is released, a panic in the queue marks the stage as failed with a fixed message, the queue driver can be restarted after a panic, and the panic hook logs the location only. A regression test covers it.
 - Region screenshot (Ctrl+Alt+S) showed a black screen over every monitor. The desktop was captured correctly; the cause was in the display path. The content security policy did not allow the page to reach the IPC protocol, so Tauri fell back to the postMessage interface, which returns binary results as an array of numbers; the overlay built its image from that array as if it were bytes, the PNG could not be decoded and the black page background was all that was left. The policy now allows the IPC protocol, binary results are converted correctly in both modes, and the frozen desktop is encoded with fast compression off the main thread. The overlay window now stays hidden until its page has decoded the frozen desktop, so the live desktop remains on screen until then, and it closes before the region is cropped and saved, which happen off the window thread. A capture that is all black, cannot be decoded or does not arrive within 20 seconds is reported in a message and the overlay closes itself (Escape and a click close it in every state), and the window is placed again when the system moved or resized it.
 
 ### Stage 5
 
-Publishing. Implemented and tested against fake servers and local Git repositories; not yet run against a real repository or channel.
+Publishing. Tested against fake servers and local Git repositories, and run once against a real test repository and a real test Discord webhook, including a publish from the application window.
 
 #### Added
 
