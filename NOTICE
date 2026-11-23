@@ -30,6 +30,13 @@ llama.cpp                    MIT                     https://github.com/ggml-org
 uv                           MIT OR Apache-2.0       https://github.com/astral-sh/uv
 tungstenite (Rust crate)     MIT OR Apache-2.0       https://github.com/snapview/tungstenite-rs
 
+The Chrome extension (extension/) ships no third-party code: it is compiled with
+plain tsc and the release zip holds only its own scripts, pages and icons. Its npm
+packages (TypeScript, ESLint, Vitest, Playwright, Prettier and their dependencies)
+are build and test tools under their own licenses (MIT, Apache-2.0 or BSD) and are
+not distributed. The crates the bridge adds next to tungstenite (sha2, getrandom)
+are MIT OR Apache-2.0.
+
 Models (downloaded by the user, not redistributed)
 --------------------------------------------------
 Whisper large-v3 (Systran/faster-whisper-large-v3)
