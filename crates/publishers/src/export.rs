@@ -206,6 +206,11 @@ pub trait TaskExporter {
         "task"
     }
 
+    /// Whether an existing item is rewritten when `update_existing` is true.
+    fn updates_existing(&self) -> bool {
+        true
+    }
+
     /// The item with this id; `None` when it is gone (404) or no longer shared.
     fn get(&self, id: &str) -> Result<Option<ExternalTask>, HttpError>;
 
@@ -283,7 +288,9 @@ pub fn upsert(
     };
     let outcome = match existing {
         Some(found) if found.trashed => UpsertOutcome::Removed { id: found.id },
-        Some(found) if update_existing => UpsertOutcome::Updated(exporter.update(&found.id, task)?),
+        Some(found) if update_existing && exporter.updates_existing() => {
+            UpsertOutcome::Updated(exporter.update(&found.id, task)?)
+        }
         Some(found) => UpsertOutcome::Unchanged(found),
         None => {
             let created = exporter.create(task)?;

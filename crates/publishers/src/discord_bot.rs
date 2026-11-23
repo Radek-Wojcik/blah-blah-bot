@@ -133,7 +133,14 @@ fn base36(mut value: u64) -> String {
 /// always give the same nonce, so a message that was sent but not acknowledged is recognised
 /// by Discord when it is sent again. At most 13 characters (`[0-9a-z]`).
 pub fn nonce(meeting_id: &str, op_key: &str, index: usize) -> String {
-    base36(fnv1a64(format!("{meeting_id}:{op_key}:{index}").as_bytes()))
+    base36(fnv1a64(
+        format!(
+            "{}:{meeting_id}:{}:{op_key}:{index}",
+            meeting_id.len(),
+            op_key.len()
+        )
+        .as_bytes(),
+    ))
 }
 
 /// A thread name from a meeting title: whitespace collapsed to single spaces, at most

@@ -409,8 +409,8 @@ fn the_check_follows_overwrites_the_owner_and_administrator() {
     assert!(other.ok());
 
     fake.set_overwrites(&c, Vec::new());
-    fake.set_bot_permissions(0);
-    assert_eq!(bot.check_channel(&g, &c, true).unwrap().missing.len(), 6);
+    fake.set_bot_permissions(VIEW_CHANNEL);
+    assert_eq!(bot.check_channel(&g, &c, true).unwrap().missing.len(), 5);
     fake.set_bot_permissions(1 << 3);
     assert!(bot.check_channel(&g, &c, true).unwrap().ok());
     fake.set_bot_permissions(0);

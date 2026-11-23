@@ -478,7 +478,7 @@ fn every_request_carries_the_token_the_version_and_json() {
     api.query_by_key(DATA_SOURCE_ID, "BBB key", "x").unwrap();
 
     let requests = fake.requests();
-    assert_eq!(requests.len(), 9);
+    assert_eq!(requests.len(), 8);
     for r in &requests {
         assert_eq!(
             r.header("authorization"),

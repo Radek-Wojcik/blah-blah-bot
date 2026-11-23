@@ -89,6 +89,10 @@ impl TaskExporter for GithubIssues<'_> {
         "issue"
     }
 
+    fn updates_existing(&self) -> bool {
+        false
+    }
+
     fn get(&self, id: &str) -> Result<Option<ExternalTask>, HttpError> {
         Ok(self.fetch(number_of(id)?)?.as_ref().map(external))
     }
