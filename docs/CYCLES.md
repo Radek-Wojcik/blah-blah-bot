@@ -238,8 +238,9 @@ The structured result of one meeting, described by `schemas/meeting.schema.json`
 ## Offline behaviour
 
 * The working tree is the cache. Everything can be read and edited without network access.
-* Before a briefing the application runs `git pull --rebase` with uncommitted edits set aside and restored. A failure (no network, no upstream, a conflict) never discards anything: the clone stays as it was, an interrupted rebase is aborted, and the reason is recorded.
+* Before a briefing the application runs `git pull --rebase`. It never stashes: with uncommitted changes to tracked files (cycle edits made in the application) nothing is pulled and the briefing says so. A failure (no network, no upstream, a conflict) never discards anything: the clone stays as it was, an interrupted rebase is aborted, and the reason is recorded.
 * The date of the last successful pull (or clone) and the last error are kept in `.git/bbb-cache.json`, and the application shows it as "state as of <date>".
+* The briefing screen opens at once with the last known state, then updates a clone in the background. Without network it stays on the old state and reads "State as of <date>. Could not update: <reason>". It lists the open tasks by person (the open issues of the cache and the task items of the `meeting.json` files, a task that points to an issue only once) and the open topics of `topics.yaml`; closed topics are left out.
 * Open issues come from the GitHub REST API (`GET /repos/{owner}/{name}/issues?state=open&labels=cycle:<id>`, pull requests excluded, up to 500 issues). A failed request returns the last cached list with its date. The cache is `.git/bbb-issues-<ID>.json`. Issues are read only.
 * A cycle created without a remote lives in a local repository; there is nothing to pull and no error is recorded.
 

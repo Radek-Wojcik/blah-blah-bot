@@ -92,6 +92,8 @@ What was built where it refines or differs from the design above.
 - **Language resolution.** `auto` compares stop words and Polish letters in the transcript text; when neither language clearly leads, the language reported by the ASR step decides, and English when that is unknown.
 - **Open issues.** The application reads the open issues of a cycle from the cache file. The fetch function exists in `cycle-store`, but the application does not yet configure a GitHub token or call it.
 
+- **Briefing source (Stage 6).** The briefing screen reads tasks and topics through the trait `BriefingSource` of the application (`tasks(cycle)` gives the open and the done tasks with a date and a cache flag, `topics(cycle)` the open topics). The source of Stage 6, `CycleStoreSource`, merges the cached open issues, the task items of the `meeting.json` files and `topics.yaml` from the local clone; the grouping by person, the overdue marks and the screen work on what a source returns and do not know where it came from. Stage 5 reads issues from GitHub with their real state and due dates and writes status changes back: it adds a second `BriefingSource` and `AppState` builds that one instead of `CycleStoreSource`, a one-line change. The command `get_briefing(cycleId, refresh)` pulls a clone only with `refresh`, by the same `pull_rebase` as before the extraction: no stash, nothing pulled over uncommitted tracked changes, a failure leaves the clone as it was and is reported with the date of the last successful pull.
+
 ## Consequences
 
 - Report layout changes never re-run a model; section assignment is the only model-dependent layout step.
