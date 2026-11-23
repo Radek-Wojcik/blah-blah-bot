@@ -1,6 +1,6 @@
 # 0020. Discord bot and Notion export
 
-**Status:** Proposed (Stage 7). The permissions, intents and scope below are proposed rather than accepted because the owner was not available to confirm them while the stage was planned; they are implemented as defaults and are confirmed or changed at the stop-and-ask point of Stage 7 in [ROADMAP.md](../ROADMAP.md). The webhook path and the outbox are described in [0010](0010-discord-webhook-and-bot.md) and [0018](0018-publishing.md); the publish rules in [0019](0019-default-publish-rule-per-target.md).
+**Status:** Accepted (Stage 7). REST-only Discord bot with zero privileged intents, permissions `309237746688`, and `on-approval` as the default publish rule for both targets. The webhook path and the outbox are described in [0010](0010-discord-webhook-and-bot.md) and [0018](0018-publishing.md); the publish rules in [0019](0019-default-publish-rule-per-target.md).
 
 ## Context
 
