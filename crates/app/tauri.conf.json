@@ -37,7 +37,24 @@
     "security": { "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: http://asset.localhost" }
   },
   "bundle": {
-    "active": false,
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"]
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
+    "publisher": "Radosław Wójcik",
+    "copyright": "Copyright (c) 2026 Radosław Wójcik",
+    "license": "MIT",
+    "category": "Productivity",
+    "shortDescription": "Local meeting recorder with transcripts, speakers and reports",
+    "longDescription": "Records a meeting on this computer, transcribes it, tells the speakers apart and drafts a report. Models run locally; nothing leaves the machine unless you publish a report.",
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["English"],
+        "displayLanguageSelector": false,
+        "compression": "lzma",
+        "installerHooks": "nsis/hooks.nsh"
+      }
+    }
   }
 }
