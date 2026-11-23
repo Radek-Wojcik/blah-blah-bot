@@ -548,13 +548,22 @@ fn no_stage7_secret_ends_up_in_db_outbox_external_refs_snapshots_repos_or_logs()
         wrong_bot.to_string(),
     ];
 
-    let buf = LogBuf::default();
-    let make = buf.clone();
-    let subscriber = tracing_subscriber::fmt()
-        .with_ansi(false)
-        .with_writer(move || make.clone())
-        .finish();
-    let _guard = tracing::subscriber::set_default(subscriber);
+    let buf = {
+        static LOG: std::sync::OnceLock<LogBuf> = std::sync::OnceLock::new();
+        LOG.get_or_init(|| {
+            let log = LogBuf::default();
+            let make = log.clone();
+            let subscriber = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_ansi(false)
+                .with_writer(move || make.clone())
+                .finish();
+            let _ = tracing::subscriber::set_global_default(subscriber);
+            tracing::callsite::rebuild_interest_cache();
+            log
+        })
+        .clone()
+    };
 
     lab.publish(&draft(), Trigger::Explicit, &ALL, &anchors())
         .expect("publish");
