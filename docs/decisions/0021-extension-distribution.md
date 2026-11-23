@@ -1,6 +1,6 @@
 # 0021. Browser extension: distribution, identity and defaults
 
-**Status:** Proposed (Stage 6)
+**Status:** Accepted (Stage 6)
 
 ## Context
 
@@ -26,13 +26,13 @@
 
 - The manifest carries a public `key`. The extension id derived from it (`pbgjebpmicmffhjbphlgginplaflodnj`) is therefore the same for every user and on every machine, and the application can check the `Origin` of the socket against it. The key is new for Stage 6; the P7 prototype used another one, so a prototype install is a different extension and does not pair.
 - The private half of the key was discarded when the key was generated: nothing is signed with it and nobody can publish an update under this id from a store.
-- `bridge.allowedExtensionIds` defaults to this id (`bridge::server::EXTENSION_ID`). A test derives the id from `extension/manifest.json` and fails when the two drift apart. A user who wants to run a self-built extension with another key adds its id in the settings, or clears the list to accept any extension origin (pairing still decides who may stream).
+- `bridge.allowedExtensionIds` defaults to this id (`bridge::server::EXTENSION_ID`). A test derives the id from `extension/manifest.json` and fails when the two drift apart. A user who wants to run a self-built extension with another key adds its id to `bridge.allowedExtensionIds` in `settings.json` (there is no UI field for it), or clears the list to accept any extension origin (pairing still decides who may stream).
 
 ### Defaults, as configuration
 
 | Setting | Default | Where |
 |---|---|---|
-| `bridge.allowedExtensionIds` | the id above | application settings |
+| `bridge.allowedExtensionIds` | the id above | `settings.json` (no UI field) |
 | `bridge.port`, `bridge.portFallbacks` | 17555, then 17556 to 17564 | application settings; the extension tries the same ten ports in order |
 | minimum protocol version (`min_protocol`) | 2 (an older extension gets `bad_version`) | `bridge::protocol::PROTOCOL_VERSION` |
 | `bridge.autoAddTabs` | on | application settings |

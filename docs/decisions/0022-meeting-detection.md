@@ -1,6 +1,6 @@
 # 0022. Meeting detection: rules, sensitivity and the default
 
-**Status:** Proposed (Stage 6)
+**Status:** Accepted (Stage 6)
 
 ## Context
 
@@ -35,7 +35,7 @@ All numbers live in `recorder::detect::Presets` and the choice in `settings.dete
 
 Targets: no prompt from idle applications; exactly one prompt per call; delay of at most the sustain time plus 2 s; CPU of the detector at most 0.1 %.
 
-**Default: balanced.** It prompts within about 10 s of a call starting while not asking for a microphone use of less than 8 s. Choosing a default is a stop-and-ask item of the roadmap, so this record stays Proposed until the user confirms it.
+**Default: balanced.** It prompts within about 10 s of a call starting while not asking for a microphone use of less than 8 s. Accepted as the default; the real 8-hour working-day measurement remains open and may tune the preset numbers later.
 
 ### Measurement
 

@@ -84,16 +84,16 @@ Open the settings to download the models and, for screenshot description and for
 
 ## Browser extension
 
-The extension is installed unpacked from the zip attached to each release; it is not in the Chrome Web Store and will not be ([ADR 0021](docs/decisions/0021-extension-distribution.md), status Proposed). The complete guide with troubleshooting is [docs/guides/extension.md](docs/guides/extension.md).
+The extension is installed unpacked from the zip attached to each release; it is not in the Chrome Web Store and will not be ([ADR 0021](docs/decisions/0021-extension-distribution.md)). The complete guide with troubleshooting is [docs/guides/extension.md](docs/guides/extension.md).
 
 1. Unpack `blah-blah-bot-extension-<version>.zip` to a folder that stays where it is. To build it yourself: `cd extension && npm ci && npm run pack` writes `target/extension/unpacked` and the zip.
-2. Open `chrome://extensions`, switch on **Developer mode**, choose **Load unpacked** and pick the folder. The id on the card must be `pbgjebpmicmffhjbphlgginplaflodnj`; the application accepts no other extension unless you add its id in the settings. Chrome warns about developer mode extensions and may switch them off after an update; switch it on again.
+2. Open `chrome://extensions`, switch on **Developer mode**, choose **Load unpacked** and pick the folder. The id on the card must be `pbgjebpmicmffhjbphlgginplaflodnj`; the application accepts no other extension unless you add its id to `bridge.allowedExtensionIds` in `settings.json` (there is no UI field for it). Chrome warns about developer mode extensions and may switch them off after an update; switch it on again.
 3. **Pair once.** In the application open **Settings, Browser extension** and press **Pair extension**; it shows a code that works once and expires after 5 minutes. Click the extension icon, type the code and press **Pair**. Pairing survives restarts; **Unpair** in the settings removes it.
 4. **Record a tab.** Start a recording, open the tab, click the extension icon (or press **Alt+Shift+R**). The badge shows `REC` and the tab becomes a track. For a tab group press **Capture this group** and then **Next tab**; Chrome allows one tab per click, so each tab needs its own action.
 
-The extension asks for `tabCapture`, `offscreen`, `activeTab`, `storage`, `tabGroups` and the site `meet.google.com`; it has no `tabs` or `history` permission and talks only to `127.0.0.1`. The page title of a tab is never sent, only the site name.
+The extension asks for `tabCapture`, `offscreen`, `activeTab`, `storage`, `tabGroups` and the site `meet.google.com`; it has no `tabs` or `history` permission and talks only to `127.0.0.1`. When a tab is captured, its page title is sent locally over `127.0.0.1` only so the source picker can display it; group and Google Meet status messages omit page titles, and stored or published track names use only the site host (`Tab: <host>`).
 
-**Detection** is on by default. Open **Settings, Detection** to choose the sensitivity, edit the list of watched programs, switch an application off (or on again after **Never**) or switch detection off. Rules and measurement: [ADR 0022](docs/decisions/0022-meeting-detection.md) (status Proposed).
+**Detection** is on by default. Open **Settings, Detection** to choose the sensitivity, edit the list of watched programs, switch an application off (or on again after **Never**) or switch detection off. Rules and measurement: [ADR 0022](docs/decisions/0022-meeting-detection.md).
 
 ## Cycles and report modes
 
@@ -110,7 +110,7 @@ Templates are Markdown with placeholders. The common ones are `{title}`, `{date}
 
 ## Publishing setup
 
-Publishing has been tested against fake GitHub and Discord servers and local Git repositories only. It has not yet been run against a real repository or channel; that check is the next step before the release, so treat the first real publication with care (use a private test repository and a test channel first). Everything below describes what the application does against those fakes; how real GitHub and Discord react is unverified.
+Publishing has been run once against a real test repository and a real test webhook (one meeting and one correction), and is otherwise tested against fake GitHub and Discord servers and local Git repositories. The organization issue field "Target date" and the Discord webhook upload limits remain unverified against real services, so test a new setup on a private repository and a test channel first.
 
 **1. GitHub token (for issues, and for pushing over https).**
 
@@ -227,7 +227,7 @@ No sensitivity raised a duplicate prompt. The session states in the hand-made tr
 - False prompts over a working day (8 hours of real use); the idle trace is 4 minutes on one machine.
 - Real Discord, Teams and Meet calls: what their audio sessions do during a call, a mute and a device check. Zoom and Slack are in the list of watched programs without a trace of their own.
 - Windows 11.
-- The default sensitivity (balanced) is a proposal, chosen on the numbers above only.
+- The default sensitivity (balanced) was accepted on the numbers above; real working-day measurement remains open.
 
 ## Stage 4 measurements
 

@@ -14,7 +14,7 @@ The extension is not in the Chrome Web Store and will not be (ADR 0021). It is i
 1. Download `blah-blah-bot-extension-<version>.zip` from the release page and unpack it to a folder that stays where it is (Chrome loads the extension from that folder every time it starts; do not unpack it into the downloads folder you clean up).
 2. Open `chrome://extensions` in Chrome.
 3. Switch on **Developer mode** (top right).
-4. Choose **Load unpacked** and select the unpacked folder. The extension appears as "Blah Blah Bot". The id shown on its card must be `pbgjebpmicmffhjbphlgginplaflodnj`; the application accepts no other extension unless you add its id in the settings.
+4. Choose **Load unpacked** and select the unpacked folder. The extension appears as "Blah Blah Bot". The id shown on its card must be `pbgjebpmicmffhjbphlgginplaflodnj`; the application accepts no other extension unless you add its id to `bridge.allowedExtensionIds` in `settings.json` (there is no UI field for it).
 5. Pin it to the toolbar (the puzzle piece menu) so the icon is one click away.
 
 Chrome shows a warning about developer mode extensions when it starts, and may switch such extensions off after an update; switch it on again in `chrome://extensions`. A new release means a new zip: unpack it over the old folder and press the reload button on the card.
@@ -59,7 +59,7 @@ Chrome allows capturing a tab only after you acted on that very tab, so a group 
 3. Press **Next tab** in the popup to bring the next missing tab to the front (tabs that play sound come first, then silent ones, then failed ones), then click the icon there. The shortcut does both: **Alt+Shift+R** captures the tab you are on and then switches to the next tab that is still missing, so for a group you press it once per tab. Pressing it on a captured tab stops that tab.
 4. A tab added to the group later is waiting: the toolbar badge shows `+1` (the number of tabs that wait for an action) and the application is told. Closing a captured tab ends its stream; the tab leaves the group list.
 
-Every tab is its own track of the recording, labelled `Tab: <site name>`. Only the site name and the tab id are sent to the application, never the page title. Chrome shows the extension a tab's title only for tabs it was used on, so other tabs of the group appear as `Tab 2`, `Tab 3` in the popup until you capture them.
+Every tab is its own track of the recording, stored and published as `Tab: <host>`. When a tab is captured, its page title is sent locally over `127.0.0.1` only so the source picker can display it; group and Google Meet status messages omit page titles and send only the site host and tab id. Chrome shows the extension a tab's title only for tabs it was used on, so other tabs of the group appear as `Tab 2`, `Tab 3` in the popup until you capture them.
 
 ## Google Meet
 
