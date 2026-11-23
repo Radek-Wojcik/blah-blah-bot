@@ -19,7 +19,6 @@ use cycle_store::issues::IssueCache;
 use cycle_store::time::{format_utc_date, now_unix_ms};
 use cycle_store::{Draft, Variant};
 use publishers::flow::{self, Prepared, StartError};
-use publishers::gate;
 use publishers::http::HttpClient;
 use publishers::outbox::{Dispatcher, Env, RepoContext, TICK_MS};
 use publishers::plan::{GithubIdentity, PlanSummary, PublishPlan};
@@ -110,6 +109,14 @@ impl Env for AppEnv {
     }
 
     fn webhook(&self, reference: &str) -> Option<String> {
+        secrets::resolve_cred(self.secrets.as_ref(), reference)
+    }
+
+    fn notion_token(&self, reference: &str) -> Option<String> {
+        secrets::resolve_cred(self.secrets.as_ref(), reference)
+    }
+
+    fn discord_bot_token(&self, reference: &str) -> Option<String> {
         secrets::resolve_cred(self.secrets.as_ref(), reference)
     }
 
@@ -384,14 +391,7 @@ fn start_error(e: StartError) -> IpcError {
     match e {
         StartError::Blocked(blocks) => {
             let first = blocks.first();
-            let code = match first {
-                Some(publishers::plan::Block::PublicRepoUnconfirmed { .. }) => {
-                    gate::PUBLIC_REPO_CODE
-                }
-                Some(publishers::plan::Block::DiscordWebhookMissing) => "discord_webhook_missing",
-                Some(publishers::plan::Block::MeetingNotInRepository) => "not_in_repository",
-                _ => "nothing_to_publish",
-            };
+            let code = first.map_or("nothing_to_publish", publishers::plan::Block::code);
             IpcError::new(code, first.map(|b| b.message()).unwrap_or_default())
         }
         StartError::Files(m) => IpcError::new("io", m),

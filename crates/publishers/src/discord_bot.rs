@@ -25,7 +25,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde_json::{json, Value};
 use store::Failure;
 
-use crate::discord::{bucket_wait, payload_request_body, retry_rate_limited, OutMessage, Pacing};
+use crate::discord::{
+    bucket_wait, content_units, payload_request_body, retry_rate_limited, OutMessage, Pacing,
+    MAX_CONTENT_UNITS,
+};
 use crate::http::{
     classify_status, parse_endpoint, redact, ErrorKind, HttpClient, HttpError, Method, Request,
     Response,
@@ -144,6 +147,82 @@ pub fn thread_name(title: &str) -> String {
     } else {
         name
     }
+}
+
+fn truncate_units(text: &str, max_units: usize) -> &str {
+    let mut units = 0;
+    let mut end = 0;
+    for (idx, ch) in text.char_indices() {
+        let len = ch.len_utf16();
+        if units + len > max_units {
+            break;
+        }
+        units += len;
+        end = idx + ch.len_utf8();
+    }
+    text[..end].trim_end()
+}
+
+/// Deterministic summary text with a "Corrections" block appended, always within Discord's
+/// content limit. Mentions inside correction texts are defused and `@everyone` / `@here`
+/// neutralised so a correction can never ping anyone.
+pub fn append_corrections(summary: &str, corrections: &[cycle_store::Correction]) -> String {
+    let base = summary.trim();
+    if corrections.is_empty() {
+        return truncate_units(base, MAX_CONTENT_UNITS).to_string();
+    }
+    let mut lines = vec!["**Corrections**".to_string()];
+    for c in corrections {
+        let safe = cycle_store::neutralise_mentions(&cycle_store::defuse_discord_mentions(&c.text));
+        let single_line = safe.split_whitespace().collect::<Vec<_>>().join(" ");
+        lines.push(format!("- {}: {single_line}", c.date));
+    }
+    let block = lines.join("\n");
+    if base.is_empty() {
+        if content_units(&block) <= MAX_CONTENT_UNITS {
+            return block;
+        }
+        return format!("{}...", truncate_units(&block, MAX_CONTENT_UNITS - 3));
+    }
+    let combined = format!("{base}\n\n{block}");
+    if content_units(&combined) <= MAX_CONTENT_UNITS {
+        return combined;
+    }
+    let half = MAX_CONTENT_UNITS / 2;
+    let kept_block = if content_units(&block) <= half {
+        block
+    } else {
+        format!("{}...", truncate_units(&block, half - 3))
+    };
+    let separator = "\n_(shortened)_\n\n";
+    let budget =
+        MAX_CONTENT_UNITS.saturating_sub(content_units(&kept_block) + content_units(separator));
+    let shortened = truncate_units(base, budget);
+    format!("{shortened}{separator}{kept_block}")
+}
+
+/// Text of the reply posted into the meeting thread when a correction is published. Mentions
+/// are defused and the text is kept within Discord's content limit.
+pub fn format_correction_reply(
+    correction: &cycle_store::Correction,
+    file_url: Option<&str>,
+) -> String {
+    let safe =
+        cycle_store::neutralise_mentions(&cycle_store::defuse_discord_mentions(&correction.text));
+    let mut text = format!("Correction ({}): {}", correction.date, safe.trim());
+    if let Some(url) = file_url.filter(|u| !u.trim().is_empty()) {
+        let link = format!("\n\n[Correction file]({url})");
+        if content_units(&text) + content_units(&link) <= MAX_CONTENT_UNITS {
+            text.push_str(&link);
+        } else {
+            let budget = MAX_CONTENT_UNITS.saturating_sub(content_units(&link) + 3);
+            text = format!("{}...{link}", truncate_units(&text, budget));
+        }
+    } else if content_units(&text) > MAX_CONTENT_UNITS {
+        let budget = MAX_CONTENT_UNITS.saturating_sub(3);
+        text = format!("{}...", truncate_units(&text, budget));
+    }
+    text
 }
 
 fn now_ms() -> i64 {

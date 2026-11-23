@@ -18,6 +18,7 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use cycle_store::{normalize_notion_id, NotionProperties};
 use serde_json::{json, Map, Value};
@@ -37,6 +38,8 @@ pub const DEFAULT_API: &str = "https://api.notion.com/v1";
 /// The API version every request pins: `2025-09-03` introduced data sources, `2026-03-11`
 /// renamed `archived` to `in_trash`.
 pub const NOTION_VERSION: &str = "2026-03-11";
+/// Pause after a write: Notion allows roughly three requests per second per connection.
+pub const WRITE_PACING: Duration = Duration::from_millis(350);
 /// Pages a key query asks for; a key is on one page, anything more is a duplicate to report.
 const KEY_QUERY_PAGE_SIZE: usize = 10;
 /// The hint of a 404: the usual cause is a database that was not shared with the integration.

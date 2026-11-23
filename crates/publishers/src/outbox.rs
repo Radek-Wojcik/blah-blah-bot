@@ -31,20 +31,24 @@ use std::time::Duration;
 use cycle_store::publish::{
     AddFileRequest, GitAuth, PublishErrorKind, PublishFile, PublishRequest,
 };
-use cycle_store::{Cycle, Draft, Repo};
+use cycle_store::{Correction, Cycle, DiscordMode, Draft, Repo};
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use store::{Failure, OpState, OutboxKind, OutboxOp, OutboxTarget, Store};
+use store::{ExternalRef, Failure, OpState, OutboxKind, OutboxOp, OutboxTarget, RefTarget, Store};
 
 use crate::addr;
 use crate::correction::{file_key, CorrectionPayload};
-use crate::discord::{self, Attachment, Pacing};
+use crate::discord::{self, Attachment, OutMessage, Pacing};
+use crate::discord_bot::{self, DiscordBot, EditOutcome};
+use crate::export::{self, Assignee, ExternalTask, TaskKey, TaskRecord, UpsertOutcome};
 use crate::gate::{self, RepoVisibility};
 use crate::github::{CorrectionSpec, Github, IssueSpec, StatusSpec, WRITE_PACING};
 use crate::http::{HttpClient, HttpError};
+use crate::notion::{self, Notion, NotionTasks};
 use crate::plan::{
-    apply_topics, issue_key, CommitPayload, DiscordPayload, GithubIdentity, IssuePayload,
-    StatusPayload,
+    apply_topics, issue_key, notion_ref_key, CommitPayload, DiscordBotPayload, DiscordPayload,
+    GithubIdentity, IssuePayload, NotionPayload, StatusPayload, DISCORD_POST_REF_KEY,
 };
 use crate::webhook::Webhook;
 
@@ -93,6 +97,22 @@ pub trait Env: Send + Sync {
     fn github_token(&self, api: &str) -> Option<String>;
     /// The webhook URL behind a `cred:` reference.
     fn webhook(&self, reference: &str) -> Option<String>;
+    /// The Notion integration token behind a `cred:` reference.
+    fn notion_token(&self, _reference: &str) -> Option<String> {
+        None
+    }
+    /// The Discord bot token behind a `cred:` reference.
+    fn discord_bot_token(&self, _reference: &str) -> Option<String> {
+        None
+    }
+    /// The Notion API base address; tests point it to `FakeNotion`.
+    fn notion_api(&self) -> String {
+        notion::DEFAULT_API.to_string()
+    }
+    /// The Discord API base address; tests point it to `FakeDiscordBot`.
+    fn discord_api(&self) -> String {
+        discord_bot::DEFAULT_API.to_string()
+    }
     /// The folder the snapshot paths of the operations are relative to.
     fn snapshot_root(&self) -> PathBuf;
     /// An HTTP client with the timeouts of the application.
@@ -228,6 +248,8 @@ pub struct Dispatcher {
     /// Targets that could not be reached, with the time of the failure.
     offline: Mutex<HashMap<OutboxTarget, i64>>,
     github: Mutex<HashMap<(String, String), Arc<Github>>>,
+    notion: Mutex<HashMap<(String, String), Arc<Notion>>>,
+    discord_bot: Mutex<HashMap<(String, String), Arc<DiscordBot>>>,
     visibility: Mutex<HashMap<String, (i64, RepoVisibility)>>,
 }
 
@@ -238,6 +260,8 @@ impl Dispatcher {
             env,
             offline: Mutex::new(HashMap::new()),
             github: Mutex::new(HashMap::new()),
+            notion: Mutex::new(HashMap::new()),
+            discord_bot: Mutex::new(HashMap::new()),
             visibility: Mutex::new(HashMap::new()),
         }
     }
@@ -337,10 +361,8 @@ impl Dispatcher {
             OutboxKind::PostDiscord => self.post_discord(op),
             OutboxKind::CommitCorrection => self.commit_correction(op),
             OutboxKind::CommentCorrection => self.comment_correction(op),
-            // Placeholders until the executors exist.
-            OutboxKind::ExportNotion | OutboxKind::EditDiscord => Err(OpError::permanent(
-                "this kind of operation is not implemented yet",
-            )),
+            OutboxKind::ExportNotion => self.export_notion(op),
+            OutboxKind::EditDiscord => self.edit_discord(op),
         }
     }
 
@@ -360,6 +382,30 @@ impl Dispatcher {
         let github = Arc::new(Github::with_client(client, api, &token)?);
         lock(&self.github).insert(key, github.clone());
         Ok((github, token))
+    }
+
+    fn notion(&self, token: &str) -> Result<Arc<Notion>, OpError> {
+        let api = self.env.notion_api();
+        let key = (api.clone(), token.to_string());
+        if let Some(found) = lock(&self.notion).get(&key) {
+            return Ok(found.clone());
+        }
+        let client = self.env.client();
+        let notion = Arc::new(Notion::with_client(client, &api, token)?);
+        lock(&self.notion).insert(key, notion.clone());
+        Ok(notion)
+    }
+
+    fn discord_bot(&self, token: &str) -> Result<Arc<DiscordBot>, OpError> {
+        let api = self.env.discord_api();
+        let key = (api.clone(), token.to_string());
+        if let Some(found) = lock(&self.discord_bot).get(&key) {
+            return Ok(found.clone());
+        }
+        let client = self.env.client();
+        let bot = Arc::new(DiscordBot::with_client(client, &api, token)?);
+        lock(&self.discord_bot).insert(key, bot.clone());
+        Ok(bot)
     }
 
     /// The public-repository check, made right before anything goes to the repository.
@@ -772,6 +818,109 @@ impl Dispatcher {
         })
     }
 
+    // ----- notion ---------------------------------------------------------------------------
+
+    fn export_notion(&self, op: &OutboxOp) -> OpResult {
+        let p: NotionPayload = payload(op)?;
+        let ctx = self.context(&p.cycle)?;
+        let target = ctx
+            .cycle
+            .targets
+            .notion
+            .as_ref()
+            .ok_or_else(|| OpError::permanent("this cycle has no Notion target"))?;
+        let token = self.env.notion_token(&target.token).ok_or_else(|| {
+            OpError::permanent(
+                "no Notion token is stored for this cycle: add it in the publishing settings, then retry",
+            )
+        })?;
+        let notion = self.notion(&token)?;
+        let tasks = NotionTasks::prepare(
+            &notion,
+            &target.database,
+            target.data_source.as_deref(),
+            &target.properties,
+        )?;
+        let report_url = self.publication(op)?.and_then(|r| r.report_url);
+        let transcript_url = p
+            .anchor
+            .as_ref()
+            .and(report_url.as_deref())
+            .and_then(addr::transcript_url);
+        let assignee = match (&p.assignee_id, &p.assignee_name) {
+            (Some(id), Some(name)) => Some(Assignee {
+                participant_id: id.clone(),
+                name: name.clone(),
+                github: None,
+            }),
+            _ => None,
+        };
+        let record = TaskRecord {
+            key: TaskKey {
+                cycle: p.cycle.clone(),
+                meeting: op.meeting_id.clone(),
+                item: p.item_id.clone(),
+            },
+            title: p.title.clone(),
+            assignee,
+            due: p.due.clone(),
+            meeting_date: p.date.clone(),
+            cycle_name: p.cycle_name.clone(),
+            report_url,
+            transcript_url,
+            transcript_anchor: p.anchor.clone(),
+            quote: p.quote.clone(),
+            time_ms: p.time_ms,
+        };
+        let ref_key = notion_ref_key(&p.item_id);
+        let known = self
+            .with_store(|s| s.get_external_ref(&op.meeting_id, RefTarget::Notion, &ref_key))?
+            .map(|r| r.external_id);
+        let store = &self.store;
+        let env = &self.env;
+        let meeting_id = op.meeting_id.as_str();
+        let ref_key_str = ref_key.as_str();
+        let mut persist_ref = |task: &ExternalTask| {
+            let row = ExternalRef {
+                meeting_id: meeting_id.to_string(),
+                target: RefTarget::Notion,
+                ref_key: ref_key_str.to_string(),
+                external_id: task.id.clone(),
+                url: task.url.clone(),
+                extra: "{}".to_string(),
+                updated_unix_ms: env.now_ms(),
+            };
+            if let Err(e) = lock(store).put_external_ref(&row) {
+                tracing::warn!(error = %e, "the Notion page reference was not stored");
+            }
+        };
+        let upserted = export::upsert(&tasks, &record, known.as_deref(), true, &mut persist_ref)?;
+        if let UpsertOutcome::Updated(task) = &upserted.outcome {
+            persist_ref(task);
+        }
+        if matches!(
+            upserted.outcome,
+            UpsertOutcome::Created(_) | UpsertOutcome::Updated(_)
+        ) {
+            self.env.sleep(notion::WRITE_PACING);
+        }
+        let (page_id, url, created, updated, removed) = match &upserted.outcome {
+            UpsertOutcome::Created(t) => (t.id.as_str(), t.url.as_deref(), true, false, false),
+            UpsertOutcome::Updated(t) => (t.id.as_str(), t.url.as_deref(), false, true, false),
+            UpsertOutcome::Unchanged(t) => (t.id.as_str(), t.url.as_deref(), false, false, false),
+            UpsertOutcome::Removed { id } => (id.as_str(), None, false, false, true),
+        };
+        Ok(json!({
+            "page_id": page_id,
+            "url": url,
+            "title": p.title,
+            "created": created,
+            "updated": updated,
+            "removed": removed,
+            "duplicates": upserted.duplicates,
+        }))
+    }
+
     // ----- discord --------------------------------------------------------------------------
 
     /// The lines that link the issues made for this meeting.
@@ -812,30 +961,23 @@ impl Dispatcher {
         ))
     }
 
-    fn post_discord(&self, op: &OutboxOp) -> OpResult {
-        let p: DiscordPayload = payload(op)?;
-        let ctx = self.context(&p.cycle)?;
-        let value = self.env.webhook(&p.reference).ok_or_else(|| {
-            OpError::permanent("no Discord webhook is stored for this cycle: add it in the publishing settings, then retry")
-        })?;
-        let hook = Webhook::parse(&value).map_err(|why| {
-            OpError::permanent(format!("the stored webhook is not usable: {why}"))
-        })?;
-        let client = self
-            .env
-            .client()
-            .with_secret(&hook.url())
-            .with_secret(hook.token());
-
-        let snapshot = self.env.snapshot_root().join(&p.snapshot);
+    fn load_discord_inputs(
+        &self,
+        op: &OutboxOp,
+        ctx: &RepoContext,
+        cycle: &str,
+        snapshot_rel: &str,
+        template_name: Option<&str>,
+    ) -> Result<(Draft, Option<String>, String, String), OpError> {
+        let snapshot = self.env.snapshot_root().join(snapshot_rel);
         let draft_text = std::fs::read_to_string(snapshot.join("meeting.json"))
             .map_err(|e| OpError::permanent(format!("the snapshot of the meeting is gone: {e}")))?;
         let draft = Draft::from_json_str(&draft_text)
             .map_err(|_| OpError::permanent("the snapshot of the meeting cannot be read"))?;
-        let template = match &p.template {
+        let template = match template_name {
             Some(name) => Some(
                 ctx.repo
-                    .read_template(&p.cycle, name)
+                    .read_template(cycle, name)
                     .map_err(|e| {
                         OpError::permanent(format!("the Discord template cannot be read: {e}"))
                     })?
@@ -852,6 +994,30 @@ impl Dispatcher {
             cycle_store::Language::En => "Meeting",
         };
         let title = format!("{word} {} {}", draft.cycle, draft.date);
+        Ok((draft, template, report_link, title))
+    }
+
+    fn post_discord(&self, op: &OutboxOp) -> OpResult {
+        let p: DiscordPayload = payload(op)?;
+        if let Some(bot_cfg) = p.bot.clone() {
+            return self.post_discord_bot(op, &p, &bot_cfg);
+        }
+        let ctx = self.context(&p.cycle)?;
+        let value = self.env.webhook(&p.reference).ok_or_else(|| {
+            OpError::permanent("no Discord webhook is stored for this cycle: add it in the publishing settings, then retry")
+        })?;
+        let hook = Webhook::parse(&value).map_err(|why| {
+            OpError::permanent(format!("the stored webhook is not usable: {why}"))
+        })?;
+        let client = self
+            .env
+            .client()
+            .with_secret(&hook.url())
+            .with_secret(hook.token());
+
+        let (draft, template, report_link, title) =
+            self.load_discord_inputs(op, &ctx, &p.cycle, &p.snapshot, p.template.as_deref())?;
+        let snapshot = self.env.snapshot_root().join(&p.snapshot);
         let links = self.issue_links(&op.meeting_id)?;
         let text = discord::render_text(&discord::TextSpec {
             draft: &draft,
@@ -914,6 +1080,379 @@ impl Dispatcher {
             "skipped_files": plan.skipped.len(),
         }))
     }
+
+    fn post_discord_bot(
+        &self,
+        op: &OutboxOp,
+        p: &DiscordPayload,
+        bot_cfg: &DiscordBotPayload,
+    ) -> OpResult {
+        let ctx = self.context(&p.cycle)?;
+        let token = self.env.discord_bot_token(&bot_cfg.token).ok_or_else(|| {
+            OpError::permanent(
+                "no Discord bot token is stored for this cycle: add it in the publishing settings, then retry",
+            )
+        })?;
+        let bot = self.discord_bot(&token)?;
+        let (draft, template, report_link, title) =
+            self.load_discord_inputs(op, &ctx, &p.cycle, &p.snapshot, p.template.as_deref())?;
+        let snapshot = self.env.snapshot_root().join(&p.snapshot);
+        let links = self.issue_links(&op.meeting_id)?;
+        let mut files = Vec::new();
+        for rel in &p.files {
+            if let Ok(bytes) = std::fs::read(snapshot.join(rel)) {
+                let name = rel.rsplit('/').next().unwrap_or(rel);
+                files.push(Attachment::new(name, bytes));
+            }
+        }
+        let (all_messages, skipped_files) = if bot_cfg.thread {
+            let summary_text = discord::render_text(&discord::TextSpec {
+                draft: &draft,
+                participants: &ctx.cycle.participants,
+                template_body: template.as_deref(),
+                title: &title,
+                report_link: &report_link,
+                issue_links: "",
+            })
+            .map_err(|issues| {
+                OpError::permanent(format!(
+                    "the Discord message cannot be rendered: {}",
+                    issues.first().map_or_else(String::new, ToString::to_string)
+                ))
+            })?;
+            let summary_plan = discord::build_plan(
+                &summary_text,
+                Vec::new(),
+                Vec::new(),
+                &ctx.cycle.participants,
+            );
+            let thread_plan =
+                discord::build_plan(&links, Vec::new(), files, &ctx.cycle.participants);
+            let mut msgs = summary_plan.messages;
+            if msgs.is_empty() {
+                msgs.push(OutMessage {
+                    content: title.clone(),
+                    allowed_mentions: json!({"parse": []}),
+                    embeds: Vec::new(),
+                    files: Vec::new(),
+                });
+            }
+            msgs.extend(thread_plan.messages);
+            (msgs, thread_plan.skipped.len())
+        } else {
+            let text = discord::render_text(&discord::TextSpec {
+                draft: &draft,
+                participants: &ctx.cycle.participants,
+                template_body: template.as_deref(),
+                title: &title,
+                report_link: &report_link,
+                issue_links: &links,
+            })
+            .map_err(|issues| {
+                OpError::permanent(format!(
+                    "the Discord message cannot be rendered: {}",
+                    issues.first().map_or_else(String::new, ToString::to_string)
+                ))
+            })?;
+            let plan = discord::build_plan(&text, Vec::new(), files, &ctx.cycle.participants);
+            (plan.messages, plan.skipped.len())
+        };
+
+        let existing_ref = self.with_store(|s| {
+            s.get_external_ref(&op.meeting_id, RefTarget::Discord, DISCORD_POST_REF_KEY)
+        })?;
+        let mut post = existing_ref
+            .as_ref()
+            .and_then(|r| serde_json::from_str::<DiscordPostExtra>(&r.extra).ok())
+            .filter(|e| e.channel_id == bot_cfg.channel)
+            .unwrap_or_else(|| DiscordPostExtra {
+                channel_id: bot_cfg.channel.clone(),
+                thread_id: None,
+                message_ids: Vec::new(),
+            });
+        let pacing = self.env.pacing();
+        let total = all_messages.len();
+
+        let persist = |post: &DiscordPostExtra| {
+            let now = self.env.now_ms();
+            if let Some(first_id) = post.message_ids.first() {
+                let row = ExternalRef {
+                    meeting_id: op.meeting_id.clone(),
+                    target: RefTarget::Discord,
+                    ref_key: DISCORD_POST_REF_KEY.to_string(),
+                    external_id: first_id.clone(),
+                    url: Some(format!(
+                        "https://discord.com/channels/{}/{}/{first_id}",
+                        bot_cfg.guild, post.channel_id
+                    )),
+                    extra: serde_json::to_string(post).unwrap_or_else(|_| "{}".to_string()),
+                    updated_unix_ms: now,
+                };
+                if let Err(e) = lock(&self.store).put_external_ref(&row) {
+                    tracing::warn!(error = %e, "the Discord post reference was not stored");
+                }
+            }
+            let progress = json!({
+                "sent_chunks": post.message_ids.len(),
+                "channel_id": post.channel_id,
+                "thread_id": post.thread_id,
+                "message_ids": post.message_ids,
+            })
+            .to_string();
+            if let Err(e) = lock(&self.store).set_op_progress(op.id, &progress, now) {
+                tracing::warn!(error = %e, "the progress of a Discord bot post was not stored");
+            }
+        };
+
+        let map_bot_err = |err: HttpError, sent: usize| -> OpError {
+            let explained =
+                bot.explain_denied(err, &bot_cfg.guild, &bot_cfg.channel, bot_cfg.thread);
+            let mut e = OpError::from(explained);
+            if sent > 0 && sent < total {
+                e.message = format!("{} ({sent} of {total} messages sent)", e.message);
+            }
+            e
+        };
+
+        // 1. Summary message in the channel.
+        if post.message_ids.is_empty() && !all_messages.is_empty() {
+            let n = discord_bot::nonce(&op.meeting_id, &op.op_key, 0);
+            let posted = bot
+                .post_message(&bot_cfg.channel, &all_messages[0], &n, &pacing)
+                .map_err(|e| map_bot_err(e, 0))?;
+            post.message_ids.push(posted.id);
+            persist(&post);
+            if let Some(wait) = posted.wait {
+                self.env.sleep(wait);
+            }
+        }
+
+        // 2. Public thread under the summary message (handles 160004 as already created).
+        if bot_cfg.thread && post.thread_id.is_none() {
+            if let Some(first_id) = post.message_ids.first().cloned() {
+                let tid = bot
+                    .create_thread(&bot_cfg.channel, &first_id, &title, &pacing)
+                    .map_err(|e| map_bot_err(e, post.message_ids.len()))?;
+                post.thread_id = Some(tid);
+                persist(&post);
+            }
+        }
+
+        // 3. Remaining text chunks, issue links and screenshots in the thread (or channel).
+        for idx in post.message_ids.len()..all_messages.len() {
+            let dest = post.thread_id.as_deref().unwrap_or(&bot_cfg.channel);
+            let n = discord_bot::nonce(&op.meeting_id, &op.op_key, idx);
+            let posted = bot
+                .post_message(dest, &all_messages[idx], &n, &pacing)
+                .map_err(|e| map_bot_err(e, post.message_ids.len()))?;
+            post.message_ids.push(posted.id);
+            persist(&post);
+            if let Some(wait) = posted.wait {
+                self.env.sleep(wait);
+            }
+        }
+
+        Ok(json!({
+            "sent_chunks": post.message_ids.len(),
+            "messages": total,
+            "skipped_files": skipped_files,
+            "channel_id": post.channel_id,
+            "thread_id": post.thread_id,
+            "message_ids": post.message_ids,
+        }))
+    }
+
+    fn edit_discord(&self, op: &OutboxOp) -> OpResult {
+        let p: CorrectionPayload = payload(op)?;
+        let ctx = self.context(&p.cycle)?;
+        let Some(target) = ctx.cycle.targets.discord.as_ref() else {
+            return Ok(json!({
+                "edited": false,
+                "replied": false,
+                "skipped": "this cycle has no Discord target",
+            }));
+        };
+        let Some(DiscordMode::Bot(bot_cfg)) = target.mode() else {
+            return Ok(json!({
+                "edited": false,
+                "replied": false,
+                "skipped": "Discord is not configured in bot mode",
+            }));
+        };
+        let Some(post_ref) = self.with_store(|s| {
+            s.get_external_ref(&op.meeting_id, RefTarget::Discord, DISCORD_POST_REF_KEY)
+        })?
+        else {
+            return Ok(json!({
+                "edited": false,
+                "replied": false,
+                "skipped": "no Discord post is recorded for this meeting",
+            }));
+        };
+        let post: DiscordPostExtra =
+            serde_json::from_str(&post_ref.extra).unwrap_or_else(|_| DiscordPostExtra {
+                channel_id: bot_cfg.channel.clone(),
+                thread_id: None,
+                message_ids: vec![post_ref.external_id.clone()],
+            });
+        let channel_id = if post.channel_id.is_empty() {
+            bot_cfg.channel.as_str()
+        } else {
+            post.channel_id.as_str()
+        };
+        let token = self.env.discord_bot_token(&bot_cfg.token).ok_or_else(|| {
+            OpError::permanent(
+                "no Discord bot token is stored for this cycle: add it in the publishing settings, then retry",
+            )
+        })?;
+        let bot = self.discord_bot(&token)?;
+        let snapshot_dir = self
+            .publication(op)?
+            .map(|r| r.snapshot_dir)
+            .ok_or_else(|| {
+                OpError::permanent(
+                    "the publication snapshot of the meeting is missing: cannot re-render the Discord summary",
+                )
+            })?;
+        let (draft, template, report_link, title) = self.load_discord_inputs(
+            op,
+            &ctx,
+            &p.cycle,
+            &snapshot_dir,
+            target.template.as_deref(),
+        )?;
+        let links = if post.thread_id.is_some() {
+            String::new()
+        } else {
+            self.issue_links(&op.meeting_id)?
+        };
+        let rendered = discord::render_text(&discord::TextSpec {
+            draft: &draft,
+            participants: &ctx.cycle.participants,
+            template_body: template.as_deref(),
+            title: &title,
+            report_link: &report_link,
+            issue_links: &links,
+        })
+        .map_err(|issues| {
+            OpError::permanent(format!(
+                "the Discord message cannot be rendered: {}",
+                issues.first().map_or_else(String::new, ToString::to_string)
+            ))
+        })?;
+        let base_summary = discord::split_content(rendered.trim(), discord::MAX_CONTENT_UNITS)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| title.clone());
+
+        let corrections = self.meeting_corrections_up_to(op, &p.correction)?;
+        let edited_content = discord_bot::append_corrections(&base_summary, &corrections);
+        let allowed_mentions = discord::allowed_mentions(&edited_content, &ctx.cycle.participants);
+        let pacing = self.env.pacing();
+
+        let already_edited = op
+            .result
+            .as_deref()
+            .and_then(|r| serde_json::from_str::<Value>(r).ok())
+            .and_then(|v| v.get("edited").and_then(Value::as_bool))
+            .unwrap_or(false);
+        if !already_edited {
+            let outcome = bot
+                .edit_message(
+                    channel_id,
+                    &post_ref.external_id,
+                    &edited_content,
+                    &allowed_mentions,
+                    &pacing,
+                )
+                .map_err(|e| {
+                    OpError::from(bot.explain_denied(e, &bot_cfg.guild, channel_id, bot_cfg.thread))
+                })?;
+            if outcome == EditOutcome::Deleted {
+                return Ok(json!({
+                    "edited": false,
+                    "replied": false,
+                    "skipped": "the Discord message was deleted",
+                }));
+            }
+            let progress = json!({ "edited": true }).to_string();
+            if let Err(e) = lock(&self.store).set_op_progress(op.id, &progress, self.env.now_ms()) {
+                tracing::warn!(error = %e, "the progress of a Discord edit was not stored");
+            }
+        }
+
+        if let Some(thread_id) = post.thread_id.as_deref() {
+            let file_url = self
+                .with_store(|s| s.get_op_by_key(&op.meeting_id, &file_key(&p.correction.id)))?
+                .and_then(|o| o.result)
+                .and_then(|r| serde_json::from_str::<Value>(&r).ok())
+                .and_then(|v| v.get("url").and_then(Value::as_str).map(String::from));
+            let reply_text =
+                discord_bot::format_correction_reply(&p.correction, file_url.as_deref());
+            let reply_msg = OutMessage {
+                content: reply_text,
+                allowed_mentions: json!({"parse": []}),
+                embeds: Vec::new(),
+                files: Vec::new(),
+            };
+            let reply_nonce = discord_bot::nonce(&op.meeting_id, &op.op_key, 0);
+            let posted = bot
+                .post_message(thread_id, &reply_msg, &reply_nonce, &pacing)
+                .map_err(|e| {
+                    OpError::from(bot.explain_denied(e, &bot_cfg.guild, channel_id, true))
+                })?;
+            Ok(json!({
+                "edited": true,
+                "replied": true,
+                "thread_id": thread_id,
+                "reply_message_id": posted.id,
+            }))
+        } else {
+            Ok(json!({
+                "edited": true,
+                "replied": false,
+            }))
+        }
+    }
+
+    /// All non-cancelled corrections of the meeting queued up to `op`, plus `current`,
+    /// deduplicated by correction id in creation order.
+    fn meeting_corrections_up_to(
+        &self,
+        op: &OutboxOp,
+        current: &Correction,
+    ) -> Result<Vec<Correction>, OpError> {
+        let ops = self.with_store(|s| s.list_ops(Some(&op.meeting_id)))?;
+        let mut out: Vec<Correction> = Vec::new();
+        for o in ops.iter().filter(|o| {
+            o.id <= op.id
+                && o.state != OpState::Cancelled
+                && matches!(
+                    o.kind,
+                    OutboxKind::EditDiscord | OutboxKind::CommitCorrection
+                )
+        }) {
+            if let Ok(cp) = serde_json::from_str::<CorrectionPayload>(&o.payload) {
+                if !out.iter().any(|c| c.id == cp.correction.id) {
+                    out.push(cp.correction);
+                }
+            }
+        }
+        if !out.iter().any(|c| c.id == current.id) {
+            out.push(current.clone());
+        }
+        Ok(out)
+    }
+}
+
+/// Stored in `external_refs.extra` for `(RefTarget::Discord, "post")`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct DiscordPostExtra {
+    channel_id: String,
+    #[serde(default)]
+    thread_id: Option<String>,
+    #[serde(default)]
+    message_ids: Vec<String>,
 }
 
 #[cfg(test)]

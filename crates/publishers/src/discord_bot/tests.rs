@@ -1194,3 +1194,42 @@ fn the_fake_answers_in_discords_shapes() {
     );
     assert_eq!(v["thread_metadata"]["auto_archive_duration"], 60);
 }
+
+#[test]
+fn append_corrections_is_deterministic_defuses_mentions_and_respects_the_limit() {
+    let c1 = cycle_store::Correction {
+        id: "c1".into(),
+        date: "2026-11-15".into(),
+        text: "Ping @everyone and <@111111111111111111> about the deadline.".into(),
+        item: Some("i1".into()),
+        issue: None,
+    };
+    let c2 = cycle_store::Correction {
+        id: "c2".into(),
+        date: "2026-11-16".into(),
+        text: "Mount moved to Tuesday.".into(),
+        item: None,
+        issue: None,
+    };
+    let a = append_corrections("Meeting summary", &[c1.clone(), c2.clone()]);
+    let b = append_corrections("Meeting summary", &[c1.clone(), c2.clone()]);
+    assert_eq!(a, b);
+    assert!(a.contains("**Corrections**"));
+    assert!(a.contains("- 2026-11-15:"));
+    assert!(a.contains("- 2026-11-16: Mount moved to Tuesday."));
+    assert!(!a.contains("@everyone"));
+    assert!(!a.contains("<@111111111111111111>"));
+
+    // An oversized summary is trimmed so the result stays within 2000 UTF-16 units.
+    let huge = "a".repeat(2500);
+    let trimmed = append_corrections(&huge, &[c2]);
+    assert!(crate::discord::content_units(&trimmed) <= crate::discord::MAX_CONTENT_UNITS);
+    assert!(trimmed.contains("**Corrections**"));
+
+    let reply = format_correction_reply(&c1, Some("https://example.test/corrections.md"));
+    assert!(reply.contains("Correction (2026-11-15):"));
+    assert!(reply.contains("[Correction file](https://example.test/corrections.md)"));
+    assert!(!reply.contains("@everyone"));
+    assert!(!reply.contains("<@111111111111111111>"));
+    assert!(crate::discord::content_units(&reply) <= crate::discord::MAX_CONTENT_UNITS);
+}
