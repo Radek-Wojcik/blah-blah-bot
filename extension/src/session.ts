@@ -80,8 +80,10 @@ export class StreamSession {
 
   /** The socket is ready (first connection or after a reconnect): start or resume. */
   onConnected(): void {
-    // A waiting stream starts when the application reports that it records (onAppState).
-    if (this.status === "ended" || this.status === "waiting") return;
+    if (this.status === "ended") return;
+    // A waiting stream offers itself again: the application lists the tabs it waits for, and
+    // it forgot them when the connection was lost. It starts recording when the application
+    // reports a recording (onAppState).
     if (this.accepted) {
       this.status = "starting";
       const first = this.pending[0]?.seq ?? this.nextSeq;
@@ -163,9 +165,11 @@ export class StreamSession {
     if (this.status === "ended") return;
     if (this.status === "active") this.pumpAll();
     const wasAccepted = this.accepted;
+    // A waiting tab is on offer in the application: tell it that the tab is gone.
+    const wasOffered = this.status === "waiting";
     this.status = "ended";
     this.cancelPump();
-    if (wasAccepted || this.pending.length > 0) {
+    if (wasAccepted || wasOffered || this.pending.length > 0) {
       this.link.sendText(
         stopMessage(this.info.streamId, reason, {
           framesSent: this.framesSent,

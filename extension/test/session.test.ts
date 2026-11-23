@@ -93,13 +93,19 @@ describe("start", () => {
     expect(link.frames).toEqual([{ streamNo: 2, seq: 0 }]);
   });
 
-  it("does not start twice when connecting while waiting", () => {
+  it("offers a waiting stream again after a reconnect, once", () => {
     const { link, s } = make();
     s.onConnected();
     s.onStartRefused({ type: "start_refused", stream_id: "t1-a", reason: "not_recording" });
     link.texts.length = 0;
+    s.onDisconnected();
     s.onConnected();
-    expect(link.texts).toHaveLength(0);
+    expect(link.types()).toEqual(["start"]);
+    // The state that follows hello_ok does not make it start a second time.
+    s.onAppState({ type: "state", recording: true, streams: [] });
+    expect(link.types()).toEqual(["start"]);
+    s.onStartOk({ type: "start_ok", stream_id: "t1-a", stream_no: 3, track: "tab" });
+    expect(s.status).toBe("active");
   });
 });
 
@@ -207,10 +213,26 @@ describe("recording state and stop", () => {
     expect(link.frames).toHaveLength(2);
   });
 
-  it("stop of a stream that was never accepted sends nothing", () => {
+  it("stop of a waiting stream tells the application, which lists it as on offer", () => {
     const { link, s } = make();
     s.onConnected();
     s.onStartRefused({ type: "start_refused", stream_id: "t1-a", reason: "not_recording" });
+    link.texts.length = 0;
+    s.stop("tab_closed");
+    expect(link.texts).toEqual([
+      {
+        type: "stop",
+        stream_id: "t1-a",
+        reason: "tab_closed",
+        frames_sent: 0,
+        samples_sent: 0,
+        frames_dropped: 0,
+      },
+    ]);
+  });
+
+  it("stop of a stream that never got an answer and sent nothing stays silent", () => {
+    const { link, s } = make();
     link.texts.length = 0;
     s.stop("user_stop");
     expect(link.texts).toHaveLength(0);
