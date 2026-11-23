@@ -7,7 +7,7 @@ use recorder::screenshot::Frame;
 use recorder::session::{CaptureBackend, RoutingBackend, ToneBackend, WasapiBackend};
 use tauri::{AppHandle, Manager};
 
-use crate::briefing::{BriefingSource, CycleStoreSource};
+use crate::briefing::{BriefingSource, PublishingSource};
 use crate::browser::{AppHost, Browser};
 use crate::cycles::ParticipantSync;
 use crate::detection::Detection;
@@ -149,13 +149,18 @@ impl AppState {
             browser,
             browser_host,
             detection,
-            // Stage 5 reads issues back from GitHub: its source replaces this one line.
-            briefing: Arc::new(CycleStoreSource::new(move || {
-                briefing_settings
-                    .lock()
-                    .map(|s| s.cycle_repos.clone())
-                    .unwrap_or_default()
-            })),
+            // The tasks come from the issues Stage 5 reads back from GitHub; a repository that
+            // is not linked or whose issues were never read falls back to the cycle files.
+            briefing: Arc::new(PublishingSource::new(
+                move || {
+                    briefing_settings
+                        .lock()
+                        .map(|s| s.cycle_repos.clone())
+                        .unwrap_or_default()
+                },
+                Arc::new(crate::secrets::Credentials),
+                crate::issue_sync::quick_client,
+            )),
             demo,
         })
     }

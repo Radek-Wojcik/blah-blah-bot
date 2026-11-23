@@ -1,18 +1,23 @@
 //! The briefing screen: open tasks by person and open topics of a cycle, before a meeting.
 //!
-//! Where the tasks come from is behind the [`BriefingSource`] trait. Today that is
-//! [`CycleStoreSource`]: the open issues of the cache (`.git/bbb-issues-<ID>.json`), the task
-//! items of the `meeting.json` files of earlier meetings and `topics.yaml`, all read from the
-//! local clone. When Stage 5 reads issues back from GitHub and writes status changes, it
-//! brings a second `BriefingSource` (the issues with their real state and due dates) and
-//! `AppState::open` builds that one instead: a one-line swap. Nothing else changes, because
+//! Where the tasks come from is behind the [`BriefingSource`] trait. The default is
+//! [`PublishingSource`] (module `publishing_source`): the open and the done issues as Stage 5
+//! reads them back from GitHub (`publishing::tasks_of`, from the cache
+//! `.git/bbb-issues-<ID>.json`), the task items of the `meeting.json` files of earlier meetings
+//! and `topics.yaml`. [`CycleStoreSource`] is what it falls back to when the repository is not
+//! linked to GitHub or its issues were never read: the cached open issues, the meeting tasks
+//! and the topics, all read from the local clone. Nothing else depends on the source, because
 //! the grouping, the overdue marks and the screen work on [`TaskFeed`] and [`TopicFeed`] only.
 //!
 //! The command `get_briefing(cycleId, refresh)` returns the whole screen as one value. With
 //! `refresh`, a cloned repository is pulled first (the same `git pull --rebase` as before the
 //! extraction, see ADR 0017: never a stash, nothing is pulled while cycle files have
-//! uncommitted edits, a failure leaves the clone untouched). The UI asks once without
-//! `refresh`, so that the last known state shows at once, and once with it.
+//! uncommitted edits, a failure leaves the clone untouched) and the source may refresh its own
+//! cache of issues (a failure keeps the cache and is reported as the state of its date). The UI
+//! asks once without `refresh`, so that the last known state shows at once, and once with it.
+
+mod publishing_source;
+pub use publishing_source::PublishingSource;
 
 use cycle_store::schema::is_identifier;
 use cycle_store::time::{format_utc_date, now_unix_ms};
@@ -57,11 +62,25 @@ pub struct TopicFeed {
     pub as_of: Option<String>,
 }
 
-/// Where the briefing gets tasks and topics from. Implementations read; they never write and
-/// never pull (the command does that before it asks).
+/// What a source did when it was asked to bring its data up to date.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SourceRefresh {
+    /// Why the update failed; the data stays what it was, with its date.
+    pub error: Option<String>,
+}
+
+/// Where the briefing gets tasks and topics from. `tasks` and `topics` only read; they never
+/// write and never pull (the command pulls the clone before it asks).
 pub trait BriefingSource: Send + Sync {
     fn tasks(&self, cycle_id: &str) -> IpcResult<TaskFeed>;
     fn topics(&self, cycle_id: &str) -> IpcResult<TopicFeed>;
+
+    /// Brings what the source keeps of its own (a cache of issues) up to date; called only
+    /// when the briefing is asked to refresh. `None`: nothing to update for this cycle (the
+    /// default). A failure is part of the answer, never an error.
+    fn refresh(&self, _located: &cycles::Located, _cycle_id: &str) -> Option<SourceRefresh> {
+        None
+    }
 }
 
 /// The source of Stage 6: the cycle repository on this machine.
@@ -216,8 +235,8 @@ pub struct Briefing {
     /// `YYYY-MM-DD` of the data shown: the last successful pull, or the age of the issue
     /// cache, whichever is older. `None` for a local repository without issues.
     pub state_as_of: Option<String>,
-    /// The last attempt to update the clone failed: what is shown is the state of
-    /// `stateAsOf`.
+    /// The last attempt to update the clone or to read the issues failed: what is shown is the
+    /// state of `stateAsOf`.
     pub offline: bool,
     /// The data may be behind the remote (see `TaskFeed::from_cache`).
     pub from_cache: bool,
@@ -289,6 +308,13 @@ pub fn build_briefing(
         ));
     }
 
+    let refreshed = if refresh {
+        source.refresh(&located, cycle_id)
+    } else {
+        None
+    };
+    let issues_error = refreshed.as_ref().and_then(|r| r.error.clone());
+    let issues_fresh = refreshed.as_ref().is_some_and(|r| r.error.is_none());
     let tasks = source.tasks(cycle_id)?;
     let topics = source.topics(cycle_id)?;
     warnings.extend(tasks.warnings.iter().cloned());
@@ -309,12 +335,15 @@ pub fn build_briefing(
             .flat_map(|g| g.tasks.iter().map(BriefingTask::from))
             .collect(),
         topics: topics.open.iter().map(TopicDto::from).collect(),
-        has_remote: located.setting.remote.is_some() || is_clone,
+        has_remote: located.setting.remote.is_some() || is_clone || refreshed.is_some(),
         state_as_of: oldest(tasks.as_of, topics.as_of),
-        offline: repo.offline,
-        from_cache: tasks.from_cache,
+        offline: repo.offline || issues_error.is_some(),
+        // Issues that were just read are not behind the remote, unless the clone could not be
+        // updated; issues that could not be read are.
+        from_cache: (tasks.from_cache && !(issues_fresh && !repo.offline))
+            || issues_error.is_some(),
         pull,
-        error: pull_error.or(repo.last_error),
+        error: pull_error.or(repo.last_error).or(issues_error),
         warnings,
     })
 }
@@ -734,7 +763,7 @@ mod tests {
     }
 
     /// A source that is not the cycle repository: the screen does not care where tasks come
-    /// from (this is how Stage 5 plugs in).
+    /// from (this is how `PublishingSource` plugs in).
     struct FixedSource;
 
     impl BriefingSource for FixedSource {
