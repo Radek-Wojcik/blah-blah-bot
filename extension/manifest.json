@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Blah Blah Bot",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Streams the audio of a browser tab to the Blah Blah Bot application on this computer (127.0.0.1) and reports Google Meet calls.",
   "minimum_chrome_version": "116",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsmiAJYAYAOwBKlIiIHwU4CRYOUStbifpkmS2I9sZdVPbHbwzQ5Tujts5U+pzPvAxvYrNcZOx67sZEnZw9ln64L3S4WGLe9kDluKyqPwiF4WgDc9iPEsQ5adpKNoeRAsE8ClAUHdomqANiA16F0O2Zw2yGDmtJ9ri1j391RlUEm64Xv70zlRF8ZGjEaFkVuTvhXMDcIJI8+PRzMUjpjEEYgR8ipHZ83g7425b7fH1Jf6Rmk2FDTLexqMV1KCSj1aeWYkuBlsrqlIhX6ATtTo6yCmUjCP32Zv+8AirlinncZ4+fA1zMSrSkK/yqDVUpIR54T0TOvPO58aLfxXnqvEqRwIDAQAB",

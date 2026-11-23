@@ -6,7 +6,7 @@ Local meeting recorder for Windows that turns calls into GitHub issues and Disco
 ![Platform: Windows](https://img.shields.io/badge/platform-Windows-blue)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
-> **Project status:** Stage 5 (publishing) is released as v0.6.0. The application keeps cycles in a Git repository and turns a processed transcript into an editable draft report with tasks, decisions, topics, notes, ideas and budgets, each linked to a quote. It commits the report to the cycle repository, creates GitHub issues, writes approved status changes back and posts to Discord through a webhook; it was run once against a real test repository and a real test webhook, and otherwise tested against fake servers and local Git repositories. Stage 1 still has one open measurement (microphone buffer flags, see below). Stage 6 (convenience) is implemented on its own branch and not released: a briefing, call detection with a prompt and a Chrome extension for browser tabs. It is tested on the mock backend, on recorded session traces and in a scripted Chrome; real calls, a real tab for 30 minutes and a working day of detection are not measured yet (see Stage 6 measurements). There is no installer; build from source.
+> **Project status:** Stage 6 (convenience) is released as v0.7.0. The application keeps cycles in a Git repository, shows a briefing of open tasks and topics before a meeting, detects calls with a prompt, records browser tabs through a Chrome extension, turns a processed transcript into an editable draft report with tasks, decisions, topics, notes, ideas and budgets linked to quotes, and publishes to the cycle repository, GitHub issues and Discord. Publishing was run once against a real test repository and a real test webhook, and is otherwise tested against fake servers and local Git repositories. Stage 6 is tested on the mock backend, on recorded session traces, over real loopback sockets and in a scripted Chrome 136; real Teams, Discord and Meet calls, a 30 minute capture of a real tab, an 8 hour working day of detection, Windows 11 and Chrome 137 or newer (where `--load-extension` is removed) are not verified yet (see Stage 6 measurements). Stage 1 still has one open measurement (microphone buffer flags, see below). There is no installer; build from source.
 
 ## What works today
 
@@ -378,7 +378,7 @@ Prototype results on the reference machine (RTX 3080 with 12 GB, Windows 10 buil
 | 3 | Speakers and voice profiles | v0.4.0 | Done |
 | 4 | Cycles and reports | v0.5.0 | Done |
 | 5 | Publishing | v0.6.0 | Done (the organization field "Target date" is unverified) |
-| 6 | Convenience | v0.7.0 | In progress, not released; real-call and 30 minute tab measurements open |
+| 6 | Convenience | v0.7.0 | Done (tested on mock/traces/scripted Chrome 136; 30 min real tab, 8 h detection day, real calls, Win 11 and Chrome >=137 unverified) |
 | 7 | Integrations | v0.8.0 | Planned |
 | 8 | Stabilization | v1.0.0 | Planned |
 

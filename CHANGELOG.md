@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-23
+
 ### Stage 6 (convenience)
 
 Briefing, call detection, a Chrome extension for browser tabs and the whole-browser fallback. Tested on the mock backend, on recorded session traces, over real loopback sockets and in a scripted Chrome; not yet run on real calls.

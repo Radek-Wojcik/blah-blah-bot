@@ -185,7 +185,7 @@ test.describe("static screenshots", () => {
           },
         ],
         meetTabs: [],
-        version: "0.6.0",
+        version: "0.7.0",
       };
       (window as unknown as { chrome: unknown }).chrome = {
         tabs: { query: async () => [{ id: 11, url: "https://meet.example.org/orbit-sync" }] },

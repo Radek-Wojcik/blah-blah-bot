@@ -335,15 +335,17 @@ flowchart LR
 - *Measurements:* continuity of a 30-minute tab capture; detection false prompts over a working day.
 
 **Definition of done**
-- [ ] Briefing shows open tasks and topics from the repository
+- [x] Briefing shows open tasks and topics from the repository (tested against local Git repositories and the mock backend: `crates/app/src/briefing.rs`, `ui/tests/briefing.spec.ts`)
 - [ ] Starting a call in Discord, Teams or Meet raises one prompt, and idle applications raise none
 - [ ] A captured tab stays audible and is recorded as its own track
-- [ ] A tab group can be captured with one action per tab
-- [ ] Release v0.7.0 published
+- [x] A tab group can be captured with one action per tab (tested in scripted Chrome and unit tests: `extension/e2e/bridge.spec.ts`, `extension/test/groups.test.ts`)
+- [x] Release v0.7.0 published
+
+**Status.** Released as v0.7.0. Tasks 1 to 6 are implemented and covered by unit, mock and scripted-Chrome tests ([ADR 0020](decisions/0020-bridge-protocol-and-pairing.md), [ADR 0021](decisions/0021-extension-distribution.md), [ADR 0022](decisions/0022-meeting-detection.md)). Open: 30-minute real-tab capture (only the 2-minute synthetic run is recorded), 8-hour working-day detection trace, real Teams, Discord and Meet calls, Windows 11, and unpacked extension loading on Chrome 137 or newer.
 
 **Demo and visuals.** GIF: detection prompt to recording; briefing screen. Screenshots: briefing, extension popup.
 
-**Docs and release.** README: extension installation, briefing. CHANGELOG. Tag `v0.7.0`.
+**Docs and release.** README: extension installation, briefing. CHANGELOG. Tag `v0.7.0` is set.
 
 **Risks.** Chrome capture restrictions and stream release timing; false detections; extension distribution outside the Web Store.
 
