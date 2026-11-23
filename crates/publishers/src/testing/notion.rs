@@ -609,20 +609,26 @@ fn update_page(state: &mut State, id: &str, req: &Recorded) -> Reply {
     let Some(body) = req.json().filter(Value::is_object) else {
         return validation("body failed validation: body should be an object.");
     };
-    let Some(properties) = body.get("properties").and_then(Value::as_object) else {
+    let in_trash = body.get("in_trash").and_then(Value::as_bool);
+    let properties = body.get("properties").and_then(Value::as_object);
+    if properties.is_none() && in_trash.is_none() {
         return validation("body.properties should be defined, instead was `undefined`.");
-    };
-    let source_id = state.pages[index].stored.data_source.clone();
-    let Some(source) = state.sources.iter_mut().find(|s| s.id == source_id) else {
-        return not_found();
-    };
-    let written = match validate_properties(source, properties) {
-        Ok(w) => w,
-        Err(reply) => return reply,
-    };
-    let page = &mut state.pages[index].stored;
-    page.properties.extend(written);
-    Reply::json(200, &page_json(page))
+    }
+    if let Some(properties) = properties {
+        let source_id = state.pages[index].stored.data_source.clone();
+        let Some(source) = state.sources.iter_mut().find(|s| s.id == source_id) else {
+            return not_found();
+        };
+        let written = match validate_properties(source, properties) {
+            Ok(w) => w,
+            Err(reply) => return reply,
+        };
+        state.pages[index].stored.properties.extend(written);
+    }
+    if let Some(trashed) = in_trash {
+        state.pages[index].stored.in_trash = trashed;
+    }
+    Reply::json(200, &page_json(&state.pages[index].stored))
 }
 
 /// Checks written properties against the schema and returns them in their stored form. A
