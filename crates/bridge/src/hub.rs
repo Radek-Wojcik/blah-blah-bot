@@ -162,6 +162,10 @@ pub struct HubStatus {
     pub pairing: Option<(String, Instant)>,
     pub clients: Vec<ClientStatus>,
     pub streams: Vec<StreamStatus>,
+    /// Tabs the extension has captured and waits to record: refused because nothing was
+    /// recording, or declined by the application. They are offered again when a recording
+    /// starts.
+    pub offered: Vec<TabStream>,
     pub connections: usize,
     pub recording: bool,
 }
@@ -169,6 +173,13 @@ pub struct HubStatus {
 struct ConnEntry {
     client_id: Option<String>,
     tx: Sender<Outgoing>,
+}
+
+/// A tab the application did not take (yet).
+struct Offer {
+    info: TabStream,
+    client_id: String,
+    conn: ConnId,
 }
 
 struct Slot {
@@ -213,6 +224,8 @@ struct Inner {
     clients: Vec<PairedClient>,
     conns: HashMap<ConnId, ConnEntry>,
     streams: HashMap<String, Slot>,
+    /// Tabs that asked to be recorded and were refused; see [`HubStatus::offered`].
+    offered: HashMap<String, Offer>,
     /// Streams that ended before the recorder attached to them. The recording thread starts
     /// a moment after the stream is accepted; a tab that stops in that moment must still be
     /// recorded, with the frames it sent.
@@ -379,6 +392,8 @@ impl Hub {
         {
             let mut inner = self.lock();
             inner.conns.remove(&conn);
+            // The extension offers its waiting tabs again after it reconnects.
+            inner.offered.retain(|_, o| o.conn != conn);
             for s in inner.streams.values_mut() {
                 if s.conn == Some(conn) {
                     s.conn = None;
@@ -503,7 +518,7 @@ impl Hub {
             title: start.title.chars().take(MAX_TITLE_CHARS).collect(),
             host: start.host.clone(),
         };
-        let stream_no = {
+        let (stream_no, client_id) = {
             let mut inner = self.lock();
             let Some(client_id) = Self::client_of(&inner, conn) else {
                 return refused(RefuseReason::Declined);
@@ -513,18 +528,32 @@ impl Hub {
             }
             inner.parked.remove(&start.stream_id);
             if inner.recording.is_none() {
+                inner.offered.insert(
+                    start.stream_id.clone(),
+                    Offer {
+                        info,
+                        client_id,
+                        conn,
+                    },
+                );
+                drop(inner);
+                self.run(After {
+                    status: true,
+                    ..After::default()
+                });
                 return refused(RefuseReason::NotRecording);
             }
             let stream_no = inner.next_stream_no;
             inner.next_stream_no = inner.next_stream_no.wrapping_add(1).max(1);
             let (tx, rx) = mpsc::sync_channel(STREAM_QUEUE_FRAMES);
             inner.by_no.insert(stream_no, start.stream_id.clone());
+            inner.offered.remove(&start.stream_id);
             inner.streams.insert(
                 start.stream_id.clone(),
                 Slot {
                     info: info.clone(),
                     stream_no,
-                    client_id,
+                    client_id: client_id.clone(),
                     conn: Some(conn),
                     track: None,
                     tx,
@@ -535,12 +564,27 @@ impl Hub {
                     dropped: 0,
                 },
             );
-            stream_no
+            (stream_no, client_id)
         };
         // The observer adds the track; it may call `attach` from another thread meanwhile.
         let decision = self.observer.add_tab(&info);
+        let accepted = decision.is_ok();
         let reply = {
             let mut inner = self.lock();
+            if let Err(reason) = &decision {
+                // Declined for now: the tab stays on offer (for the picker) and can be
+                // taken later.
+                if *reason != RefuseReason::Duplicate {
+                    inner.offered.insert(
+                        start.stream_id.clone(),
+                        Offer {
+                            info: info.clone(),
+                            client_id: client_id.clone(),
+                            conn,
+                        },
+                    );
+                }
+            }
             match (decision, inner.streams.get_mut(&start.stream_id)) {
                 (Ok(track), Some(slot)) => {
                     slot.track = Some(track.clone());
@@ -561,8 +605,11 @@ impl Hub {
                 }
             }
         };
+        // A refusal changes no state the extension needs: answering it with a state message
+        // would make a waiting tab ask again at once.
         self.run(After {
-            state: true,
+            state: accepted,
+            status: !accepted,
             ..After::default()
         });
         reply
@@ -599,8 +646,17 @@ impl Hub {
 
     /// The extension stopped a stream.
     pub fn stop(&self, conn: ConnId, stop: &Stop) {
+        let mut offer_gone = false;
         let removed = {
             let mut inner = self.lock();
+            if inner
+                .offered
+                .get(&stop.stream_id)
+                .is_some_and(|o| o.conn == conn)
+            {
+                inner.offered.remove(&stop.stream_id);
+                offer_gone = true;
+            }
             let owned = inner
                 .streams
                 .get(&stop.stream_id)
@@ -629,6 +685,11 @@ impl Hub {
             );
             self.run(After {
                 state: true,
+                ..After::default()
+            });
+        } else if offer_gone {
+            self.run(After {
+                status: true,
                 ..After::default()
             });
         }
@@ -740,6 +801,12 @@ impl Hub {
         }
     }
 
+    /// Send the current state to every extension again. A tab that waits on offer asks
+    /// the application again when it receives a state that says a recording runs.
+    pub fn announce_state(&self) {
+        self.broadcast_state();
+    }
+
     /// Offer a new pairing code.
     pub fn start_pairing(&self, now: Instant) -> Result<(String, Instant), RandomError> {
         let out = {
@@ -804,6 +871,7 @@ impl Hub {
                     c.client_id = None;
                 }
             }
+            inner.offered.retain(|_, o| o.client_id != client_id);
             let gone: Vec<String> = inner
                 .streams
                 .iter()
@@ -901,6 +969,12 @@ impl Hub {
                 })
                 .collect(),
             streams,
+            offered: {
+                let mut offered: Vec<TabStream> =
+                    inner.offered.values().map(|o| o.info.clone()).collect();
+                offered.sort_by(|a, b| a.stream_id.cmp(&b.stream_id));
+                offered
+            },
             connections: inner.conns.len(),
             recording: inner.recording.is_some(),
         }
@@ -1046,6 +1120,104 @@ mod tests {
             feed.next(Duration::from_millis(10)),
             FeedEvent::End(EndReason::Closed)
         );
+    }
+
+    fn offered_ids(hub: &Hub) -> Vec<String> {
+        hub.status(Instant::now())
+            .offered
+            .into_iter()
+            .map(|t| t.stream_id)
+            .collect()
+    }
+
+    fn states_in(rx: &Receiver<Outgoing>) -> usize {
+        rx.try_iter()
+            .filter(|o| matches!(o, Outgoing::Message(ServerMessage::State(_))))
+            .count()
+    }
+
+    #[test]
+    fn a_tab_refused_while_idle_is_on_offer_until_it_is_taken_or_stopped() {
+        let (hub, _) = hub();
+        let (conn, rx, _) = paired(&hub);
+        let _ = rx.try_iter().count();
+        assert!(matches!(
+            hub.start(conn, &start_msg("s1")),
+            ServerMessage::StartRefused(_)
+        ));
+        let mut other = start_msg("s2");
+        other.tab_id = 8;
+        other.host = "docs.example.org".into();
+        hub.start(conn, &other);
+        assert_eq!(offered_ids(&hub), ["s1", "s2"]);
+        let offered = hub.status(Instant::now()).offered;
+        assert_eq!(offered[1].host, "docs.example.org");
+        assert!(hub.status(Instant::now()).streams.is_empty());
+        // Refusals change no state: the extension is not told again.
+        assert_eq!(states_in(&rx), 0);
+
+        // The tab is closed: the extension says so.
+        hub.stop(
+            conn,
+            &Stop {
+                stream_id: "s2".into(),
+                reason: StopReason::TabClosed,
+                frames_sent: 0,
+                samples_sent: 0,
+                frames_dropped: 0,
+            },
+        );
+        assert_eq!(offered_ids(&hub), ["s1"]);
+
+        // A recording starts; the waiting tab asks again and joins.
+        hub.set_recording(Some("m1".into()));
+        assert_eq!(states_in(&rx), 1);
+        assert!(matches!(
+            hub.start(conn, &start_msg("s1")),
+            ServerMessage::StartOk(_)
+        ));
+        assert!(offered_ids(&hub).is_empty());
+        assert_eq!(hub.status(Instant::now()).streams.len(), 1);
+    }
+
+    #[test]
+    fn a_declined_tab_stays_on_offer_and_can_be_announced_again() {
+        let (hub, obs) = hub();
+        let (conn, rx, _) = paired(&hub);
+        hub.set_recording(Some("m1".into()));
+        *obs.refuse.lock().unwrap() = Some(RefuseReason::Declined);
+        hub.start(conn, &start_msg("s1"));
+        assert_eq!(offered_ids(&hub), ["s1"]);
+        let _ = rx.try_iter().count();
+        // The user adds the tab later: the state goes out and the tab asks again.
+        *obs.refuse.lock().unwrap() = None;
+        hub.announce_state();
+        assert_eq!(states_in(&rx), 1);
+        assert!(matches!(
+            hub.start(conn, &start_msg("s1")),
+            ServerMessage::StartOk(_)
+        ));
+        assert!(offered_ids(&hub).is_empty());
+    }
+
+    #[test]
+    fn offers_end_with_the_connection() {
+        let (hub, _) = hub();
+        let (conn, _rx, _) = paired(&hub);
+        hub.start(conn, &start_msg("s1"));
+        assert_eq!(offered_ids(&hub), ["s1"]);
+        hub.disconnect(conn, Instant::now());
+        assert!(offered_ids(&hub).is_empty());
+    }
+
+    #[test]
+    fn unpairing_removes_the_offers_of_the_client() {
+        let (hub, _) = hub();
+        let (conn, _rx, ok) = paired(&hub);
+        hub.start(conn, &start_msg("s9"));
+        assert_eq!(offered_ids(&hub), ["s9"]);
+        assert!(hub.unpair(&ok.client_id));
+        assert!(offered_ids(&hub).is_empty());
     }
 
     #[test]
