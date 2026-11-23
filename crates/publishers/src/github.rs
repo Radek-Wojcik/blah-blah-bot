@@ -15,8 +15,10 @@ use crate::http::{parse_endpoint, ErrorKind, HttpClient, HttpError, Request};
 pub const DEFAULT_API: &str = "https://api.github.com";
 const API_VERSION: &str = "2022-11-28";
 
+mod exporter;
 mod issues;
 
+pub use exporter::GithubIssues;
 pub use issues::{
     defuse_mentions, issue_body, CorrectionSpec, DueOutcome, IssueOutcome, IssueSpec,
     StatusOutcome, StatusSpec, DUE_FIELD_NAME, WRITE_PACING,
