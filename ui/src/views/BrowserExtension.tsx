@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useBackend } from "../backend-context";
-import { bridgeSummary, clientDetails, pairingTimeLeft } from "../bridge";
+import { bridgeSummary, clientDetails, groupSummary, pairingTimeLeft } from "../bridge";
 import { errorMessage } from "../hooks";
 import type { BridgeStatus } from "../ipc/types";
 
@@ -47,6 +47,11 @@ export function BrowserExtension() {
       <div className="panel quiet" style={{ maxWidth: 620 }}>
         <div className="panel-body">
           <p data-testid="bridge-state">{bridgeSummary(status)}</p>
+          {status.groups.map((g, i) => (
+            <p key={g.groupId} data-testid="bridge-group">
+              {groupSummary(g, i)}
+            </p>
+          ))}
           {pairing && left ? (
             <div aria-label="Pairing code">
               <p>

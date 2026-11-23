@@ -167,6 +167,18 @@ export interface BridgeStreamView {
   waiting: boolean;
 }
 
+export interface BridgeGroupTabView {
+  tabId: number;
+  /** `captured`, `waiting` or `failed`. */
+  status: string;
+}
+
+/** A tab group the user is capturing, with the status of each tab. */
+export interface BridgeGroupView {
+  groupId: number;
+  tabs: BridgeGroupTabView[];
+}
+
 /** State of the bridge to the Chrome extension; payload of `bridge-changed`. */
 export interface BridgeStatus {
   enabled: boolean;
@@ -177,6 +189,7 @@ export interface BridgeStatus {
   pairing: PairingView | null;
   clients: BridgeClientView[];
   streams: BridgeStreamView[];
+  groups: BridgeGroupView[];
 }
 
 export type IpcErrorCode =

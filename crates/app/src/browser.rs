@@ -5,13 +5,14 @@
 //! The extension can only stream while a recording runs; each accepted tab becomes a track
 //! of that recording (`tab:<stream id>`), fed from the bridge through [`HubTabs`].
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bridge::hub::{FeedEvent, HubObserver, StreamFeed, TabStream};
 use bridge::pairing::{display_code, PairedClient};
-use bridge::protocol::RefuseReason;
+use bridge::protocol::{Group, GroupTabStatus, MeetState, RefuseReason};
 use bridge::{Hub, HubConfig, Server, ServerConfig};
 use recorder::push::{PushFrame, TabFeed, TabItem, TabSource};
 use serde::Serialize;
@@ -53,6 +54,23 @@ pub struct StreamView {
     pub waiting: bool,
 }
 
+/// Capture status of one tab of a tab group.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupTabView {
+    pub tab_id: u32,
+    /// `captured`, `waiting` or `failed`.
+    pub status: String,
+}
+
+/// A tab group the user is capturing, with the status of each tab.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupView {
+    pub group_id: i64,
+    pub tabs: Vec<GroupTabView>,
+}
+
 /// Everything the Browser extension section shows. Payload of `bridge-changed`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -65,6 +83,7 @@ pub struct BridgeStatus {
     pub pairing: Option<PairingView>,
     pub clients: Vec<ClientView>,
     pub streams: Vec<StreamView>,
+    pub groups: Vec<GroupView>,
 }
 
 /// What the bridge needs from the rest of the application.
@@ -75,12 +94,15 @@ pub trait BrowserHost: Send + Sync {
     fn add_tab(&self, stream_id: &str, label: &str) -> IpcResult<String>;
     /// The bridge status changed.
     fn changed(&self);
+    /// A Google Meet tab was joined or left (the meeting code is never sent).
+    fn meet(&self, _tab_id: u32, _joined: bool) {}
 }
 
 /// The hub's view of the application.
 struct Link {
     host: Arc<dyn BrowserHost>,
     auto_add: Arc<AtomicBool>,
+    groups: Arc<Mutex<BTreeMap<i64, Vec<GroupTabView>>>>,
 }
 
 /// Label of a tab track in the source list.
@@ -124,8 +146,34 @@ impl HubObserver for Link {
     }
 
     fn meet(&self, meet: &bridge::protocol::Meet) {
-        // Meeting detection uses this from Stage 6 M4 on; log it for now.
         tracing::info!(tab = meet.tab_id, state = ?meet.state, "Google Meet tab");
+        self.host.meet(meet.tab_id, meet.state == MeetState::Joined);
+    }
+
+    fn group(&self, group: &Group) {
+        if let Ok(mut groups) = self.groups.lock() {
+            if group.tabs.is_empty() {
+                groups.remove(&group.group_id);
+            } else {
+                groups.insert(
+                    group.group_id,
+                    group
+                        .tabs
+                        .iter()
+                        .map(|t| GroupTabView {
+                            tab_id: t.tab_id,
+                            status: match t.status {
+                                GroupTabStatus::Captured => "captured",
+                                GroupTabStatus::Waiting => "waiting",
+                                GroupTabStatus::Failed => "failed",
+                            }
+                            .to_string(),
+                        })
+                        .collect(),
+                );
+            }
+        }
+        self.host.changed();
     }
 }
 
@@ -172,6 +220,7 @@ struct Running {
 pub struct Browser {
     hub: Arc<Hub>,
     auto_add: Arc<AtomicBool>,
+    groups: Arc<Mutex<BTreeMap<i64, Vec<GroupTabView>>>>,
     enabled: AtomicBool,
     running: Mutex<Running>,
 }
@@ -188,9 +237,11 @@ impl Browser {
     /// Create the bridge with the stored clients. The server starts with [`Browser::apply`].
     pub fn new(settings: &BridgeSettings, host: Arc<dyn BrowserHost>) -> Arc<Self> {
         let auto_add = Arc::new(AtomicBool::new(settings.auto_add_tabs));
+        let groups = Arc::new(Mutex::new(BTreeMap::new()));
         let link = Arc::new(Link {
             host,
             auto_add: auto_add.clone(),
+            groups: groups.clone(),
         });
         let hub = Hub::new(
             HubConfig {
@@ -203,6 +254,7 @@ impl Browser {
         Arc::new(Self {
             hub,
             auto_add,
+            groups,
             enabled: AtomicBool::new(settings.enabled),
             running: Mutex::new(Running::default()),
         })
@@ -308,6 +360,18 @@ impl Browser {
                     waiting: s.waiting,
                 })
                 .collect(),
+            groups: self
+                .groups
+                .lock()
+                .map(|g| {
+                    g.iter()
+                        .map(|(id, tabs)| GroupView {
+                            group_id: *id,
+                            tabs: tabs.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
         }
     }
 
@@ -392,6 +456,14 @@ impl BrowserHost for AppHost {
         if let Err(e) = app.emit(EVENT_BRIDGE, state.browser().status()) {
             tracing::warn!(error = %e, "could not emit the bridge status");
         }
+    }
+
+    fn meet(&self, tab_id: u32, joined: bool) {
+        let Some(app) = self.app.get() else { return };
+        let Some(state) = app.try_state::<AppState>() else {
+            return;
+        };
+        state.detection().meet(u64::from(tab_id), joined);
     }
 }
 
@@ -557,10 +629,7 @@ mod tests {
             if src.status == crate::recording_dto::SourceStatus::Ended {
                 break;
             }
-            assert!(
-                Instant::now() < deadline,
-                "the tab track did not end"
-            );
+            assert!(Instant::now() < deadline, "the tab track did not end");
             std::thread::sleep(Duration::from_millis(20));
         }
         let id = recorder.stop().unwrap();

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bridgeSummary, clientDetails, pairingTimeLeft } from "./bridge";
+import { bridgeSummary, clientDetails, groupSummary, pairingTimeLeft } from "./bridge";
 import type { BridgeStatus } from "./ipc/types";
 
 const base: BridgeStatus = {
@@ -10,9 +10,22 @@ const base: BridgeStatus = {
   pairing: null,
   clients: [],
   streams: [],
+  groups: [],
 };
 
 describe("bridge helpers", () => {
+  it("summarizes a tab group", () => {
+    const g = {
+      groupId: 7,
+      tabs: [
+        { tabId: 1, status: "captured" },
+        { tabId: 2, status: "waiting" },
+        { tabId: 3, status: "failed" },
+      ],
+    };
+    expect(groupSummary(g, 0)).toBe("Group 1: 1/3 tabs captured, 1 failed");
+  });
+
   it("counts down a pairing code and stops at expiry", () => {
     expect(pairingTimeLeft(300_000, 0)).toBe("5:00");
     expect(pairingTimeLeft(300_000, 299_500)).toBe("0:01");

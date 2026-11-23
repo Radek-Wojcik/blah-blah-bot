@@ -56,6 +56,7 @@ export function createMockBridge(opts: MockBridgeOptions) {
       connected: settings.enabled && connected.has(c.id),
     })),
     streams: [],
+    groups: [],
   });
   const emit = () => listeners.forEach((l) => l.cb(status()));
   const clearTimer = () => {

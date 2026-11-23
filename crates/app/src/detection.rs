@@ -100,7 +100,6 @@ impl Detection {
 
     /// A Google Meet tab joined or left its call (reported by the extension). The bridge hook
     /// in `browser.rs` calls this; until that hook is connected nothing calls it.
-    #[allow(dead_code)]
     pub fn meet(&self, tab_id: u64, joined: bool) {
         if let Ok(mut d) = self.detector.lock() {
             d.meet(self.now_ms(), tab_id, joined);
