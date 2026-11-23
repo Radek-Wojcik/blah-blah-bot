@@ -351,6 +351,54 @@ def test_gpu_steps_default_to_not_run_and_follow_the_recorded_file(tmp_path):
     assert rows["extraction"]["status"] == "not_run"
 
 
+def test_partial_gpu_run_merges_into_the_recorded_steps(tmp_path):
+    write_json(
+        tmp_path / "gpu-steps.json",
+        [
+            {"id": "asr", "status": "passed", "seconds": 100.0, "note": "kept"},
+            {
+                "id": "stage4-models",
+                "status": "failed",
+                "seconds": 460.7,
+                "reason": "exit code 101",
+            },
+            {"id": "pipeline-2h", "status": "passed", "seconds": 370.0},
+        ],
+    )
+    fresh = [{"id": "stage4-models", "status": "passed", "seconds": 907.6, "reason": ""}]
+    merged = rg.merge_gpu_steps(tmp_path, fresh)
+    # the re-run step is replaced, the others keep their last result, the order follows GPU_STEPS
+    assert [r["id"] for r in merged] == ["stage4-models", "asr", "pipeline-2h"]
+    on_disk = json.loads((tmp_path / "gpu-steps.json").read_text(encoding="utf-8"))
+    assert on_disk == merged
+    rows = {r["id"]: r for r in rg.load_gpu_steps(tmp_path)}
+    assert rows["stage4-models"]["status"] == "passed" and rows["stage4-models"]["seconds"] == 907.6
+    assert rows["asr"]["status"] == "passed" and rows["asr"]["note"] == "kept"
+    assert rows["pipeline-2h"]["status"] == "passed"
+    assert rows["extraction"]["status"] == "not_run"
+    # a first run (no file yet) simply writes its rows
+    first = rg.merge_gpu_steps(tmp_path / "new", fresh)
+    assert [r["id"] for r in first] == ["stage4-models"]
+
+
+def test_large_values_are_not_printed_in_exponent_form():
+    assert rg.fmt_value(11500.0, "mib").startswith("11500")
+    assert "e+" not in rg.fmt_value(123456.0, "mib")
+    assert rg.fmt_value(9813.0, "mib").startswith("9813")
+
+
+def test_merge_gpu_steps_cli_reads_the_fresh_rows_from_a_file(tmp_path):
+    write_json(tmp_path / "gpu-steps.json", [{"id": "asr", "status": "passed", "seconds": 1.0}])
+    fresh = tmp_path / "fresh.json"
+    fresh.write_text(
+        json.dumps([{"id": "diarization", "status": "failed", "seconds": 2.0}]),
+        encoding="utf-8-sig",
+    )
+    assert rg.main(["--gpu-results", str(tmp_path), "--merge-gpu-steps", str(fresh)]) == 0
+    rows = {r["id"]: r["status"] for r in rg.load_gpu_steps(tmp_path)}
+    assert rows["asr"] == "passed" and rows["diarization"] == "failed"
+
+
 def test_recommendation_levels(tmp_path):
     base = baselines(tmp_path)
     logs = make_logs(tmp_path, failed="cargo test")

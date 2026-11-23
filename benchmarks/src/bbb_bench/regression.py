@@ -9,7 +9,8 @@ Inputs (all optional, a missing input is reported as "not run" or "baseline only
 - `--logs`: the folder `scripts/test-all.ps1 -LogDir` wrote (`steps.json`, one log per step,
   JUnit files of pytest);
 - `--gpu-results`: the folder of a GPU run (`scripts/regression.ps1 -Mode gpu`): fresh result
-  files with the same names as the recorded ones and `gpu-steps.json`;
+  files with the same names as the recorded ones and `gpu-steps.json` (a partial run with
+  `-Only` merges its rows into the file, see `merge_gpu_steps`);
 - `benchmarks/results/`: the recorded results, which are the baselines;
 - `--hygiene-count`: directories left in the temp folders (0 passes).
 
@@ -311,12 +312,37 @@ MANUAL_STEPS: dict[str, str] = {
 }
 
 
+def _read_step_rows(path: Path) -> list[dict[str, Any]]:
+    raw = _read(path)
+    if not raw:
+        return []
+    data = json.loads(raw.lstrip("﻿"))
+    return [row for row in (data if isinstance(data, list) else [data]) if "id" in row]
+
+
+def merge_gpu_steps(gpu_dir: Path, fresh: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Write `gpu-steps.json` with `fresh` merged into the rows already recorded there.
+
+    A partial run (`regression.ps1 -Mode gpu -Only ...`) must not erase the steps it did not run:
+    every step that ran again replaces its earlier row, the others keep their last result. The
+    rows come out in the order of GPU_STEPS (unknown ids last, in the order they were found).
+    """
+    rows = {r["id"]: r for r in _read_step_rows(gpu_dir / "gpu-steps.json")}
+    for row in fresh:
+        rows[row["id"]] = row
+    order = {step_id: i for i, step_id in enumerate(GPU_STEPS)}
+    merged = sorted(rows.values(), key=lambda r: order.get(r["id"], len(order)))
+    gpu_dir.mkdir(parents=True, exist_ok=True)
+    (gpu_dir / "gpu-steps.json").write_text(
+        json.dumps(merged, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    return merged
+
+
 def load_gpu_steps(gpu_dir: Path | None) -> list[dict[str, Any]]:
     recorded: dict[str, dict[str, Any]] = {}
-    raw = _read(gpu_dir / "gpu-steps.json") if gpu_dir else None
-    if raw:
-        data = json.loads(raw.lstrip("﻿"))
-        for row in data if isinstance(data, list) else [data]:
+    if gpu_dir:
+        for row in _read_step_rows(gpu_dir / "gpu-steps.json"):
             recorded[row["id"]] = row
     rows = []
     for step_id, title in GPU_STEPS.items():
@@ -1125,7 +1151,10 @@ def fmt_value(value: float | None, unit: str) -> str:
         return "-"
     if unit == "rate":
         return f"{value * 100:.1f} %"
-    return f"{value:.4g}{_UNIT_SUFFIX.get(unit, '')}"
+    text = f"{value:.4g}"
+    if "e" in text:  # 11500 must not turn into 1.15e+04
+        text = f"{value:.0f}"
+    return f"{text}{_UNIT_SUFFIX.get(unit, '')}"
 
 
 def fmt_delta(row: dict[str, Any]) -> str:
@@ -1279,7 +1308,21 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="JSON object: threshold id -> reason, for misses the owner has accepted",
     )
+    p.add_argument(
+        "--merge-gpu-steps",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="merge the step rows in FILE into <--gpu-results>/gpu-steps.json and exit",
+    )
     args = p.parse_args(argv)
+
+    if args.merge_gpu_steps:
+        if not args.gpu_results:
+            p.error("--merge-gpu-steps needs --gpu-results")
+        merged = merge_gpu_steps(args.gpu_results, _read_step_rows(args.merge_gpu_steps))
+        print(f"gpu-steps.json: {len(merged)} steps -> {args.gpu_results}")
+        return 0
 
     accepted = None
     if args.accepted:

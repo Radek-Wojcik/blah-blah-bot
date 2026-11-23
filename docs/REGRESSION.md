@@ -12,7 +12,7 @@ Every script is started with `powershell -ExecutionPolicy Bypass -File scripts\<
 | Plan only, nothing executed | `scripts\regression.ps1 -DryRun` and `scripts\regression.ps1 -Mode gpu -DryRun` |
 | Only some CPU suites | `-Skip ui` or `-Suite worker,benchmarks` (suites: `rust`, `worker`, `benchmarks`, `ui`) |
 | GPU part (opt-in) | `scripts\regression.ps1 -Mode gpu -AudioDir ... -MiniDir ... -SlidesDir ... -VisionDir ... -ExtractionDir ... -LongAudio ... -LlamaServer ... -Model ...` |
-| Only some GPU steps | `-Only asr,diarization` |
+| Only some GPU steps | `-Only asr,diarization` (the rows are merged into `gpu-steps.json`: the other steps keep their last result) |
 | Rebuild the report from what exists | `scripts\regression.ps1 -ReportOnly` |
 | Write the final report into `benchmarks\results\` | add `-WriteResults` (default: `target\regression\report\`) |
 | Accept a known miss with a reason | `-Accepted <file.json>`, an object such as `{"term-recall": "reason"}` |

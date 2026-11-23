@@ -39,7 +39,8 @@
   CPU part: run only these suites.
 
 .PARAMETER Only
-  GPU part: run only these steps (ids as printed by -DryRun).
+  GPU part: run only these steps (ids as printed by -DryRun). The result is merged into
+  gpu-steps.json: the steps that are not run again keep their last recorded result.
 
 .PARAMETER ReportOnly
   Run nothing; build the report from the logs and results that exist.
@@ -292,7 +293,15 @@ try {
             if ($row.status -eq "failed") { $failed.Add("GPU step $($step.id)") }
             $rows.Add($row)
         }
-        ConvertTo-Json -InputObject @($rows.ToArray()) -Depth 4 | Set-Content -LiteralPath (Join-Path $gpuDir "gpu-steps.json") -Encoding UTF8
+        # The rows of this run are merged into gpu-steps.json: a partial run (-Only) keeps the last
+        # result of the steps it did not run and replaces those it ran again.
+        $freshRows = Join-Path $testTmp "gpu-steps-fresh.json"
+        ConvertTo-Json -InputObject @($rows.ToArray()) -Depth 4 | Set-Content -LiteralPath $freshRows -Encoding UTF8
+        Push-Location (Join-Path $repo "benchmarks")
+        try {
+            & uv run python -m bbb_bench.regression --gpu-results $gpuDir --merge-gpu-steps $freshRows
+            if ($LASTEXITCODE -ne 0) { throw "merging gpu-steps.json failed" }
+        } finally { Pop-Location; Remove-Item -LiteralPath $freshRows -Force -ErrorAction SilentlyContinue }
         # The two hour timing run leaves a work folder of segment files behind.
         $pipelineWork = Join-Path $regDir "pipeline-2h-work"
         if (Test-Path -LiteralPath $pipelineWork) { Remove-Item -LiteralPath $pipelineWork -Recurse -Force }
