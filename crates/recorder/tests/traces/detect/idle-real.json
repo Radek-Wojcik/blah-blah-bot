@@ -1,0 +1,122 @@
+{
+  "version": 1,
+  "kind": "real",
+  "description": "Idle audio sessions of a Windows 10 machine in normal desktop use, enumeration only",
+  "poll_ms": 1000,
+  "duration_ms": 240000,
+  "apps": {
+    "app-1": {
+      "kind": "other"
+    },
+    "app-2": {
+      "kind": "other"
+    },
+    "app-3": {
+      "kind": "other"
+    }
+  },
+  "events": [
+    {
+      "t_ms": 22,
+      "sessions": [
+        {
+          "app": "app-1",
+          "pid": 1,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        },
+        {
+          "app": "app-2",
+          "pid": 2,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        },
+        {
+          "app": "app-2",
+          "pid": 2,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        },
+        {
+          "app": "app-2",
+          "pid": 2,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        },
+        {
+          "app": "app-2",
+          "pid": 2,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        },
+        {
+          "app": "app-2",
+          "pid": 2,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        },
+        {
+          "app": "app-2",
+          "pid": 2,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        },
+        {
+          "app": "app-2",
+          "pid": 2,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        },
+        {
+          "app": "app-2",
+          "pid": 2,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        },
+        {
+          "app": "app-2",
+          "pid": 2,
+          "flow": "capture",
+          "state": "inactive",
+          "peak": "none"
+        },
+        {
+          "app": "app-3",
+          "pid": 3,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        }
+      ]
+    }
+  ],
+  "labels": [
+    {
+      "start_ms": 0,
+      "end_ms": 240000,
+      "app": "*",
+      "kind": "no_prompt",
+      "note": "idle machine, no call"
+    }
+  ],
+  "expect": {
+    "low": {
+      "prompts": 0
+    },
+    "balanced": {
+      "prompts": 0
+    },
+    "high": {
+      "prompts": 0
+    }
+  }
+}

@@ -1,0 +1,114 @@
+{
+  "version": 1,
+  "kind": "synthetic",
+  "description": "Hand-made: a call in the new Teams, whose audio sessions belong to a webview child process of ms-teams.exe; the session list already names the application (via keeps the process).",
+  "poll_ms": 1000,
+  "duration_ms": 1500000,
+  "apps": {
+    "ms-teams": {
+      "kind": "conferencing"
+    }
+  },
+  "events": [
+    {
+      "t_ms": 0,
+      "sessions": [
+        {
+          "app": "ms-teams",
+          "pid": 2,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        }
+      ]
+    },
+    {
+      "t_ms": 120000,
+      "sessions": [
+        {
+          "app": "ms-teams",
+          "pid": 2,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        },
+        {
+          "app": "ms-teams",
+          "pid": 1,
+          "flow": "capture",
+          "state": "active",
+          "peak": "low",
+          "via": "msedgewebview2"
+        },
+        {
+          "app": "ms-teams",
+          "pid": 1,
+          "flow": "render",
+          "state": "active",
+          "peak": "high",
+          "via": "msedgewebview2"
+        }
+      ]
+    },
+    {
+      "t_ms": 400000,
+      "sessions": [
+        {
+          "app": "ms-teams",
+          "pid": 2,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        },
+        {
+          "app": "ms-teams",
+          "pid": 1,
+          "flow": "capture",
+          "state": "active",
+          "peak": "high",
+          "via": "msedgewebview2"
+        },
+        {
+          "app": "ms-teams",
+          "pid": 1,
+          "flow": "render",
+          "state": "active",
+          "peak": "low",
+          "via": "msedgewebview2"
+        }
+      ]
+    },
+    {
+      "t_ms": 1200000,
+      "sessions": [
+        {
+          "app": "ms-teams",
+          "pid": 2,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        }
+      ]
+    }
+  ],
+  "labels": [
+    {
+      "start_ms": 120000,
+      "end_ms": 1200000,
+      "app": "ms-teams",
+      "kind": "call",
+      "note": "meeting through the webview child"
+    }
+  ],
+  "expect": {
+    "low": {
+      "prompts": 1
+    },
+    "balanced": {
+      "prompts": 1
+    },
+    "high": {
+      "prompts": 1
+    }
+  }
+}

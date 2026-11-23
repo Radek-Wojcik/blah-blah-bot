@@ -1,0 +1,104 @@
+{
+  "version": 1,
+  "kind": "synthetic",
+  "description": "Hand-made: voice typing of the system (microphone for forty seconds) next to idle Discord and Teams clients; no call.",
+  "poll_ms": 1000,
+  "duration_ms": 300000,
+  "apps": {
+    "app-1": {
+      "kind": "other"
+    },
+    "discord": {
+      "kind": "conferencing"
+    },
+    "ms-teams": {
+      "kind": "conferencing"
+    }
+  },
+  "events": [
+    {
+      "t_ms": 0,
+      "sessions": [
+        {
+          "app": "discord",
+          "pid": 1,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        },
+        {
+          "app": "ms-teams",
+          "pid": 3,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        }
+      ]
+    },
+    {
+      "t_ms": 60000,
+      "sessions": [
+        {
+          "app": "discord",
+          "pid": 1,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        },
+        {
+          "app": "ms-teams",
+          "pid": 3,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        },
+        {
+          "app": "app-1",
+          "pid": 4,
+          "flow": "capture",
+          "state": "active",
+          "peak": "high"
+        }
+      ]
+    },
+    {
+      "t_ms": 100000,
+      "sessions": [
+        {
+          "app": "discord",
+          "pid": 1,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        },
+        {
+          "app": "ms-teams",
+          "pid": 3,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        }
+      ]
+    }
+  ],
+  "labels": [
+    {
+      "start_ms": 60000,
+      "end_ms": 100000,
+      "app": "app-1",
+      "kind": "no_prompt",
+      "note": "voice typing"
+    }
+  ],
+  "expect": {
+    "low": {
+      "prompts": 0
+    },
+    "balanced": {
+      "prompts": 0
+    },
+    "high": {
+      "prompts": 0
+    }
+  }
+}
