@@ -106,6 +106,16 @@ pub struct SyncOutcome {
     pub warnings: Vec<String>,
 }
 
+/// Per-project local preferences stored in the local database (never committed to Git).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectPrefs {
+    pub cycle_id: String,
+    pub local_save_enabled: bool,
+    pub local_save_dir: String,
+    pub llm_kind_override: Option<String>,
+    pub llm_model_override: Option<String>,
+}
+
 fn unix_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -268,6 +278,61 @@ impl Store {
             "DELETE FROM meeting_llm WHERE meeting_id = ?1",
             params![meeting_id],
         )? > 0)
+    }
+
+    // ----- per-project local preferences -----
+
+    /// Read the local preferences for a project/cycle, returning defaults when none are stored.
+    pub fn get_project_prefs(&self, cycle_id: &str) -> Result<ProjectPrefs> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT local_save_enabled, local_save_dir, llm_kind_override, llm_model_override
+                 FROM project_prefs WHERE cycle_id = ?1",
+                params![cycle_id],
+                |r| {
+                    Ok(ProjectPrefs {
+                        cycle_id: cycle_id.to_string(),
+                        local_save_enabled: r.get::<_, i64>(0)? != 0,
+                        local_save_dir: r.get(1)?,
+                        llm_kind_override: r.get(2)?,
+                        llm_model_override: r.get(3)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row.unwrap_or_else(|| ProjectPrefs {
+            cycle_id: cycle_id.to_string(),
+            ..ProjectPrefs::default()
+        }))
+    }
+
+    /// Save local preferences for a project/cycle.
+    pub fn set_project_prefs(&self, prefs: &ProjectPrefs) -> Result<()> {
+        if prefs.cycle_id.trim().is_empty() {
+            return Err(StoreError::Invalid("cycle_id cannot be empty".into()));
+        }
+        if let Some(kind) = &prefs.llm_kind_override {
+            LlmKind::parse(kind)?;
+        }
+        self.conn.execute(
+            "INSERT INTO project_prefs
+               (cycle_id, local_save_enabled, local_save_dir, llm_kind_override, llm_model_override)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(cycle_id) DO UPDATE SET
+               local_save_enabled = excluded.local_save_enabled,
+               local_save_dir = excluded.local_save_dir,
+               llm_kind_override = excluded.llm_kind_override,
+               llm_model_override = excluded.llm_model_override",
+            params![
+                prefs.cycle_id,
+                i64::from(prefs.local_save_enabled),
+                prefs.local_save_dir,
+                prefs.llm_kind_override,
+                prefs.llm_model_override,
+            ],
+        )?;
+        Ok(())
     }
 
     // ----- participants of a cycle -----
@@ -838,10 +903,7 @@ mod tests {
 
     #[test]
     fn a_migrated_database_opens_again_unchanged() {
-        let dir = tempfile::Builder::new()
-            .prefix("bbb-store-v4-")
-            .tempdir()
-            .unwrap();
+        let dir = crate::test_tmp::TestDir::new("store-v4");
         let path = dir.path().join("v3.db");
         {
             let conn = Connection::open(&path).unwrap();
@@ -859,5 +921,41 @@ mod tests {
             assert_eq!(s.schema_version().unwrap(), crate::migrations::LATEST);
             assert_eq!(s.list_participants().unwrap().len(), 1);
         }
+    }
+
+    #[test]
+    fn project_prefs_round_trip_and_default_when_missing() {
+        let s = store();
+        let def = s.get_project_prefs("NOMAD").unwrap();
+        assert_eq!(
+            def,
+            ProjectPrefs {
+                cycle_id: "NOMAD".into(),
+                local_save_enabled: false,
+                local_save_dir: String::new(),
+                llm_kind_override: None,
+                llm_model_override: None,
+            }
+        );
+
+        let updated = ProjectPrefs {
+            cycle_id: "NOMAD".into(),
+            local_save_enabled: true,
+            local_save_dir: "C:/Meetings/NOMAD".into(),
+            llm_kind_override: Some("external".into()),
+            llm_model_override: Some("gemma-4".into()),
+        };
+        s.set_project_prefs(&updated).unwrap();
+        assert_eq!(s.get_project_prefs("NOMAD").unwrap(), updated);
+
+        let cleared = ProjectPrefs {
+            cycle_id: "NOMAD".into(),
+            local_save_enabled: false,
+            local_save_dir: String::new(),
+            llm_kind_override: None,
+            llm_model_override: None,
+        };
+        s.set_project_prefs(&cleared).unwrap();
+        assert_eq!(s.get_project_prefs("NOMAD").unwrap(), cleared);
     }
 }

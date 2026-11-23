@@ -223,6 +223,19 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     ALTER TABLE outbox_v6 RENAME TO outbox;
     CREATE INDEX idx_outbox_due ON outbox(state, next_attempt_unix_ms);
     ",
+    // Version 7: scheduled job execution, participant preview clip files, and per-project
+    // local preferences.
+    "
+    ALTER TABLE jobs ADD COLUMN scheduled_unix_ms INTEGER;
+    ALTER TABLE participants ADD COLUMN sample_clip_file TEXT;
+    CREATE TABLE IF NOT EXISTS project_prefs (
+        cycle_id TEXT PRIMARY KEY,
+        local_save_enabled INTEGER NOT NULL DEFAULT 0,
+        local_save_dir TEXT NOT NULL DEFAULT '',
+        llm_kind_override TEXT,
+        llm_model_override TEXT
+    );
+    ",
 ];
 
 /// Schema version after all migrations have run.
@@ -236,17 +249,53 @@ pub fn migrate(conn: &Connection) -> Result<()> {
             supported: LATEST,
         });
     }
-    if current == LATEST {
-        return Ok(());
+    if current < LATEST {
+        // Rebuilding a table that other tables reference needs foreign keys off: with them on,
+        // dropping the table would cascade into its children. The pragma has no effect inside
+        // a transaction, so it is switched here and restored afterwards.
+        let foreign_keys: bool = conn.pragma_query_value(None, "foreign_keys", |r| r.get(0))?;
+        conn.pragma_update(None, "foreign_keys", "OFF")?;
+        let result = run_pending(conn, current);
+        conn.pragma_update(None, "foreign_keys", foreign_keys)?;
+        result?;
     }
-    // Rebuilding a table that other tables reference needs foreign keys off: with them on,
-    // dropping the table would cascade into its children. The pragma has no effect inside
-    // a transaction, so it is switched here and restored afterwards.
-    let foreign_keys: bool = conn.pragma_query_value(None, "foreign_keys", |r| r.get(0))?;
-    conn.pragma_update(None, "foreign_keys", "OFF")?;
-    let result = run_pending(conn, current);
-    conn.pragma_update(None, "foreign_keys", foreign_keys)?;
-    result
+    ensure_ux_schema(conn)
+}
+
+fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        if name == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Idempotently ensures the UX Overhaul columns and `project_prefs` table exist, so merging
+/// with another branch that also adds a version-7 migration is conflict-free.
+fn ensure_ux_schema(conn: &Connection) -> Result<()> {
+    if !has_column(conn, "jobs", "scheduled_unix_ms")? {
+        conn.execute("ALTER TABLE jobs ADD COLUMN scheduled_unix_ms INTEGER", [])?;
+    }
+    if !has_column(conn, "participants", "sample_clip_file")? {
+        conn.execute(
+            "ALTER TABLE participants ADD COLUMN sample_clip_file TEXT",
+            [],
+        )?;
+    }
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS project_prefs (
+            cycle_id TEXT PRIMARY KEY,
+            local_save_enabled INTEGER NOT NULL DEFAULT 0,
+            local_save_dir TEXT NOT NULL DEFAULT '',
+            llm_kind_override TEXT,
+            llm_model_override TEXT
+        );",
+    )?;
+    Ok(())
 }
 
 fn run_pending(conn: &Connection, current: u32) -> Result<()> {
@@ -315,7 +364,7 @@ mod tests {
     fn migrating_a_version_4_database_adds_the_publishing_tables_and_keeps_the_data() {
         let s = Store::init(v4_database()).unwrap();
         assert_eq!(s.schema_version().unwrap(), LATEST);
-        assert_eq!(LATEST, 6);
+        assert_eq!(LATEST, 7);
 
         // Existing data is untouched.
         let m = s.get_meeting("20261113-140501").unwrap().unwrap().meeting;
@@ -330,7 +379,12 @@ mod tests {
         assert_eq!(s.samples_of("NOMAD:ola").unwrap().len(), 1);
 
         // The new tables exist, are empty and are usable.
-        for table in ["outbox", "publications", "repo_confirmations"] {
+        for table in [
+            "outbox",
+            "publications",
+            "repo_confirmations",
+            "project_prefs",
+        ] {
             assert_eq!(count(&s, table), 0, "{table}");
         }
         s.confirm_repo("github.com/o/r", "public", 1).unwrap();
@@ -344,10 +398,8 @@ mod tests {
 
     #[test]
     fn a_migrated_database_opens_again_without_changes() {
-        let dir = std::env::temp_dir().join(format!("bbb-store-v5-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::test_tmp::TestDir::new("store-v5");
         let path = dir.join("v4.db");
-        let _ = std::fs::remove_file(&path);
         {
             let conn = Connection::open(&path).unwrap();
             for sql in &MIGRATIONS[..4] {
@@ -360,7 +412,6 @@ mod tests {
             assert_eq!(s.schema_version().unwrap(), LATEST);
             assert_eq!(count(&s, "outbox"), 0);
         }
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -457,5 +508,40 @@ mod tests {
         assert_eq!(index, 1);
         s.delete_meeting("20261113-140501").unwrap();
         assert_eq!(count(&s, "outbox"), 0);
+    }
+
+    #[test]
+    fn migrating_a_version_6_database_adds_schedule_clip_and_project_prefs() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        for sql in &MIGRATIONS[..6] {
+            conn.execute_batch(sql).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 6).unwrap();
+        conn.execute_batch(
+            "INSERT INTO meetings (id, title, started_unix_ms, state, dir)
+               VALUES ('m1', 'Weekly', 5, 'stopped', 'm1');
+             INSERT INTO jobs (meeting_id, created_unix_ms, updated_unix_ms)
+               VALUES ('m1', 5, 5);
+             INSERT INTO participants (id, name, created_unix_ms)
+               VALUES ('p1', 'Ola', 7);",
+        )
+        .unwrap();
+        let s = Store::init(conn).unwrap();
+        assert_eq!(s.schema_version().unwrap(), 7);
+        assert!(s.set_job_schedule("m1", Some(123_456)).unwrap());
+        assert_eq!(
+            s.get_job("m1").unwrap().unwrap().scheduled_unix_ms,
+            Some(123_456)
+        );
+        assert!(s
+            .set_participant_sample_clip("p1", Some(".voice-samples/p1.wav"))
+            .unwrap());
+        assert_eq!(
+            s.list_all_participants_with_profiles().unwrap()[0]
+                .sample_clip_file
+                .as_deref(),
+            Some(".voice-samples/p1.wav")
+        );
     }
 }
