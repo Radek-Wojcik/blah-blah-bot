@@ -29,6 +29,7 @@ def _prepare_cuda_libraries() -> None:
 
 
 def run(manifest: Manifest) -> None:
+    protocol.progress("asr", 0.05, "loading model")
     _prepare_cuda_libraries()
     from faster_whisper import WhisperModel
 
@@ -44,9 +45,14 @@ def run(manifest: Manifest) -> None:
     if glossary:
         kwargs["initial_prompt"] = "Glossary: " + ", ".join(glossary) + "."
 
+    protocol.progress("asr", 0.10, "transcribing")
     out_dir = manifest.work_dir / "asr"
     total = max(1, len(manifest.tracks))
     for index, track in enumerate(manifest.tracks):
+        track_start = 0.10 + 0.88 * (index / total)
+        track_span = 0.88 / total
+        if index > 0:
+            protocol.progress("asr", track_start, f"track {track.name}")
         audio = load_track_audio(manifest, track)
         duration_s = len(audio) / SAMPLE_RATE
         segments_out: list[dict[str, Any]] = []
@@ -71,13 +77,19 @@ def run(manifest: Manifest) -> None:
                         "words": words,
                     }
                 )
+                seg_frac = min(1.0, max(0.0, seg.end / duration_s))
                 protocol.progress(
                     "asr",
-                    (index + min(1.0, seg.end / duration_s)) / total,
+                    min(0.98, track_start + track_span * seg_frac),
                     f"track {track.name}",
                 )
         write_json(
             out_dir / f"{track.name}.json",
             {"track": track.name, "language": detected, "segments": segments_out},
         )
-        protocol.progress("asr", (index + 1) / total, f"track {track.name} done")
+        protocol.progress(
+            "asr",
+            min(0.98, track_start + track_span),
+            f"track {track.name} done",
+        )
+    protocol.progress("asr", 1.0, "done")

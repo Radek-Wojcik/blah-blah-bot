@@ -34,6 +34,77 @@ SECTIONS_TOKENS = 4096
 FIRST_SENTENCE = re.compile(r"^.*?[.!?](?=\s|$)", re.DOTALL)
 ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 ISSUE_NUMBER = re.compile(r"\d+")
+PLACEHOLDER_SUMMARY = re.compile(r"^Summary of a window with \d+ items\.?$", re.IGNORECASE)
+WORD_TOKEN = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿĄĆĘŁŃÓŚŹŻąćęłńóśźż0-9]+")
+SHORT_TITLE_MAX_CHARS = 70
+SHORT_TITLE_MIN_WORDS = 3
+SHORT_TITLE_MAX_WORDS = 8
+MAX_KEY_SCREENSHOTS = 8
+TRAILING_CONNECTORS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "at",
+        "by",
+        "do",
+        "for",
+        "from",
+        "i",
+        "in",
+        "into",
+        "na",
+        "o",
+        "of",
+        "on",
+        "or",
+        "oraz",
+        "po",
+        "the",
+        "to",
+        "w",
+        "with",
+        "z",
+        "za",
+    }
+)
+LOW_VALUE_DESCRIPTIONS = (
+    "blank screen",
+    "black screen",
+    "empty screen",
+    "no content",
+    "nothing visible",
+    "loading screen",
+    "pusty ekran",
+    "czarny ekran",
+    "brak treści",
+)
+HIGH_INFO_TERMS = frozenset(
+    {
+        "architecture",
+        "budget",
+        "chart",
+        "code",
+        "data",
+        "diagram",
+        "error",
+        "graph",
+        "kod",
+        "metric",
+        "metrics",
+        "plan",
+        "roadmap",
+        "schedule",
+        "schema",
+        "schemat",
+        "slajd",
+        "slide",
+        "table",
+        "tabela",
+        "timeline",
+        "wykres",
+    }
+)
 
 SUMMARY_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -276,14 +347,160 @@ def summarize(
         return level[0] if level else ""
     assert backend is not None
     while len(level) > prompts.SUMMARY_MAX_DIRECT:
-        level = [
-            summarize_once(backend, group, language, final=False, people=people)
-            for group in chunks(level, prompts.SUMMARY_GROUP)
-        ]
-        on_call()
+        next_level: list[str] = []
+        for group in chunks(level, prompts.SUMMARY_GROUP):
+            on_call()
+            next_level.append(summarize_once(backend, group, language, final=False, people=people))
+            on_call()
+        level = next_level
+    on_call()
     result = summarize_once(backend, level, language, final=True, people=people)
     on_call()
     return result
+
+
+# Short title and key screenshots --------------------------------------------------------
+
+
+def _clean_title_clause(text: str) -> str:
+    sentence = first_sentence(text).strip()
+    for sep in (";", " — ", " – ", ": "):
+        if sep in sentence:
+            head = sentence.split(sep, 1)[0].strip()
+            if len(head.split()) >= SHORT_TITLE_MIN_WORDS:
+                sentence = head
+                break
+    if "," in sentence:
+        head = sentence.split(",", 1)[0].strip()
+        if SHORT_TITLE_MIN_WORDS <= len(head.split()) <= SHORT_TITLE_MAX_WORDS:
+            sentence = head
+    return sentence.strip(" \t\r\n.!?;:,-—–\"'()[]{}")
+
+
+def _bound_title_words(clause: str) -> str:
+    if not clause:
+        return ""
+    raw_words = [w.strip(".,!?;:\"'()[]{}") for w in clause.split()]
+    words = [w for w in raw_words if w]
+    if len(words) < SHORT_TITLE_MIN_WORDS:
+        return ""
+    words = words[:SHORT_TITLE_MAX_WORDS]
+    while len(words) > SHORT_TITLE_MIN_WORDS and words[-1].casefold() in TRAILING_CONNECTORS:
+        words.pop()
+    while len(words) > SHORT_TITLE_MIN_WORDS and len(" ".join(words)) > SHORT_TITLE_MAX_CHARS:
+        words.pop()
+    while len(words) > SHORT_TITLE_MIN_WORDS and words[-1].casefold() in TRAILING_CONNECTORS:
+        words.pop()
+    title = " ".join(words)
+    if len(title) > SHORT_TITLE_MAX_CHARS:
+        title = title[:SHORT_TITLE_MAX_CHARS].rstrip()
+    return title if len(title.split()) >= SHORT_TITLE_MIN_WORDS else ""
+
+
+def derive_short_title(summary: str, items: Sequence[dict[str, Any]] = ()) -> str:
+    """Derive a concise 3 to 8 word title (<= 70 chars) from `summary` or top decision/topic."""
+    clean_summary = " ".join(summary.split())
+    if clean_summary and not PLACEHOLDER_SUMMARY.match(clean_summary):
+        title = _bound_title_words(_clean_title_clause(clean_summary))
+        if title:
+            return title
+
+    priority_order = ("decision", "topic", "task", "budget", "idea", "note")
+    for item_type in priority_order:
+        for it in items:
+            if it.get("type") == item_type:
+                title = _bound_title_words(_clean_title_clause(str(it.get("text", ""))))
+                if title:
+                    return title
+    for it in items:
+        title = _bound_title_words(_clean_title_clause(str(it.get("text", ""))))
+        if title:
+            return title
+    return ""
+
+
+def _description_tokens(text: str) -> set[str]:
+    return {t.casefold() for t in WORD_TOKEN.findall(text) if len(t) >= 3}
+
+
+def _is_nontrivial_description(text: str) -> bool:
+    clean = " ".join(text.split())
+    if len(clean) < 20 or len(clean.split()) < 4:
+        return False
+    lower = clean.casefold()
+    if len(clean) < 80 and any(phrase in lower for phrase in LOW_VALUE_DESCRIPTIONS):
+        return False
+    return len(_description_tokens(clean)) >= 3
+
+
+def _screenshot_info_score(text: str) -> float:
+    tokens = _description_tokens(text)
+    if not tokens:
+        return 0.0
+    digits = len(re.findall(r"\d+", text))
+    domain_hits = sum(1 for t in tokens if t in HIGH_INFO_TERMS)
+    length_bonus = min(len(text), 600) / 100.0
+    return len(tokens) + 1.5 * digits + 2.0 * domain_hits + length_bonus
+
+
+def select_key_screenshots(
+    descriptions: dict[str, Any] | Sequence[dict[str, Any]] | None,
+    max_screenshots: int = MAX_KEY_SCREENSHOTS,
+) -> list[str]:
+    """Select at most `max_screenshots` distinct, highest-information screenshot filenames."""
+    if not descriptions or max_screenshots <= 0:
+        return []
+    raw_items = (
+        descriptions.get("items", []) if isinstance(descriptions, dict) else list(descriptions)
+    )
+    candidates: list[dict[str, Any]] = []
+    for idx, entry in enumerate(raw_items):
+        if not isinstance(entry, dict):
+            continue
+        file_name = str(entry.get("file", "")).strip()
+        desc = str(entry.get("description", "")).strip()
+        if not file_name or not _is_nontrivial_description(desc):
+            continue
+        tokens = _description_tokens(desc)
+        candidates.append(
+            {
+                "index": idx,
+                "offset_ms": float(entry.get("offset_ms", idx)),
+                "file": file_name,
+                "tokens": tokens,
+                "score": _screenshot_info_score(desc),
+            }
+        )
+    if not candidates:
+        return []
+
+    # Rank by information score descending, breaking ties by earlier timestamp.
+    ranked = sorted(candidates, key=lambda c: (-c["score"], c["offset_ms"], c["index"]))
+    selected: list[dict[str, Any]] = []
+    seen_files: set[str] = set()
+    for cand in ranked:
+        if cand["file"] in seen_files:
+            continue
+        tokens = cand["tokens"]
+        is_dup = False
+        for kept in selected:
+            kept_tokens = kept["tokens"]
+            union = len(tokens | kept_tokens)
+            inter = len(tokens & kept_tokens)
+            jaccard = inter / union if union else 1.0
+            containment = inter / max(1, len(tokens))
+            if jaccard >= 0.72 or containment >= 0.85:
+                is_dup = True
+                break
+        if is_dup:
+            continue
+        selected.append(cand)
+        seen_files.add(cand["file"])
+        if len(selected) >= max_screenshots:
+            break
+
+    selected.sort(key=lambda c: (c["offset_ms"], c["index"]))
+    return [c["file"] for c in selected]
 
 
 # Sections -------------------------------------------------------------------------------
@@ -423,6 +640,7 @@ def build_draft(
     warnings += validate_items(items, context)
     number_items(items)
 
+    on_call()
     try:
         summary = summarize(backend, [w["summary"] for w in results], language, on_call, people)
     except llm_client.LlmError as e:
@@ -430,11 +648,18 @@ def build_draft(
         warnings.append(
             _warning("summary_failed", f"The summary was not written by the model: {e}")
         )
+    on_call()
     sections, note = layout(backend, items, context, language)
+    on_call()
     final = [draft_item(it) for it in items]
     proposals, proposal_warnings = build_status_proposals(results, context)
     warnings = [*unverified_warnings(items), *proposal_warnings, *warnings]
-    doc = {
+    short_title = derive_short_title(summary, final)
+    descriptions_doc = extract.read_optional(
+        manifest.work_dir / "descriptions.json", "screenshot-descriptions"
+    )
+    key_screenshots = select_key_screenshots(descriptions_doc)
+    doc: dict[str, Any] = {
         "version": 1,
         "meeting_id": manifest.meeting_id,
         "cycle": context["cycle"],
@@ -445,15 +670,17 @@ def build_draft(
         "meeting_type": context["meeting_type"],
         "sections": sections,
         "summary": summary,
-        "items": final,
-        "warnings": warnings,
     }
+    if short_title:
+        doc["short_title"] = short_title
+    if key_screenshots:
+        doc["key_screenshots"] = key_screenshots
+    doc["items"] = final
     if proposals:
         # Left out while empty: a draft without proposals is byte for byte what Stage 4 wrote.
         # Placed before the warnings, the order of the draft type of the application.
-        doc = {**{k: v for k, v in doc.items() if k != "warnings"}}
         doc["status_proposals"] = proposals
-        doc["warnings"] = warnings
+    doc["warnings"] = warnings
     return doc, note
 
 
@@ -487,13 +714,14 @@ def run(manifest: Manifest) -> None:
     summaries = [w["summary"] for w in windows_doc["windows"] if w["summary"].strip()]
     has_items = any(w["items"] for w in windows_doc["windows"])
     needs_model = len(summaries) > 1 or (context["mode"] == "auto" and has_items)
-    total = max(1, len(windows_doc["windows"]))
+    total = max(3, len(windows_doc["windows"]) * 2 + 2)
     calls = 0
 
     def on_call() -> None:
         nonlocal calls
         calls += 1
-        protocol.progress(STEP, min(0.9, 0.1 + calls / (total + 1)), f"summary step {calls}")
+        frac = min(0.95, 0.10 + 0.85 * min(1.0, calls / total))
+        protocol.progress(STEP, frac, f"reduce step {calls}")
 
     protocol.progress(STEP, 0.05, f"{len(windows_doc['windows'])} windows")
     backend_cm = llm_client.open_backend(cfg) if needs_model else nullcontext(None)
