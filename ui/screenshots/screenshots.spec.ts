@@ -274,6 +274,70 @@ test.describe("static screenshots", () => {
     await settle(page);
     await publishing.screenshot({ path: path.join(OUT, "token-setup.png") });
   });
+
+  // Stage 7. Run only these with: npx playwright test --project=screenshots -g "Notion mapping|Discord bot setup"
+  test("Notion mapping", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 2400 });
+    await page.goto("/?view=main&backend=mock&rate=0&page=cycle&cycle=NOMAD");
+    await page.getByRole("checkbox", { name: "Export tasks to a Notion database" }).check();
+    await page.getByLabel("Database id").fill("0123456789abcdef0123456789abcdef");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Saved" })).toBeVisible();
+
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const notionForm = page.getByRole("form", { name: "Notion token for cred:notion/nomad" });
+    await notionForm
+      .getByLabel("Notion token for cred:notion/nomad")
+      .fill(["ntn", "demoSecretIntegrationToken0123456789"].join("_"));
+    await notionForm.getByRole("button", { name: "Store" }).click();
+    await expect(notionForm).toContainText("Token stored: ntn_...6789");
+
+    await page.getByRole("button", { name: "Cycles", exact: true }).click();
+    await page.getByRole("button", { name: "Edit NOMAD" }).click();
+    await page.getByRole("button", { name: "Inspect database & auto-map" }).click();
+    await expect(
+      page.getByText(/Connected to Notion as "Nomad notes": database "Tasks"/),
+    ).toBeVisible();
+    await settle(page);
+    const fieldset = page
+      .locator("fieldset")
+      .filter({ hasText: "Export tasks to a Notion database" });
+    await fieldset.screenshot({ path: path.join(OUT, "notion-mapping.png") });
+  });
+
+  test("Discord bot setup", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 2400 });
+    await page.goto("/?view=main&backend=mock&rate=0&page=cycle&cycle=NOMAD");
+    await page
+      .getByRole("radiogroup", { name: "Discord delivery mode" })
+      .getByRole("radio", { name: "Bot" })
+      .click();
+    await page.getByLabel("Server (guild) id").fill("111111111111111111");
+    await page.getByLabel("Channel id").fill("222222222222222222");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Saved" })).toBeVisible();
+
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const botForm = page.getByRole("form", { name: "Bot token for cred:discord-bot/nomad" });
+    await botForm
+      .getByLabel("Bot token for cred:discord-bot/nomad")
+      .fill(["MTIzNDU2Nzg5MDEyMzQ1Njc4", "Gdemo1", "DemoBotSecretSignature0123456789abcdef"].join("."));
+    await botForm.getByRole("button", { name: "Store" }).click();
+    await expect(botForm).toContainText("Bot token stored: bot MTIz...");
+
+    await page.getByRole("button", { name: "Cycles", exact: true }).click();
+    await page.getByRole("button", { name: "Edit NOMAD" }).click();
+    await page.getByRole("button", { name: "Check channel & permissions" }).click();
+    await expect(
+      page.getByText('Connected as "Nomad notes" to #meetings in Nomad team.'),
+    ).toBeVisible();
+    const fieldset = page.locator("fieldset").filter({ hasText: "Post a summary to a channel" });
+    await fieldset
+      .getByLabel("Discord Application ID (for invite link)")
+      .fill("123456789012345678");
+    await settle(page);
+    await fieldset.screenshot({ path: path.join(OUT, "discord-bot-setup.png") });
+  });
 });
 
 test("record flow GIF", async ({ page }) => {
