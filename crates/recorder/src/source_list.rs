@@ -85,6 +85,22 @@ pub fn classify_sessions(
     out
 }
 
+/// The applications with an audio session on this computer, as sources to record.
+pub fn list_apps() -> crate::Result<Vec<AppSource>> {
+    let sessions = crate::sessions::list_sessions()?;
+    let mut sys = sysinfo::System::new();
+    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+    let lookup = |pid: u32| {
+        sys.process(sysinfo::Pid::from_u32(pid)).map(|p| {
+            (
+                p.name().to_string_lossy().into_owned(),
+                p.parent().map(sysinfo::Pid::as_u32),
+            )
+        })
+    };
+    Ok(classify_sessions(&sessions, std::process::id(), lookup))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
