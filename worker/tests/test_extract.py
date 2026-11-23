@@ -173,13 +173,19 @@ def test_named_speaker_reaches_the_model_in_the_lines_and_the_speaker_list(tmp_p
         user = fake.requests[0]["messages"][1]["content"]
         system = fake.requests[0]["messages"][0]["content"]
     assert "[00:00:10] Radek Wójcik: " + MOUNT in sent
-    assert "Speakers in this window" in user
-    assert "- Radek Wójcik (name known: use it)" in user
-    assert "- You (the person who recorded the meeting, no name known)" in user
+    assert "Speakers in this window: You (recorder), Radek Wójcik (named)" in user
     assert "SPEAKER_00" not in sent and "Speaker 1" not in sent
     # The instruction: names for known people, never a general word, no invented names.
-    assert 'never call that person "participant", "speaker", "uczestnik"' in system
-    assert "Never invent a name" in system
+    assert 'never by a general word like "participant", "speaker", "uczestnik" or "mówca"' in system
+    assert "never invent a name" in system
+    # Keep `assignee` and `due` contiguous; speaker naming sits with `summary`, after task `text`.
+    lines = system.splitlines()
+    assignee_line = next(i for i, ln in enumerate(lines) if ln.startswith("- `assignee`"))
+    due_line = next(i for i, ln in enumerate(lines) if ln.startswith("- `due`"))
+    assert due_line == assignee_line + 1
+    assert system.index("Leave the assignee and the date out of `text`") < system.index(
+        "non-task `text`"
+    )
     # The list comes before the transcript window and outside of it.
     assert user.index("Speakers in this window") < user.index(prompts.TRANSCRIPT_BEGIN)
 
@@ -205,8 +211,8 @@ def test_unnamed_speakers_stay_generic_and_are_not_given_names(tmp_path):
         m = make_meeting(tmp_path, small_transcript(), context_doc(), llm_options(fake.url))
         extract.run(m)
         user = fake.requests[0]["messages"][1]["content"]
-    assert "- Speaker 1 (no name known: write this label as it is)" in user
-    assert "(name known" not in user
+    assert "Speakers in this window: You (recorder), Speaker 1 (unnamed)" in user
+    assert "(named)" not in user
     assert "[00:00:10] Speaker 1: " + MOUNT in user
 
 

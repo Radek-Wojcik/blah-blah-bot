@@ -41,13 +41,6 @@ proposals that were rejected or dropped, hypotheticals and small talk. If a task
 over, the assignee is the person who finally accepts it.
 - `assignee` is the id of a participant from the participant list, or null when the owner is \
 not clear. Never invent an id. Lines are written with participant names; map them to ids.
-- Every line starts with the name of the person who spoke, and the Speakers list says which \
-of them have a known name. In `summary` (and in the `text` of notes, decisions, ideas and \
-topics, where it matters who said or decided something) call people by those names, spelled as \
-written. When a name is known, never call that person "participant", "speaker", "uczestnik", \
-"mówca" or any other general word. A speaker without a known name keeps the label of the line \
-("Speaker 2"); "You" is the person who recorded the meeting. Never invent a name for such a \
-speaker and never turn the label into a general word like "uczestnik" or "participant".
 - `due` is an ISO date (YYYY-MM-DD) or null. Resolve relative dates ("next Friday", "by the \
 end of the week", "jutro") against the meeting date with the calendar below. A weekday name alone ("do czwartku", \
 "by Thursday") is the first such day after the meeting date, and the due date is that day itself, not the \
@@ -88,7 +81,10 @@ speech: "zamówić moduł GNSS", "send the report to the client". Never use a no
 date out of `text`; they have their own fields. When the line only accepts ("Tak, zrobię to \
 do wtorku"), name the action from the request just before it, never "do it".
 - Write `text` and `summary` in {language}.
-- `summary` is two to four sentences about this window.
+- `summary` is two to four sentences about this window. In `summary` (and in non-task `text` \
+where who spoke matters), call named speakers by their exact name as written on the lines, \
+never by a general word like "participant", "speaker", "uczestnik" or "mówca". Keep unnamed \
+labels ("Speaker 2", "You" for the recorder) as written, and never invent a name.
 - If the window contains no items, return an empty list and still write the summary. \
 Always return `status_changes` too, empty when there is nothing to report.
 """
@@ -183,18 +179,18 @@ def _block(title: str, lines: list[str], empty: str = "none") -> str:
 
 
 def speakers_block(roster: Sequence[tuple[str, str]]) -> str:
-    """The speakers of a window and what is known about each, for the user part of the
-    extraction prompt. `roster` is (label, status) as `windows.roster` gives it."""
-    notes = {
-        windows.NAMED: "name known: use it",
-        windows.RECORDER: "the person who recorded the meeting, no name known",
-        windows.UNNAMED: "no name known: write this label as it is",
+    """The speakers of a window and how each is known, as one compact line for the user part of
+    the extraction prompt. `roster` is (label, status) as `windows.roster` gives it."""
+    tags = {
+        windows.NAMED: "named",
+        windows.RECORDER: "recorder",
+        windows.UNNAMED: "unnamed",
     }
-    lines = [
-        f"- {_fence_safe(_clip(label, SPEAKER_LABEL_CHARS))} ({notes[status]})"
+    entries = [
+        f"{_fence_safe(_clip(label, SPEAKER_LABEL_CHARS))} ({tags[status]})"
         for label, status in roster
     ]
-    return _block("Speakers in this window (the names at the start of the lines):", lines)
+    return "Speakers in this window: " + (", ".join(entries) if entries else "none")
 
 
 def extract_user(
