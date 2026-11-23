@@ -193,6 +193,17 @@ impl Slot {
         }
         // Dropping the sender ends the feed once the queued frames are read.
     }
+
+    /// Like [`Slot::finish`], but hands back the feed when the recorder has not attached to
+    /// it yet, so that it can still read the queued frames and the end.
+    fn retire(mut self, reason: EndReason) -> Option<StreamFeed> {
+        let feed = self.rx.take().map(|rx| StreamFeed {
+            rx,
+            end: self.end.clone(),
+        });
+        self.finish(reason);
+        feed
+    }
 }
 
 #[derive(Default)]
@@ -202,6 +213,10 @@ struct Inner {
     clients: Vec<PairedClient>,
     conns: HashMap<ConnId, ConnEntry>,
     streams: HashMap<String, Slot>,
+    /// Streams that ended before the recorder attached to them. The recording thread starts
+    /// a moment after the stream is accepted; a tab that stops in that moment must still be
+    /// recorded, with the frames it sent.
+    parked: HashMap<String, StreamFeed>,
     by_no: HashMap<u32, String>,
     next_conn: ConnId,
     next_stream_no: u32,
@@ -235,6 +250,17 @@ fn error(code: ErrorCode, message: impl Into<String>) -> ServerMessage {
         code,
         message: message.into(),
     })
+}
+
+impl Inner {
+    /// Take a stream out of the hub and end it. A feed nobody attached to waits for the
+    /// recorder in `parked`.
+    fn retire(&mut self, id: &str, slot: Slot, reason: EndReason) {
+        self.by_no.remove(&slot.stream_no);
+        if let Some(feed) = slot.retire(reason) {
+            self.parked.insert(id.to_string(), feed);
+        }
+    }
 }
 
 impl Hub {
@@ -485,6 +511,7 @@ impl Hub {
             if inner.streams.contains_key(&start.stream_id) {
                 return refused(RefuseReason::Duplicate);
             }
+            inner.parked.remove(&start.stream_id);
             if inner.recording.is_none() {
                 return refused(RefuseReason::NotRecording);
             }
@@ -580,24 +607,26 @@ impl Hub {
                 .is_some_and(|s| s.conn == Some(conn));
             if owned {
                 let slot = inner.streams.remove(&stop.stream_id);
-                if let Some(s) = &slot {
-                    inner.by_no.remove(&s.stream_no);
+                if let Some(slot) = slot {
+                    let (frames, reason) = (slot.frames, EndReason::Stopped(stop.reason));
+                    inner.retire(&stop.stream_id, slot, reason);
+                    Some(frames)
+                } else {
+                    None
                 }
-                slot
             } else {
                 None
             }
         };
-        if let Some(slot) = removed {
+        if let Some(frames_received) = removed {
             tracing::info!(
                 stream = %stop.stream_id,
                 reason = stop.reason.as_str(),
                 frames_sent = stop.frames_sent,
-                frames_received = slot.frames,
+                frames_received,
                 frames_dropped_by_sender = stop.frames_dropped,
                 "tab stream stopped"
             );
-            slot.finish(EndReason::Stopped(stop.reason));
             self.run(After {
                 state: true,
                 ..After::default()
@@ -644,6 +673,13 @@ impl Hub {
     /// Take the audio of a stream. Works once per stream.
     pub fn attach(&self, stream_id: &str) -> Result<StreamFeed, String> {
         let mut inner = self.lock();
+        if !inner.streams.contains_key(stream_id) {
+            // The stream ended before the recorder got here: it still gets what was sent.
+            return inner
+                .parked
+                .remove(stream_id)
+                .ok_or_else(|| format!("unknown tab stream `{stream_id}`"));
+        }
         let slot = inner
             .streams
             .get_mut(stream_id)
@@ -662,6 +698,7 @@ impl Hub {
     pub fn detach(&self, stream_id: &str) {
         let removed = {
             let mut inner = self.lock();
+            inner.parked.remove(stream_id);
             let slot = inner.streams.remove(stream_id);
             if let Some(s) = &slot {
                 inner.by_no.remove(&s.stream_no);
@@ -687,8 +724,9 @@ impl Hub {
                 inner.recording = meeting_id;
                 if inner.recording.is_none() {
                     inner.by_no.clear();
-                    for (_, slot) in inner.streams.drain() {
-                        slot.finish(EndReason::Closed);
+                    let ended: Vec<(String, Slot)> = inner.streams.drain().collect();
+                    for (id, slot) in ended {
+                        inner.retire(&id, slot, EndReason::Closed);
                     }
                 }
                 true
@@ -774,8 +812,7 @@ impl Hub {
                 .collect();
             for id in gone {
                 if let Some(slot) = inner.streams.remove(&id) {
-                    inner.by_no.remove(&slot.stream_no);
-                    slot.finish(EndReason::Closed);
+                    inner.retire(&id, slot, EndReason::Closed);
                 }
             }
             After {
@@ -816,8 +853,7 @@ impl Hub {
             for id in late {
                 if let Some(slot) = inner.streams.remove(&id) {
                     tracing::warn!(stream = %id, "tab stream not resumed in time");
-                    inner.by_no.remove(&slot.stream_no);
-                    slot.finish(EndReason::ConnectionLost);
+                    inner.retire(&id, slot, EndReason::ConnectionLost);
                     after.state = true;
                 }
             }
@@ -1060,6 +1096,43 @@ mod tests {
             feed.next(Duration::from_millis(10)),
             FeedEvent::End(EndReason::Stopped(StopReason::TabClosed))
         );
+    }
+
+    #[test]
+    fn a_stream_that_stops_before_the_recorder_attaches_is_still_delivered() {
+        let (hub, _) = hub();
+        let (conn, _rx, _) = paired(&hub);
+        hub.set_recording(Some("m1".into()));
+        let ServerMessage::StartOk(ok) = hub.start(conn, &start_msg("s1")) else {
+            panic!();
+        };
+        for seq in 0..3 {
+            hub.frame(conn, frame(ok.stream_no, seq));
+        }
+        // The recording thread is slow to start: the tab is gone before it attaches.
+        hub.stop(
+            conn,
+            &Stop {
+                stream_id: "s1".into(),
+                reason: StopReason::TabClosed,
+                frames_sent: 3,
+                samples_sent: 960,
+                frames_dropped: 0,
+            },
+        );
+        assert!(hub.status(Instant::now()).streams.is_empty());
+        let mut feed = hub.attach("s1").unwrap();
+        for _ in 0..3 {
+            assert!(matches!(
+                feed.next(Duration::from_millis(10)),
+                FeedEvent::Frame(_)
+            ));
+        }
+        assert_eq!(
+            feed.next(Duration::from_millis(10)),
+            FeedEvent::End(EndReason::Stopped(StopReason::TabClosed))
+        );
+        assert!(hub.attach("s1").is_err());
     }
 
     #[test]

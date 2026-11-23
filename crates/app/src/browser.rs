@@ -549,7 +549,20 @@ mod tests {
                 frames_dropped: 3,
             },
         );
-        std::thread::sleep(Duration::from_millis(400));
+        // Wait for the track to read the frames and the end, not for a fixed time.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let live = recorder.tick().unwrap();
+            let src = live.sources.iter().find(|s| s.id == "tab:s1").unwrap();
+            if src.status == crate::recording_dto::SourceStatus::Ended {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the tab track did not end"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
         let id = recorder.stop().unwrap();
         browser.sync_recording(recorder.meeting_id());
 
