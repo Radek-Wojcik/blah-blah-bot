@@ -71,7 +71,9 @@ pub fn recover_meeting(app: AppHandle, state: State<'_, AppState>, id: String) -
 
 #[tauri::command]
 pub fn list_sources(state: State<'_, AppState>) -> IpcResult<Vec<SourceInfo>> {
-    state.recorder.list_sources()
+    let mut sources = state.recorder.list_sources()?;
+    state.browser().add_tab_sources(&mut sources);
+    Ok(sources)
 }
 
 #[tauri::command]
@@ -96,7 +98,10 @@ pub fn start_recording(
         settings.last_report.as_ref(),
     )?;
     let root = state.recordings_root()?;
+    // The tabs on offer that were not chosen stay out of this recording.
+    let chosen = req.source_ids.clone();
     state.recorder.start(&root, req, report.clone())?;
+    state.browser().begin_recording(&chosen);
     state.browser().sync_recording(state.recorder.meeting_id());
     // Best effort from here on: the recording is running.
     if let Some(last) = cycles::last_report_of(&report) {
@@ -131,7 +136,12 @@ pub fn stop_recording(app: AppHandle, state: State<'_, AppState>) -> IpcResult<(
 
 #[tauri::command]
 pub fn add_source(app: AppHandle, state: State<'_, AppState>, source_id: String) -> IpcResult<()> {
-    state.recorder.add_source(&source_id)?;
+    if source_id.starts_with("tab:") {
+        // A tab on offer joins through the bridge: it asks again and is taken.
+        state.browser().allow_tab(&source_id)?;
+    } else {
+        state.recorder.add_source(&source_id)?;
+    }
     if let Some(s) = state.recorder.tick() {
         emit_state(&app, &s);
     }

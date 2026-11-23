@@ -18,6 +18,7 @@ mod recording;
 mod recording_dto;
 mod secrets;
 mod settings;
+mod sources;
 mod speaker_commands;
 mod state;
 
