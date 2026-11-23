@@ -372,11 +372,16 @@ select {
   font-size: 0.72em;
   text-transform: uppercase;
 }
+.picker {
+  /* A fieldset is as wide as its widest content by default; long tab titles must truncate. */
+  min-width: 0;
+}
 .pick-section {
   display: flex;
   flex-direction: column;
   gap: 4px;
   margin-bottom: 6px;
+  min-width: 0;
 }
 .pick-heading,
 .pick-subheading {
@@ -393,6 +398,7 @@ select {
 .pick-item {
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
 .pick-hint {
   margin: 2px 0 2px 1.9em;

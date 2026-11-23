@@ -39,8 +39,9 @@ test.describe("static screenshots", () => {
   });
 
   test("source picker", async ({ page }) => {
-    await page.setViewportSize({ width: 340, height: 420 });
-    await page.goto("/?view=widget&backend=mock&rate=0");
+    // Taller than the other widget shots: the Browser section lists captured tabs.
+    await page.setViewportSize({ width: 340, height: 600 });
+    await page.goto("/?view=widget&backend=mock&rate=0&tabs=1");
     await page.getByLabel("Discord").check();
     await settle(page);
     await page.screenshot({ path: path.join(OUT, "source-picker.png") });
