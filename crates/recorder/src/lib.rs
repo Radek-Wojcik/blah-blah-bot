@@ -31,6 +31,8 @@ pub mod session;
 #[cfg(windows)]
 pub mod sessions;
 #[cfg(windows)]
+pub mod source_list;
+#[cfg(windows)]
 pub mod sysutil;
 
 #[cfg(test)]
