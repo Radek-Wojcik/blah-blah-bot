@@ -405,7 +405,7 @@ test("record flow GIF", async ({ page }) => {
   await shot();
   await page.waitForTimeout(1_200);
   await shot();
-  await page.getByLabel("Add source").selectOption({ label: "Google Chrome" });
+  await page.getByLabel("Add source").selectOption({ label: "Chrome (whole browser)" });
   await shot();
   await page.getByRole("button", { name: /Screenshot/ }).click();
   await shot();
