@@ -915,3 +915,91 @@ describe("browser extension bridge", () => {
     expect((await b.cancelPairing()).pairing).toBeNull();
   });
 });
+
+describe("meeting detection", () => {
+  it("defaults to balanced with the known applications and keeps the settings on a save", async () => {
+    const b = createMockBackend({ clockRate: 0 });
+    const d = await b.getDetectionSettings();
+    expect(d.enabled).toBe(true);
+    expect(d.sensitivity).toBe("balanced");
+    expect(d.knownApps).toEqual(["discord", "discordptb", "ms-teams", "teams", "zoom", "slack"]);
+    const saved = await b.saveDetectionSettings({
+      ...d,
+      sensitivity: "high",
+      knownApps: [...d.knownApps, " Webex.EXE", "zoom"],
+    });
+    expect(saved.sensitivity).toBe("high");
+    expect(saved.knownApps.at(-1)).toBe("webex");
+    expect(saved.knownApps.filter((a) => a === "zoom")).toHaveLength(1);
+    // A save of the general settings does not touch detection.
+    const s = await b.getSettings();
+    expect(s.detection?.sensitivity).toBe("high");
+    await b.saveSettings({ ...s, detection: { ...s.detection!, sensitivity: "low" } });
+    expect((await b.getDetectionSettings()).sensitivity).toBe("high");
+    await expect(
+      b.saveDetectionSettings({ ...saved, knownApps: ["C:\\x\\app.exe"] }),
+    ).rejects.toMatchObject({ code: "invalid" });
+  });
+
+  it("raises one prompt, and Record starts a recording of the microphone and the application", async () => {
+    vi.useFakeTimers();
+    try {
+      const b = createMockBackend({ clockRate: 0, detectMs: 100 });
+      const seen: string[] = [];
+      await b.onDetectionPrompt((p) => seen.push(p.key));
+      expect(await b.detectionPrompt()).toBeNull();
+      await vi.advanceTimersByTimeAsync(150);
+      expect(seen).toEqual(["discord"]);
+      const prompt = await b.detectionPrompt();
+      expect(prompt).toMatchObject({ app: "discord", display: "Discord", source: "audio" });
+      const outcome = await b.answerDetection(prompt!.key, "record");
+      expect(outcome).toEqual({ started: true, needsReport: false });
+      const state = await b.recordingState();
+      expect(state.status).toBe("recording");
+      expect(state.sources.map((x) => x.id)).toEqual(["mic:default", "app:discord"]);
+      expect(await b.detectionPrompt()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("Not now leaves the call alone, Never switches the application off and clears the prompt", async () => {
+    vi.useFakeTimers();
+    try {
+      const b = createMockBackend({ clockRate: 0, detectMs: 50 });
+      const cleared: string[] = [];
+      await b.onDetectionCleared((k) => cleared.push(k));
+      await vi.advanceTimersByTimeAsync(80);
+      expect(await b.answerDetection("discord", "not_now")).toEqual({
+        started: false,
+        needsReport: false,
+      });
+      expect((await b.recordingState()).status).toBe("idle");
+      expect(cleared).toEqual(["discord"]);
+      expect((await b.getDetectionSettings()).optedOut).toEqual([]);
+
+      const c = createMockBackend({ clockRate: 0, detectMs: 50 });
+      await vi.advanceTimersByTimeAsync(80);
+      await c.answerDetection("discord", "never");
+      expect((await c.getDetectionSettings()).optedOut).toEqual(["discord"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("switching detection off or opting the application out withdraws a prompt on offer", async () => {
+    vi.useFakeTimers();
+    try {
+      const b = createMockBackend({ clockRate: 0, detectMs: 50 });
+      const cleared: string[] = [];
+      await b.onDetectionCleared((k) => cleared.push(k));
+      await vi.advanceTimersByTimeAsync(80);
+      const d = await b.getDetectionSettings();
+      await b.saveDetectionSettings({ ...d, optedOut: ["discord"] });
+      expect(cleared).toEqual(["discord"]);
+      expect(await b.detectionPrompt()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

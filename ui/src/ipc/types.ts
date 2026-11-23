@@ -81,6 +81,42 @@ export interface Settings {
   lastReport?: LastReport | null;
   /** The bridge to the Chrome extension (always present from the backend). */
   bridge?: BridgeSettings;
+  /** Meeting detection. Read-only for the settings screen: it changes through `saveDetectionSettings`. */
+  detection?: DetectionSettings;
+}
+
+/** How readily a call raises the "record this call?" prompt. */
+export type Sensitivity = "low" | "balanced" | "high";
+
+export interface DetectionSettings {
+  /** Watch for calls at all. */
+  enabled: boolean;
+  sensitivity: Sensitivity;
+  /** Conferencing applications (executable names without .exe, lowercase). Browsers are never detected this way. */
+  knownApps: string[];
+  /** Applications the user chose "Never" for. */
+  optedOut: string[];
+  /** Use the Google Meet reports of the browser extension. */
+  meet: boolean;
+}
+
+/** A call the detector found, asking whether to record it. */
+export interface DetectionPrompt {
+  /** Identifies the call (the application, or `meet:<tab>`). */
+  key: string;
+  app: string;
+  /** Name to show. */
+  display: string;
+  source: "audio" | "meet";
+}
+
+export type DetectionAnswer = "record" | "not_now" | "never";
+
+export interface AnswerOutcome {
+  /** A recording runs now because of the answer. */
+  started: boolean;
+  /** The last report choice could not be used; the recorder window was opened for the choice. */
+  needsReport: boolean;
 }
 
 /** A paired Chrome extension as stored in the settings (the secret is never sent to the UI). */

@@ -1,11 +1,15 @@
 import type {
   AddRepoRequest,
+  AnswerOutcome,
   BridgeStatus,
   CloudPreview,
   CycleDetails,
   CycleDto,
   CycleListItem,
   CycleRepoView,
+  DetectionAnswer,
+  DetectionPrompt,
+  DetectionSettings,
   DraftItemPatch,
   DraftSection,
   DraftView,
@@ -71,6 +75,19 @@ export interface Backend {
   cancelPairing(): Promise<BridgeStatus>;
   /** Forget a paired extension and close its connection. */
   unpairClient(clientId: string): Promise<BridgeStatus>;
+
+  /** Meeting detection: which applications raise a prompt and how readily. */
+  getDetectionSettings(): Promise<DetectionSettings>;
+  /** Returns the settings as stored (names normalized). */
+  saveDetectionSettings(settings: DetectionSettings): Promise<DetectionSettings>;
+  /** The prompt on offer, for a window that opened after the event. */
+  detectionPrompt(): Promise<DetectionPrompt | null>;
+  /**
+   * Answer the prompt: `record` starts a recording of the microphone and the application with
+   * the last report choice (or opens the recorder window when there is none), `not_now` leaves
+   * this call alone, `never` stops prompts for the application.
+   */
+  answerDetection(key: string, answer: DetectionAnswer): Promise<AnswerOutcome>;
 
   /**
    * Create the processing job of a meeting if missing and start processing. With `options.llm`
@@ -190,4 +207,7 @@ export interface Backend {
   /** A cycle, template or repository changed. */
   onCyclesChanged(cb: () => void): Promise<Unsubscribe>;
   onBridgeChanged(cb: (status: BridgeStatus) => void): Promise<Unsubscribe>;
+  onDetectionPrompt(cb: (prompt: DetectionPrompt) => void): Promise<Unsubscribe>;
+  /** Payload: the key of the call whose prompt was withdrawn. */
+  onDetectionCleared(cb: (key: string) => void): Promise<Unsubscribe>;
 }

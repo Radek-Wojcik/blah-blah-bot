@@ -601,3 +601,58 @@ test.describe("browser extension settings on the mock backend", () => {
     await expect(section.getByRole("button", { name: "Pair extension" })).toBeDisabled();
   });
 });
+
+test.describe("meeting detection on the mock backend", () => {
+  test("a detected call asks once and Record starts a recording of the microphone and the app", async ({
+    page,
+  }) => {
+    await page.goto("/?view=widget&backend=mock&detectms=300");
+    const prompt = page.getByRole("alertdialog", { name: "Record this call?" });
+    await expect(prompt).toBeVisible();
+    await expect(prompt).toContainText("A Discord call seems to have started.");
+    await expect(prompt.getByRole("button", { name: "Never for Discord" })).toBeVisible();
+    await prompt.getByRole("button", { name: "Record" }).click();
+    await expect(prompt).toHaveCount(0);
+    await expect(page.getByText("Recording", { exact: true })).toBeVisible();
+    const sources = page.getByRole("list", { name: "Recorded sources" });
+    await expect(sources.getByRole("listitem")).toHaveCount(2);
+    await expect(sources).toContainText("Microphone (USB headset)");
+    await expect(sources).toContainText("Discord");
+  });
+
+  test("Not now closes the prompt and starts nothing", async ({ page }) => {
+    await page.goto("/?view=widget&backend=mock&detectms=300");
+    const prompt = page.getByRole("alertdialog", { name: "Record this call?" });
+    await prompt.getByRole("button", { name: "Not now" }).click();
+    await expect(prompt).toHaveCount(0);
+    await expect(page.getByText("Standby")).toBeVisible();
+  });
+
+  test("the settings choose the sensitivity and Ask again undoes Never", async ({ page }) => {
+    await page.goto("/?view=main&backend=mock");
+    await page.getByRole("button", { name: "Settings" }).click();
+    const section = page.getByRole("region", { name: "Detection" });
+    await expect(section.getByLabel(/^Balanced/)).toBeChecked();
+    await expect(section.getByTestId("detection-state")).toHaveText("On, watching 7 applications.");
+
+    await section.getByLabel(/^High/).check();
+    await expect(section.getByLabel(/^High/)).toBeChecked();
+
+    const list = section.getByRole("list", { name: "Watched applications" });
+    await expect(list.getByRole("listitem")).toHaveCount(6);
+    await section.getByRole("button", { name: "Never ask for Zoom" }).click();
+    await expect(list).toContainText("switched off with Never");
+    await expect(section.getByTestId("detection-state")).toHaveText("On, watching 6 applications.");
+    await section.getByRole("button", { name: "Ask again for Zoom" }).click();
+    await expect(list).not.toContainText("switched off with Never");
+
+    await section.getByLabel("Add a program").fill("Webex.exe");
+    await section.getByRole("button", { name: "Add", exact: true }).click();
+    await expect(list.getByRole("listitem")).toHaveCount(7);
+    await expect(list).toContainText("webex.exe");
+
+    await section.getByLabel("Ask whether to record when a call starts").uncheck();
+    await expect(section.getByTestId("detection-state")).toHaveText("Off: no prompt is raised.");
+    await expect(section.getByLabel(/^Low/)).toBeDisabled();
+  });
+});

@@ -6,6 +6,7 @@ import { errorMessage, useCycles, useMeetings, useRecordingState } from "../hook
 import type { MeetingSummary, Settings } from "../ipc/types";
 import { canProcess, jobStateLabel } from "../processing";
 import { BrowserExtension } from "./BrowserExtension";
+import { DetectionSettingsView } from "./DetectionSettings";
 import { CycleEditor } from "./CycleEditor";
 import { CyclesView } from "./Cycles";
 import { DraftEditor } from "./DraftEditor";
@@ -378,6 +379,7 @@ function SettingsView() {
           </form>
         </div>
       </div>
+      <DetectionSettingsView />
       <BrowserExtension />
       <CycleRepos />
       <ProcessingSettingsView />

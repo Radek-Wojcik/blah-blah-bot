@@ -3,6 +3,7 @@ import { useBackend } from "../backend-context";
 import { formatDuration } from "../format";
 import { errorMessage, useRecordingState, useSources } from "../hooks";
 import type { ActiveSource, SourceInfo } from "../ipc/types";
+import { DetectionPrompt } from "./DetectionPrompt";
 import { ProcessPrompt } from "./ProcessPrompt";
 import { ReportGate } from "./ReportGate";
 
@@ -112,6 +113,8 @@ export function Widget() {
       )}
 
       <ProcessPrompt />
+      {/* The demo mock raises its prompt here; the application shows it in its own window. */}
+      {new URLSearchParams(window.location.search).has("detectms") && <DetectionPrompt embedded />}
       {gate && (
         <ReportGate
           onCancel={() => setGate(false)}

@@ -18,6 +18,8 @@ export function selectBackend(search: string = window.location.search): Backend 
   const fault = params.get("overlayfault");
   // `pairms=N` makes a simulated extension enter the pairing code after N milliseconds.
   const pairms = params.get("pairms");
+  // `detectms=N` makes the mock detect a Discord call N milliseconds after start.
+  const detectms = params.get("detectms");
   return createMockBackend({
     recording: params.get("state") === "recording",
     // `newdraft=1` starts with a newer draft next to the edited one of the demo meeting.
@@ -25,6 +27,7 @@ export function selectBackend(search: string = window.location.search): Backend 
     ...(rate === null ? {} : { clockRate: Number(rate) }),
     ...(jobms === null ? {} : { jobStepMs: Number(jobms) }),
     ...(pairms === null ? {} : { bridgePairMs: Number(pairms) }),
+    ...(detectms === null ? {} : { detectMs: Number(detectms) }),
     ...(fault === "blank" || fault === "black" || fault === "broken"
       ? { overlayFault: fault }
       : {}),

@@ -96,6 +96,10 @@ export function createTauriBackend(): Backend {
     startPairing: () => invoke("start_pairing"),
     cancelPairing: () => invoke("cancel_pairing"),
     unpairClient: (clientId) => invoke("unpair_client", { clientId }),
+    getDetectionSettings: () => invoke("get_detection_settings"),
+    saveDetectionSettings: (settings) => invoke("save_detection_settings", { settings }),
+    detectionPrompt: () => invoke("detection_prompt"),
+    answerDetection: (key, answer) => invoke("answer_detection", { key, answer }),
     onRecordingState: (cb) => listen("recording-state", (e) => cb(e.payload as never)),
     onMeetingsChanged: (cb) => listen("meetings-changed", () => cb()),
     onQueueChanged: (cb) => listen("queue-changed", (e) => cb(e.payload as never)),
@@ -104,6 +108,8 @@ export function createTauriBackend(): Backend {
     onDraftChanged: (cb) => listen("draft-changed", (e) => cb(e.payload as string)),
     onCyclesChanged: (cb) => listen("cycles-changed", () => cb()),
     onBridgeChanged: (cb) => listen("bridge-changed", (e) => cb(e.payload as never)),
+    onDetectionPrompt: (cb) => listen("detection-prompt", (e) => cb(e.payload as never)),
+    onDetectionCleared: (cb) => listen("detection-cleared", (e) => cb(e.payload as string)),
   };
 }
 

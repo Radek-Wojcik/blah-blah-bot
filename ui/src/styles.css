@@ -2312,3 +2312,23 @@ textarea {
   letter-spacing: 0.15em;
   margin: 0.4em 0;
 }
+
+/* Meeting detection: the record-this-call prompt (its own small window in the application). */
+.detect {
+  height: 100%;
+  padding: 10px;
+}
+.detect-embedded {
+  height: auto;
+  padding: 0;
+}
+.detect .actions .btn {
+  flex: 1 1 auto;
+}
+.detect-title {
+  font-weight: 700;
+  margin: 0 0 4px;
+}
+.detect-text {
+  margin: 0 0 10px;
+}

@@ -14,6 +14,7 @@ import {
 } from "./mock-demo";
 import { createCycleStore, type RecordingReport } from "./mock-cycles";
 import { createMockBridge } from "./mock-bridge";
+import { createMockDetection } from "./mock-detection";
 import { createMockDrafts } from "./mock-drafts";
 import { fail } from "./mock-util";
 import { isLocalHost, missingForKind, urlHost, validateLlmSettings } from "../llm";
@@ -98,6 +99,8 @@ export interface MockOptions {
   overlayFault?: "blank" | "black" | "broken";
   /** Simulate an extension entering the pairing code this many milliseconds after pairing starts. */
   bridgePairMs?: number;
+  /** Raise a prompt for a fictional Discord call this many milliseconds after start. */
+  detectMs?: number;
 }
 
 /** In-memory backend that serves the fictional demo cycle. No audio devices, files or network. */
@@ -351,6 +354,29 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
   }
 
   if (opts.recording) begin(["mic:default", "app:discord"], 12 * MIN + 41_000);
+
+  // ----- meeting detection -----
+  const detection = createMockDetection({
+    ...(opts.detectMs === undefined ? {} : { promptAfterMs: opts.detectMs }),
+    recording: () => state.status === "recording",
+    // The same gate as `startRecording` with the last report; a recording that runs already
+    // gets the sources added.
+    record: async (sourceIds) => {
+      const report = cycles.resolveChoice(undefined, true);
+      if (state.status === "recording") {
+        sourceIds
+          .filter((id) => !state.sources.some((s) => s.id === id))
+          .forEach(
+            (id) =>
+              (state = { ...state, sources: [...state.sources, active(id, state.elapsedMs)] }),
+          );
+        emit();
+        return;
+      }
+      begin(sourceIds);
+      if (state.meetingId !== null) reports.set(state.meetingId, report);
+    },
+  });
 
   // Every subscription is its own entry, even when the same callback is registered twice
   // (React StrictMode does that): removing one must not remove the other.
@@ -768,6 +794,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       })),
       lastReport: cycles.lastReport(),
       bridge: bridge.settings(),
+      detection: detection.settings(),
     }),
     // The repository list, the last report and the paired extensions are not saved from the
     // settings screen.
@@ -780,6 +807,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       });
     },
     ...bridge.methods,
+    ...detection.methods,
     onRecordingState: (cb) => subscribe(stateListeners, cb),
     onMeetingsChanged: (cb) => subscribe(meetingListeners, cb),
     onQueueChanged: (cb) => subscribe(queueListeners, cb),
