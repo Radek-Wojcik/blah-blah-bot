@@ -14,7 +14,7 @@ test.describe("recorder widget on the mock backend", () => {
     await expect(sources.getByRole("listitem")).toHaveCount(2);
 
     // Add a source while recording.
-    await page.getByLabel("Add source").selectOption({ label: "Google Chrome" });
+    await page.getByLabel("Add source").selectOption({ label: "Chrome (whole browser)" });
     await expect(sources.getByRole("listitem")).toHaveCount(3);
 
     // Screenshot counter.
@@ -39,6 +39,100 @@ test.describe("recorder widget on the mock backend", () => {
     await page.goto("/?view=widget&backend=mock&state=recording");
     await expect(page.getByText("Recording", { exact: true })).toBeVisible();
     await expect(page.getByLabel("Elapsed time")).toContainText("12:4");
+  });
+});
+
+test.describe("source picker on the mock backend", () => {
+  test("is grouped Microphone, Applications, Browser", async ({ page }) => {
+    await page.goto("/?view=widget&backend=mock");
+    const picker = page.getByRole("group", { name: "Sources" });
+    await expect(picker.getByRole("group")).toHaveCount(3);
+    await expect(picker.getByRole("group").nth(0)).toHaveAccessibleName("Microphone");
+    await expect(picker.getByRole("group").nth(1)).toHaveAccessibleName("Applications");
+    await expect(picker.getByRole("group").nth(2)).toHaveAccessibleName("Browser");
+  });
+
+  test("offers the whole browser as the fallback while the extension offers no tab", async ({
+    page,
+  }) => {
+    await page.goto("/?view=widget&backend=mock");
+    const browser = page.getByRole("group", { name: "Browser" });
+    await expect(browser.getByRole("checkbox")).toHaveCount(1);
+    const whole = browser.getByLabel("Chrome (whole browser)");
+    await expect(whole).not.toBeChecked();
+    await expect(whole).toHaveAccessibleDescription(/extension is not connected/);
+    await expect(browser.getByText("instead of single tabs")).toBeVisible();
+
+    // The fallback records: choose it together with the microphone.
+    await whole.check();
+    await recordFromGate(page);
+    const sources = page.getByRole("list", { name: "Recorded sources" });
+    await expect(sources.getByText("Chrome (whole browser)")).toBeVisible();
+    // Nothing is said about double recording: no tab is chosen.
+    await expect(page.getByRole("status")).toHaveCount(0);
+  });
+
+  test("ticks the captured tabs, groups them and records the ones that stay ticked", async ({
+    page,
+  }) => {
+    await page.goto("/?view=widget&backend=mock&tabs=1");
+    const browser = page.getByRole("group", { name: "Browser" });
+    await expect(browser.getByText("Group 1", { exact: true })).toBeVisible();
+    await expect(browser.getByText("Other tabs", { exact: true })).toBeVisible();
+    const sync = browser.getByLabel("Tab: ORBIT weekly sync (meet.example.org)");
+    const plan = browser.getByLabel("Tab: Thruster plan (docs.example.org)");
+    const sheet = browser.getByLabel("Tab: Budget sheet (sheets.example.org)");
+    await expect(sync).toBeChecked();
+    await expect(plan).toBeChecked();
+    await expect(sheet).toBeChecked();
+    await expect(browser.getByLabel("Chrome (whole browser)")).not.toBeChecked();
+    await expect(browser.getByLabel("Chrome (whole browser)")).toHaveAccessibleDescription(
+      /Choose tabs instead/,
+    );
+
+    await plan.uncheck();
+    await recordFromGate(page);
+    const sources = page.getByRole("list", { name: "Recorded sources" });
+    await expect(sources.getByRole("listitem")).toHaveCount(3);
+    await expect(sources.getByText("Tab: Thruster plan (docs.example.org)")).toHaveCount(0);
+    await expect(sources.getByText("Tab: Budget sheet (sheets.example.org)")).toBeVisible();
+  });
+
+  test("warns when a tab and the whole browser are both chosen", async ({ page }) => {
+    await page.goto("/?view=widget&backend=mock&tabs=1");
+    const warning = page.getByRole("status");
+    await expect(warning).toHaveCount(0);
+    await page.getByLabel("Chrome (whole browser)").check();
+    await expect(warning).toContainText("recorded twice");
+    // Leaving the tabs out removes the warning.
+    for (const name of [
+      "Tab: ORBIT weekly sync (meet.example.org)",
+      "Tab: Thruster plan (docs.example.org)",
+      "Tab: Budget sheet (sheets.example.org)",
+    ]) {
+      await page.getByLabel(name).uncheck();
+    }
+    await expect(warning).toHaveCount(0);
+  });
+
+  test("names a failed tab as the reason for the whole browser", async ({ page }) => {
+    await page.goto("/?view=widget&backend=mock&tabs=failed");
+    await expect(page.getByLabel("Chrome (whole browser)")).toHaveAccessibleDescription(
+      /A tab could not be captured/,
+    );
+  });
+
+  test("adds a captured tab to a recording in progress", async ({ page }) => {
+    await page.goto("/?view=widget&backend=mock&tabs=1&state=recording");
+    const sources = page.getByRole("list", { name: "Recorded sources" });
+    await expect(sources.getByRole("listitem")).toHaveCount(2);
+    await page
+      .getByLabel("Add source")
+      .selectOption({ label: "Tab: Budget sheet (sheets.example.org)" });
+    await expect(sources.getByRole("listitem")).toHaveCount(3);
+    // A tab and the whole browser together are called out while recording as well.
+    await page.getByLabel("Add source").selectOption({ label: "Chrome (whole browser)" });
+    await expect(page.getByRole("status")).toContainText("recorded twice");
   });
 });
 
