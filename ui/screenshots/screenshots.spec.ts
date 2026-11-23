@@ -103,6 +103,17 @@ test.describe("static screenshots", () => {
     await page.screenshot({ path: path.join(OUT, "cycle-settings.png") });
   });
 
+  // Stage 6. Run only this one with: npx playwright test --project=screenshots -g "briefing"
+  test("briefing", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 1250 });
+    await page.goto("/?view=main&backend=mock&rate=0&page=briefing&cycle=NOMAD");
+    await expect(page.getByRole("region", { name: "Tasks of Alex Demo" })).toBeVisible();
+    await expect(page.locator(".brief-status")).toHaveText(/^State as of 2026-11-13\./);
+    await expect(page.getByRole("button", { name: "Update" })).toBeEnabled();
+    await settle(page);
+    await page.screenshot({ path: path.join(OUT, "briefing.png") });
+  });
+
   test("draft with the source popover", async ({ page }) => {
     // Tall enough that the whole draft is in view and nothing scrolls.
     await page.setViewportSize({ width: 1280, height: 1250 });
