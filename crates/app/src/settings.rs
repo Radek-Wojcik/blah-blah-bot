@@ -175,6 +175,20 @@ impl DetectionSettings {
         }
     }
 
+    /// Migrate legacy settings where `"meet"` was stored in `opted_out` instead of switching
+    /// `meet` off, so an unrelated save cannot silently re-enable Google Meet.
+    pub fn migrate_legacy_meet(&mut self) {
+        if self
+            .opted_out
+            .iter()
+            .any(|a| recorder::detect::app_stem(a) == recorder::detect::MEET_APP)
+        {
+            self.meet = false;
+            self.opted_out
+                .retain(|a| recorder::detect::app_stem(a) != recorder::detect::MEET_APP);
+        }
+    }
+
     /// Normalize the lists (stems, lowercase, no duplicates) and check them.
     pub fn normalized(mut self) -> Result<Self, String> {
         let clean = |list: &mut Vec<String>| {
@@ -189,9 +203,7 @@ impl DetectionSettings {
         };
         clean(&mut self.known_apps);
         clean(&mut self.opted_out);
-        if self.meet {
-            self.opted_out.retain(|a| a != recorder::detect::MEET_APP);
-        }
+        self.migrate_legacy_meet();
         if self.known_apps.len() > 64 || self.opted_out.len() > 64 {
             return Err("At most 64 applications in a list".into());
         }
@@ -243,10 +255,12 @@ impl Default for Settings {
 impl Settings {
     /// Load settings; a missing or unreadable file yields the defaults.
     pub fn load(path: &Path) -> Self {
-        std::fs::read_to_string(path)
+        let mut settings: Self = std::fs::read_to_string(path)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        settings.detection.migrate_legacy_meet();
+        settings
     }
 
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
@@ -527,7 +541,7 @@ mod tests {
     }
 
     #[test]
-    fn opting_out_of_meet_toggles_meet_and_re_enabling_clears_legacy_opt_out() {
+    fn opting_out_of_meet_toggles_meet_and_migrates_legacy_opt_out() {
         let mut d = DetectionSettings::default();
         d.opt_out("meet");
         assert!(!d.meet);
@@ -536,13 +550,37 @@ mod tests {
         d.opt_out("Discord.EXE");
         assert_eq!(d.opted_out, ["discord"]);
 
+        // Saving an unrelated setting on legacy `{ meet: true, optedOut: ["meet"] }` must keep
+        // Meet off instead of silently re-enabling it.
         let legacy = DetectionSettings {
+            sensitivity: Sensitivity::High,
             meet: true,
             opted_out: vec!["meet".into(), "zoom".into()],
             ..DetectionSettings::default()
         };
-        let normalized = legacy.normalized().unwrap();
-        assert!(normalized.meet);
-        assert_eq!(normalized.opted_out, ["zoom"]);
+        let migrated = legacy.normalized().unwrap();
+        assert!(!migrated.meet);
+        assert_eq!(migrated.opted_out, ["zoom"]);
+
+        // Explicitly re-enabling Meet once `"meet"` is gone keeps Meet on.
+        let reenabled = DetectionSettings {
+            meet: true,
+            ..migrated
+        }
+        .normalized()
+        .unwrap();
+        assert!(reenabled.meet);
+        assert_eq!(reenabled.opted_out, ["zoom"]);
+
+        // Loading a legacy settings file migrates `"meet"` out of `opted_out` immediately.
+        let (_dir, path) = temp("legacy-meet");
+        std::fs::write(
+            &path,
+            r#"{"detection":{"meet":true,"optedOut":["meet","zoom"]}}"#,
+        )
+        .unwrap();
+        let loaded = Settings::load(&path);
+        assert!(!loaded.detection.meet);
+        assert_eq!(loaded.detection.opted_out, ["zoom"]);
     }
 }

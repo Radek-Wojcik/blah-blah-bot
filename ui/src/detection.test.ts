@@ -9,6 +9,7 @@ import {
   withApp,
   withMeet,
 } from "./detection";
+import { createMockDetection } from "./ipc/mock-detection";
 import type { DetectionSettings } from "./ipc/types";
 
 const base: DetectionSettings = {
@@ -25,16 +26,19 @@ describe("detection helpers", () => {
     expect(normalizeApp("ms-teams")).toBe("ms-teams");
   });
 
-  it("refuses empty, duplicate and path-like names", () => {
+  it("refuses empty, duplicate, meet and path-like names", () => {
     expect(appProblem("", [])).not.toBeNull();
     expect(appProblem("Zoom.exe", ["zoom"])).toContain("already");
     expect(appProblem("C:\\Apps\\x.exe", [])).toContain("without a folder");
+    expect(appProblem("meet", [])).toContain("toggle");
+    expect(appProblem("Meet.exe", [])).toContain("toggle");
     expect(appProblem("webex", ["zoom"])).toBeNull();
   });
 
   it("adds a valid name and leaves the list alone otherwise", () => {
     expect(withApp(["zoom"], " Webex.exe")).toEqual(["zoom", "webex"]);
     expect(withApp(["zoom"], "zoom")).toEqual(["zoom"]);
+    expect(withApp(["zoom"], "meet")).toEqual(["zoom"]);
   });
 
   it("names the known applications", () => {
@@ -74,5 +78,27 @@ describe("detection helpers", () => {
     expect(disabled.meet).toBe(false);
     expect(disabled.optedOut).toEqual(["zoom"]);
     expect(meetWatched(disabled)).toBe(false);
+  });
+
+  it("migrates legacy meet opt-out on unrelated save without re-enabling Meet", async () => {
+    const mock = createMockDetection({
+      record: async () => {},
+      recording: () => false,
+    });
+    const legacy: DetectionSettings = {
+      ...base,
+      sensitivity: "high",
+      meet: true,
+      optedOut: ["meet", "zoom"],
+    };
+
+    const migrated = await mock.methods.saveDetectionSettings(legacy);
+    expect(migrated.meet).toBe(false);
+    expect(migrated.optedOut).toEqual(["zoom"]);
+    expect(migrated.sensitivity).toBe("high");
+
+    const reenabled = await mock.methods.saveDetectionSettings(withMeet(legacy, true));
+    expect(reenabled.meet).toBe(true);
+    expect(reenabled.optedOut).toEqual(["zoom"]);
   });
 });

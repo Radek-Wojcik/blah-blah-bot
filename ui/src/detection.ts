@@ -31,6 +31,7 @@ export function appProblem(text: string, list: string[]): string | null {
   if (name === "") return "Enter the name of the program, for example zoom.";
   if (/[\\/:]/.test(name)) return "Enter the program name only, without a folder.";
   if (name.length > 64) return "The name is too long.";
+  if (name === "meet") return "Google Meet has its own toggle above.";
   if (list.includes(name)) return `${name} is in the list already.`;
   return null;
 }

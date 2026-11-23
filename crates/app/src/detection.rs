@@ -98,8 +98,7 @@ impl Detection {
         u64::try_from(self.clock.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
 
-    /// A Google Meet tab joined or left its call (reported by the extension). The bridge hook
-    /// in `browser.rs` calls this; until that hook is connected nothing calls it.
+    /// A Google Meet tab joined or left its call (reported by the extension via `browser.rs`).
     pub fn meet(&self, tab_id: u64, joined: bool) {
         if let Ok(mut d) = self.detector.lock() {
             d.meet(self.now_ms(), tab_id, joined);
@@ -322,7 +321,9 @@ fn close_window(app: &AppHandle) {
 
 #[tauri::command]
 pub fn get_detection_settings(state: State<'_, AppState>) -> IpcResult<DetectionSettings> {
-    Ok(state.settings()?.detection)
+    let mut detection = state.settings()?.detection;
+    detection.migrate_legacy_meet();
+    Ok(detection)
 }
 
 #[tauri::command]
@@ -545,15 +546,30 @@ mod tests {
         }
         assert!(feed(&d, 10_000, 10, &[]).is_empty());
 
-        // Even if legacy settings still hold `"meet"` in `opted_out`, turning `meet` back on
-        // removes it on normalization and prompts work again.
-        settings.meet = true;
-        settings.opted_out.push(MEET_APP.into());
-        let restored = settings.normalized().unwrap();
+        // Saving an unrelated setting on legacy settings holding `"meet"` in `opted_out` migrates
+        // `meet` to `false` instead of silently re-enabling it.
+        let legacy = DetectionSettings {
+            meet: true,
+            opted_out: vec![MEET_APP.into()],
+            ..settings
+        };
+        let migrated = legacy.normalized().unwrap();
+        assert!(!migrated.meet);
+        assert!(!migrated.opted_out.contains(&MEET_APP.to_string()));
+        assert!(d.apply(&migrated).is_empty());
+        assert!(feed(&d, 20_000, 10, &[]).is_empty());
+
+        // Explicitly turning `meet` back on restores prompts.
+        let restored = DetectionSettings {
+            meet: true,
+            ..migrated
+        }
+        .normalized()
+        .unwrap();
         assert!(restored.meet);
         assert!(!restored.opted_out.contains(&MEET_APP.to_string()));
         assert!(d.apply(&restored).is_empty());
-        let events = feed(&d, 20_000, 10, &[]);
+        let events = feed(&d, 30_000, 10, &[]);
         assert_eq!(events.len(), 1);
         assert_eq!(d.prompt().unwrap().key, "meet:10");
     }

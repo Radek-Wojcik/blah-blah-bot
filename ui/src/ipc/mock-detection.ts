@@ -65,9 +65,11 @@ export function createMockDetection(opts: MockDetectionOptions) {
         };
         if (!["low", "balanced", "high"].includes(next.sensitivity))
           fail("invalid", "unknown sensitivity");
-        const optedOut = clean(next.optedOut).filter((a) => !(next.meet && a === "meet"));
+        const legacyMeetOptOut = next.optedOut.some((a) => normalizeApp(a) === "meet");
+        const optedOut = clean(next.optedOut.filter((a) => normalizeApp(a) !== "meet"));
         settings = {
           ...next,
+          meet: legacyMeetOptOut ? false : next.meet,
           knownApps: clean(next.knownApps),
           optedOut,
         };
