@@ -35,7 +35,7 @@ Briefing, call detection, a Chrome extension for browser tabs and the whole-brow
 
 - A real tab was not recorded for 30 minutes, and Chrome's capture of a real tab and the keyboard shortcut are not covered by automated tests.
 - False prompts over a working day, real Discord, Teams and Meet calls and Windows 11 are not measured; the hand-made traces hold assumptions about how those applications use the microphone.
-- The default sensitivity (balanced), ADR 0021 and ADR 0022 are proposals.
+- The default sensitivity (`balanced`, ADR 0022) and unpacked extension distribution (ADR 0021) are Accepted, though the preset numbers have not yet been tuned against a real working-day trace.
 - Only Chrome is supported. The extension is installed in developer mode, so Chrome shows a warning and may switch it off after an update; there is no automatic update.
 - A call in a browser other than Meet, and a call in an application that closes its microphone while muted, are not detected. A short microphone test in a watched application can raise a prompt.
 
