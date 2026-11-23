@@ -36,8 +36,61 @@ pub fn is_chrome(process: &str) -> bool {
     app_stem(process) == "chrome"
 }
 
-/// Group `sessions` by program. Sessions of `own_pid`, of the system sounds (no process) and
-/// of programs already listed are skipped.
+/// True when `process` is a Windows system audio host (`audiodg`, `svchost`, `system`).
+pub fn is_system_audio_host(process: &str) -> bool {
+    matches!(
+        app_stem(process).as_str(),
+        "audiodg" | "svchost" | "system" | "system idle process"
+    )
+}
+
+/// True when a Windows audio session display name points to `AudioSrv.dll` (the Windows
+/// system-sounds resource string, e.g. `@%SystemRoot%\System32\AudioSrv.Dll,-202`).
+pub fn is_audiosrv_display(display_name: &str) -> bool {
+    display_name
+        .trim()
+        .to_ascii_lowercase()
+        .contains("audiosrv.dll")
+}
+
+/// True when an audio session belongs to Windows system sounds or a system audio host and
+/// must not be offered as an application source.
+pub fn is_system_audio_session(pid: u32, process: &str, display_name: &str) -> bool {
+    pid == 0
+        || process.trim().is_empty()
+        || is_system_audio_host(process)
+        || is_audiosrv_display(display_name)
+}
+
+/// Capitalized executable stem (`Discord.exe` -> `Discord`, `spotify.exe` -> `Spotify`),
+/// used when Windows reports an indirect MUI resource string (`@...`) as the session name.
+pub fn clean_stem_label(process: &str) -> String {
+    let stem = app_stem(process);
+    let mut chars = stem.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+/// Choose the user-visible label for an application session.
+fn session_label(process: &str, display_name: &str) -> String {
+    let trimmed = display_name.trim();
+    if trimmed.is_empty() {
+        process
+            .strip_suffix(".exe")
+            .or_else(|| process.strip_suffix(".EXE"))
+            .unwrap_or(process)
+            .to_string()
+    } else if trimmed.starts_with('@') {
+        clean_stem_label(process)
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Group `sessions` by program. Sessions of `own_pid`, of the system sounds (`pid == 0`,
+/// `AudioSrv.dll`, or system audio hosts) and of programs already listed are skipped.
 ///
 /// `lookup` gives the executable name and the parent of a process; it finds the real top of
 /// Chrome, whose audio sessions belong to a helper process (the audio service) while the
@@ -47,14 +100,20 @@ pub fn classify_sessions(
     own_pid: u32,
     lookup: impl Fn(u32) -> Option<(String, Option<u32>)>,
 ) -> Vec<AppSource> {
+    let keep = |s: &SessionInfo| {
+        s.pid != own_pid && !is_system_audio_session(s.pid, &s.process, &s.display_name)
+    };
     let mut out = Vec::new();
     let mut seen: Vec<&str> = Vec::new();
     for s in sessions {
-        if s.pid == own_pid || s.process.is_empty() || seen.contains(&s.process.as_str()) {
+        if !keep(s) || seen.contains(&s.process.as_str()) {
             continue;
         }
         seen.push(&s.process);
-        let group: Vec<&SessionInfo> = sessions.iter().filter(|x| x.process == s.process).collect();
+        let group: Vec<&SessionInfo> = sessions
+            .iter()
+            .filter(|x| x.process == s.process && keep(x))
+            .collect();
         let top = group
             .iter()
             .find(|x| !group.iter().any(|y| Some(y.pid) == x.parent_pid))
@@ -70,11 +129,12 @@ pub fn classify_sessions(
             });
             continue;
         }
-        let label = if s.display_name.trim().is_empty() {
-            s.process.trim_end_matches(".exe").to_string()
-        } else {
-            s.display_name.clone()
-        };
+        let chosen_display = group
+            .iter()
+            .map(|x| x.display_name.trim())
+            .find(|d| !d.is_empty() && !d.starts_with('@'))
+            .unwrap_or_else(|| s.display_name.trim());
+        let label = session_label(&s.process, chosen_display);
         out.push(AppSource {
             pid: top.pid,
             label,
@@ -217,11 +277,72 @@ mod tests {
     fn this_application_and_the_system_sounds_are_not_listed() {
         let sessions = [
             session(0, None, "", "active"),
+            session(0, None, "System", "active"),
             session(42, Some(1), "blah-blah-bot.exe", "active"),
             session(7, Some(1), "vlc.exe", "inactive"),
         ];
         let out = classify_sessions(&sessions, 42, |_| None);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].pid, 7);
+    }
+
+    #[test]
+    fn audiosrv_and_system_audio_hosts_are_filtered_out() {
+        let mut audiosrv_on_svchost = session(1040, Some(1), "svchost.exe", "inactive");
+        audiosrv_on_svchost.display_name = r"@%SystemRoot%\System32\AudioSrv.Dll,-202".into();
+
+        let mut audiosrv_on_custom = session(1050, Some(1), "SomeHost.exe", "active");
+        audiosrv_on_custom.display_name = r"@%systemroot%\system32\audiosrv.dll,-202".into();
+
+        let audiodg = session(1060, Some(1), "audiodg.exe", "active");
+        let system_proc = session(4, None, "System", "inactive");
+        let pid_zero = session(0, None, "explorer.exe", "active");
+        let spotify = session(2000, Some(1), "Spotify.exe", "active");
+
+        let sessions = [
+            audiosrv_on_svchost,
+            audiosrv_on_custom,
+            audiodg,
+            system_proc,
+            pid_zero,
+            spotify,
+        ];
+        let out = classify_sessions(&sessions, 1, |_| None);
+        assert_eq!(
+            out,
+            vec![AppSource {
+                pid: 2000,
+                label: "Spotify".into(),
+                active: true,
+                kind: AppKind::Application,
+            }]
+        );
+    }
+
+    #[test]
+    fn indirect_mui_resource_names_fall_back_to_capitalized_process_stem() {
+        let mut discord = session(300, Some(1), "discord.exe", "active");
+        discord.display_name = r"@%ProgramFiles%\Discord\Discord.exe,-101".into();
+
+        let mut teams = session(400, Some(1), "Teams.exe", "inactive");
+        teams.display_name = r"@%ProgramFiles%\Microsoft\Teams\current\Teams.exe,-204".into();
+
+        let mut spotify = session(500, Some(1), "spotify.exe", "active");
+        spotify.display_name = r"@C:\Program Files\WindowsApps\SpotifyAB\Spotify.exe,-1".into();
+
+        let sessions = [discord, teams, spotify];
+        let out = classify_sessions(&sessions, 1, |_| None);
+        let summary: Vec<(u32, &str, bool)> = out
+            .iter()
+            .map(|s| (s.pid, s.label.as_str(), s.active))
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                (300, "Discord", true),
+                (400, "Teams", false),
+                (500, "Spotify", true),
+            ]
+        );
     }
 }

@@ -8,7 +8,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -16,6 +16,7 @@ use std::time::Duration;
 use serde::Serialize;
 
 use crate::capture::{run_track, CaptureContext, SharedState, Source, TrackState, TrackStatus};
+pub use crate::capture::{AudioLevels, LEVEL_BARS};
 use crate::error::{RecorderError, Result};
 use crate::journal::{Entry, Journal, JOURNAL_FILE_NAME};
 use crate::push::{PushTrack, TabItem, TabSource};
@@ -327,6 +328,7 @@ struct ActiveSource {
     handle: Option<JoinHandle<()>>,
     machine: SourceMachine,
     level: f32,
+    levels: AudioLevels,
 }
 
 impl ActiveSource {
@@ -373,6 +375,8 @@ pub struct SourceSnapshot {
     pub offset_ms: f64,
     /// Peak level since the previous snapshot, 0 to 1.
     pub level: f32,
+    /// Real-time 12-bar audio envelope of this source (`0.0..=1.0`).
+    pub levels: AudioLevels,
     /// Explanation for an ended or failed source.
     pub detail: Option<String>,
 }
@@ -382,6 +386,8 @@ pub struct SourceSnapshot {
 pub struct SessionSnapshot {
     pub elapsed_ms: f64,
     pub sources: Vec<SourceSnapshot>,
+    /// Combined real-time 12-bar audio envelope across all active sources (`0.0..=1.0`).
+    pub levels: AudioLevels,
 }
 
 fn phase_name(p: SourcePhase) -> &'static str {
@@ -402,6 +408,9 @@ fn end_detail(p: SourcePhase, error: Option<String>) -> Option<String> {
         _ => None,
     }
 }
+
+/// Type alias for [`Session`] used by higher layers.
+pub type RecordingSession = Session;
 
 /// A recording in progress.
 pub struct Session {
@@ -486,15 +495,13 @@ impl Session {
             return Err(SessionError::SourceAlreadyAdded(spec.id()));
         }
         let track = self.unique_track_name(&spec);
-        let ctx = Arc::new(CaptureContext {
-            peak: AtomicU32::new(0),
-            clock_start_hns: self.clock_start_hns,
-            stop: AtomicBool::new(false),
-            journal: self.journal.clone(),
-            out_dir: self.dir.clone(),
-            seg_samples: self.seg_samples,
-            drift_correction: true,
-        });
+        let ctx = Arc::new(CaptureContext::new(
+            self.clock_start_hns,
+            self.journal.clone(),
+            self.dir.clone(),
+            self.seg_samples,
+            true,
+        ));
         let state: SharedState = Arc::new(Mutex::new(TrackState::default()));
         let backend = self.backend.clone();
         let handle = {
@@ -514,6 +521,7 @@ impl Session {
             handle: Some(handle),
             machine: SourceMachine::new(),
             level: 0.0,
+            levels: AudioLevels::default(),
         });
         Ok(track)
     }
@@ -568,10 +576,19 @@ impl Session {
         )
     }
 
+    /// Current combined 12-bar audio envelope across all active sources (`0.0..=1.0`).
+    pub fn levels(&self) -> AudioLevels {
+        self.sources
+            .iter()
+            .filter(|s| s.machine.is_active())
+            .fold(AudioLevels::default(), |acc, s| acc.merge(s.ctx.levels()))
+    }
+
     /// Current state of every source. Reading resets the level meters.
     pub fn snapshot(&mut self) -> SessionSnapshot {
         self.refresh();
         let elapsed_ms = self.now_ms();
+        let mut combined = AudioLevels::default();
         let sources = self
             .sources
             .iter_mut()
@@ -579,19 +596,47 @@ impl Session {
                 let peak = s.ctx.take_peak();
                 // Fall off smoothly instead of jumping to zero between packets.
                 s.level = if peak >= s.level { peak } else { s.level * 0.7 };
+                let raw_levels = s.ctx.take_levels();
+                let mut next_bars = [0.0; LEVEL_BARS];
+                for (i, b) in next_bars.iter_mut().enumerate() {
+                    let prev = s.levels.bars[i];
+                    let cur = raw_levels.bars[i];
+                    *b = if cur >= prev { cur } else { prev * 0.7 };
+                }
+                s.levels = AudioLevels {
+                    peak: if raw_levels.peak >= s.levels.peak {
+                        raw_levels.peak
+                    } else {
+                        s.levels.peak * 0.7
+                    },
+                    rms: if raw_levels.rms >= s.levels.rms {
+                        raw_levels.rms
+                    } else {
+                        s.levels.rms * 0.7
+                    },
+                    bars: next_bars,
+                };
                 let (offset_ms, error) = s
                     .state
                     .lock()
                     .map(|st| (st.offset_ms, st.error.clone()))
                     .unwrap_or((0.0, None));
                 let phase = s.machine.phase();
+                let active = s.machine.is_active();
+                let src_levels = if active {
+                    combined = combined.merge(s.levels);
+                    s.levels
+                } else {
+                    AudioLevels::default()
+                };
                 SourceSnapshot {
                     id: s.spec.id(),
                     label: s.label.clone(),
                     track: s.track.clone(),
                     phase: phase_name(phase),
                     offset_ms,
-                    level: if s.machine.is_active() { s.level } else { 0.0 },
+                    level: if active { s.level } else { 0.0 },
+                    levels: src_levels,
                     detail: end_detail(phase, error),
                 }
             })
@@ -599,6 +644,7 @@ impl Session {
         SessionSnapshot {
             elapsed_ms,
             sources,
+            levels: combined,
         }
     }
 

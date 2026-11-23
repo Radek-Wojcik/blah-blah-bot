@@ -27,6 +27,8 @@ pub mod wav;
 #[cfg(windows)]
 pub mod capture;
 #[cfg(windows)]
+pub mod power;
+#[cfg(windows)]
 pub mod session;
 #[cfg(windows)]
 pub mod sessions;
@@ -38,4 +40,10 @@ pub mod sysutil;
 #[cfg(test)]
 mod test_util;
 
+#[cfg(windows)]
+pub use capture::{AudioLevels, LEVEL_BARS};
 pub use error::{RecorderError, Result};
+#[cfg(windows)]
+pub use power::SystemWakeLock;
+#[cfg(windows)]
+pub use session::RecordingSession;
