@@ -6,9 +6,11 @@
 //!   Markdown files.
 //! * [`repo`]: the working tree, driven through the `git` command line.
 //! * [`issues`]: open issues with an offline cache.
+//! * [`briefing`]: open tasks by person and open topics, from issues and meeting files.
 //! * [`context`](mod@context): `work/context.json`.
 //! * [`draft`], [`mod@render`]: the meeting draft types and the template engine.
 
+pub mod briefing;
 pub mod context;
 pub mod cycle;
 pub mod draft;
@@ -23,6 +25,10 @@ pub mod template;
 pub mod time;
 pub mod topics;
 
+pub use briefing::{
+    group_tasks, issue_number, meeting_tasks, merge_tasks, open_topics, GroupKind, MergedTasks,
+    TaskEntry, TaskGroup, TaskItem, TaskOrigin,
+};
 pub use context::{build_context, Context, ContextRequest, DEFAULT_MAX_PREVIOUS_ITEMS};
 pub use cycle::{
     Cycle, DiscordRef, DiscordTarget, GithubTarget, GlossaryEntry, Languages, NotionTarget,

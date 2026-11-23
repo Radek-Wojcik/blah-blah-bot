@@ -770,6 +770,7 @@ dependencies = [
  "serde_json",
  "serde_norway",
  "tempfile",
+ "testkit",
  "thiserror 2.0.21",
  "tracing",
  "ureq",
