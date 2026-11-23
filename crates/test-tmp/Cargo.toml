@@ -1,0 +1,14 @@
+[package]
+name = "test-tmp"
+description = "Scratch folders for tests: kept under target/test-tmp, removed on drop, loud when a folder cannot be removed. Used only as a dev-dependency"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

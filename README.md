@@ -6,7 +6,7 @@ Local meeting recorder for Windows that turns calls into GitHub issues and Disco
 ![Platform: Windows](https://img.shields.io/badge/platform-Windows-blue)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
-> **Project status:** Stage 3 (speakers and voice profiles) is released as v0.4.0. Stage 4 (cycles and reports) is implemented and waiting for its release: the application now also keeps cycles in a Git repository and turns a processed transcript into an editable draft report with tasks, decisions, topics, notes, ideas and budgets, each linked to a quote. Stage 5 (publishing) is implemented too and waits for verification with real services: it commits the report to the cycle repository, creates GitHub issues, writes approved status changes back and posts to Discord through a webhook, and has been tested only against fake servers and local Git repositories, never against a real repository or channel. Stage 1 still has one open measurement (microphone buffer flags, see below). There is no installer; build from source.
+> **Project status:** Stage 5 (publishing) is released as v0.6.0. The application keeps cycles in a Git repository and turns a processed transcript into an editable draft report with tasks, decisions, topics, notes, ideas and budgets, each linked to a quote. It commits the report to the cycle repository, creates GitHub issues, writes approved status changes back and posts to Discord through a webhook; it was run once against a real test repository and a real test webhook, and otherwise tested against fake servers and local Git repositories. Stage 1 still has one open measurement (microphone buffer flags, see below). There is no installer; build from source.
 
 ## What works today
 
@@ -312,7 +312,7 @@ Prototype results on the reference machine (RTX 3080 with 12 GB, Windows 10 buil
 - Voice recognition is measured on synthetic voices only. Participants of a cycle belong to that cycle; a meeting without a cycle still uses the local list. A meeting processed after its audio was deleted has no sample clips, so voices are named from the transcript.
 - The Python environment is large (about 7.4 GB) and the first model downloads take a while.
 - The cloud backend is tested only against a mock server. Open issues of a cycle are read from GitHub into a cache; without a token only public repositories can be read. Edits to `cycle.yaml` and templates are not committed by the application. Extraction quality was measured on synthetic transcripts only (Gemma 4 12B: task recall 86.0%; lower in Polish and mixed meetings, 43.5% to 100% per meeting), and Qwen3 14B misses the extraction thresholds on this set. In mixed-language meetings the task text is written in the report language. The new screens are tested on the mock backend, not yet end to end in the real application.
-- Stage 5 is implemented but not released and has not been run against a real GitHub repository or Discord channel: it is tested against fake servers and local Git repositories only. The organization issue field "Target date", the Discord upload limits for webhooks, whether GitHub resolves the transcript anchors and the quality of the status proposals of a real model are unverified, and the default rule per target is a proposal. A meeting cannot be published twice.
+- Stage 5 was run once against a real test repository and a real test webhook (one meeting, one correction) and is otherwise tested against fake servers and local Git repositories. The organization issue field "Target date", the Discord upload limits for webhooks and the quality of the status proposals of a real model are unverified. A meeting cannot be published twice.
 
 ## Roadmap
 
@@ -323,7 +323,7 @@ Prototype results on the reference machine (RTX 3080 with 12 GB, Windows 10 buil
 | 2 | Processing pipeline | v0.3.0 | Done |
 | 3 | Speakers and voice profiles | v0.4.0 | Done |
 | 4 | Cycles and reports | v0.5.0 | Done |
-| 5 | Publishing | v0.6.0 | Implemented against fake servers, verification with real services and release pending |
+| 5 | Publishing | v0.6.0 | Done (the organization field "Target date" is unverified) |
 | 6 | Convenience | v0.7.0 | Planned |
 | 7 | Integrations | v0.8.0 | Planned |
 | 8 | Stabilization | v1.0.0 | Planned |

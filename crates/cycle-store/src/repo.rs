@@ -799,7 +799,7 @@ mod tests {
 
     #[test]
     fn the_meetings_folder_is_inside_the_repository_or_refused() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("repo");
         let repo = Repo::init_local(dir.path().join("r")).unwrap();
         assert_eq!(
             repo.meetings_dir("NOMAD").unwrap(),
@@ -841,7 +841,7 @@ mod tests {
 
     #[test]
     fn init_local_makes_a_clean_repo_on_main() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_tmp::TestDir::new("repo");
         let repo = Repo::init_local(tmp.path().join("repo")).unwrap();
         assert!(repo.is_git_repo());
         let status = repo.status().unwrap();
@@ -859,7 +859,7 @@ mod tests {
 
     #[test]
     fn create_list_load_save_cycles() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_tmp::TestDir::new("repo");
         let repo = Repo::init_local(tmp.path().join("repo")).unwrap();
         assert!(repo.list_cycles().unwrap().is_empty());
 
@@ -910,7 +910,7 @@ mod tests {
 
     #[test]
     fn invalid_cycles_are_listed_with_issues_and_not_fatal() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_tmp::TestDir::new("repo");
         let repo = Repo::init_local(tmp.path().join("repo")).unwrap();
         repo.create_cycle(&cycle("GOOD")).unwrap();
         let cycles = repo.cycles_dir();
@@ -947,7 +947,7 @@ mod tests {
 
     #[test]
     fn create_cycle_refuses_invalid_input_without_writing() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_tmp::TestDir::new("repo");
         let repo = Repo::init_local(tmp.path().join("repo")).unwrap();
         let mut c = cycle("NOMAD");
         c.report
@@ -966,7 +966,7 @@ mod tests {
 
     #[test]
     fn topics_and_templates_round_trip() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_tmp::TestDir::new("repo");
         let repo = Repo::init_local(tmp.path().join("repo")).unwrap();
         repo.create_cycle(&cycle("NOMAD")).unwrap();
         assert!(repo.load_topics("NOMAD").unwrap().is_empty());
@@ -1003,7 +1003,7 @@ mod tests {
 
     #[test]
     fn clone_pull_and_offline_failure_keep_the_clone() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_tmp::TestDir::new("repo");
         let origin = new_origin(tmp.path());
 
         let clone = Repo::clone(origin.root().to_str().unwrap(), tmp.path().join("clone")).unwrap();
@@ -1086,7 +1086,7 @@ mod tests {
 
     #[test]
     fn a_dirty_tree_is_never_pulled_into_or_stashed() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_tmp::TestDir::new("repo");
         let origin = new_origin(tmp.path());
         let clone = clone_of(&origin, tmp.path());
         // Both sides change the same file; the local change is not committed.
@@ -1109,7 +1109,7 @@ mod tests {
 
     #[test]
     fn a_conflicting_committed_edit_is_aborted_and_leaves_valid_files() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_tmp::TestDir::new("repo");
         let origin = new_origin(tmp.path());
         let clone = clone_of(&origin, tmp.path());
         set_name(&origin, "Upstream name");
@@ -1136,7 +1136,7 @@ mod tests {
 
     #[test]
     fn a_rebase_the_user_started_is_not_aborted() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_tmp::TestDir::new("repo");
         let origin = new_origin(tmp.path());
         let clone = clone_of(&origin, tmp.path());
         set_name(&origin, "Upstream name");
@@ -1171,7 +1171,7 @@ mod tests {
 
     #[test]
     fn conflict_markers_that_arrive_are_undone() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_tmp::TestDir::new("repo");
         let origin = new_origin(tmp.path());
         let clone = clone_of(&origin, tmp.path());
         let head = g(clone.root(), &["rev-parse", "HEAD"]);
@@ -1195,7 +1195,7 @@ mod tests {
 
     #[test]
     fn an_update_that_breaks_a_cycle_is_reported() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_tmp::TestDir::new("repo");
         let origin = new_origin(tmp.path());
         let clone = clone_of(&origin, tmp.path());
         let file = origin.cycle_dir("NOMAD").unwrap().join("cycle.yaml");
@@ -1210,7 +1210,7 @@ mod tests {
 
     #[test]
     fn every_handle_of_a_repository_shares_one_lock() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_tmp::TestDir::new("repo");
         let a = Repo::init_local(tmp.path().join("one")).unwrap();
         let b = Repo::open(a.root()).unwrap();
         let other = Repo::init_local(tmp.path().join("two")).unwrap();
@@ -1258,7 +1258,7 @@ mod tests {
 
     #[test]
     fn clone_rejects_bad_destinations_and_urls() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_tmp::TestDir::new("repo");
         let origin = new_origin(tmp.path());
         let busy = tmp.path().join("busy");
         fs::create_dir_all(&busy).unwrap();
@@ -1280,7 +1280,7 @@ mod tests {
 
     #[test]
     fn status_reports_uncommitted_work() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_tmp::TestDir::new("repo");
         let origin = new_origin(tmp.path());
         assert!(!origin.status().unwrap().is_dirty());
         origin.create_cycle(&cycle("ROVER")).unwrap();
@@ -1299,7 +1299,7 @@ mod tests {
 
     #[test]
     fn issue_cache_path_is_inside_the_git_dir() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_tmp::TestDir::new("repo");
         let repo = Repo::init_local(tmp.path().join("repo")).unwrap();
         let path = repo.issue_cache_path("NOMAD").unwrap();
         assert!(path.starts_with(repo.git_dir().unwrap()));

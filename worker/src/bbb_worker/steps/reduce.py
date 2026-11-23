@@ -1,7 +1,8 @@
 """Reduce step: one draft out of the window results.
 
-Reads `work/extract/windows.json`, `work/context.json` and the transcript (only to resolve the
-output language when `windows.json` does not say), writes `work/draft.json` (schema
+Reads `work/extract/windows.json`, `work/context.json` and the transcript (for the names of the
+speakers that have one, which the summary prompt keeps, and to resolve the output language when
+`windows.json` does not say), writes `work/draft.json` (schema
 `meeting`) or, when that file already holds user edits, `work/draft.new.json`.
 
 In order: deduplicate across windows, validate assignees, due dates and links against the
@@ -19,11 +20,12 @@ import re
 from collections.abc import Callable, Sequence
 from contextlib import nullcontext
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Any, TypeVar
 
 from .. import dedup, draft, lang, llm_client, prompts, protocol, schema
 from ..manifest import Manifest
-from ..windows import format_clock
+from ..windows import format_clock, named_people
 from . import extract, read_json
 
 STEP = "reduce"
@@ -243,12 +245,16 @@ def fallback_summary(summaries: list[str]) -> str:
 
 
 def summarize_once(
-    backend: llm_client.Backend, parts: list[str], language: str, final: bool
+    backend: llm_client.Backend,
+    parts: list[str],
+    language: str,
+    final: bool,
+    people: Sequence[str] = (),
 ) -> str:
     done = llm_client.complete_json(
         backend,
         system=prompts.summary_system(language, final),
-        user=prompts.summary_user(parts),
+        user=prompts.summary_user(parts, people),
         schema=SUMMARY_SCHEMA,
         name="summary",
         max_tokens=SUMMARY_TOKENS,
@@ -261,19 +267,21 @@ def summarize(
     summaries: list[str],
     language: str,
     on_call: Callable[[], None] = lambda: None,
+    people: Sequence[str] = (),
 ) -> str:
-    """Window summaries to one meeting summary; many windows are reduced in groups first."""
+    """Window summaries to one meeting summary; many windows are reduced in groups first.
+    `people` are the names of the speakers that have one; the model is told to keep them."""
     level = [s for s in summaries if s.strip()]
     if len(level) <= 1:
         return level[0] if level else ""
     assert backend is not None
     while len(level) > prompts.SUMMARY_MAX_DIRECT:
         level = [
-            summarize_once(backend, group, language, final=False)
+            summarize_once(backend, group, language, final=False, people=people)
             for group in chunks(level, prompts.SUMMARY_GROUP)
         ]
         on_call()
-    result = summarize_once(backend, level, language, final=True)
+    result = summarize_once(backend, level, language, final=True, people=people)
     on_call()
     return result
 
@@ -406,6 +414,7 @@ def build_draft(
     backend: llm_client.Backend | None,
     windows_doc: dict[str, Any],
     on_call: Callable[[], None],
+    people: Sequence[str] = (),
 ) -> tuple[dict[str, Any], str]:
     results = windows_doc["windows"]
     raw_items = [it for w in results for it in w["items"]]
@@ -415,7 +424,7 @@ def build_draft(
     number_items(items)
 
     try:
-        summary = summarize(backend, [w["summary"] for w in results], language, on_call)
+        summary = summarize(backend, [w["summary"] for w in results], language, on_call, people)
     except llm_client.LlmError as e:
         summary = fallback_summary([w["summary"] for w in results])
         warnings.append(
@@ -458,6 +467,14 @@ def output_language(
     return lang.resolve(context["output_language"], transcript["language"], texts)
 
 
+def speaker_names(work: Path) -> list[str]:
+    """Names of the speakers that have one, from the transcript the extraction read (the
+    named one when the application wrote it). None when there is no transcript file."""
+    if not (work / "transcript.named.json").exists() and not (work / "transcript.json").exists():
+        return []
+    return named_people(extract.read_transcript(work))
+
+
 def run(manifest: Manifest) -> None:
     cfg = llm_client.config_from(manifest.options)
     cfg.ensure_allowed()
@@ -481,7 +498,8 @@ def run(manifest: Manifest) -> None:
     protocol.progress(STEP, 0.05, f"{len(windows_doc['windows'])} windows")
     backend_cm = llm_client.open_backend(cfg) if needs_model else nullcontext(None)
     with backend_cm as backend:
-        doc, note = build_draft(manifest, context, language, backend, windows_doc, on_call)
+        people = speaker_names(work) if backend is not None else []
+        doc, note = build_draft(manifest, context, language, backend, windows_doc, on_call, people)
     target = draft.write_draft(work, doc)
     if target.name == draft.DRAFT_NEW:
         protocol.progress(STEP, 1.0, f"{draft.DRAFT} has edits; wrote {draft.DRAFT_NEW} instead")

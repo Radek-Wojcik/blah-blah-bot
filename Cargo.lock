@@ -63,7 +63,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "app"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "cycle-store",
  "keyring-core",
@@ -79,6 +79,7 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-single-instance",
  "tempfile",
+ "test-tmp",
  "thiserror 2.0.21",
  "tracing",
  "tracing-appender",
@@ -703,13 +704,13 @@ dependencies = [
 
 [[package]]
 name = "cycle-store"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "jsonschema",
  "serde",
  "serde_json",
  "serde_norway",
- "tempfile",
+ "test-tmp",
  "thiserror 2.0.21",
  "tracing",
  "ureq",
@@ -3206,14 +3207,14 @@ dependencies = [
 
 [[package]]
 name = "publishers"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "cycle-store",
  "publishers",
  "serde",
  "serde_json",
  "store",
- "tempfile",
+ "test-tmp",
  "thiserror 2.0.21",
  "tracing",
  "tracing-subscriber",
@@ -3222,7 +3223,7 @@ dependencies = [
 
 [[package]]
 name = "queue"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "cycle-store",
  "jsonschema",
@@ -3275,7 +3276,7 @@ checksum = "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539"
 
 [[package]]
 name = "recorder"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "png",
  "serde",
@@ -3921,7 +3922,7 @@ dependencies = [
 
 [[package]]
 name = "speakers"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "serde",
 ]
@@ -3956,7 +3957,7 @@ checksum = "ff7589a1859b09232522bb9edf076ca7fcf14ded96685d3fa629db73023ffbb7"
 
 [[package]]
 name = "store"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "rusqlite",
  "serde",
@@ -4453,6 +4454,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5fed54709c5b3a53d09bb1c113ea4f5ceafd1e772ddcb0030a82e1d56c087b08"
 dependencies = [
  "new_debug_unreachable",
+]
+
+[[package]]
+name = "test-tmp"
+version = "0.6.0"
+dependencies = [
+ "tempfile",
 ]
 
 [[package]]

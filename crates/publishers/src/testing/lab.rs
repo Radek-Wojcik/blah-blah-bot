@@ -203,7 +203,6 @@ impl Env for LabEnv {
 }
 
 pub struct Lab {
-    pub tmp: tempfile::TempDir,
     /// The bare repository that plays the remote.
     pub remote: PathBuf,
     /// The clone the application publishes from.
@@ -216,6 +215,8 @@ pub struct Lab {
     pub options: LabOptions,
     /// The database file of the store.
     pub db_path: PathBuf,
+    /// Last, so that it is removed after the store and the dispatcher let go of its files.
+    pub tmp: test_tmp::TestDir,
 }
 
 fn topic(id: &str, text: &str) -> Topic {
@@ -230,7 +231,7 @@ fn topic(id: &str, text: &str) -> Topic {
 
 impl Lab {
     pub fn new(options: LabOptions) -> Lab {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_tmp::TestDir::new("lab");
         let remote = tmp.path().join("remote.git");
         std::fs::create_dir_all(&remote).unwrap();
         git(

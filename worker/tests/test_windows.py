@@ -26,6 +26,50 @@ def test_short_transcript_is_one_window():
     assert len(parts[0].lines) == 30
 
 
+def test_speaker_status_tells_names_from_generic_labels():
+    status = windows.speaker_status
+    assert status("voice", "Radek Wójcik") == windows.NAMED
+    assert status("voice", "Speaker 12") == windows.UNNAMED
+    assert status("voice", "Speaker") == windows.NAMED  # not the generic form
+    assert status("unknown", "Unknown") == windows.UNNAMED
+    assert status("source", "Discord") == windows.UNNAMED
+    assert status("user", "You") == windows.RECORDER
+    assert status("", "Alex") == windows.NAMED
+
+
+def test_named_people_and_the_roster_of_a_window():
+    doc = transcript_doc(
+        [
+            segment(0, 0, 2_000, "First."),
+            segment(1, 3_000, 5_000, "Second.", speaker="mic:SPEAKER_00"),
+            segment(2, 6_000, 8_000, "Third.", speaker="mic:SPEAKER_01"),
+            segment(3, 9_000, 11_000, "Fourth.", speaker="mic:SPEAKER_00"),
+        ]
+    )
+    doc["speakers"][1]["label"] = "Radek Wójcik"
+    doc["speakers"].append(
+        {"id": "mic:SPEAKER_01", "label": "Speaker 2", "kind": "voice", "track": "mic"}
+    )
+    assert windows.named_people(doc) == ["Radek Wójcik"]
+    (window,) = windows.split_windows(windows.speech_lines(doc))
+    assert windows.roster(window.lines) == [
+        ("You", windows.RECORDER),
+        ("Radek Wójcik", windows.NAMED),
+        ("Speaker 2", windows.UNNAMED),
+    ]
+
+
+def test_the_lines_of_a_named_transcript_differ_from_the_plain_ones_only_in_the_label():
+    plain = transcript_doc([segment(0, 0, 2_000, "Hello there.", speaker="mic:SPEAKER_00")])
+    named = transcript_doc([segment(0, 0, 2_000, "Hello there.", speaker="mic:SPEAKER_00")])
+    named["speakers"][1]["label"] = "Radek Wójcik"
+    (a,) = windows.speech_lines(plain)
+    (b,) = windows.speech_lines(named)
+    assert (a.label, b.label) == ("Speaker 1", "Radek Wójcik")
+    assert (a.text, a.speaker, a.start_ms, a.end_ms) == (b.text, b.speaker, b.start_ms, b.end_ms)
+    assert windows.render_line(b) == "[00:00:00] Radek Wójcik: Hello there."
+
+
 def test_empty_transcript_has_no_windows():
     assert windows.split_windows([]) == []
 

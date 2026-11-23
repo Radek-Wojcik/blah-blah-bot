@@ -10,20 +10,20 @@ publish.workspace = true
 [features]
 # Hand-written fake GitHub and Discord servers, for the tests of this crate and of the
 # application. Never part of a release build.
-test-support = ["dep:tempfile"]
+test-support = ["dep:test-tmp"]
 
 [dependencies]
 cycle-store = { path = "../cycle-store" }
 serde.workspace = true
 serde_json.workspace = true
 store = { path = "../store" }
-tempfile = { version = "3", optional = true }
+test-tmp = { path = "../test-tmp", optional = true }
 thiserror.workspace = true
 tracing.workspace = true
 ureq = { version = "3.5", default-features = false, features = ["native-tls-no-default"] }
 
 [dev-dependencies]
-tempfile = "3"
+test-tmp = { path = "../test-tmp" }
 tracing-subscriber = "0.3"
 # The integration tests in `tests/` use the fake servers.
 publishers = { path = ".", features = ["test-support"] }

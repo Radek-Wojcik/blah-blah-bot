@@ -211,6 +211,9 @@ export function defaultTitle(draft: Draft, lang: Lang): string {
   return `${lang === "pl" ? "Spotkanie" : "Meeting"} ${draft.cycle} ${draft.date}`;
 }
 
+/** Stands in the text for a placeholder that expanded to nothing; `tidy` removes it. */
+const EMPTY_MARK = "\ue000";
+
 function headingLevel(line: string): number | null {
   let hashes = 0;
   while (line[hashes] === "#") hashes += 1;
@@ -219,11 +222,17 @@ function headingLevel(line: string): number | null {
 
 /**
  * Removes empty headings (level 2 and deeper), trailing spaces and extra blank lines, and puts
- * one blank line around every heading.
+ * one blank line around every heading. A heading is empty when nothing but blank lines follows
+ * it before the next heading or `---`, or when the first block under it is made of placeholders
+ * that expanded to nothing (`## Tasks`, `{tasks}`, a blank line, then a link).
  */
 function tidy(text: string): string {
-  const lines = text.split("\n").map((l) => l.trimEnd());
-  if (lines[lines.length - 1] === "") lines.pop();
+  const raw = text.split("\n");
+  if (raw[raw.length - 1] === "") raw.pop();
+  const isMark = (l: string) =>
+    l.includes(EMPTY_MARK) && l.split(EMPTY_MARK).join("").trim() === "";
+  const marked = raw.map(isMark);
+  const lines = raw.map((l) => l.split(EMPTY_MARK).join("").trimEnd());
   let inFence = false;
   const fenced = lines.map((l) => {
     if (l.trimStart().startsWith("```")) {
@@ -233,10 +242,26 @@ function tidy(text: string): string {
     return inFence;
   });
   const levelAt = (i: number) => (fenced[i] ? null : headingLevel(lines[i]));
+  // A line that is blank for real, not just because an empty placeholder stood on it.
+  const plainBlank = (j: number) => lines[j] === "" && !marked[j];
+  const firstBlockIsEmpty = (i: number): boolean => {
+    let j = i + 1;
+    while (j < lines.length && plainBlank(j)) j += 1;
+    const start = j;
+    while (j < lines.length && !plainBlank(j)) {
+      if (!marked[j]) return false;
+      j += 1;
+    }
+    return j > start;
+  };
   const keep = lines.map(() => true);
   lines.forEach((_, i) => {
     const level = levelAt(i);
     if (level === null || level < 2) return;
+    if (firstBlockIsEmpty(i)) {
+      keep[i] = false;
+      return;
+    }
     let hasContent = false;
     for (let j = i + 1; j < lines.length; j += 1) {
       if (!fenced[j] && lines[j] === "---") break;
@@ -353,7 +378,14 @@ export function renderReport(
     }
   };
   let out = "";
-  for (const t of tokens) out += "text" in t ? t.text : expand(t.placeholder);
+  for (const t of tokens) {
+    if ("text" in t) {
+      out += t.text;
+    } else {
+      const text = expand(t.placeholder);
+      out += text.trim() === "" ? EMPTY_MARK : text;
+    }
+  }
   // Item text, the summary and section titles come from a model: the report must not be able to
   // notify everybody where it is posted.
   return neutraliseMentions(tidy(out));

@@ -401,6 +401,23 @@ describe("report rendering", () => {
       /unknown placeholder/,
     );
   });
+
+  it("drops a heading whose list is empty even when a link follows it", () => {
+    const d = parityDraft("en");
+    d.items = d.items.filter((i) => i.type === "decision");
+    const body =
+      "{summary}\n\n## Decisions\n{decisions}\n\n## Tasks\n{tasks}\n\n[Full report]({report_link})\n";
+    expect(renderReport(d, parityPeople, body, "en", "chat")).toBe(
+      "We agreed on the mount.\n\n## Decisions\n\n- Use aluminium\n\n[Full report](report.md)\n",
+    );
+    d.items = [];
+    expect(renderReport(d, parityPeople, body, "en", "chat")).toBe(
+      "We agreed on the mount.\n\n[Full report](report.md)\n",
+    );
+    expect(renderReport(d, parityPeople, "## Mixed\n{tasks}\n{summary}\n", "en", "chat")).toBe(
+      "## Mixed\n\nWe agreed on the mount.\n",
+    );
+  });
 });
 
 describe("draft operations", () => {

@@ -154,6 +154,66 @@ def test_named_transcript_is_preferred(tmp_path):
     assert "] Sam: " in sent and "Speaker 1" not in sent
 
 
+def named_pair() -> tuple[dict, dict]:
+    """The transcript of the worker and the one the application writes after the user named
+    the voice of the second speaker."""
+    named = small_transcript()
+    named["speakers"][1]["label"] = "Radek Wójcik"
+    return small_transcript(), named
+
+
+def test_named_speaker_reaches_the_model_in_the_lines_and_the_speaker_list(tmp_path):
+    raw, named = named_pair()
+    with FakeLlm(extraction_for(RULES)) as fake:
+        m = make_meeting(
+            tmp_path, raw, context_doc(), llm_options(fake.url), {"transcript.named.json": named}
+        )
+        extract.run(m)
+        sent = fake.prompts()
+        user = fake.requests[0]["messages"][1]["content"]
+        system = fake.requests[0]["messages"][0]["content"]
+    assert "[00:00:10] Radek Wójcik: " + MOUNT in sent
+    assert "Speakers in this window" in user
+    assert "- Radek Wójcik (name known: use it)" in user
+    assert "- You (the person who recorded the meeting, no name known)" in user
+    assert "SPEAKER_00" not in sent and "Speaker 1" not in sent
+    # The instruction: names for known people, never a general word, no invented names.
+    assert 'never call that person "participant", "speaker", "uczestnik"' in system
+    assert "Never invent a name" in system
+    # The list comes before the transcript window and outside of it.
+    assert user.index("Speakers in this window") < user.index(prompts.TRANSCRIPT_BEGIN)
+
+
+def test_quotes_still_verify_when_the_lines_carry_a_name(tmp_path):
+    raw, named = named_pair()
+    sources = []
+    for folder, files in (("plain", {}), ("named", {"transcript.named.json": named})):
+        with FakeLlm(extraction_for(RULES)) as fake:
+            m = make_meeting(tmp_path / folder, raw, context_doc(), llm_options(fake.url), files)
+            extract.run(m)
+        (item,) = windows_doc(m)["windows"][0]["items"]
+        sources.append(item["source"])
+    plain, with_name = sources
+    assert with_name["verified"] and with_name["match"] == 1.0
+    # The same position and the id of the speaker, not the name: the name is display only.
+    assert with_name == plain
+    assert with_name["speaker"] == "mic:SPEAKER_00"
+
+
+def test_unnamed_speakers_stay_generic_and_are_not_given_names(tmp_path):
+    with FakeLlm(extraction_for([])) as fake:
+        m = make_meeting(tmp_path, small_transcript(), context_doc(), llm_options(fake.url))
+        extract.run(m)
+        user = fake.requests[0]["messages"][1]["content"]
+    assert "- Speaker 1 (no name known: write this label as it is)" in user
+    assert "(name known" not in user
+    assert "[00:00:10] Speaker 1: " + MOUNT in user
+
+
+def test_a_prompt_without_speakers_has_no_speaker_list():
+    assert "Speakers in this window" not in prompts.extract_user(context_doc(), "[00:00:01] x")
+
+
 def test_edited_text_is_sent_instead_of_the_recognised_one(tmp_path):
     edits = {"segments": {"0": {"text": "Corrected opening line."}}}
     with FakeLlm(extraction_for([])) as fake:

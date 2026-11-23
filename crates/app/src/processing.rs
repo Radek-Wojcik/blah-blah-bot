@@ -644,8 +644,15 @@ impl Processing {
         let spawned = std::thread::Builder::new()
             .name("queue-driver".into())
             .spawn(move || {
-                this.drive();
+                // A panic must not leave the flag set: no driver would ever start again.
+                let outcome =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| this.drive()));
                 this.driver_running.store(false, Ordering::SeqCst);
+                if outcome.is_err() {
+                    tracing::error!("the queue driver stopped after a panic");
+                    this.emit_queue();
+                    return;
+                }
                 // A job added while the driver was finishing must not be left behind.
                 if this.has_runnable() {
                     this.kick();

@@ -11,6 +11,7 @@ Passages that the user excluded are removed before windowing and never reach a w
 from __future__ import annotations
 
 import bisect
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -23,6 +24,14 @@ _FAR_FUTURE_MS = 10**12
 
 SPEECH = "speech"
 SCREENSHOT = "screenshot"
+
+# How a speaker is known to the model: by a name (the user named the voice, or it matched a
+# participant), by a generic label only ("Speaker 2", an unnamed source) or as the person who
+# recorded the meeting ("You").
+NAMED = "named"
+UNNAMED = "unnamed"
+RECORDER = "recorder"
+_GENERIC_VOICE = re.compile(r"Speaker \d+")
 
 
 @dataclass(frozen=True)
@@ -37,6 +46,7 @@ class Line:
     text: str
     kind: str = SPEECH
     segment_id: int = -1
+    speaker_kind: str = ""  # `kind` of the transcript speaker: user, voice, source, unknown
 
 
 @dataclass(frozen=True)
@@ -58,6 +68,36 @@ class Window:
     @property
     def speech(self) -> tuple[Line, ...]:
         return tuple(ln for ln in self.lines if ln.kind == SPEECH)
+
+
+def speaker_status(speaker_kind: str, label: str) -> str:
+    """NAMED, UNNAMED or RECORDER for a transcript speaker. The application replaces the
+    generic label of a voice ("Speaker 2") by the participant's name once the voice is named;
+    sources, "Unknown" and generic voice labels are not names."""
+    if speaker_kind == "user" or label == "You":
+        return RECORDER
+    if speaker_kind in ("source", "unknown") or label == "Unknown":
+        return UNNAMED
+    return UNNAMED if _GENERIC_VOICE.fullmatch(label) else NAMED
+
+
+def roster(lines: tuple[Line, ...] | list[Line]) -> list[tuple[str, str]]:
+    """The speakers of the speech lines as (label, status), in order of first appearance. The
+    labels are what the model sees at the start of the lines."""
+    seen: dict[str, str] = {}
+    for ln in lines:
+        if ln.kind == SPEECH and ln.label not in seen:
+            seen[ln.label] = speaker_status(ln.speaker_kind, ln.label)
+    return list(seen.items())
+
+
+def named_people(transcript: dict[str, Any]) -> list[str]:
+    """Names of the speakers of a transcript that carry a real name, without repeats."""
+    names: list[str] = []
+    for sp in transcript["speakers"]:
+        if speaker_status(sp["kind"], sp["label"]) == NAMED and sp["label"] not in names:
+            names.append(sp["label"])
+    return names
 
 
 def format_clock(ms: int) -> str:
@@ -89,6 +129,7 @@ def _segment_edits(edits: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
 def speech_lines(transcript: dict[str, Any], edits: dict[str, Any] | None = None) -> list[Line]:
     """Segments with the user's text corrections applied, excluded passages removed."""
     labels = {s["id"]: s["label"] for s in transcript["speakers"]}
+    kinds = {s["id"]: s["kind"] for s in transcript["speakers"]}
     changes = _segment_edits(edits)
     lines: list[Line] = []
     for seg in sorted(transcript["segments"], key=lambda s: (s["start_ms"], s["end_ms"], s["id"])):
@@ -108,6 +149,7 @@ def speech_lines(transcript: dict[str, Any], edits: dict[str, Any] | None = None
                 label=labels.get(seg["speaker"], seg["speaker"]),
                 text=text,
                 segment_id=seg["id"],
+                speaker_kind=kinds.get(seg["speaker"], ""),
             )
         )
     return lines

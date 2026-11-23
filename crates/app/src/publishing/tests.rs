@@ -25,16 +25,17 @@ const MEETING: &str = "20261113-140501";
 
 /// Repositories, a store with one meeting, and a publishing service over them.
 struct Rig {
-    _keep: Option<tempfile::TempDir>,
     root: PathBuf,
     repos: Arc<Mutex<Vec<CycleRepoSetting>>>,
     secrets: Arc<MemorySecrets>,
     store: Arc<Mutex<Store>>,
     publishing: Arc<Publishing>,
+    /// Last, so that it is removed after everything that may hold a file in it.
+    _keep: Option<test_tmp::TestDir>,
 }
 
 impl Rig {
-    fn new(root: PathBuf, repos: Vec<CycleRepoSetting>, keep: Option<tempfile::TempDir>) -> Rig {
+    fn new(root: PathBuf, repos: Vec<CycleRepoSetting>, keep: Option<test_tmp::TestDir>) -> Rig {
         std::fs::create_dir_all(root.join(MEETING).join("work")).unwrap();
         let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
         store

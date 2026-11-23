@@ -1771,14 +1771,15 @@ pub(crate) mod tests {
 
     /// A temporary data folder with a default repository and a store.
     pub struct Lab {
-        pub dir: tempfile::TempDir,
         pub settings: Settings,
         pub store: Store,
+        /// Last, so that it is removed after the store let go of its files.
+        pub dir: test_tmp::TestDir,
     }
 
     impl Lab {
         pub fn new() -> Self {
-            let dir = tempfile::tempdir().unwrap();
+            let dir = test_tmp::TestDir::new("cycles");
             let mut settings = Settings::default();
             resolve_target_repo(&mut settings, None, dir.path()).unwrap();
             Self {
@@ -1854,7 +1855,7 @@ pub(crate) mod tests {
 
     #[test]
     fn the_default_repository_is_created_lazily_and_once() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("cycles");
         let mut settings = Settings::default();
         assert!(!dir.path().join(DEFAULT_REPO_DIR).exists());
         let first = resolve_target_repo(&mut settings, None, dir.path()).unwrap();
@@ -3034,7 +3035,7 @@ targets:
 
     #[test]
     fn the_briefing_pulls_once_per_attempt_not_every_time_the_queue_looks() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_tmp::TestDir::new("cycles");
         let (origin, repos, clone) = origin_and_clone(tmp.path());
         let ledger = PullLedger::default();
 
@@ -3056,7 +3057,7 @@ targets:
 
     #[test]
     fn the_briefing_leaves_a_repository_with_uncommitted_cycle_edits_alone() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_tmp::TestDir::new("cycles");
         let (origin, repos, clone) = origin_and_clone(tmp.path());
         // The user renamed the cycle in the app (never committed); a teammate renamed it too.
         let mut mine = clone.load_cycle("NOMAD").unwrap();
@@ -3088,7 +3089,7 @@ targets:
 
     #[test]
     fn a_manual_pull_with_uncommitted_edits_says_repo_dirty() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_tmp::TestDir::new("cycles");
         let (origin, repos, clone) = origin_and_clone(tmp.path());
         upstream_adds(&origin, "ROVER");
 
@@ -3113,7 +3114,7 @@ targets:
 
     #[test]
     fn a_pull_that_breaks_a_cycle_warns_and_the_warning_reaches_the_result() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_tmp::TestDir::new("cycles");
         let (origin, repos, clone) = origin_and_clone(tmp.path());
         std::fs::write(
             origin.cycle_dir("NOMAD").unwrap().join("cycle.yaml"),

@@ -453,7 +453,7 @@ mod tests {
         let t = parse_template("x", "{summary}\n\n{summary_section}\n").unwrap();
         assert!(validate_template(&t).is_empty());
         // A cycle created before `{summary_section}` keeps its own default.md.
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("template");
         let old = "# {title}\n\n## Summary\n{summary}\n\n{sections}\n";
         fs::write(dir.path().join("default.md"), old).unwrap();
         assert!(!create_default_template(dir.path()).unwrap());
@@ -553,7 +553,7 @@ mod tests {
 
     #[test]
     fn list_read_write_in_a_directory() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("template");
         let tdir = dir.path().join("templates");
         assert!(list_templates(&tdir).unwrap().is_empty());
         assert!(create_default_template(&tdir).unwrap());

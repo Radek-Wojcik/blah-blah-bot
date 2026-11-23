@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["crates/app", "crates/cycle-store", "crates/publishers", "crates/queue", "crates/recorder", "crates/speakers", "crates/store"]
+members = ["crates/app", "crates/cycle-store", "crates/publishers", "crates/queue", "crates/recorder", "crates/speakers", "crates/store", "crates/test-tmp"]
 exclude = ["benchmarks"]
 
 [workspace.package]
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT"

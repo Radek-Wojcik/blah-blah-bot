@@ -69,7 +69,7 @@ fn begin<'a>(snapshot: &'a str) -> Start<'a> {
 
 #[test]
 fn freezing_copies_what_goes_out_and_numbers_the_snapshots() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = test_tmp::TestDir::new("flow-tests");
     let meeting = tmp.path().join(MEETING);
     fs::create_dir_all(meeting.join("img")).unwrap();
     fs::write(meeting.join("img/0001-00-12-41.png"), b"png-bytes").unwrap();
@@ -124,7 +124,7 @@ fn freezing_copies_what_goes_out_and_numbers_the_snapshots() {
 
 #[test]
 fn a_snapshot_that_cannot_be_written_leaves_nothing_behind() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = test_tmp::TestDir::new("flow-tests");
     let d = draft(MEETING, vec![], vec![]);
     let images = vec![("a.png".to_string(), tmp.path().join("missing.png"))];
     let err = freeze(
