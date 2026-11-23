@@ -200,6 +200,7 @@ describe("plan and the public repository gate", () => {
     expect(plan.targets).toEqual([
       { target: "github", mode: "on-approval", available: true },
       { target: "discord", mode: "on-approval", available: true },
+      { target: "notion", mode: null, available: false },
     ]);
     expect(plan.summary.commit && plan.summary.pushes).toBe(true);
     expect(plan.summary.files).toContain("transcript.md");
@@ -266,7 +267,7 @@ describe("plan and the public repository gate", () => {
     cycle.targets.discord = { webhook: "cred:discord/nomad", publish: "off" };
     expect((await b.saveCycle(cycle)).saved).toBe(true);
     const off = await b.publishPlan("m5");
-    expect(off.targets.map((t) => t.available)).toEqual([false, false]);
+    expect(off.targets.map((t) => t.available)).toEqual([false, false, false]);
     expect(off.blocks.map((x) => x.code)).toEqual(["nothing_to_publish"]);
     expect(await codeOf(b.publishMeeting("m5", ["github"]))).toBe("nothing_to_publish");
   });
@@ -627,6 +628,7 @@ describe("the publishing rule of a target", () => {
     expect(plan.targets.map((t) => [t.target, t.mode, t.available])).toEqual([
       ["github", "on-approval", true],
       ["discord", "auto", true],
+      ["notion", null, false],
     ]);
   });
 
@@ -636,9 +638,10 @@ describe("the publishing rule of a target", () => {
     expect((await b.getCycle("PLAIN")).cycle.targets.github ?? null).toBeNull();
     const targets = await b.setTargetRule("PLAIN", "github", "auto");
     expect(targets.github).toEqual({ path: "meetings", publish: "auto" });
-    // Discord needs a webhook reference that only the cycle editor adds.
+    // Discord and Notion need a target that only the cycle editor adds.
     expect(await codeOf(b.setTargetRule("PLAIN", "discord", "auto"))).toBe("no_target");
-    expect(await codeOf(b.setTargetRule("PLAIN", "notion" as never, "auto"))).toBe("invalid");
+    expect(await codeOf(b.setTargetRule("PLAIN", "notion", "auto"))).toBe("no_target");
+    expect(await codeOf(b.setTargetRule("PLAIN", "slack" as never, "auto"))).toBe("invalid");
     expect(await codeOf(b.setTargetRule("PLAIN", "github", "sometimes" as never))).toBe("invalid");
     expect(await codeOf(b.setTargetRule("GHOST", "github", "auto"))).toBe("not_found");
   });
@@ -664,7 +667,9 @@ describe("the publishing rule of a target", () => {
     await b.setTargetRule("NOMAD", "github", "off");
     await b.setTargetRule("NOMAD", "discord", "off");
     const plan = await b.publishPlan("m5");
-    expect(plan.targets.every((t) => t.mode === "off" && !t.available)).toBe(true);
+    expect(plan.targets.every((t) => (t.mode === "off" || t.mode === null) && !t.available)).toBe(
+      true,
+    );
     expect(await codeOf(b.publishMeeting("m5", ["github", "discord"]))).toBe("nothing_to_publish");
   });
 
@@ -898,5 +903,200 @@ describe("corrections to a published meeting", () => {
     expect(await codeOf(b.updateDraftItem("m5", before.draft.items[0].id, { text: "x" }))).toBe(
       "published",
     );
+  });
+});
+
+describe("Stage 7: Notion and Discord bot integrations", () => {
+  const NOTION_TOKEN = ["ntn", "demoSecretIntegrationToken0123456789"].join("_");
+  const BOT_TOKEN = ["MTIzNDU2Nzg5MDEyMzQ1Njc4", "Gdemo1", "DemoBotSecretSignature0123456789abcdef"].join(".");
+
+  it("validates, stores, masks and tests Notion tokens, schema and mapping", async () => {
+    const b = fresh();
+    expect(await codeOf(b.testNotionAccess("NOMAD"))).toBe("no_target");
+    const cycle = (await b.getCycle("NOMAD")).cycle;
+    cycle.targets.notion = {
+      token: "cred:notion/nomad",
+      database: "0123456789abcdef0123456789abcdef",
+      publish: "on-approval",
+      properties: { title: "Name", key: "BBB key" },
+    };
+    expect((await b.saveCycle(cycle)).saved).toBe(true);
+
+    expect(await codeOf(b.setTargetSecret("cred:notion/nomad", "bad-token"))).toBe(
+      "invalid_notion_token",
+    );
+    await b.setTargetSecret("cred:notion/nomad", NOTION_TOKEN);
+    const secrets = await b.publishingSecrets();
+    const notionSecret = secrets.targets.find((t) => t.kind === "notion")!;
+    expect(notionSecret).toMatchObject({
+      reference: "cred:notion/nomad",
+      set: true,
+      masked: "ntn_...6789",
+    });
+
+    const access = await b.testNotionAccess("NOMAD");
+    expect(access).toMatchObject({
+      ok: true,
+      botName: "Nomad notes",
+      databaseTitle: "Tasks",
+      tokenSet: true,
+    });
+    const schema = await b.notionSchema("NOMAD");
+    expect(schema.proposed).toMatchObject({
+      title: "Name",
+      key: "BBB key",
+      assignee: "Assignee",
+      due: "Due",
+      status: "Status",
+      statusValue: "Not started",
+      meeting: "Meeting",
+    });
+    const savedTargets = await b.setNotionMapping("NOMAD", null, schema.proposed);
+    expect(savedTargets.notion?.properties).toEqual(schema.proposed);
+  });
+
+  it("exports tasks to Notion idempotently and re-exports while keeping status and skipping trashed pages", async () => {
+    const b = fresh();
+    await b.confirmPublicRepo("NOMAD");
+    const cycle = (await b.getCycle("NOMAD")).cycle;
+    cycle.targets.notion = {
+      token: "cred:notion/nomad",
+      database: "0123456789abcdef0123456789abcdef",
+      publish: "on-approval",
+      properties: {
+        title: "Name",
+        key: "BBB key",
+        assignee: "Assignee",
+        due: "Due",
+        status: "Status",
+        statusValue: "Not started",
+        meeting: "Meeting",
+      },
+    };
+    await b.saveCycle(cycle);
+    await b.setTargetSecret("cred:notion/nomad", NOTION_TOKEN);
+
+    const first = await b.publishMeeting("m5", ["github", "notion"]);
+    expect(first.queued).toBe(9);
+    await settled(b);
+
+    const pages = hooks().notionPages();
+    expect(pages).toHaveLength(4);
+    expect(pages[0]).toMatchObject({
+      key: "bbb:v1:NOMAD:m5:i03",
+      status: "Not started",
+      trashed: false,
+    });
+
+    // Second publish queues nothing and creates no duplicate pages.
+    const again = await b.publishMeeting("m5", ["notion"]);
+    expect(again.queued).toBe(0);
+    expect(hooks().notionPages()).toHaveLength(4);
+
+    // User changes status of page 0 to "In progress" and trashes page 1 in Notion.
+    hooks().setNotionProperty(pages[0].id, "Status", "In progress");
+    hooks().trashNotionPage(pages[1].id);
+
+    const reexported = await b.reexportNotion("m5");
+    expect(reexported.queued).toBe(4);
+    await settled(b);
+
+    const after = hooks().notionPages();
+    expect(after).toHaveLength(4);
+    expect(after[0].status).toBe("In progress");
+    expect(after[1].trashed).toBe(true);
+    const ops = (await b.outboxState()).ops.filter((o) => o.kind === "export_notion");
+    expect(ops.find((o) => o.opKey === "notion:i03")?.result).toMatchObject({
+      updated: true,
+      created: false,
+      removed: false,
+    });
+    expect(ops.find((o) => o.opKey === "notion:i04")?.result).toMatchObject({
+      removed: true,
+      created: false,
+      updated: false,
+    });
+  });
+
+  it("checks Discord bot permissions, searches members and roles, posts a thread and edits on correction", async () => {
+    const b = fresh();
+    await b.confirmPublicRepo("NOMAD");
+    const cycle = (await b.getCycle("NOMAD")).cycle;
+    cycle.targets.discord = {
+      bot: {
+        token: "cred:discord-bot/nomad",
+        guild: "111111111111111111",
+        channel: "222222222222222222",
+        thread: true,
+        editOnCorrection: true,
+      },
+      publish: "on-approval",
+    };
+    expect((await b.saveCycle(cycle)).saved).toBe(true);
+
+    expect(await codeOf(b.setTargetSecret("cred:discord-bot/nomad", "not-a-bot-token"))).toBe(
+      "invalid_bot_token",
+    );
+    await b.setTargetSecret("cred:discord-bot/nomad", BOT_TOKEN);
+
+    const check = await b.testDiscordBot("NOMAD");
+    expect(check).toMatchObject({
+      ok: true,
+      botName: "Nomad notes",
+      guildName: "Nomad team",
+      channelName: "meetings",
+      missing: [],
+    });
+
+    hooks().setBotPermissions(["VIEW_CHANNEL", "SEND_MESSAGES"]);
+    const missing = await b.testDiscordBot("NOMAD");
+    expect(missing.ok).toBe(false);
+    expect(missing.missing).toContain("CREATE_PUBLIC_THREADS");
+    hooks().setBotPermissions([
+      "VIEW_CHANNEL",
+      "SEND_MESSAGES",
+      "ATTACH_FILES",
+      "READ_MESSAGE_HISTORY",
+      "CREATE_PUBLIC_THREADS",
+      "SEND_MESSAGES_IN_THREADS",
+    ]);
+
+    const members = await b.searchDiscordMembers("NOMAD", "al");
+    expect(members.map((m) => m.username)).toEqual(["alex_demo", "alexandra_sample", "alek_test"]);
+    const roles = await b.listDiscordRoles("NOMAD");
+    expect(roles.map((r) => r.name)).toContain("Mechanics");
+
+    const updatedCycle = await b.setParticipantDiscord("NOMAD", "alex", {
+      userId: members[0].userId,
+    });
+    expect(updatedCycle.participants.find((p) => p.id === "alex")?.discord).toEqual({
+      userId: "000000000000000001",
+    });
+
+    await b.publishMeeting("m5", ["github", "discord"]);
+    await settled(b);
+
+    const threads = hooks().discordThreads();
+    expect(threads).toHaveLength(1);
+    expect(hooks().discordBotMessages().length).toBeGreaterThanOrEqual(2);
+
+    await b.addCorrection("m5", "Delivery moved to Monday.", undefined, undefined, "2026-11-16");
+    const pubCorr = await b.publishCorrections("m5");
+    expect(pubCorr.queued).toBe(2);
+    await settled(b);
+
+    const corrView = await b.listCorrections("m5");
+    expect(corrView.corrections[0].discordEdit).toMatchObject({
+      state: "done",
+      result: {
+        edited: true,
+        replied: true,
+        thread_id: threads[0].id,
+      },
+    });
+    const botMsgs = hooks().discordBotMessages();
+    expect(botMsgs[0].content).toContain("Corrections:");
+    expect(botMsgs[0].content).toContain("Delivery moved to Monday.");
+    expect(botMsgs.at(-1)?.content).toContain("Correction (2026-11-16): Delivery moved to Monday.");
   });
 });

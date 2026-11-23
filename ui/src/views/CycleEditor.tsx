@@ -16,13 +16,17 @@ import type {
   CycleDto,
   CycleIssue,
   CycleParticipant,
+  DiscordBotCheck,
+  DiscordBotTarget,
   LanguageSetting,
-  PublishMode,
   ReportMode,
 } from "../ipc/types";
 import { DEFAULT_PUBLISH_RULE } from "../publish";
 import { MODE_HELP, MODE_NAMES, REPORT_MODES } from "../report-gate";
 import { CycleTasksView } from "./CycleTasks";
+import { DiscordInviteBox } from "./DiscordInviteBox";
+import { DiscordParticipantPicker } from "./DiscordParticipantPicker";
+import { NotionTargetFields } from "./NotionTargetFields";
 import { RuleChoice } from "./RuleChoice";
 import { TemplateEditor } from "./TemplateEditor";
 
@@ -30,12 +34,6 @@ const LANGUAGES: { value: LanguageSetting; label: string }[] = [
   { value: "auto", label: "Auto" },
   { value: "pl", label: "Polish" },
   { value: "en", label: "English" },
-];
-
-const PUBLISH: { value: PublishMode; label: string }[] = [
-  { value: "on-approval", label: "After approval in the draft" },
-  { value: "auto", label: "Automatically" },
-  { value: "off", label: "Never" },
 ];
 
 /** The problems found at one path, shown next to the field. */
@@ -78,6 +76,9 @@ export function CycleEditor(props: { cycleId: string; onBack: () => void }) {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [botChecking, setBotChecking] = useState(false);
+  const [botCheck, setBotCheck] = useState<DiscordBotCheck | null>(null);
+  const [botCheckError, setBotCheckError] = useState<string | null>(null);
 
   const adopt = useCallback((d: CycleDetails) => {
     setDetails(d);
@@ -144,6 +145,43 @@ export function CycleEditor(props: { cycleId: string; onBack: () => void }) {
   const discordRef = cycle.targets.discord;
   const github = cycle.targets.github;
   const notion = cycle.targets.notion;
+  const savedBot = details.cycle.targets.discord?.bot ?? null;
+  const currentBot = discordRef?.bot ?? null;
+  const hasSavedDiscordBot = savedBot !== null;
+  const botDirty = JSON.stringify(savedBot) !== JSON.stringify(currentBot);
+  const savedNotion = details.cycle.targets.notion ?? null;
+  const currentNotion = notion ?? null;
+  const notionConnectionDirty =
+    savedNotion === null ||
+    currentNotion === null ||
+    savedNotion.token !== currentNotion.token ||
+    savedNotion.database !== currentNotion.database ||
+    (savedNotion.dataSource ?? "") !== (currentNotion.dataSource ?? "");
+  const slug = cycle.id.toLowerCase();
+
+  const defaultBotTarget = (): DiscordBotTarget => ({
+    token: `cred:discord-bot/${slug}`,
+    guild: "",
+    channel: "",
+    thread: true,
+    editOnCorrection: true,
+  });
+
+  const checkDiscordBot = () => {
+    if (botDirty) {
+      setBotCheck(null);
+      setBotCheckError("Save the cycle first so the bot settings are stored, then check.");
+      return;
+    }
+    setBotChecking(true);
+    setBotCheck(null);
+    setBotCheckError(null);
+    backend
+      .testDiscordBot(cycleId)
+      .then(setBotCheck)
+      .catch((e) => setBotCheckError(errorMessage(e)))
+      .finally(() => setBotChecking(false));
+  };
 
   return (
     <>
@@ -319,6 +357,18 @@ export function CycleEditor(props: { cycleId: string; onBack: () => void }) {
                 >
                   Remove
                 </button>
+                {hasSavedDiscordBot && (
+                  <div className="row-span">
+                    <DiscordParticipantPicker
+                      cycleId={cycleId}
+                      participantId={p.id}
+                      participantIndex={i}
+                      participantName={p.name}
+                      kind={kind}
+                      onPick={(discord) => setParticipant(i, { discord })}
+                    />
+                  </div>
+                )}
               </li>
             );
           })}
@@ -521,7 +571,7 @@ export function CycleEditor(props: { cycleId: string; onBack: () => void }) {
       <Section
         id="targets"
         title="Targets"
-        hint="Where a report is published, and when. For GitHub and Discord you choose the rule yourself: Off, On approval (when you press Publish in the draft) or Automatic (as soon as the draft is complete). Until you choose, On approval is used, so nothing is published by itself. Secrets are never stored here: Discord and Notion refer to them as cred:name."
+        hint="Where a report is published, and when. For GitHub, Discord and Notion you choose the rule yourself: Off, On approval (when you press Publish in the draft) or Automatic (as soon as the draft is complete). Until you choose, On approval is used, so nothing is published by itself. Secrets are never stored here: Discord and Notion refer to them as cred:name."
       >
         <div className="form targets">
           <fieldset>
@@ -580,33 +630,206 @@ export function CycleEditor(props: { cycleId: string; onBack: () => void }) {
               <input
                 type="checkbox"
                 checked={discordRef != null}
-                onChange={(e) =>
+                onChange={(e) => {
+                  setBotCheck(null);
+                  setBotCheckError(null);
                   setTargets({
                     discord: e.target.checked
-                      ? { webhook: "cred:", publish: DEFAULT_PUBLISH_RULE.discord }
+                      ? {
+                          webhook: `cred:discord/${slug}`,
+                          publish: DEFAULT_PUBLISH_RULE.discord,
+                        }
                       : null,
-                  })
-                }
+                  });
+                }}
               />
               Post a summary to a channel
             </label>
             {discordRef && (
               <>
-                <label>
-                  Webhook reference
-                  <input
-                    value={discordRef.webhook}
-                    placeholder="cred:discord/nomad"
-                    onChange={(e) =>
-                      setTargets({ discord: { ...discordRef, webhook: e.target.value } })
-                    }
-                  />
-                  <small>
-                    The name of a secret in the Windows Credential Manager, written cred:name. The
-                    webhook address itself is never stored in the repository.
-                  </small>
-                  <Problems issues={issues} path="targets.discord.webhook" />
-                </label>
+                <div className="field-group">
+                  <span className="field-label">Delivery mode</span>
+                  <div className="rule-switch" role="radiogroup" aria-label="Discord delivery mode">
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={discordRef.bot === undefined}
+                      className={
+                        discordRef.bot === undefined ? "btn btn-small" : "btn btn-small btn-ghost"
+                      }
+                      onClick={() => {
+                        setBotCheck(null);
+                        setBotCheckError(null);
+                        setTargets({
+                          discord: {
+                            webhook: discordRef.webhook ?? `cred:discord/${slug}`,
+                            publish: discordRef.publish,
+                            ...(discordRef.template ? { template: discordRef.template } : {}),
+                          },
+                        });
+                      }}
+                    >
+                      Webhook
+                    </button>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={discordRef.bot !== undefined}
+                      className={
+                        discordRef.bot !== undefined ? "btn btn-small" : "btn btn-small btn-ghost"
+                      }
+                      onClick={() => {
+                        setBotCheck(null);
+                        setBotCheckError(null);
+                        setTargets({
+                          discord: {
+                            bot: discordRef.bot ?? defaultBotTarget(),
+                            publish: discordRef.publish,
+                            ...(discordRef.template ? { template: discordRef.template } : {}),
+                          },
+                        });
+                      }}
+                    >
+                      Bot
+                    </button>
+                  </div>
+                  <Problems issues={issues} path="targets.discord" />
+                </div>
+
+                {discordRef.bot ? (
+                  <>
+                    <label>
+                      Bot token reference
+                      <input
+                        value={discordRef.bot.token}
+                        placeholder={`cred:discord-bot/${slug}`}
+                        onChange={(e) =>
+                          setTargets({
+                            discord: {
+                              ...discordRef,
+                              bot: { ...discordRef.bot!, token: e.target.value },
+                            },
+                          })
+                        }
+                      />
+                      <small>
+                        The name of a secret in the Windows Credential Manager, written cred:name.
+                        Store the bot token in Settings &gt; Publishing.
+                      </small>
+                      <Problems issues={issues} path="targets.discord.bot.token" />
+                    </label>
+                    <div className="form-row">
+                      <label>
+                        Server (guild) id
+                        <input
+                          value={discordRef.bot.guild}
+                          inputMode="numeric"
+                          placeholder="111111111111111111"
+                          onChange={(e) =>
+                            setTargets({
+                              discord: {
+                                ...discordRef,
+                                bot: { ...discordRef.bot!, guild: e.target.value },
+                              },
+                            })
+                          }
+                        />
+                        <Problems issues={issues} path="targets.discord.bot.guild" />
+                      </label>
+                      <label>
+                        Channel id
+                        <input
+                          value={discordRef.bot.channel}
+                          inputMode="numeric"
+                          placeholder="222222222222222222"
+                          onChange={(e) =>
+                            setTargets({
+                              discord: {
+                                ...discordRef,
+                                bot: { ...discordRef.bot!, channel: e.target.value },
+                              },
+                            })
+                          }
+                        />
+                        <Problems issues={issues} path="targets.discord.bot.channel" />
+                      </label>
+                    </div>
+                    <label className="check">
+                      <input
+                        type="checkbox"
+                        checked={discordRef.bot.thread}
+                        onChange={(e) =>
+                          setTargets({
+                            discord: {
+                              ...discordRef,
+                              bot: { ...discordRef.bot!, thread: e.target.checked },
+                            },
+                          })
+                        }
+                      />
+                      Open one thread per meeting under the summary
+                    </label>
+                    <label className="check">
+                      <input
+                        type="checkbox"
+                        checked={discordRef.bot.editOnCorrection}
+                        onChange={(e) =>
+                          setTargets({
+                            discord: {
+                              ...discordRef,
+                              bot: { ...discordRef.bot!, editOnCorrection: e.target.checked },
+                            },
+                          })
+                        }
+                      />
+                      Edit the summary when a correction is published
+                    </label>
+                    <div className="actions">
+                      <button
+                        className="btn btn-small btn-ghost"
+                        type="button"
+                        disabled={botChecking}
+                        onClick={checkDiscordBot}
+                      >
+                        {botChecking ? "Checking…" : "Check channel & permissions"}
+                      </button>
+                    </div>
+                    {botCheckError && (
+                      <p className="error" role="alert">
+                        {botCheckError}
+                      </p>
+                    )}
+                    {botCheck && (
+                      <div
+                        className={botCheck.ok ? "secret-result" : "error"}
+                        role={botCheck.ok ? "status" : "alert"}
+                      >
+                        <p>{botCheck.message}</p>
+                        {botCheck.missing.length > 0 && (
+                          <p>Missing permissions: {botCheck.missing.join(", ")}.</p>
+                        )}
+                      </div>
+                    )}
+                    <DiscordInviteBox compact />
+                  </>
+                ) : (
+                  <label>
+                    Webhook reference
+                    <input
+                      value={discordRef.webhook ?? ""}
+                      placeholder={`cred:discord/${slug}`}
+                      onChange={(e) =>
+                        setTargets({ discord: { ...discordRef, webhook: e.target.value } })
+                      }
+                    />
+                    <small>
+                      The name of a secret in the Windows Credential Manager, written cred:name. The
+                      webhook address itself is never stored in the repository.
+                    </small>
+                    <Problems issues={issues} path="targets.discord.webhook" />
+                  </label>
+                )}
+
                 <label>
                   Message template
                   <select
@@ -649,48 +872,25 @@ export function CycleEditor(props: { cycleId: string; onBack: () => void }) {
                   setTargets({
                     notion: e.target.checked
                       ? {
-                          token: "cred:",
+                          token: `cred:notion/${slug}`,
                           database: "",
-                          publish: "on-approval",
+                          publish: DEFAULT_PUBLISH_RULE.notion,
                           properties: { title: "Name", key: "BBB key" },
                         }
                       : null,
                   })
                 }
               />
-              Add the report to a database
+              Export tasks to a Notion database
             </label>
             {notion && (
-              <>
-                <label>
-                  Database
-                  <input
-                    value={notion.database}
-                    placeholder="cred:notion/nomad-db"
-                    onChange={(e) =>
-                      setTargets({ notion: { ...notion, database: e.target.value } })
-                    }
-                  />
-                  <small>A database id or a cred: reference to it.</small>
-                  <Problems issues={issues} path="targets.notion.database" />
-                </label>
-                <label>
-                  Publish
-                  <select
-                    aria-label="Notion publish"
-                    value={notion.publish}
-                    onChange={(e) =>
-                      setTargets({ notion: { ...notion, publish: e.target.value as PublishMode } })
-                    }
-                  >
-                    {PUBLISH.map((p) => (
-                      <option key={p.value} value={p.value}>
-                        {p.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </>
+              <NotionTargetFields
+                cycleId={cycleId}
+                notion={notion}
+                connectionDirty={notionConnectionDirty}
+                issues={issues}
+                onChange={(next) => setTargets({ notion: next })}
+              />
             )}
           </fieldset>
         </div>

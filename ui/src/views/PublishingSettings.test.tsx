@@ -264,6 +264,56 @@ describe("when to publish", () => {
       host.querySelector('[aria-label="Discord, cycle Plain cycle publishing rule"]'),
     ).toBeNull();
     expect(host.textContent).toContain("No Discord target");
+    expect(host.textContent).toContain("No Notion target");
     expect(checked(group("GitHub, cycle Plain cycle publishing rule"))).toEqual(["On approval"]);
+  });
+
+  it("shows Discord bot, Notion integration token, invite link and Notion rule when configured", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    const cycle = (await backend.getCycle("NOMAD")).cycle;
+    cycle.targets.discord = {
+      bot: {
+        token: "cred:discord-bot/nomad",
+        guild: "111111111111111111",
+        channel: "222222222222222222",
+        thread: true,
+        editOnCorrection: true,
+      },
+      publish: "on-approval",
+    };
+    cycle.targets.notion = {
+      token: "cred:notion/nomad",
+      database: "0123456789abcdef0123456789abcdef",
+      publish: "on-approval",
+      properties: { title: "Name", key: "BBB key" },
+    };
+    await backend.saveCycle(cycle);
+    await mount(backend);
+
+    expect(host.textContent).toContain("Bot token for cred:discord-bot/nomad");
+    expect(host.textContent).toContain("Notion token for cred:notion/nomad");
+    expect(host.textContent).toContain("309237746688");
+    expect(host.textContent).toContain("0 privileged intents required");
+
+    const appInput = input("Discord Application ID (for invite link)");
+    await type(appInput, "123456789012345678");
+    expect(host.textContent).toContain(
+      "https://discord.com/oauth2/authorize?client_id=123456789012345678&scope=bot&permissions=309237746688",
+    );
+
+    const botToken = ["MTIzNDU2Nzg5MDEyMzQ1Njc4", "Gdemo1", "DemoBotSecretSignature0123456789abcdef"].join(".");
+    await type(input("Bot token for cred:discord-bot/nomad"), botToken);
+    await submit("Bot token for cred:discord-bot/nomad");
+    expect(host.textContent).toContain("Bot token stored: bot MTIz...");
+    expect(host.innerHTML).not.toContain("DemoBotSecretSignature");
+
+    const notionToken = ["ntn", "demoSecretIntegrationToken0123456789"].join("_");
+    await type(input("Notion token for cred:notion/nomad"), notionToken);
+    await submit("Notion token for cred:notion/nomad");
+    expect(host.textContent).toContain("Token stored: ntn_...6789");
+    expect(host.innerHTML).not.toContain("demoSecretIntegrationToken");
+
+    const notionRule = group("Notion, cycle Nomad rover publishing rule");
+    expect(checked(notionRule)).toEqual(["On approval"]);
   });
 });

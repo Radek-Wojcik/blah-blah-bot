@@ -10,12 +10,19 @@ import type {
   CycleRepoView,
   DraftItemPatch,
   DraftSection,
+  DiscordBotCheck,
+  DiscordMember,
+  DiscordRef,
+  DiscordRole,
   DraftView,
   GithubAccess,
   MeetingDetails,
   MeetingSummary,
   ModelStatus,
   ModelsProgress,
+  NotionAccess,
+  NotionProperties,
+  NotionSchema,
   ProcessOptions,
   ProcessingSettings,
   ProposedStatus,
@@ -222,8 +229,10 @@ export interface Backend {
   /** Links a registered repository to a GitHub repository (`owner/name`); empty values clear the link. */
   setGithubRepo(repoId: string, githubRepo?: string, githubApi?: string): Promise<CycleRepoView>;
   /**
-   * Write-only value of a `cred:` reference. A Discord webhook is validated first and rejects with
-   * `invalid_webhook`; the message never repeats the value.
+   * Write-only value of a `cred:` reference. The value is checked against what the cycles use the
+   * reference for and rejects with `invalid_webhook` (a Discord webhook), `invalid_bot_token` (a
+   * Discord bot token) or `invalid_notion_token` (a Notion integration token); the message never
+   * repeats the value.
    */
   setTargetSecret(reference: string, value: string): Promise<void>;
   clearTargetSecret(reference: string): Promise<void>;
@@ -234,7 +243,7 @@ export interface Backend {
    * Sets when a target of a cycle is published (`targets.<target>.publish` of `cycle.yaml`) and
    * nothing else; returns the cycle's targets as saved. `github` covers the report, the issues
    * and the write-back of approved status changes, `discord` needs a Discord target
-   * (`no_target`). No value writes a status change back without approval and an explicit
+   * (`no_target`), and so does `notion`. No value writes a status change back without approval and an explicit
    * publication, and the public-repository check applies to every value.
    */
   setTargetRule(
@@ -242,6 +251,56 @@ export interface Backend {
     target: PublishTargetName,
     mode: PublishMode,
   ): Promise<CycleTargets>;
+
+  /**
+   * Asks Notion whether the stored token can reach the database of the cycle's Notion target.
+   * Nothing is written. An expected failure is a result with a message, not an error; a cycle
+   * without a Notion target rejects with `no_target`.
+   */
+  testNotionAccess(cycleId: string): Promise<NotionAccess>;
+  /**
+   * The properties of the Notion database, the mapping they suggest and what is wrong with the
+   * mapping the cycle has. Rejects with `no_target`, or `secrets` when no token is stored.
+   */
+  notionSchema(cycleId: string): Promise<NotionSchema>;
+  /**
+   * Writes the data source and the property names of the cycle's Notion target and nothing else
+   * (`null` leaves no data source set); returns the cycle's targets as saved. Rejects with
+   * `no_target`.
+   */
+  setNotionMapping(
+    cycleId: string,
+    dataSource: string | null,
+    properties: NotionProperties,
+  ): Promise<CycleTargets>;
+  /**
+   * Checks the bot token against the guild and channel of the cycle's Discord bot target and
+   * lists the permissions it lacks in the channel. Nothing is posted. An expected failure is a
+   * result with a message, not an error.
+   */
+  testDiscordBot(cycleId: string): Promise<DiscordBotCheck>;
+  /**
+   * Members of the server whose user name or nickname starts with `query` (2 characters at
+   * least, 10 results at most). Needs a bot target and a stored token.
+   */
+  searchDiscordMembers(cycleId: string, query: string): Promise<DiscordMember[]>;
+  /** The roles of the server (without @everyone), for a participant that is a role. */
+  listDiscordRoles(cycleId: string): Promise<DiscordRole[]>;
+  /**
+   * Writes `participants[].discord` of one participant and nothing else; `null` removes the
+   * mapping. Returns the cycle as saved.
+   */
+  setParticipantDiscord(
+    cycleId: string,
+    participantId: string,
+    discord: DiscordRef | null,
+  ): Promise<CycleDto>;
+  /**
+   * Exports the tasks of a published meeting to Notion again: the mapped values are updated, the
+   * status a person set in Notion is kept, and a page they trashed is not made again. Rejects with
+   * `not_published`, `nothing_to_publish` (the rule is Off) and the blocks of the plan.
+   */
+  reexportNotion(meetingId: string): Promise<PublishResult>;
   /** What publishing to `targets` (all of the cycle's when absent) would do. Changes nothing. */
   publishPlan(meetingId: string, targets?: string[]): Promise<PublishPlan>;
   /**

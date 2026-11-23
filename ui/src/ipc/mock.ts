@@ -152,6 +152,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     now: () => DEMO_NOW + (Date.now() - startedAt),
     screenshotCount: (id) => meetings.find((m) => m.id === id)?.screenshotCount ?? 0,
     onUnlocked: (id) => drafts.touch(id),
+    onCyclesChanged: emitCycles,
   });
   lock.is = publishing.isLocked;
   if (opts.offline) publishing.hooks.setOffline(true);

@@ -125,7 +125,13 @@ export type IpcErrorCode =
   | "new_draft_pending"
   /** The value is not a Discord webhook; the message never repeats it. */
   | "invalid_webhook"
-  /** The cycle has no such target (a Discord target needs a webhook reference). */
+  /** The value does not have the shape of a Discord bot token; the message never repeats it. */
+  | "invalid_bot_token"
+  /** The value does not have the shape of a Notion integration token; never repeated. */
+  | "invalid_notion_token"
+  | "discord_bot_token_missing"
+  | "notion_token_missing"
+  /** The cycle has no such target (a Discord target needs a webhook or a bot, Notion a token). */
   | "no_target"
   /** A correction needs a published (locked) meeting. */
   | "not_published"
@@ -427,11 +433,17 @@ export interface CycleListItem {
   offline: boolean;
 }
 
+/** The Discord user or role a participant is mentioned as: exactly one of the two. */
+export interface DiscordRef {
+  userId?: string;
+  roleId?: string;
+}
+
 export interface CycleParticipant {
   id: string;
   name: string;
   github?: string;
-  discord?: { userId?: string; roleId?: string };
+  discord?: DiscordRef;
 }
 
 /** `targets.discord.bot`: a bot that posts and opens a thread per meeting. */
@@ -756,14 +768,20 @@ export interface GithubHost {
   tokenSet: boolean;
 }
 
-/** A secret a cycle file refers to as `cred:name` (a Discord webhook). */
+/**
+ * A secret a cycle file refers to as `cred:name`: a Discord webhook (`discord`), a Discord bot
+ * token (`discord-bot`) or a Notion integration token (`notion`).
+ */
 export interface TargetSecret {
   reference: string;
   /** The cycle that uses it. */
   cycleId: string;
-  kind: "discord";
+  kind: "discord" | "discord-bot" | "notion";
   set: boolean;
-  /** The host and the ends of the webhook id, never the address. */
+  /**
+   * A form that is safe to show, never the secret: the host and the ends of the webhook id,
+   * `bot <first four characters>...` for a bot token, `ntn_...<last four>` for a Notion token.
+   */
   masked: string | null;
 }
 
@@ -791,7 +809,7 @@ export interface WebhookCheck {
   name: string | null;
 }
 
-export type PublishTargetName = "github" | "discord";
+export type PublishTargetName = "github" | "discord" | "notion";
 
 export interface PublishTargetView {
   target: PublishTargetName;
@@ -806,6 +824,14 @@ export interface PlannedIssue {
   title: string;
   assignee: string | null;
   due: string | null;
+}
+
+/** One task that exporting to Notion creates a page for, or updates when it is already there. */
+export interface PlannedNotionPage {
+  itemId: string;
+  title: string;
+  /** The page of an earlier export, when there is one. */
+  existingUrl: string | null;
 }
 
 export interface PlannedStatus {
@@ -866,6 +892,12 @@ export interface PlanSummary {
    */
   topics?: TopicsPlan | null;
   discord: boolean;
+  /** How the message is sent; null when Discord is not part of the plan. */
+  discordMode: "webhook" | "bot" | null;
+  /** Bot mode: the rest of the message goes into a thread under the summary. */
+  discordThread: boolean;
+  /** The tasks exported to Notion, one page each. */
+  notion: PlannedNotionPage[];
   /** Status changes that were not approved: they are not written back. */
   proposalsPending: number;
 }
@@ -873,6 +905,8 @@ export interface PlanSummary {
 export type PlanBlockCode =
   | "public_repo_unconfirmed"
   | "discord_webhook_missing"
+  | "discord_bot_token_missing"
+  | "notion_token_missing"
   | "nothing_to_publish"
   | "not_in_repository";
 
@@ -894,14 +928,16 @@ export interface RepoPublishInfo {
   confirmed: boolean;
 }
 
-export type OpTarget = "github" | "issues" | "discord";
+export type OpTarget = "github" | "issues" | "discord" | "notion";
 export type OpKind =
   | "commit_meeting"
   | "create_issue"
   | "set_issue_state"
   | "post_discord"
   | "commit_correction"
-  | "comment_correction";
+  | "comment_correction"
+  | "export_notion"
+  | "edit_discord";
 export type OpState = "queued" | "running" | "done" | "failed" | "cancelled";
 
 /** One operation of the outbox. `result` is what the operation reported, as JSON. */
@@ -966,8 +1002,24 @@ export interface OpResult {
   path?: string;
   /** A correction comment: false when an earlier attempt had posted it. */
   commented?: boolean;
-  /** A correction comment that was left out, and why. */
+  /** A correction comment or a Discord edit that was left out, and why. */
   skipped?: string;
+  /** A Notion export: the page, and what happened to it (one of the three is true). */
+  page_id?: string;
+  created?: boolean;
+  updated?: boolean;
+  /** The page was trashed by a person: it is left alone and not made again. */
+  removed?: boolean;
+  /** More than one page had the task's key: the oldest was used and none was deleted. */
+  duplicates?: number;
+  /** A Discord post: where it went. In bot mode `message_ids` has every message sent. */
+  channel_id?: string;
+  message_ids?: string[];
+  /** Bot mode: the thread opened under the summary, when the cycle asks for one. */
+  thread_id?: string | null;
+  /** A Discord edit: the summary was edited, and the reply was posted in the thread. */
+  edited?: boolean;
+  replied?: boolean;
 }
 
 export interface OutboxState {
@@ -1055,6 +1107,8 @@ export interface Correction {
   state: CorrectionState;
   file: CorrectionStep | null;
   comment: CorrectionStep | null;
+  /** Bot mode: the edit of the Discord summary (and the reply in its thread). */
+  discordEdit?: CorrectionStep | null;
   /** The name of the file in the meeting folder once published. */
   fileName: string | null;
   url: string | null;
@@ -1079,4 +1133,77 @@ export interface PublishedCorrections {
   /** Operations queued by this call. */
   queued: number;
   notes: string[];
+}
+
+// ----- Stage 7: Notion and the Discord bot ------------------------------------------------------
+
+/** The Notion property types the field mapping knows. */
+export type NotionPropertyType =
+  | "title"
+  | "rich_text"
+  | "select"
+  | "multi_select"
+  | "date"
+  | "status"
+  | "url"
+  | "number"
+  | "checkbox"
+  | "people";
+
+/** An expected failure is a result with a message, not an error. */
+export interface NotionAccess {
+  ok: boolean;
+  message: string;
+  /** The name of the integration. */
+  botName: string | null;
+  databaseTitle: string | null;
+  dataSources: { id: string; name: string }[];
+  tokenSet: boolean;
+}
+
+/** One problem of the field mapping; `field` is a key of `NotionProperties`. */
+export interface NotionMappingProblem {
+  field: keyof NotionProperties;
+  message: string;
+}
+
+export interface NotionSchema {
+  /** The data source the properties belong to. */
+  dataSourceId: string;
+  properties: { name: string; type: NotionPropertyType }[];
+  /** The mapping the properties suggest. */
+  proposed: NotionProperties;
+  /** The mapping the cycle has now. */
+  current: NotionProperties;
+  /** What is wrong with `current`: a missing property or one of a type the field cannot use. */
+  problems: NotionMappingProblem[];
+}
+
+export type DiscordChannelKind = "text" | "announcement" | "forum";
+
+/** An expected failure is a result with a message, not an error. */
+export interface DiscordBotCheck {
+  ok: boolean;
+  message: string;
+  botName: string | null;
+  guildName: string | null;
+  channelName: string | null;
+  channelKind: DiscordChannelKind | null;
+  /** Names of the permissions the bot lacks in the channel (`CREATE_PUBLIC_THREADS`, ...). */
+  missing: string[];
+  tokenSet: boolean;
+}
+
+export interface DiscordMember {
+  userId: string;
+  username: string;
+  globalName: string | null;
+  nick: string | null;
+  bot: boolean;
+}
+
+export interface DiscordRole {
+  roleId: string;
+  name: string;
+  mentionable: boolean;
 }

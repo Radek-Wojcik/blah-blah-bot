@@ -105,6 +105,16 @@ export function createTauriBackend(): Backend {
     clearTargetSecret: (reference) => invoke("clear_target_secret", { reference }),
     testDiscordWebhook: (reference) => invoke("test_discord_webhook", { reference }),
     setTargetRule: (cycleId, target, mode) => invoke("set_target_rule", { cycleId, target, mode }),
+    testNotionAccess: (cycleId) => invoke("test_notion_access", { cycleId }),
+    notionSchema: (cycleId) => invoke("notion_schema", { cycleId }),
+    setNotionMapping: (cycleId, dataSource, properties) =>
+      invoke("set_notion_mapping", { cycleId, dataSource, properties }),
+    testDiscordBot: (cycleId) => invoke("test_discord_bot", { cycleId }),
+    searchDiscordMembers: (cycleId, query) => invoke("search_discord_members", { cycleId, query }),
+    listDiscordRoles: (cycleId) => invoke("list_discord_roles", { cycleId }),
+    setParticipantDiscord: (cycleId, participantId, discord) =>
+      invoke("set_participant_discord", { cycleId, participantId, discord }),
+    reexportNotion: (meetingId) => invoke("reexport_notion", { meetingId }),
     publishPlan: (meetingId, targets) => invoke("publish_plan", { meetingId, targets }),
     publishMeeting: (meetingId, targets) => invoke("publish_meeting", { meetingId, targets }),
     confirmPublicRepo: (cycleId) => invoke("confirm_public_repo", { cycleId }),

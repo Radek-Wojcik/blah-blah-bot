@@ -12,9 +12,12 @@ import type {
 import {
   DEFAULT_PUBLISH_RULE,
   STATUS_WRITE_BACK_NOTE,
+  botTokenProblem,
+  notionTokenProblem,
   parseWebhook,
   tokenProblem,
 } from "../publish";
+import { DiscordInviteBox } from "./DiscordInviteBox";
 import { RuleChoice } from "./RuleChoice";
 
 /** What a check of a stored secret answered. */
@@ -265,6 +268,7 @@ function CycleRules(props: { cycle: CycleListItem; version: unknown }) {
   if (!targets) return error ? <p className="error">{error}</p> : null;
   const github = targets.github?.publish ?? DEFAULT_PUBLISH_RULE.github;
   const discord = targets.discord?.publish ?? null;
+  const notion = targets.notion?.publish ?? null;
   const row = (target: PublishTargetName, label: string, mode: PublishMode) => (
     <div className="rule-row">
       <span className="field-label">{label}</span>
@@ -289,6 +293,13 @@ function CycleRules(props: { cycle: CycleListItem; version: unknown }) {
         ) : (
           <p className="target-rule-help">
             No Discord target: add one in the settings of the cycle to choose a rule for it.
+          </p>
+        )}
+        {notion !== null ? (
+          row("notion", "Notion", notion)
+        ) : (
+          <p className="target-rule-help">
+            No Notion target: add one in the settings of the cycle to choose a rule for it.
           </p>
         )}
         {error && (
@@ -408,36 +419,123 @@ export function PublishingSettingsView() {
       )}
 
       <h3 className="sub-head">Discord webhook</h3>
-      {secrets.targets.length === 0 ? (
-        <p className="empty">
-          No cycle posts to Discord. Add a Discord target to a cycle, then store its webhook here.
-        </p>
-      ) : (
-        <div className="secret-list">
-          {secrets.targets.map((t) => (
-            <div key={t.reference} className="panel quiet" style={{ maxWidth: 620 }}>
+      {(() => {
+        const webhooks = secrets.targets.filter((t) => t.kind === "discord");
+        return webhooks.length === 0 ? (
+          <p className="empty">
+            No cycle uses a Discord webhook. Add a Discord webhook target to a cycle, then store its
+            webhook here.
+          </p>
+        ) : (
+          <div className="secret-list">
+            {webhooks.map((t) => (
+              <div key={t.reference} className="panel quiet" style={{ maxWidth: 620 }}>
+                <div className="panel-body">
+                  <SecretForm
+                    label={`Webhook for ${t.reference}`}
+                    storedText={t.masked ? `Webhook stored: ${t.masked}` : "Webhook stored"}
+                    emptyText={`No webhook stored (used by the cycle ${t.cycleId})`}
+                    set={t.set}
+                    placeholder="https://discord.com/api/webhooks/…"
+                    help={`Used by the cycle ${t.cycleId}. Checked before it is stored; the address itself is never shown again.`}
+                    problem={(value) => {
+                      const r = parseWebhook(value);
+                      return typeof r === "string" ? r : null;
+                    }}
+                    onStore={(value) => backend.setTargetSecret(t.reference, value).then(load)}
+                    onClear={() => backend.clearTargetSecret(t.reference).then(load)}
+                    onTest={() => backend.testDiscordWebhook(t.reference)}
+                    testLabel="Test webhook"
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
+
+      <h3 className="sub-head">Discord bot</h3>
+      {(() => {
+        const bots = secrets.targets.filter((t) => t.kind === "discord-bot");
+        return (
+          <div className="secret-list">
+            {bots.length === 0 ? (
+              <p className="empty">
+                No cycle uses a Discord bot. Switch a cycle&apos;s Discord target to Bot mode, then
+                store its bot token here.
+              </p>
+            ) : (
+              bots.map((t) => (
+                <div key={t.reference} className="panel quiet" style={{ maxWidth: 620 }}>
+                  <div className="panel-body">
+                    <SecretForm
+                      label={`Bot token for ${t.reference}`}
+                      storedText={t.masked ? `Bot token stored: ${t.masked}` : "Bot token stored"}
+                      emptyText={`No bot token stored (used by the cycle ${t.cycleId})`}
+                      set={t.set}
+                      placeholder="MTIzNDU2Nzg5MDEyMzQ1Njc4…"
+                      help={`Used by the cycle ${t.cycleId}. Checked before it is stored; the token itself is never shown again.`}
+                      problem={botTokenProblem}
+                      onStore={(value) => backend.setTargetSecret(t.reference, value).then(load)}
+                      onClear={() => backend.clearTargetSecret(t.reference).then(load)}
+                      onTest={async () => {
+                        const r = await backend.testDiscordBot(t.cycleId);
+                        const detail =
+                          r.missing.length > 0 && !r.message.includes(r.missing[0])
+                            ? ` Missing permissions: ${r.missing.join(", ")}.`
+                            : "";
+                        return { ok: r.ok, message: `${r.message}${detail}` };
+                      }}
+                      testLabel="Test bot"
+                    />
+                  </div>
+                </div>
+              ))
+            )}
+            <div className="panel quiet" style={{ maxWidth: 620 }}>
               <div className="panel-body">
-                <SecretForm
-                  label={`Webhook for ${t.reference}`}
-                  storedText={t.masked ? `Webhook stored: ${t.masked}` : "Webhook stored"}
-                  emptyText={`No webhook stored (used by the cycle ${t.cycleId})`}
-                  set={t.set}
-                  placeholder="https://discord.com/api/webhooks/…"
-                  help={`Used by the cycle ${t.cycleId}. Checked before it is stored; the address itself is never shown again.`}
-                  problem={(value) => {
-                    const r = parseWebhook(value);
-                    return typeof r === "string" ? r : null;
-                  }}
-                  onStore={(value) => backend.setTargetSecret(t.reference, value).then(load)}
-                  onClear={() => backend.clearTargetSecret(t.reference).then(load)}
-                  onTest={() => backend.testDiscordWebhook(t.reference)}
-                  testLabel="Test webhook"
-                />
+                <DiscordInviteBox />
               </div>
             </div>
-          ))}
-        </div>
-      )}
+          </div>
+        );
+      })()}
+
+      <h3 className="sub-head">Notion integration</h3>
+      {(() => {
+        const notions = secrets.targets.filter((t) => t.kind === "notion");
+        return notions.length === 0 ? (
+          <p className="empty">
+            No cycle exports tasks to Notion. Add a Notion target to a cycle, then store its
+            integration token here.
+          </p>
+        ) : (
+          <div className="secret-list">
+            {notions.map((t) => (
+              <div key={t.reference} className="panel quiet" style={{ maxWidth: 620 }}>
+                <div className="panel-body">
+                  <SecretForm
+                    label={`Notion token for ${t.reference}`}
+                    storedText={t.masked ? `Token stored: ${t.masked}` : "Token stored"}
+                    emptyText={`No Notion token stored (used by the cycle ${t.cycleId})`}
+                    set={t.set}
+                    placeholder="ntn_…"
+                    help={`Used by the cycle ${t.cycleId}. Share the Notion database with this integration (... > Connections).`}
+                    problem={notionTokenProblem}
+                    onStore={(value) => backend.setTargetSecret(t.reference, value).then(load)}
+                    onClear={() => backend.clearTargetSecret(t.reference).then(load)}
+                    onTest={async () => {
+                      const r = await backend.testNotionAccess(t.cycleId);
+                      return { ok: r.ok, message: r.message };
+                    }}
+                    testLabel="Test access"
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
 
       <h3 className="sub-head">When to publish</h3>
       <p className="section-hint">

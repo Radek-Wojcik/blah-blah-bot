@@ -37,6 +37,8 @@ const PUBLISH = ["auto", "on-approval", "off"];
 const GITHUB_LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]*$/;
 const SNOWFLAKE = /^[0-9]{1,25}$/;
 const CREDENTIAL = /^cred:[A-Za-z0-9][A-Za-z0-9_./-]*$/;
+const NOTION_ID =
+  /^[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}$/;
 
 const BAD_ID = "must start with a letter or digit and contain only letters, digits, - and _";
 
@@ -121,15 +123,43 @@ export function validateCycle(c: CycleDto, templates: string[]): CycleIssue[] {
         "targets.discord.webhook",
         "must be a reference such as cred:discord/nomad; a webhook address is never stored in the repository",
       );
+    const bot = t.discord.bot;
+    if (t.discord.webhook === undefined && bot === undefined)
+      add("targets.discord", "give exactly one of webhook and bot");
+    if (t.discord.webhook !== undefined && bot !== undefined)
+      add("targets.discord", "give exactly one of webhook and bot, not both");
+    if (bot !== undefined) {
+      if (!CREDENTIAL.test(bot.token))
+        add(
+          "targets.discord.bot.token",
+          "must be a reference such as cred:discord-bot/nomad; a bot token is never stored in the repository",
+        );
+      if (!SNOWFLAKE.test(bot.guild))
+        add("targets.discord.bot.guild", `"${bot.guild}" is not a Discord id (digits only)`);
+      if (!SNOWFLAKE.test(bot.channel))
+        add("targets.discord.bot.channel", `"${bot.channel}" is not a Discord id (digits only)`);
+    }
     if (!PUBLISH.includes(t.discord.publish))
       add("targets.discord.publish", "unknown publish rule");
     if (t.discord.template !== undefined && !IDENTIFIER.test(t.discord.template))
       add("targets.discord.template", `the template name ${BAD_ID}`);
   }
   if (t.notion) {
+    if (!CREDENTIAL.test(t.notion.token))
+      add(
+        "targets.notion.token",
+        "must be a reference such as cred:notion/nomad; a token is never stored in the repository",
+      );
     if (t.notion.database.trim() === "")
       add("targets.notion.database", "the database must not be empty");
+    else if (!NOTION_ID.test(t.notion.database.trim()))
+      add("targets.notion.database", "is not a Notion database id (32 hexadecimal digits)");
+    if (t.notion.dataSource !== undefined && !NOTION_ID.test(t.notion.dataSource))
+      add("targets.notion.data_source", "is not a Notion data source id (32 hexadecimal digits)");
     if (!PUBLISH.includes(t.notion.publish)) add("targets.notion.publish", "unknown publish rule");
+    const props = t.notion.properties;
+    if (props.status && !props.statusValue)
+      add("targets.notion.properties.status_value", "give the status a new page gets");
   }
   return issues;
 }
@@ -147,6 +177,17 @@ function normalize(dto: CycleDto): CycleDto {
     Object.entries(c.report.byType).sort(([a], [b]) => a.localeCompare(b)),
   );
   if (c.targets.discord && !c.targets.discord.template) delete c.targets.discord.template;
+  const notion = c.targets.notion;
+  if (notion) {
+    // Like `NotionPropertiesDto` into `NotionProperties`: an empty name is no name.
+    const props = notion.properties;
+    props.title = props.title.trim() === "" ? "Name" : props.title;
+    props.key = props.key.trim() === "" ? "BBB key" : props.key;
+    for (const field of ["assignee", "due", "status", "statusValue", "meeting", "cycle"] as const)
+      if (props[field] !== undefined && props[field]!.trim() === "") delete props[field];
+    if (notion.dataSource !== undefined && notion.dataSource.trim() === "")
+      delete notion.dataSource;
+  }
   return c;
 }
 
@@ -298,7 +339,7 @@ export interface CycleStore {
   repoOf(cycleId: string): CycleRepoView;
   /**
    * Sets `targets.<target>.publish` and nothing else, as `set_target_rule` does: a cycle without
-   * a GitHub target gets one with the default folder; Discord needs a target with a webhook.
+   * a GitHub target gets one with the default folder; Discord and Notion need a target.
    */
   setTargetRule(cycleId: string, target: string, mode: PublishMode): CycleTargets;
   /** Links a repository to a GitHub repository (`owner/name`) and API address; empty clears. */
@@ -672,8 +713,16 @@ export function createCycleStore(): CycleStore {
             "this cycle has no Discord target: add one in the cycle settings first",
           );
         else discord.publish = mode;
+      } else if (target === "notion") {
+        const notion = e.cycle.targets.notion;
+        if (!notion)
+          fail("no_target", "this cycle has no Notion target: add one in the cycle settings first");
+        else notion.publish = mode;
       } else {
-        fail("invalid", `${target} is not a target with a publishing rule (github or discord)`);
+        fail(
+          "invalid",
+          `${target} is not a target with a publishing rule (github, discord or notion)`,
+        );
       }
       return structuredClone(e.cycle.targets);
     },
