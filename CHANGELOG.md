@@ -12,6 +12,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The overlay no longer stays as a black sheet when something goes wrong: a capture that is all black, cannot be decoded or does not arrive within 20 seconds is reported in a message and the overlay closes itself. Escape, a click and a right click close it in every state.
 - The overlay window is read back after it is placed over the monitors and placed again when the system changed its position or size.
 
+### Stage 6 (convenience)
+
+Briefing, call detection, a Chrome extension for browser tabs and the whole-browser fallback. Tested on the mock backend, on recorded session traces, over real loopback sockets and in a scripted Chrome; not yet run on real calls.
+
+#### Added
+
+- Bridge (`crates/bridge`): a WebSocket server on `127.0.0.1` for the Chrome extension, protocol version 2 (JSON control messages and binary audio frames on one connection, schema `schemas/bridge-message.schema.json`, fixtures shared with the extension tests). Pairing with a one-time 8-character code valid for 5 minutes, a 32-byte secret per paired browser (only its SHA-256 is kept), checks of the peer, `Host` and `Origin`, size limits, a heartbeat and a resume after a lost connection. `examples/test_receiver` runs the bridge alone. ADR 0020.
+- Browser tabs as tracks: a tab is a pushed track placed by sample count; missing frames become silence journaled as `stream_gap`, and the sender clock feeds drift correction. A closed tab ends only its own track. Tabs the application did not take stay on offer and join a recording that starts later.
+- Chrome extension (`extension/`, Manifest V3, TypeScript, plain `tsc`): captures a tab with `tabCapture` in an offscreen document, keeps the tab audible, streams 16 kHz mono audio to the application, reconnects with a backoff and a 30 second buffer, survives a stopped service worker, and reports Google Meet calls with the site name only. Permissions: `tabCapture`, `offscreen`, `activeTab`, `storage`, `tabGroups` and `meet.google.com`; no `tabs` or `history`. Shortcut Alt+Shift+R.
+- Guided capture of tab groups: the popup lists the tabs of the group with their status (captured, waiting for a click, not audible, failed) and a Next tab button; a tab added later waits and shows a badge. The group status is also shown in Settings, Browser extension.
+- Extension packaging: `npm run pack` writes `target/extension/blah-blah-bot-extension-<version>.zip` without the test hook; the extension is installed unpacked from the release zip in developer mode ([docs/guides/extension.md](docs/guides/extension.md), ADR 0021) and has a fixed id derived from its manifest key.
+- Settings, Browser extension: pairing code, connection and group status, unpair, switching the bridge off.
+- Meeting detection: Discord, Teams, Zoom and Slack (the list is a setting) are recognized by a microphone session that stays open for the sustain time of the chosen sensitivity (low, balanced, high; default balanced); a session is tied to its application through the parent chain of its process (the new Teams plays from a webview child). One prompt per call with Record, Not now and Never for the application, no prompt while the application is recorded, browsers excluded from the audio rule, Meet reported by the extension through the same rules. Nothing is recorded to detect a call. ADR 0022.
+- Detection tools: `record_session_trace` records the audio sessions of a machine (enumeration only, no audio) and anonymizes the trace; `score_detection` replays the committed traces for each sensitivity.
+- Settings, Detection: on and off, sensitivity, watched programs, opt-out and its undo.
+- Source picker grouped as Microphone, Applications and Browser; captured tabs (`Tab: <title> (<host>)`, grouped as they are in Chrome) and `Chrome (whole browser)` as the fallback with the reason it is offered; a warning when a tab and the whole browser are both chosen; a tab captured during a recording joins it. Only the site name of a tab is stored with a recording.
+- Briefing screen (`?page=briefing`, opened from the cycle list and from the report mode gate): open tasks by person with overdue marks, tasks without an owner, open topics, finished tasks kept apart, "state as of" when the repository cannot be updated. The data comes through a `BriefingSource` trait, so the source can be replaced.
+- Tests under `target/` only (`testkit::target_tempdir`, `target/e2e-tmp`); scripted Chrome tests for the extension; a mock end-to-end test of the briefing, a detected call, a recording with a tab and the process prompt.
+
+#### Measured
+
+- Continuity of a synthetic tone through the extension, the bridge and the recorder, **2 minute run** (the 30 minute run is open): 5,978 frames, none lost, longest gap 46.3 ms (limit 100 ms). Raw data: `benchmarks/results/stage6-tab-30min-synthetic.json`.
+- Detection replayed over 11 session traces (one real idle trace of 4 minutes, ten made by hand), per sensitivity (`stage6-detection-*.json`). Balanced: 6 of 6 labelled calls prompted once after 8 to 10 s, no false prompt on the real idle trace, 1 on a synthetic non-call trace (a 12 s microphone test). Low: 5 of 6, after 20 s. High: 6 of 6 after 3 s, 2 false prompts on synthetic non-call traces.
+
+#### Known issues
+
+- A real tab was not recorded for 30 minutes, and Chrome's capture of a real tab and the keyboard shortcut are not covered by automated tests.
+- False prompts over a working day, real Discord, Teams and Meet calls and Windows 11 are not measured; the hand-made traces hold assumptions about how those applications use the microphone.
+- The default sensitivity (balanced), ADR 0021 and ADR 0022 are proposals.
+- Only Chrome is supported. The extension is installed in developer mode, so Chrome shows a warning and may switch it off after an update; there is no automatic update.
+- A call in a browser other than Meet, and a call in an application that closes its microphone while muted, are not detected. A short microphone test in a watched application can raise a prompt.
+
 ## [0.5.0] - 2026-11-16
 
 ### Added
