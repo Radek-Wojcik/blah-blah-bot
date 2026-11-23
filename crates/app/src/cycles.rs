@@ -1009,6 +1009,101 @@ pub fn set_target_rule(
     Ok(CycleDto::from(&cycle).targets)
 }
 
+/// Writes `targets.notion.data_source` and `targets.notion.properties` of a cycle and nothing
+/// else, returning the cycle's targets as saved. `data_source: None` (or blank) clears the
+/// data source choice. Rejects with `no_target` when the cycle has no Notion target.
+pub fn set_notion_mapping(
+    repos: &[CycleRepoSetting],
+    cycle_id: &str,
+    data_source: Option<&str>,
+    properties: NotionPropertiesDto,
+) -> IpcResult<TargetsDto> {
+    let located = locate_or_err(repos, cycle_id)?;
+    let mut cycle = load_valid(&located)?;
+    let notion = cycle.targets.notion.as_mut().ok_or_else(|| {
+        IpcError::new(
+            "no_target",
+            "this cycle has no Notion target: add one in the cycle settings first",
+        )
+    })?;
+    let next_ds = data_source
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let next_props: NotionProperties = properties.into();
+    let changed = notion.data_source != next_ds || notion.properties != next_props;
+    notion.data_source = next_ds;
+    notion.properties = next_props;
+    let templates = located.repo.list_templates(&cycle.id)?;
+    let issues = cycle.validate(&templates);
+    if let Some(first) = issues.first() {
+        return Err(IpcError::new("cycle_invalid", first.to_string()));
+    }
+    if changed {
+        located.repo.save_cycle(&cycle)?;
+    }
+    Ok(CycleDto::from(&cycle).targets)
+}
+
+/// Writes `participants[].discord` of one participant and nothing else; `None` clears the
+/// mapping. Returns the cycle as saved.
+pub fn set_participant_discord(
+    repos: &[CycleRepoSetting],
+    cycle_id: &str,
+    participant_id: &str,
+    discord: Option<DiscordRefDto>,
+) -> IpcResult<CycleDto> {
+    let located = locate_or_err(repos, cycle_id)?;
+    let mut cycle = load_valid(&located)?;
+    let next = match discord {
+        None => None,
+        Some(d) => {
+            let user_id = d
+                .user_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+            let role_id = d
+                .role_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+            if user_id.is_some() == role_id.is_some() {
+                return Err(IpcError::new(
+                    "invalid",
+                    "give exactly one of a Discord user id and a role id",
+                ));
+            }
+            let id = user_id.as_deref().or(role_id.as_deref()).unwrap_or("");
+            if !cycle_store::is_discord_id(id) {
+                return Err(IpcError::new(
+                    "invalid",
+                    format!("\"{id}\" is not a Discord id (digits only)"),
+                ));
+            }
+            Some(DiscordRef { user_id, role_id })
+        }
+    };
+    let person = cycle
+        .participants
+        .iter_mut()
+        .find(|p| p.id == participant_id)
+        .ok_or_else(|| IpcError::new("not_found", "this participant does not exist"))?;
+    let changed = person.discord != next;
+    person.discord = next;
+    let templates = located.repo.list_templates(&cycle.id)?;
+    let issues = cycle.validate(&templates);
+    if let Some(first) = issues.first() {
+        return Err(IpcError::new("cycle_invalid", first.to_string()));
+    }
+    if changed {
+        located.repo.save_cycle(&cycle)?;
+    }
+    Ok(CycleDto::from(&cycle))
+}
+
 /// Brings the stored participants of a cycle in line with its `cycle.yaml`. A cycle that is
 /// not available or not valid is left alone.
 pub fn sync_cycle<S: ParticipantSync + ?Sized>(
