@@ -137,26 +137,43 @@ test.describe("source picker on the mock backend", () => {
 });
 
 test.describe("main window on the mock backend", () => {
-  test("lists meetings and marks a recovered one", async ({ page }) => {
+  test("lists projects and standalone meetings and marks a recovered one", async ({ page }) => {
     await page.goto("/?view=main&backend=mock");
-    await expect(page.getByRole("heading", { name: "Meetings" })).toBeVisible();
-    await expect(page.getByRole("article")).toHaveCount(5);
+    await expect(page.getByRole("heading", { name: "Projects", level: 2 })).toBeVisible();
+    await expect(page.getByRole("article")).toHaveCount(3);
+    const standalone = page
+      .getByRole("list", { name: "Standalone meetings" })
+      .getByRole("listitem");
+    await expect(standalone).toHaveCount(4);
     await expect(page.getByText("Recovered", { exact: true })).toBeVisible();
+
+    await page
+      .getByRole("article", { name: "Project Nomad rover" })
+      .getByRole("button", { name: "Open project" })
+      .click();
+    await expect(
+      page.getByRole("list", { name: "Meetings list" }).getByRole("listitem"),
+    ).toHaveCount(1);
+    await expect(page.getByRole("list", { name: "Meetings list" })).toContainText(
+      "ORBIT weekly sync",
+    );
   });
 
   test("deleting a meeting removes its card", async ({ page }) => {
     await page.goto("/?view=main&backend=mock");
-    const card = page.getByRole("article").filter({ hasText: "Budget check-in" });
-    await card.getByRole("button", { name: "Delete" }).click();
-    await expect(page.getByRole("article")).toHaveCount(4);
+    const standalone = page.getByRole("list", { name: "Standalone meetings" });
+    const row = standalone.getByRole("listitem").filter({ hasText: "Budget check-in" });
+    await row.getByRole("button", { name: "Delete" }).click();
+    await expect(standalone.getByRole("listitem")).toHaveCount(3);
   });
 
   test("settings can be edited and saved", async ({ page }) => {
     await page.goto("/?view=main&backend=mock");
     await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("tab", { name: "Preferences" }).click();
     await page.getByLabel("Record / Stop hotkey").fill("Ctrl+F9");
-    await page.getByRole("button", { name: "Save", exact: true }).click();
-    await expect(page.getByRole("status")).toHaveText("Saved");
+    await page.getByRole("button", { name: "Save preferences", exact: true }).click();
+    await expect(page.getByRole("status")).toHaveText("Preferences saved.");
   });
 
   test("layout adapts: sidebar becomes a top bar on narrow windows", async ({ page }) => {
@@ -230,10 +247,13 @@ const FAST = "/?view=main&backend=mock&jobms=400";
 test.describe("processing pipeline on the mock backend", () => {
   test("process a meeting from the list and watch its stages in the queue", async ({ page }) => {
     await page.goto(FAST);
-    const card = page.getByRole("article").filter({ hasText: "Kickoff" });
-    await card.getByRole("button", { name: "Process" }).click();
+    const row = page
+      .getByRole("list", { name: "Standalone meetings" })
+      .getByRole("listitem")
+      .filter({ hasText: "Kickoff" });
+    await row.getByRole("button", { name: "Process" }).click();
     // Already queued: a second request is not possible.
-    await expect(card.getByRole("button", { name: "Process" })).toBeDisabled();
+    await expect(row.getByRole("button", { name: "Process" })).toBeDisabled();
 
     await page.getByRole("button", { name: "Queue", exact: true }).click();
     const job = page.getByRole("article", { name: "Kickoff" });
@@ -253,10 +273,16 @@ test.describe("processing pipeline on the mock backend", () => {
     await expect(stages.getByRole("listitem").filter({ hasText: "Extract items" })).toHaveCount(1);
     await expect(stages.getByRole("listitem").filter({ hasText: "Build draft" })).toHaveCount(1);
 
-    // Back in the list the meeting offers its transcript.
-    await page.getByRole("button", { name: "Meetings", exact: true }).click();
-    const meeting = page.getByRole("article").filter({ hasText: "Kickoff" });
-    await expect(meeting.getByRole("button", { name: "Transcript" })).toBeVisible();
+    // Back in the list the meeting opens its transcript inside MeetingDetail.
+    await page.getByRole("button", { name: "Projects", exact: true }).click();
+    const meeting = page
+      .getByRole("list", { name: "Standalone meetings" })
+      .getByRole("listitem")
+      .filter({ hasText: "Kickoff" });
+    await meeting.getByRole("button", { name: "Open" }).click();
+    await page.getByRole("tab", { name: "Transcript" }).click();
+    await expect(page.getByRole("heading", { name: "Transcript" })).toBeVisible();
+    await expect(page.getByText("Language: en")).toBeVisible();
   });
 
   test("the queue shows running, waiting and failed jobs", async ({ page }) => {
@@ -305,8 +331,16 @@ test.describe("processing pipeline on the mock backend", () => {
 test.describe("transcript on the mock backend", () => {
   async function openTranscript(page: import("@playwright/test").Page) {
     await page.goto("/?view=main&backend=mock");
-    const card = page.getByRole("article").filter({ hasText: "ORBIT weekly sync" });
-    await card.getByRole("button", { name: "Transcript" }).click();
+    await page
+      .getByRole("article", { name: "Project Nomad rover" })
+      .getByRole("button", { name: "Open project" })
+      .click();
+    const row = page
+      .getByRole("list", { name: "Meetings list" })
+      .getByRole("listitem")
+      .filter({ hasText: "ORBIT weekly sync" });
+    await row.getByRole("button", { name: "Open" }).click();
+    await page.getByRole("tab", { name: "Transcript" }).click();
     await expect(page.getByRole("heading", { name: "Transcript" })).toBeVisible();
   }
 
@@ -339,9 +373,13 @@ test.describe("transcript on the mock backend", () => {
 
     // Leave the transcript and open it again: the backend kept the edits.
     await page.getByRole("button", { name: "Back to meetings" }).click();
-    await expect(page.getByRole("heading", { name: "Meetings" })).toBeVisible();
-    const card = page.getByRole("article").filter({ hasText: "ORBIT weekly sync" });
-    await card.getByRole("button", { name: "Transcript" }).click();
+    await expect(page.getByRole("heading", { name: "Nomad rover", level: 2 })).toBeVisible();
+    const row = page
+      .getByRole("list", { name: "Meetings list" })
+      .getByRole("listitem")
+      .filter({ hasText: "ORBIT weekly sync" });
+    await row.getByRole("button", { name: "Open" }).click();
+    await page.getByRole("tab", { name: "Transcript" }).click();
     await expect(
       page.getByRole("button", { name: "Good. Did the new valve change the thrust curve at all?" }),
     ).toBeVisible();
@@ -379,32 +417,32 @@ test.describe("transcript on the mock backend", () => {
 
 test.describe("processing settings on the mock backend", () => {
   test("changes are saved", async ({ page }) => {
-    await page.goto("/?view=main&backend=mock&page=settings");
-    const section = page.getByRole("region", { name: "Processing" });
-    await section.getByLabel("Audio files after processing").selectOption("delete");
-    await expect(section.getByText(/corrections are only possible by editing/)).toBeVisible();
-    await section.getByLabel("GPU guard: maximum utilization (%)").fill("55");
-    await section.getByRole("button", { name: "Save processing settings" }).click();
-    await expect(section.getByRole("status")).toHaveText("Processing settings saved");
+    await page.goto("/?view=main&backend=mock&page=settings&tab=processing");
+    const form = page.getByRole("form", { name: "Processing policy" });
+    await form.getByLabel("Audio files after processing").selectOption("delete");
+    await expect(form.getByText(/corrections can only be made by editing/)).toBeVisible();
+    await form.getByLabel("Max GPU utilization (%)").fill("55");
+    await form.getByRole("button", { name: "Save processing policy" }).click();
+    await expect(form.getByRole("status")).toHaveText("Processing policy saved.");
   });
 
   test("the token is write-only and shown as stored", async ({ page }) => {
-    await page.goto("/?view=main&backend=mock&page=settings");
-    const section = page.getByRole("region", { name: "Processing" });
-    await expect(section.getByText("No token stored")).toBeVisible();
-    await section.getByLabel("Token", { exact: false }).fill("hf_test_value");
-    await section.getByRole("button", { name: "Store token" }).click();
-    await expect(section.getByText("Token stored")).toBeVisible();
-    await expect(section.getByLabel("Token", { exact: false })).toHaveValue("");
-    await section.getByRole("button", { name: "Clear token" }).click();
-    await expect(section.getByText("No token stored")).toBeVisible();
+    await page.goto("/?view=main&backend=mock&page=settings&tab=connectors");
+    const form = page.getByRole("form", { name: "Hugging Face Token" });
+    await expect(form.getByText("No token stored")).toBeVisible();
+    await form.getByLabel("Hugging Face Token").fill("hf_test_value");
+    await form.getByRole("button", { name: "Store" }).click();
+    await expect(form.getByText("Token stored in Windows Credential Manager")).toBeVisible();
+    await expect(form.getByLabel("Hugging Face Token")).toHaveValue("");
+    await form.getByRole("button", { name: "Clear" }).click();
+    await expect(form.getByText("No token stored")).toBeVisible();
   });
 
   test("models can be downloaded, gated ones need the token first", async ({ page }) => {
-    await page.goto("/?view=main&backend=mock&page=settings&jobms=400");
+    await page.goto("/?view=main&backend=mock&page=settings&tab=models&jobms=400");
     const models = page.getByRole("list", { name: "Models" });
     await expect(models.getByText("Cached")).toHaveCount(1);
-    await expect(models.getByText(/acceptance of the model terms/)).toBeVisible();
+    await expect(models.getByText(/accepting the model terms/)).toBeVisible();
 
     await page.getByRole("button", { name: /^Download Speaker separation/ }).click();
     await expect(page.getByRole("alert").filter({ hasText: "Hugging Face token" })).toBeVisible();
@@ -424,8 +462,16 @@ test.describe("speakers on the mock backend", () => {
 
   test("the labeling screen is reachable from the list and the transcript", async ({ page }) => {
     await page.goto("/?view=main&backend=mock");
-    const card = page.getByRole("article").filter({ hasText: "ORBIT weekly sync" });
-    await card.getByRole("button", { name: "Name speakers" }).click();
+    await page
+      .getByRole("article", { name: "Project Nomad rover" })
+      .getByRole("button", { name: "Open project" })
+      .click();
+    const row = page
+      .getByRole("list", { name: "Meetings list" })
+      .getByRole("listitem")
+      .filter({ hasText: "ORBIT weekly sync" });
+    await row.getByRole("button", { name: "Open" }).click();
+    await page.getByRole("tab", { name: "Speakers" }).click();
     await expect(page.getByRole("heading", { name: "Speakers" })).toBeVisible();
     await expect(page.getByText(/never leave this computer/)).toBeVisible();
 
@@ -434,10 +480,14 @@ test.describe("speakers on the mock backend", () => {
     await page.getByRole("button", { name: "Name speakers" }).click();
     await expect(page.getByRole("heading", { name: "Speakers" })).toBeVisible();
     await page.getByRole("button", { name: "Back to meetings" }).click();
-    await expect(page.getByRole("heading", { name: "Meetings" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Nomad rover", level: 2 })).toBeVisible();
 
-    // A meeting without a finished job offers no labeling.
-    const kickoff = page.getByRole("article").filter({ hasText: "Kickoff" });
+    // A standalone meeting without a finished job offers no labeling button on its row.
+    await page.getByRole("button", { name: "Back to projects" }).click();
+    const kickoff = page
+      .getByRole("list", { name: "Standalone meetings" })
+      .getByRole("listitem")
+      .filter({ hasText: "Kickoff" });
     await expect(kickoff.getByRole("button", { name: "Name speakers" })).toHaveCount(0);
   });
 
@@ -580,13 +630,14 @@ test.describe("speakers on the mock backend", () => {
 });
 
 test.describe("voice profiles on the mock backend", () => {
-  const SETTINGS = "/?view=main&backend=mock&page=settings";
+  const VOICES = "/?view=main&backend=mock&page=settings&tab=voices";
+  const PROCESSING = "/?view=main&backend=mock&page=settings&tab=processing";
 
   test("a participant is renamed", async ({ page }) => {
-    await page.goto(SETTINGS);
-    const people = page.getByRole("list", { name: "Participants" });
+    await page.goto(VOICES);
+    const people = page.getByRole("list", { name: "Voice profiles" });
     await expect(people.getByRole("listitem")).toHaveCount(3);
-    await expect(people.getByText("4 samples · 18:20 of speech")).toBeVisible();
+    await expect(people.getByText("4 samples")).toBeVisible();
     await page.getByRole("button", { name: "Rename Jan Demo" }).click();
     await page.getByLabel("New name for Jan Demo").fill("Jan Example");
     await people.getByRole("button", { name: "Save", exact: true }).click();
@@ -595,8 +646,8 @@ test.describe("voice profiles on the mock backend", () => {
   });
 
   test("renaming to an existing name shows the error", async ({ page }) => {
-    await page.goto(SETTINGS);
-    const people = page.getByRole("list", { name: "Participants" });
+    await page.goto(VOICES);
+    const people = page.getByRole("list", { name: "Voice profiles" });
     await page.getByRole("button", { name: "Rename Jan Demo" }).click();
     await page.getByLabel("New name for Jan Demo").fill("alex demo");
     await people.getByRole("button", { name: "Save", exact: true }).click();
@@ -604,8 +655,8 @@ test.describe("voice profiles on the mock backend", () => {
   });
 
   test("resetting a voice and deleting a participant ask first", async ({ page }) => {
-    await page.goto(SETTINGS);
-    const people = page.getByRole("list", { name: "Participants" });
+    await page.goto(VOICES);
+    const people = page.getByRole("list", { name: "Voice profiles" });
     await page.getByRole("button", { name: "Reset the voice of Alex Demo" }).click();
     const dialog = page.getByRole("dialog", { name: "Reset this voice?" });
     await dialog.getByRole("button", { name: "Cancel" }).click();
@@ -613,19 +664,19 @@ test.describe("voice profiles on the mock backend", () => {
 
     await page.getByRole("button", { name: "Reset the voice of Alex Demo" }).click();
     await dialog.getByRole("button", { name: "Reset voice" }).click();
-    await expect(people.getByText("No voice learned yet")).toHaveCount(1);
-    await expect(page.getByRole("button", { name: "Reset the voice of Alex Demo" })).toBeDisabled();
+    await expect(people.getByRole("listitem")).toHaveCount(2);
+    await expect(people.getByText("Alex Demo")).toHaveCount(0);
 
     await page.getByRole("button", { name: "Delete Kasia Demo" }).click();
     const del = page.getByRole("dialog", { name: "Delete this participant?" });
     await del.getByRole("button", { name: "Delete participant" }).click();
-    await expect(people.getByRole("listitem")).toHaveCount(2);
+    await expect(people.getByRole("listitem")).toHaveCount(1);
     await expect(people.getByText("Kasia Demo")).toHaveCount(0);
   });
 
   test("all voice data is deleted after a confirmation", async ({ page }) => {
-    await page.goto(SETTINGS);
-    const people = page.getByRole("list", { name: "Participants" });
+    await page.goto(VOICES);
+    const people = page.getByRole("list", { name: "Voice profiles" });
     await page.getByRole("button", { name: "Delete all voice data" }).click();
     const dialog = page.getByRole("dialog", { name: "Delete all voice data?" });
     await expect(dialog.getByText(/all voice profiles, all stored voice embeddings/)).toBeVisible();
@@ -639,27 +690,27 @@ test.describe("voice profiles on the mock backend", () => {
     await page.getByRole("button", { name: "Delete all voice data" }).click();
     await dialog.getByRole("button", { name: "Delete all voice data" }).click();
     await expect(dialog).toHaveCount(0);
-    await expect(people.getByText("No voice learned yet")).toHaveCount(3);
-    await expect(people.getByText(/samples?/)).toHaveCount(0);
+    await expect(people.getByRole("listitem")).toHaveCount(0);
+    await expect(page.getByText(/No voice profiles yet/)).toBeVisible();
   });
 
   test("voice settings are saved and invalid thresholds are refused", async ({ page }) => {
-    await page.goto(SETTINGS);
-    const section = page.getByRole("region", { name: "Processing" });
-    await expect(section.getByLabel(/name automatically from score/)).toHaveValue("0.75");
-    await expect(section.getByLabel(/suggest a name from score/)).toHaveValue("0.6");
-    await expect(section.getByLabel(/margin over the second best match/)).toHaveValue("0.1");
-    await expect(section.getByLabel(/Keep sample clips for/)).toHaveValue("30");
+    await page.goto(PROCESSING);
+    const form = page.getByRole("form", { name: "Processing policy" });
+    await expect(form.getByLabel(/name automatically from score/i)).toHaveValue("0.75");
+    await expect(form.getByLabel(/suggest a name from score/i)).toHaveValue("0.6");
+    await expect(form.getByLabel(/margin over second best match/i)).toHaveValue("0.1");
+    await expect(form.getByLabel(/Keep unconfirmed sample clips/i)).toHaveValue("30");
 
-    await section.getByLabel(/suggest a name from score/).fill("0.9");
-    await expect(section.getByRole("alert").filter({ hasText: "cannot be higher" })).toBeVisible();
-    await expect(section.getByRole("button", { name: "Save processing settings" })).toBeDisabled();
+    await form.getByLabel(/suggest a name from score/i).fill("0.9");
+    await expect(form.getByRole("alert").filter({ hasText: "cannot be higher" })).toBeVisible();
+    await expect(form.getByRole("button", { name: "Save processing policy" })).toBeDisabled();
 
-    await section.getByLabel(/suggest a name from score/).fill("0.55");
-    await section.getByLabel(/name automatically from score/).fill("0.75");
-    await section.getByLabel(/Keep sample clips for/).fill("14");
-    await section.getByRole("button", { name: "Save processing settings" }).click();
-    await expect(section.getByRole("status")).toHaveText("Processing settings saved");
+    await form.getByLabel(/suggest a name from score/i).fill("0.55");
+    await form.getByLabel(/name automatically from score/i).fill("0.75");
+    await form.getByLabel(/Keep unconfirmed sample clips/i).fill("14");
+    await form.getByRole("button", { name: "Save processing policy" }).click();
+    await expect(form.getByRole("status")).toHaveText("Processing policy saved.");
   });
 });
 
@@ -667,6 +718,7 @@ test.describe("browser extension settings on the mock backend", () => {
   test("pair an extension with a code, see it connect, unpair it", async ({ page }) => {
     await page.goto("/?view=main&backend=mock&pairms=500");
     await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("tab", { name: "Preferences" }).click();
     const section = page.getByRole("region", { name: "Browser extension" });
     await expect(section.getByTestId("bridge-state")).toHaveText("Listening on 127.0.0.1:17555.");
     const list = section.getByRole("list", { name: "Paired extensions" });
@@ -687,9 +739,10 @@ test.describe("browser extension settings on the mock backend", () => {
   test("turning the bridge off stops pairing", async ({ page }) => {
     await page.goto("/?view=main&backend=mock");
     await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("tab", { name: "Preferences" }).click();
     await page.getByLabel("Accept the Chrome extension on this computer").uncheck();
-    await page.getByRole("button", { name: "Save", exact: true }).click();
-    await expect(page.getByRole("status")).toHaveText("Saved");
+    await page.getByRole("button", { name: "Save preferences", exact: true }).click();
+    await expect(page.getByRole("status")).toHaveText("Preferences saved.");
     const section = page.getByRole("region", { name: "Browser extension" });
     await expect(section.getByTestId("bridge-state")).toContainText("Off");
     await expect(section.getByRole("button", { name: "Pair extension" })).toBeDisabled();
@@ -725,6 +778,7 @@ test.describe("meeting detection on the mock backend", () => {
   test("the settings choose the sensitivity and Ask again undoes Never", async ({ page }) => {
     await page.goto("/?view=main&backend=mock");
     await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("tab", { name: "Preferences" }).click();
     const section = page.getByRole("region", { name: "Detection" });
     await expect(section.getByLabel(/^Balanced/)).toBeChecked();
     await expect(section.getByTestId("detection-state")).toHaveText("On, watching 7 applications.");

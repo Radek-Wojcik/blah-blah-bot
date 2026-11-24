@@ -216,8 +216,14 @@ test.describe("publishing on the mock backend", () => {
     });
     // A colleague closes the issue made from a task; the state is read at the next pull.
     await hooks(page, (h) => h.closeIssue(15));
-    await page.getByRole("button", { name: "Cycles", exact: true }).click();
-    await page.getByRole("button", { name: "Edit NOMAD" }).click();
+    await page
+      .getByRole("navigation", { name: "Main navigation" })
+      .getByRole("button", { name: /^Projects/ })
+      .click();
+    await page
+      .getByRole("article", { name: "Project Nomad rover" })
+      .getByRole("button", { name: "Open project" })
+      .click();
     const tasks = page.getByRole("region", { name: "Tasks" });
     await expect(tasks).toContainText("demo-org/nomad-cycles · 3 open, 1 done");
     await expect(tasks).toContainText("As of 2026-11-12");
@@ -258,9 +264,17 @@ test.describe("publishing on the mock backend", () => {
     await expect(panel(page).getByRole("list", { name: "What will happen" })).toContainText(
       "Post the summary to Discord",
     );
-    // The choice is the cycle's: it shows in the cycle settings too.
-    await page.getByRole("button", { name: "Cycles", exact: true }).click();
-    await page.getByRole("button", { name: "Edit NOMAD" }).click();
+    // The choice is the project's: it shows in Project Settings too.
+    await page
+      .getByRole("navigation", { name: "Main navigation" })
+      .getByRole("button", { name: /^Projects/ })
+      .click();
+    await page
+      .getByRole("article", { name: "Project Nomad rover" })
+      .getByRole("button", { name: "Open project" })
+      .click();
+    await page.getByRole("button", { name: "Project settings" }).click();
+    await page.getByRole("tab", { name: "Integrations" }).click();
     await expect(
       page
         .getByRole("radiogroup", { name: "Discord publishing rule" })
@@ -285,9 +299,17 @@ test.describe("publishing on the mock backend", () => {
     await expect(panel(page).getByRole("list", { name: "What will happen" })).not.toContainText(
       "Close issue",
     );
-    // The choice reaches cycle.yaml: the cycle editor shows it.
-    await page.getByRole("button", { name: "Cycles", exact: true }).click();
-    await page.getByRole("button", { name: "Edit NOMAD" }).click();
+    // The choice reaches cycle.yaml: Project Settings shows it.
+    await page
+      .getByRole("navigation", { name: "Main navigation" })
+      .getByRole("button", { name: /^Projects/ })
+      .click();
+    await page
+      .getByRole("article", { name: "Project Nomad rover" })
+      .getByRole("button", { name: "Open project" })
+      .click();
+    await page.getByRole("button", { name: "Project settings" }).click();
+    await page.getByRole("tab", { name: "Integrations" }).click();
     await expect(
       page
         .getByRole("radiogroup", { name: "GitHub publishing rule" })
@@ -345,9 +367,9 @@ test.describe("publishing on the mock backend", () => {
   });
 
   test("the rule of every cycle is set in the settings as well", async ({ page }) => {
-    await page.goto(MAIN + "&page=settings");
+    await page.goto(MAIN + "&page=settings&tab=preferences");
     const github = page.getByRole("radiogroup", {
-      name: "GitHub, cycle Nomad rover publishing rule",
+      name: "GitHub, project Nomad rover publishing rule",
     });
     await expect(github.getByRole("radio", { name: "On approval" })).toBeChecked();
     await github.getByRole("radio", { name: "Automatic" }).click();
@@ -355,18 +377,34 @@ test.describe("publishing on the mock backend", () => {
     await expect(
       page.getByText("Status changes are never written back automatically"),
     ).toBeVisible();
-    await page.getByRole("button", { name: "Meetings", exact: true }).click();
-    await page.getByRole("button", { name: /^Open the draft of ORBIT weekly sync/ }).click();
+    await page.getByRole("button", { name: "Projects", exact: true }).click();
+    await page
+      .getByRole("article", { name: "Project Nomad rover" })
+      .getByRole("button", { name: "Open project" })
+      .click();
+    await page
+      .getByRole("list", { name: "Meetings list" })
+      .getByRole("listitem")
+      .filter({ hasText: "ORBIT weekly sync" })
+      .getByRole("button", { name: "Open" })
+      .click();
     await expect(rule(page, "GitHub").getByRole("radio", { name: "Automatic" })).toBeChecked();
   });
 
   test("a missing webhook blocks the Discord post and the settings fix it", async ({ page }) => {
-    await page.goto(MAIN + "&page=settings");
+    await page.goto(`${MAIN}&page=project&cycle=NOMAD`);
+    await page.getByRole("button", { name: "Project settings" }).click();
+    await page.getByRole("tab", { name: "Integrations" }).click();
     const form = page.getByRole("form", { name: "Webhook for cred:discord/nomad" });
     await form.getByRole("button", { name: "Clear" }).click();
     await expect(form).toContainText("No webhook stored");
-    await page.getByRole("button", { name: "Meetings", exact: true }).click();
-    await page.getByRole("button", { name: /^Open the draft of ORBIT weekly sync/ }).click();
+    await page.getByRole("button", { name: "Close", exact: true }).first().click();
+    await page
+      .getByRole("list", { name: "Meetings list" })
+      .getByRole("listitem")
+      .filter({ hasText: "ORBIT weekly sync" })
+      .getByRole("button", { name: "Open" })
+      .click();
     await expect(panel(page).getByRole("alert")).toContainText("No Discord webhook is stored");
     await expect(panel(page).getByRole("button", { name: "Publish", exact: true })).toBeDisabled();
     await panel(page)
@@ -451,11 +489,11 @@ test.describe("report previews", () => {
 
 test.describe("token setup", () => {
   test("a token is typed masked, stored, and not shown again", async ({ page }) => {
-    await page.goto(`${MAIN}&page=settings`);
-    const form = page.getByRole("form", { name: "GitHub token for api.github.com" });
+    await page.goto(`${MAIN}&page=settings&tab=connectors`);
+    const form = page.getByRole("form", { name: "GitHub Token (api.github.com)" });
     await form.getByRole("button", { name: "Clear" }).click();
     await expect(form).toContainText("No token stored");
-    const field = form.getByLabel("GitHub token for api.github.com");
+    const field = form.getByLabel("GitHub Token (api.github.com)");
     await expect(field).toHaveAttribute("type", "password");
     await field.fill("two words");
     await form.getByRole("button", { name: "Store" }).click();
@@ -469,7 +507,9 @@ test.describe("token setup", () => {
   });
 
   test("a webhook is checked, stored masked and tested", async ({ page }) => {
-    await page.goto(`${MAIN}&page=settings`);
+    await page.goto(`${MAIN}&page=project&cycle=NOMAD`);
+    await page.getByRole("button", { name: "Project settings" }).click();
+    await page.getByRole("tab", { name: "Integrations" }).click();
     const form = page.getByRole("form", { name: "Webhook for cred:discord/nomad" });
     await expect(form).toContainText("Webhook stored: discord.com webhook 0000...0007");
     await form.getByLabel("Webhook for cred:discord/nomad").fill("https://example.org/hook");
@@ -486,12 +526,15 @@ test.describe("token setup", () => {
   });
 
   test("a repository is linked to GitHub and the access is tested", async ({ page }) => {
-    await page.goto(`${MAIN}&page=settings`);
-    const form = page.getByRole("form", { name: "GitHub repository of team-cycles" });
-    await form.getByRole("button", { name: "Test access" }).click();
-    await expect(form.getByRole("status")).toContainText(
+    await page.goto(`${MAIN}&page=settings&tab=connectors`);
+    const tokenForm = page.getByRole("form", { name: "GitHub Token (api.github.com)" });
+    await tokenForm.getByRole("button", { name: "Test access" }).click();
+    await expect(tokenForm.getByRole("status")).toContainText(
       "Connected to demo-org/nomad-cycles as demo-bot",
     );
+    await page.goto(`${MAIN}&page=project&cycle=SANDBOX`);
+    await page.getByRole("button", { name: "Project settings" }).click();
+    await page.getByRole("tab", { name: "Integrations" }).click();
     const bad = page.getByRole("form", { name: "GitHub repository of local" });
     await bad.getByLabel("GitHub repository of local").fill("not a repository");
     await bad.getByRole("button", { name: "Save link" }).click();
@@ -500,17 +543,19 @@ test.describe("token setup", () => {
 });
 
 test.describe("the rule of a target is chosen explicitly", () => {
-  const CYCLE = `${MAIN}&page=cycle&cycle=NOMAD`;
+  const PROJECT = `${MAIN}&page=project&cycle=NOMAD`;
   const group = (page: Page, target: "GitHub" | "Discord") =>
     page.getByRole("radiogroup", { name: `${target} publishing rule` });
 
   test("switching a target on shows the three rules with what each does, On approval in use", async ({
     page,
   }) => {
-    await page.goto(CYCLE);
+    await page.goto(PROJECT);
+    await page.getByRole("button", { name: "Project settings" }).click();
+    await page.getByRole("tab", { name: "Integrations" }).click();
     for (const [target, label] of [
-      ["GitHub", "Commit reports to the repository"],
-      ["Discord", "Post a summary to a channel"],
+      ["GitHub", "Commit meeting reports to the repository"],
+      ["Discord", "Post a summary to a Discord channel"],
     ] as const) {
       const box = page.getByRole("checkbox", { name: label });
       await box.uncheck();
@@ -531,16 +576,21 @@ test.describe("the rule of a target is chosen explicitly", () => {
       await expect(options.getByRole("listitem").nth(1)).toContainText("(in use)");
     }
     // Saved as it is shown.
-    await page.getByLabel("Webhook reference").fill("cred:discord/updates");
-    await page.getByRole("button", { name: "Save", exact: true }).click();
-    await expect(page.getByRole("status").filter({ hasText: "Saved" })).toBeVisible();
+    await page
+      .locator("label", { hasText: "Webhook credential reference" })
+      .locator("input")
+      .fill("cred:discord/updates");
+    await page.getByRole("button", { name: "Save project settings" }).click();
+    await expect(
+      page.getByRole("status").filter({ hasText: "Project settings saved." }),
+    ).toBeVisible();
     await expect(group(page, "Discord").getByRole("radio", { name: "On approval" })).toBeChecked();
     await expect(group(page, "GitHub").getByRole("radio", { name: "On approval" })).toBeChecked();
 
     // A choice is a choice: Automatic shows its warning and is what gets saved.
     await group(page, "Discord").getByRole("radio", { name: "Automatic" }).click();
     await expect(page.locator(".target-rule-warn")).toContainText("cannot be taken back");
-    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page.getByRole("button", { name: "Save project settings" }).click();
     await expect(group(page, "Discord").getByRole("radio", { name: "Automatic" })).toBeChecked();
     await group(page, "Discord").getByRole("radio", { name: "On approval" }).click();
     await expect(page.locator(".target-rule-warn")).toHaveCount(0);

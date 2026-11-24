@@ -8,15 +8,17 @@ import { expect, test } from "@playwright/test";
  */
 test.describe("briefing to detected call to recording with a tab to processing", () => {
   test("the whole flow", async ({ page }) => {
-    // 1. Briefing before the meeting, opened from the cycle list.
+    // 1. Project briefing before the meeting, opened from the projects workspace.
     await page.goto("/?view=main&backend=mock&rate=0");
-    await page.getByRole("button", { name: "Cycles", exact: true }).click();
-    await page.getByRole("button", { name: "Briefing NOMAD" }).click();
-    await expect(page.getByRole("heading", { name: "Briefing", level: 2 })).toBeVisible();
-    await expect(page.locator(".brief-summary")).toHaveText(
-      "7 open tasks, 2 overdue · 2 open topics",
-    );
-    await expect(page.getByRole("region", { name: "Tasks of Jan Demo" })).toContainText(
+    await page
+      .getByRole("article", { name: "Project Nomad rover" })
+      .getByRole("button", { name: "Open project" })
+      .click();
+    await expect(page.getByRole("heading", { name: "Nomad rover", level: 2 })).toBeVisible();
+    await expect(
+      page.getByRole("region", { name: "Action items and tasks" }).locator(".chip"),
+    ).toHaveText("7 open tasks, 2 overdue · 2 open topics");
+    await expect(page.getByRole("list", { name: "Top action items" })).toContainText(
       "Order the battery pack",
     );
 
