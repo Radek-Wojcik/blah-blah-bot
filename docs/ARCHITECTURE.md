@@ -161,7 +161,7 @@ Rust modules are crates in one Cargo workspace. Licenses of third-party parts ar
 
 ### 4.7 `ai-worker` (Python sidecar)
 
-Runs only while a job is processing. The environment is created with `uv` on first use and is not part of the installer; the installer ships the worker sources, the lock file, the schemas and a pinned `uv`. Every downloaded model is pinned to one commit of its repository ([ADR 0021](decisions/0021-model-revision-pinning.md)).
+Runs only while a job is processing. The environment is created with `uv` on first use and is not part of the installer; the installer ships the worker sources, the lock file, the schemas and a pinned `uv`. Every downloaded model is pinned to one commit of its repository ([ADR 0025](decisions/0025-model-revision-pinning.md)).
 
 | Step | Function | Technology |
 |---|---|---|

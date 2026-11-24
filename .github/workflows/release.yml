@@ -54,7 +54,7 @@ jobs:
       - name: Build and check the installer
         # Downloads the pinned uv release and checks its SHA256, builds the UI and the NSIS
         # installer, inspects the payload and writes target/installer/SHA256SUMS.txt.
-        # Signing stays off unless a BBB_SIGN_COMMAND secret exists (docs/decisions/0020).
+        # Signing stays off unless a BBB_SIGN_COMMAND secret exists (docs/decisions/0024).
         shell: pwsh
         env:
           TAG: ${{ github.ref_name }}

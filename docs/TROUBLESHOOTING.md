@@ -72,7 +72,7 @@ Close other programs that use the GPU (games, video editors, browsers with hardw
 
 ### SmartScreen warns about the installer
 
-The installer is not signed ([ADR 0020](decisions/0020-installer-signing.md)), so Windows shows "Windows protected your PC". Compare the SHA256 checksum with `SHA256SUMS.txt` from the same release, then choose "More info" and "Run anyway". If your organization removes that choice, the installer cannot be run on that machine. See [INSTALL.md](INSTALL.md).
+The installer is not signed ([ADR 0024](decisions/0024-installer-signing.md)), so Windows shows "Windows protected your PC". Compare the SHA256 checksum with `SHA256SUMS.txt` from the same release, then choose "More info" and "Run anyway". If your organization removes that choice, the installer cannot be run on that machine. See [INSTALL.md](INSTALL.md).
 
 ### WebView2 is missing
 

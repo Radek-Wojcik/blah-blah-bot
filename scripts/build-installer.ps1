@@ -22,7 +22,7 @@
   Everything is written under target\. The temp directory is redirected to target\test-tmp for
   the duration of the build and cleaned afterwards; the hygiene check runs last.
 
-  Signing is off by default (docs\decisions\0020-installer-signing.md). When the environment
+  Signing is off by default (docs\decisions\0024-installer-signing.md). When the environment
   variable BBB_SIGN_COMMAND is set, it is passed to Tauri as bundle.windows.signCommand
   ("%1" stands for the file to sign) and the checksum is computed after signing.
 

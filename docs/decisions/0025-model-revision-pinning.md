@@ -1,4 +1,4 @@
-# 0021. Model revision pinning
+# 0025. Model revision pinning
 
 **Status:** Accepted
 

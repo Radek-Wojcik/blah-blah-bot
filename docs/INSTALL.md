@@ -29,7 +29,7 @@ The two hashes must be identical.
 
 ## SmartScreen
 
-The installer is **not signed** by default ([ADR 0020](decisions/0020-installer-signing.md), status Proposed). Windows SmartScreen therefore shows "Windows protected your PC" when the file is run. After verifying the checksum, choose "More info", then "Run anyway". An organization's policy can remove the "Run anyway" choice; then the installer cannot be run on that machine. On Windows 11 with Smart App Control switched on, an unsigned installer can be blocked outright; this has not been tested.
+The installer is **not signed** by default ([ADR 0024](decisions/0024-installer-signing.md), status Proposed). Windows SmartScreen therefore shows "Windows protected your PC" when the file is run. After verifying the checksum, choose "More info", then "Run anyway". An organization's policy can remove the "Run anyway" choice; then the installer cannot be run on that machine. On Windows 11 with Smart App Control switched on, an unsigned installer can be blocked outright; this has not been tested.
 
 ## Building the installer
 

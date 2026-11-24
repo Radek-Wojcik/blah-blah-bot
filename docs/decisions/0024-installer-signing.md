@@ -1,4 +1,4 @@
-# 0020. Installer signing
+# 0024. Installer signing
 
 **Status:** Proposed. The default below ships unless the options are decided otherwise before the 1.0 release.
 
