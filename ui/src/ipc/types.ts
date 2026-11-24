@@ -12,6 +12,10 @@ export interface MeetingSummary {
   screenshotCount: number;
   /** State of the processing job of this meeting, null when it was never queued. */
   job?: JobState | null;
+  /** Short 3-8 word summary headline derived from the meeting draft. */
+  shortTitle?: string | null;
+  /** Published report URL when the meeting has been published. */
+  reportUrl?: string | null;
 }
 
 export interface TrackInfo {
@@ -32,6 +36,8 @@ export interface MeetingDetails {
   screenshots: ScreenshotInfo[];
 }
 
+export type MeetingDetail = MeetingDetails;
+
 export type SourceKind = "microphone" | "application" | "browser_tab" | "browser";
 
 /**
@@ -48,6 +54,8 @@ export interface SourceInfo {
   hint?: string;
   /** The browser tab group of a tab, for example `Group 1`. */
   group?: string;
+  /** Optional process or source name alias. */
+  name?: string;
 }
 
 export type SourceStatus = "starting" | "recording" | "ended" | "error";
@@ -75,10 +83,20 @@ export interface RecordingState {
   screenshotCount: number;
 }
 
+/** Live 12-bar audio energy levels emitted while recording. */
+export interface RecordingLevels {
+  peak: number;
+  rms: number;
+  bars: number[];
+}
+
 export interface Settings {
   recordingsDir: string;
   recordHotkey: string;
   screenshotHotkey: string;
+  localSaveEnabled?: boolean;
+  localSaveDir?: string;
+  lastSourceKeys?: string[];
   /**
    * Registered cycle repositories. Read-only for the settings screen: they change only through
    * `addCycleRepo` and the cycle commands, and a `saveSettings` keeps the stored list.
@@ -91,6 +109,8 @@ export interface Settings {
   /** Meeting detection. Read-only for the settings screen: it changes through `saveDetectionSettings`. */
   detection?: DetectionSettings;
 }
+
+export type GeneralSettings = Settings;
 
 /** How readily a call raises the "record this call?" prompt. */
 export type Sensitivity = "low" | "balanced" | "high";
@@ -317,11 +337,23 @@ export interface JobView {
   waitingReason: string | null;
   /** In execution order. */
   stages: StageView[];
+  /** Optional future timestamp (Unix ms) when this job is scheduled to run. */
+  scheduledUnixMs?: number | null;
+  /** Estimated remaining seconds for the active job. */
+  etaSeconds?: number | null;
+}
+
+export interface QueueGpuOverride {
+  gpuMaxUtilPercent: number;
+  gpuIdleSeconds: number;
 }
 
 export interface QueueState {
   jobs: JobView[];
+  gpuOverride?: QueueGpuOverride | null;
 }
+
+export type QueueView = QueueState;
 
 export type LanguageChoice = "auto" | "pl" | "en";
 
@@ -1216,4 +1248,57 @@ export interface PublishedCorrections {
   /** Operations queued by this call. */
   queued: number;
   notes: string[];
+}
+
+// ---------- UX Overhaul: project preferences, wizard, media import, global voices ----------
+
+export type CycleSummary = CycleDto;
+
+export interface ProjectPrefs {
+  cycleId: string;
+  localSaveEnabled: boolean;
+  localSaveDir: string;
+  llmKindOverride?: string | null;
+  llmModelOverride?: string | null;
+}
+
+export interface WizardCreateProjectInput {
+  mode: "auto" | "existing";
+  repoPath?: string | null;
+  remoteUrl?: string | null;
+  id: string;
+  name: string;
+  outputLanguage?: string | null;
+  defaultReportMode?: string | null;
+  githubRepo?: string | null;
+  discordWebhookRef?: string | null;
+  localSaveEnabled?: boolean | null;
+  localSaveDir?: string | null;
+}
+
+export interface ImportMeetingInput {
+  cycleId: string;
+  filePath: string;
+  mediaMode: "audio_only" | "audio_and_slides";
+  reportMode: string;
+  meetingType?: string | null;
+  outputLanguage?: string | null;
+  processNow: boolean;
+}
+
+export interface DetectedModels {
+  llamaServerPath: string | null;
+  llmModels: string[];
+  visionModels: string[];
+  defaultLocalSaveDir: string;
+}
+
+export interface GlobalVoiceProfile {
+  id: string;
+  name: string;
+  cycleId: string | null;
+  projects: string[];
+  sampleCount: number;
+  updatedUnixMs: number;
+  hasSampleClip: boolean;
 }
