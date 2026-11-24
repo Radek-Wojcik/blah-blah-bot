@@ -1,3 +1,6 @@
+import random
+import time
+
 from bbb_worker import schema, transcript
 
 
@@ -99,3 +102,93 @@ def test_context_window():
         ]
     }
     assert len(transcript.context_around(doc, 30_000)) == 1
+
+
+def _linear_reference(start_ms: float, end_ms: float, turns: list[transcript.Turn]) -> str | None:
+    best: tuple[float, str] | None = None
+    for t_start, t_end, who in turns:
+        overlap = min(end_ms, t_end) - max(start_ms, t_start)
+        if overlap > 0 and (best is None or overlap > best[0]):
+            best = (overlap, who)
+    if best:
+        return best[1]
+    mid = (start_ms + end_ms) / 2
+    nearest: tuple[float, str] | None = None
+    for t_start, t_end, who in turns:
+        distance = max(t_start - mid, mid - t_end, 0.0)
+        if nearest is None or distance < nearest[0]:
+            nearest = (distance, who)
+    if nearest and nearest[0] <= transcript.NEAREST_TOLERANCE_MS:
+        return nearest[1]
+    return None
+
+
+def test_turn_index_matches_linear_scan_on_overlapping_ties_and_unsorted_turns():
+    assert transcript.speaker_for_word(0, 100, []) is None
+    assert transcript.TurnIndex([]).speaker_for_word(0, 100) is None
+
+    # Unsorted, nested, equal-overlap ties, equal-distance ties, zero-width words.
+    turns: list[transcript.Turn] = [
+        (2000, 3000, "B"),
+        (0, 10000, "Long"),
+        (1000, 2000, "A"),
+        (1500, 2500, "C"),
+        (12000, 13000, "D"),
+        (14200, 15000, "E"),
+    ]
+    index = transcript.TurnIndex(turns)
+    probes = [
+        (0, 500),
+        (1000, 2000),
+        (1500, 2500),
+        (1800, 2200),
+        (5000, 5000),  # zero-length word inside Long
+        (10500, 10500),  # exact tolerance boundary from Long
+        (10501, 10501),  # just outside tolerance from Long
+        (13500, 13700),  # mid=13600: distance 600 to D & E (> tolerance)
+        (13500, 13600),  # mid=13550: distance 550
+        (13100, 13900),  # mid=13500: distance 500 to D (wins over 700 to E)
+        (13500, 13500),  # mid=13500: distance 500 to D
+    ]
+    for s, e in probes:
+        expected = _linear_reference(s, e, turns)
+        assert index.speaker_for_word(s, e) == expected
+        assert transcript.speaker_for_word(s, e, turns) == expected
+
+    # Exercise > 32 turns path with random overlapping & unsorted turns.
+    rng = random.Random(42)
+    many_turns: list[transcript.Turn] = []
+    for i in range(80):
+        s = rng.randint(0, 20_000)
+        e = s + rng.randint(100, 4_000)
+        many_turns.append((s, e, f"S{i % 7}"))
+    many_index = transcript.TurnIndex(many_turns)
+    for _ in range(300):
+        s = rng.randint(-600, 25_000)
+        e = s + rng.randint(0, 1_000)
+        expected = _linear_reference(s, e, many_turns)
+        assert many_index.speaker_for_word(s, e) == expected
+        assert transcript.speaker_for_word(s, e, many_turns) == expected
+
+
+def test_speaker_for_word_10k_turns_is_fast():
+    # 10,000 turns across 10 hours (3.6 s each with slight overlap).
+    turns: list[transcript.Turn] = [(i * 3600, i * 3600 + 3500, f"S{i % 4}") for i in range(10_000)]
+    words = [word(f" w{i}", i * 600, i * 600 + 400) for i in range(50_000)]
+
+    t0 = time.perf_counter()
+    for w in words:
+        transcript.speaker_for_word(w["start_ms"], w["end_ms"], turns)
+    direct_elapsed = time.perf_counter() - t0
+    assert direct_elapsed < 2.0
+
+    t1 = time.perf_counter()
+    doc = transcript.merge(
+        "m10h",
+        [{"name": "discord", "source": "app:discord.exe"}],
+        {"discord": asr(*words)},
+        {"discord": turns},
+    )
+    merge_elapsed = time.perf_counter() - t1
+    assert merge_elapsed < 2.0
+    assert len(doc["segments"]) > 0
