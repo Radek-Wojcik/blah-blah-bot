@@ -14,6 +14,7 @@ import {
   issueNumber,
   issueUrl,
   proposalEffect,
+  safeHttpUrl,
   statusVerb,
   taskOfTarget,
 } from "../publish";
@@ -98,7 +99,8 @@ function ProposalCard(props: {
   const [comment, setComment] = useState(p.comment ?? "");
   const number = issueNumber(p.target);
   const task = taskOfTarget(tasks, p.target);
-  const href = number === null || !tasks?.repo ? null : (task?.url ?? issueUrl(tasks.repo, number));
+  const href =
+    number === null || !tasks?.repo ? null : safeHttpUrl(task?.url ?? issueUrl(tasks.repo, number));
   const unverified = p.source !== null && !p.source.verified;
   const saveComment = () => {
     if (locked || comment.trim() === (p.comment ?? "")) return;

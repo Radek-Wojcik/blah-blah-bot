@@ -263,16 +263,33 @@ export function canCancel(op: OutboxOp): boolean {
   return op.state === "queued" || op.state === "failed";
 }
 
+/** Keeps only `https:` and `http:` links from API responses (`javascript:`/`data:` become null). */
+export function safeHttpUrl(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  try {
+    const u = new URL(raw);
+    return u.protocol === "https:" || u.protocol === "http:" ? u.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The link an operation produced, with its text, when it has one. */
 export function opLink(op: OutboxOp): { href: string; text: string } | null {
   const r = op.result;
   if (!r || op.state !== "done") return null;
-  if (op.kind === "create_issue" && r.url && r.number !== undefined)
-    return { href: r.url, text: `#${r.number}` };
-  if (op.kind === "commit_meeting" && r.report_url)
-    return { href: r.report_url, text: r.commit ? `commit ${r.commit}` : "report" };
-  if (op.kind === "commit_correction" && r.url)
-    return { href: r.url, text: r.file ?? "correction" };
+  if (op.kind === "create_issue" && r.url && r.number !== undefined) {
+    const href = safeHttpUrl(r.url);
+    return href ? { href, text: `#${r.number}` } : null;
+  }
+  if (op.kind === "commit_meeting" && r.report_url) {
+    const href = safeHttpUrl(r.report_url);
+    return href ? { href, text: r.commit ? `commit ${r.commit}` : "report" } : null;
+  }
+  if (op.kind === "commit_correction" && r.url) {
+    const href = safeHttpUrl(r.url);
+    return href ? { href, text: r.file ?? "correction" } : null;
+  }
   return null;
 }
 

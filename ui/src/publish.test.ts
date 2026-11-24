@@ -292,6 +292,15 @@ describe("outbox", () => {
       ),
     ).toEqual({ href: "https://github.com/o/r/blob/main/x/report.md", text: "commit abc1234" });
     expect(opLink(op(1, { state: "queued" }))).toBeNull();
+    expect(
+      opLink(
+        op(1, {
+          kind: "create_issue",
+          state: "done",
+          result: { number: 13, url: "javascript:alert(1)" },
+        }),
+      ),
+    ).toBeNull();
   });
 
   it("tells which targets are offline", () => {

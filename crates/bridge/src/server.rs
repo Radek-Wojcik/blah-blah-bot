@@ -28,8 +28,7 @@ const REAP_EVERY: Duration = Duration::from_millis(200);
 pub struct ServerConfig {
     /// Ports tried in order; `0` picks a free port (tests).
     pub ports: Vec<u16>,
-    /// Extension ids accepted in the `Origin` header. Empty accepts any
-    /// `chrome-extension://` origin; the pairing secret still decides who may stream.
+    /// Extension ids accepted in the `Origin` header. Empty refuses every connection.
     pub allowed_extension_ids: Vec<String>,
     /// A connection that sends nothing for this long is closed.
     pub heartbeat_timeout: Duration,
@@ -43,7 +42,7 @@ impl Default for ServerConfig {
             ports: std::iter::once(DEFAULT_PORT)
                 .chain(FALLBACK_PORTS)
                 .collect(),
-            allowed_extension_ids: Vec::new(),
+            allowed_extension_ids: vec![EXTENSION_ID.to_string()],
             heartbeat_timeout: Duration::from_millis(u64::from(HEARTBEAT_TIMEOUT_MS)),
             hello_timeout: Duration::from_secs(10),
         }

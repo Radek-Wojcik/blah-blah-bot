@@ -10,6 +10,7 @@ import {
   correctionProblem,
   correctionRuleHelp,
   correctionStatusLine,
+  safeHttpUrl,
   today,
   unqueued,
 } from "../publish";
@@ -356,11 +357,16 @@ function CorrectionRow(props: {
           {about && <span className="person-meta"> · {about}</span>}
         </span>
         <span className={correctionBadgeClass(c.state)}>{CORRECTION_STATE_LABELS[c.state]}</span>
-        {c.url && (
-          <a href={c.url} target="_blank" rel="noreferrer noopener">
-            {c.fileName ?? "correction"}
-          </a>
-        )}
+        {(() => {
+          const href = safeHttpUrl(c.url);
+          return (
+            href && (
+              <a href={href} target="_blank" rel="noreferrer noopener">
+                {c.fileName ?? "correction"}
+              </a>
+            )
+          );
+        })()}
       </div>
       <p className="correction-text">{c.text}</p>
       {line && (

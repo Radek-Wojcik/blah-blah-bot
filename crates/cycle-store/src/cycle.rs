@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::draft::{LanguageSetting, ReportMode};
 use crate::error::{CycleError, Result, ValidationIssue};
-use crate::schema::{self, Schema};
+use crate::schema::{self, is_identifier, is_windows_reserved_name, Schema};
 
 /// Name of the template every new cycle gets.
 pub const DEFAULT_TEMPLATE_NAME: &str = "default";
@@ -155,6 +155,9 @@ pub fn repo_path_problem(path: &str) -> Option<String> {
         if name.ends_with('.') {
             return Some("a folder name must not end with a dot".into());
         }
+        if is_windows_reserved_name(name) {
+            return Some(format!("`{name}` is a Windows reserved device name"));
+        }
         if !name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
@@ -284,11 +287,23 @@ impl Cycle {
         }
     }
 
-    /// Checks that do not need the template files: unique participant ids.
+    /// Checks that do not need the template files: valid identifiers and unique participant ids.
     pub fn semantic_issues(&self) -> Vec<ValidationIssue> {
         let mut issues = Vec::new();
+        if !is_identifier(&self.id) {
+            issues.push(ValidationIssue::new(
+                "id",
+                format!("cycle id \"{}\" is not a valid identifier", self.id),
+            ));
+        }
         let mut seen: BTreeMap<&str, usize> = BTreeMap::new();
         for (i, p) in self.participants.iter().enumerate() {
+            if !is_identifier(&p.id) {
+                issues.push(ValidationIssue::new(
+                    format!("participants[{i}].id"),
+                    format!("participant id \"{}\" is not a valid identifier", p.id),
+                ));
+            }
             if let Some(first) = seen.insert(p.id.as_str(), i) {
                 issues.push(ValidationIssue::new(
                     format!("participants[{i}].id"),
@@ -631,5 +646,28 @@ targets:
         ];
         let err = cycle.to_yaml().unwrap_err();
         assert!(err.issues().iter().any(|i| i.message.contains("duplicate")));
+    }
+
+    #[test]
+    fn windows_reserved_device_names_are_rejected() {
+        let reserved = Cycle::new("con", "x");
+        assert!(matches!(
+            reserved.to_yaml(),
+            Err(CycleError::Invalid { .. })
+        ));
+
+        let mut bad_participant = Cycle::new("NOMAD", "x");
+        bad_participant.participants.push(Participant {
+            id: "LPT1".into(),
+            name: "Printer".into(),
+            github: None,
+            discord: None,
+        });
+        assert!(matches!(
+            bad_participant.to_yaml(),
+            Err(CycleError::Invalid { .. })
+        ));
+        assert!(repo_path_problem("meetings/NUL").is_some());
+        assert!(repo_path_problem("meetings/com3.txt").is_some());
     }
 }

@@ -421,9 +421,41 @@ fn percent_encode(s: &str) -> String {
     out
 }
 
+fn validate_api_base(api_base: &str) -> std::result::Result<(), String> {
+    let (scheme, rest) = api_base
+        .split_once("://")
+        .ok_or_else(|| "API address must be a URL".to_string())?;
+    let scheme = scheme.to_ascii_lowercase();
+    if scheme != "https" && scheme != "http" {
+        return Err("API address must use https://".to_string());
+    }
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.contains('@') {
+        return Err("API address must not contain credentials".to_string());
+    }
+    let host = if let Some(v6) = authority.strip_prefix('[') {
+        v6.split(']').next().unwrap_or("")
+    } else {
+        authority.split(':').next().unwrap_or("")
+    };
+    if host.is_empty() {
+        return Err("API address has no host".to_string());
+    }
+    let is_loopback = host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    if scheme == "http" && !is_loopback {
+        return Err("plain http:// is only allowed for loopback hosts; use https://".to_string());
+    }
+    Ok(())
+}
+
 fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(20)))
+        .max_redirects(0)
+        .max_redirects_will_error(false)
         .tls_config(
             ureq::tls::TlsConfig::builder()
                 .provider(ureq::tls::TlsProvider::NativeTls)
@@ -441,6 +473,7 @@ fn fetch_all(
     label: &str,
     token: Option<&str>,
 ) -> std::result::Result<Vec<OpenIssue>, String> {
+    validate_api_base(api_base)?;
     if !valid_repo(repo) {
         return Err(format!(
             "invalid repository name {repo:?}, expected owner/name"
@@ -1049,5 +1082,31 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn non_loopback_plain_http_and_bad_schemes_are_refused() {
+        let dir = test_tmp::TestDir::new("issues");
+        for bad in [
+            "http://api.github.com",
+            "http://example.com:8080",
+            "file:///etc/passwd",
+            "ftp://example.com",
+            "https://user:pass@api.github.com",
+            "not-a-url",
+        ] {
+            let list = fetch_open_issues(
+                bad,
+                "owner/rover",
+                "cycle:A",
+                Some("tok"),
+                &dir.path().join("c.json"),
+            );
+            assert!(list.from_cache || list.error.is_some(), "{bad}");
+            assert!(list.error.is_some(), "expected error for {bad}");
+        }
+        assert!(validate_api_base("https://api.github.com").is_ok());
+        assert!(validate_api_base("http://127.0.0.1:8080").is_ok());
+        assert!(validate_api_base("http://localhost:8080").is_ok());
     }
 }

@@ -96,12 +96,44 @@ pub fn yaml_to_json(text: &str) -> Result<Value, ValidationIssue> {
         .map_err(|e| ValidationIssue::new("", format!("unsupported YAML construct: {e}")))
 }
 
-/// True for `^[A-Za-z0-9][A-Za-z0-9_-]*$`, the shape of cycle, participant, topic and
-/// template identifiers.
+/// Windows reserved DOS device names (case-insensitive, with or without an extension).
+pub fn is_windows_reserved_name(s: &str) -> bool {
+    let stem = s.split('.').next().unwrap_or("");
+    let upper = stem.to_ascii_uppercase();
+    matches!(
+        upper.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
+}
+
+/// True for `^[A-Za-z0-9][A-Za-z0-9_-]*$` excluding Windows reserved device names, the
+/// shape of cycle, participant, topic and template identifiers.
 pub fn is_identifier(s: &str) -> bool {
     let mut chars = s.chars();
     matches!(chars.next(), Some(c) if c.is_ascii_alphanumeric())
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        && !is_windows_reserved_name(s)
 }
 
 #[cfg(test)]
@@ -127,6 +159,13 @@ mod tests {
         assert!(!is_identifier("-a"));
         assert!(!is_identifier("a b"));
         assert!(!is_identifier("../x"));
+        for reserved in [
+            "CON", "con", "PRN", "aux", "NUL", "COM1", "com9", "LPT1", "lpt9",
+        ] {
+            assert!(!is_identifier(reserved), "{reserved}");
+        }
+        assert!(is_identifier("COM0"));
+        assert!(is_identifier("CON1"));
     }
 
     #[test]

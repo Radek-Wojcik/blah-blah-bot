@@ -878,7 +878,7 @@ fn the_token_goes_into_the_environment_only_for_its_own_remote() {
     };
     let env = auth_env("https://github.com/owner/rover.git", &auth);
     let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
-    assert_eq!(get("GIT_CONFIG_COUNT"), Some("1"));
+    assert_eq!(get("GIT_CONFIG_COUNT"), Some("2"));
     assert_eq!(
         get("GIT_CONFIG_KEY_0"),
         Some("http.https://github.com/.extraheader")
@@ -893,6 +893,8 @@ fn the_token_goes_into_the_environment_only_for_its_own_remote() {
             .as_str()
         )
     );
+    assert_eq!(get("GIT_CONFIG_KEY_1"), Some("http.followRedirects"));
+    assert_eq!(get("GIT_CONFIG_VALUE_1"), Some("false"));
     // A look-alike host, a plain path, ssh and another server never get it.
     for url in [
         "https://github.com.evil.example/owner/rover.git",
@@ -947,6 +949,7 @@ fn git_output_is_scrubbed_of_the_token_and_of_url_credentials() {
     let git = Git {
         root: Path::new("."),
         env: Vec::new(),
+        auth_env: Vec::new(),
         secrets: vec![token.to_string()],
     };
     let out = Output {

@@ -315,6 +315,9 @@ fn command_with(cfg: &WorkerConfig, launcher: Option<&Launcher>, args: &[&str]) 
     cmd.env("UV_PROJECT_ENVIRONMENT", &cfg.env_dir)
         // Only `run_step` hands the key to a process; nothing inherits it by accident.
         .env_remove(LLM_API_KEY_ENV)
+        // Only `ensure_models` gets `HF_TOKEN`; inference steps and `llama-server` never see it.
+        .env_remove("HF_TOKEN")
+        .env_remove("HUGGING_FACE_HUB_TOKEN")
         .env("PYTHONUNBUFFERED", "1")
         .env("PYTHONIOENCODING", "utf-8")
         .stdin(Stdio::null())
@@ -325,9 +328,6 @@ fn command_with(cfg: &WorkerConfig, launcher: Option<&Launcher>, args: &[&str]) 
     }
     if let Some(p) = &cfg.llama_server {
         cmd.env("BBB_LLAMA_SERVER", p);
-    }
-    if let Some(t) = &cfg.hf_token {
-        cmd.env("HF_TOKEN", t);
     }
     #[cfg(windows)]
     {
@@ -438,16 +438,23 @@ pub fn ensure_environment(cfg: &WorkerConfig) -> Result<(), RunError> {
     }
 }
 
+fn ensure_models_command(cfg: &WorkerConfig, keys: &[&str]) -> Command {
+    let list = keys.join(",");
+    command(cfg, &["run", "--frozen"]).tap(|c| {
+        c.args(["python", "-m", "bbb_worker", "models", "--ensure", &list]);
+        if let Some(t) = &cfg.hf_token {
+            c.env("HF_TOKEN", t);
+        }
+    })
+}
+
 /// Download models (needs the network). `keys` are model keys known to the worker.
 pub fn ensure_models(
     cfg: &WorkerConfig,
     keys: &[&str],
     on_event: impl FnMut(&WorkerEvent),
 ) -> Result<(), RunError> {
-    let list = keys.join(",");
-    let cmd = command(cfg, &["run", "--frozen"]).tap(|c| {
-        c.args(["python", "-m", "bbb_worker", "models", "--ensure", &list]);
-    });
+    let cmd = ensure_models_command(cfg, keys);
     run_process(cmd, Duration::from_secs(6 * 3600), on_event).map(|_| ())
 }
 
@@ -494,6 +501,36 @@ pub fn run_step(
 /// The worker is not started when the options would send the meeting to the cloud without
 /// confirmation. The API key, when there is one, goes into the environment of the
 /// `extract` and `reduce` steps of an external or cloud backend and nowhere else.
+fn step_command(
+    launcher: Option<&Launcher>,
+    cfg: &WorkerConfig,
+    manifest_path: &Path,
+    meeting_dir: &Path,
+    options: &JobOptions,
+    step: &str,
+) -> Command {
+    let mut cmd = command_with(cfg, launcher, &["run", "--frozen"]).tap(|c| {
+        if launcher.is_none() {
+            c.args(["python", "-m", "bbb_worker"]);
+        }
+        c.arg(step)
+            .arg("--manifest")
+            .arg(manifest_path)
+            .arg("--meeting-dir")
+            .arg(meeting_dir);
+    });
+    let remote = options
+        .llm
+        .as_ref()
+        .is_some_and(|l| l.kind != LlmKind::Managed);
+    if remote && matches!(step, "extract" | "reduce") {
+        if let Some(key) = &cfg.llm_api_key {
+            cmd.env(LLM_API_KEY_ENV, key.expose());
+        }
+    }
+    cmd
+}
+
 pub fn run_step_with(
     launcher: Option<&Launcher>,
     cfg: &WorkerConfig,
@@ -514,25 +551,7 @@ pub fn run_step_with(
     )
     .map_err(|e| RunError::new(e.to_string()))?;
 
-    let mut cmd = command_with(cfg, launcher, &["run", "--frozen"]).tap(|c| {
-        if launcher.is_none() {
-            c.args(["python", "-m", "bbb_worker"]);
-        }
-        c.arg(step)
-            .arg("--manifest")
-            .arg(&manifest_path)
-            .arg("--meeting-dir")
-            .arg(&meeting_dir);
-    });
-    let remote = options
-        .llm
-        .as_ref()
-        .is_some_and(|l| l.kind != LlmKind::Managed);
-    if remote && matches!(step, "extract" | "reduce") {
-        if let Some(key) = &cfg.llm_api_key {
-            cmd.env(LLM_API_KEY_ENV, key.expose());
-        }
-    }
+    let cmd = step_command(launcher, cfg, &manifest_path, &meeting_dir, options, step);
     run_process(cmd, cfg.step_timeout, on_event).map(|_| ())
 }
 
@@ -829,5 +848,53 @@ mod tests {
     fn language_model_stages_map_to_worker_steps() {
         assert_eq!(step_name(Stage::Extract), Some("extract"));
         assert_eq!(step_name(Stage::Reduce), Some("reduce"));
+    }
+
+    #[test]
+    fn hf_token_is_passed_only_to_model_downloads() {
+        use std::ffi::OsStr;
+        let cfg = WorkerConfig {
+            uv: "uv".into(),
+            worker_dir: "worker".into(),
+            env_dir: "env".into(),
+            models_dir: None,
+            llama_server: None,
+            hf_token: Some("hf_SECRETTOKEN".into()),
+            step_timeout: Duration::from_secs(1),
+            llm_api_key: None,
+        };
+        let env_of = |cmd: &Command, key: &str| -> Option<Option<String>> {
+            cmd.get_envs()
+                .find(|(k, _)| *k == OsStr::new(key))
+                .map(|(_, v)| v.map(|s| s.to_string_lossy().into_owned()))
+        };
+
+        let models_cmd = ensure_models_command(&cfg, &["diarization"]);
+        assert_eq!(
+            env_of(&models_cmd, "HF_TOKEN"),
+            Some(Some("hf_SECRETTOKEN".to_string()))
+        );
+
+        let opts = JobOptions::default();
+        for step in ["asr", "diarize", "vision", "extract", "reduce"] {
+            let cmd = step_command(
+                None,
+                &cfg,
+                Path::new("m.json"),
+                Path::new("dir"),
+                &opts,
+                step,
+            );
+            assert_eq!(
+                env_of(&cmd, "HF_TOKEN"),
+                Some(None),
+                "step {step} must strip HF_TOKEN"
+            );
+            assert_eq!(
+                env_of(&cmd, "HUGGING_FACE_HUB_TOKEN"),
+                Some(None),
+                "step {step} must strip HUGGING_FACE_HUB_TOKEN"
+            );
+        }
     }
 }

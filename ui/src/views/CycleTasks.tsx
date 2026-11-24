@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useBackend } from "../backend-context";
 import { errorMessage, useCycleFacts } from "../hooks";
 import type { CycleTask } from "../ipc/types";
-import { taskCounts, tasksAsOf } from "../publish";
+import { safeHttpUrl, taskCounts, tasksAsOf } from "../publish";
 
 /**
  * The tasks of a cycle as its GitHub issues stand: open ones, and done ones (an issue that is
@@ -79,13 +79,14 @@ export function CycleTasksView(props: { cycleId: string; repoId: string }) {
 }
 
 function TaskRow({ task, done }: { task: CycleTask; done: boolean }) {
+  const href = safeHttpUrl(task.url);
   return (
     <li className={done ? "task task-done" : "task"}>
       <span className={done ? "badge badge-job-done" : "badge badge-job-running"}>
         {done ? "Done" : "Open"}
       </span>
-      {task.url ? (
-        <a href={task.url} target="_blank" rel="noreferrer noopener">
+      {href ? (
+        <a href={href} target="_blank" rel="noreferrer noopener">
           #{task.number}
         </a>
       ) : (

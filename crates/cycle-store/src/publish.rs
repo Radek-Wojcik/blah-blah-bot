@@ -327,10 +327,12 @@ fn rejected_by_remote_race(text: &str) -> bool {
 // ----- git plumbing --------------------------------------------------------------------------
 
 /// A Git context for one repository with the environment every command of one publish
-/// attempt shares.
+/// A Git context for one repository; credentials are passed only to network commands
+/// (`fetch` and `push`) via [`Self::run_network`].
 struct Git<'a> {
     root: &'a Path,
     env: Vec<(String, String)>,
+    auth_env: Vec<(String, String)>,
     secrets: Vec<String>,
 }
 
@@ -348,13 +350,24 @@ impl Git<'_> {
         }
     }
 
-    fn run(&self, args: &[&str]) -> Result<Output, PublishError> {
-        git::run_env(Some(self.root), args, &self.env).map_err(|e| match e {
+    fn run_with(&self, args: &[&str], env: &[(String, String)]) -> Result<Output, PublishError> {
+        git::run_env(Some(self.root), args, env).map_err(|e| match e {
             CycleError::GitUnavailable(e) => {
                 PublishError::permanent(format!("git is not available: {e}"))
             }
             other => PublishError::permanent(self.scrubbed(&other.to_string())),
         })
+    }
+
+    fn run(&self, args: &[&str]) -> Result<Output, PublishError> {
+        self.run_with(args, &self.env)
+    }
+
+    /// Runs a network git command (`fetch` / `push`) with the scoped auth environment.
+    fn run_network(&self, args: &[&str]) -> Result<Output, PublishError> {
+        let mut combined = self.env.clone();
+        combined.extend(self.auth_env.iter().cloned());
+        self.run_with(args, &combined)
     }
 
     /// Runs git; a failure is classified from its text.
@@ -464,7 +477,7 @@ fn auth_env(remote_url: &str, auth: &GitAuth) -> Vec<(String, String)> {
         return Vec::new();
     }
     vec![
-        ("GIT_CONFIG_COUNT".into(), "1".into()),
+        ("GIT_CONFIG_COUNT".into(), "2".into()),
         (
             "GIT_CONFIG_KEY_0".into(),
             format!("http.{base}.extraheader"),
@@ -476,6 +489,8 @@ fn auth_env(remote_url: &str, auth: &GitAuth) -> Vec<(String, String)> {
                 base64(format!("x-access-token:{}", auth.token).as_bytes())
             ),
         ),
+        ("GIT_CONFIG_KEY_1".into(), "http.followRedirects".into()),
+        ("GIT_CONFIG_VALUE_1".into(), "false".into()),
     ]
 }
 
@@ -615,6 +630,7 @@ fn build(
     let gi = Git {
         root: g.root,
         env,
+        auth_env: Vec::new(),
         secrets: g.secrets.clone(),
     };
 
@@ -830,7 +846,7 @@ fn tip(g: &Git, target: &Target) -> Result<Option<String>, PublishError> {
     if let Some(remote) = &target.remote {
         let args = fetch_args(remote, &target.remote_branch);
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let out = g.run(&refs)?;
+        let out = g.run_network(&refs)?;
         if !out.ok {
             let text = out.message();
             // An empty remote has no branch to fetch: that is the first push, not a failure.
@@ -989,13 +1005,14 @@ pub fn publish_meeting_observed(
     let mut g = Git {
         root: repo.root(),
         env: Vec::new(),
+        auth_env: Vec::new(),
         secrets,
     };
     let target = target_of(&g)?;
-    // The token applies to the remote it was made for, and to nothing else.
+    // The token applies to the remote it was made for, and only to network commands.
     if let (Some(auth), Some(remote)) = (req.auth, &target.remote) {
         let url = g.ok(&["remote", "get-url", remote])?;
-        g.env.extend(auth_env(&url, auth));
+        g.auth_env.extend(auth_env(&url, auth));
     }
     let paths = |folder: &str| -> Vec<String> {
         req.files
@@ -1025,7 +1042,7 @@ pub fn publish_meeting_observed(
                 before_push(attempts);
                 let args = push_args(remote, &commit, &target.remote_branch);
                 let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-                let out = g.run(&refs)?;
+                let out = g.run_network(&refs)?;
                 if !out.ok {
                     let text = g.scrubbed(&out.message());
                     if rejected_by_remote_race(&text) {
@@ -1143,6 +1160,7 @@ fn build_file(
     let gi = Git {
         root: g.root,
         env,
+        auth_env: Vec::new(),
         secrets: g.secrets.clone(),
     };
     gi.ok(&["read-tree", p])?;
@@ -1229,12 +1247,13 @@ pub fn add_file_observed(
     let mut g = Git {
         root: repo.root(),
         env: Vec::new(),
+        auth_env: Vec::new(),
         secrets,
     };
     let target = target_of(&g)?;
     if let (Some(auth), Some(remote)) = (req.auth, &target.remote) {
         let url = g.ok(&["remote", "get-url", remote])?;
-        g.env.extend(auth_env(&url, auth));
+        g.auth_env.extend(auth_env(&url, auth));
     }
     let mut attempts = 0;
     loop {
@@ -1249,7 +1268,7 @@ pub fn add_file_observed(
                 before_push(attempts);
                 let args = push_args(remote, &built.commit, &target.remote_branch);
                 let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-                let out = g.run(&refs)?;
+                let out = g.run_network(&refs)?;
                 if !out.ok {
                     let text = g.scrubbed(&out.message());
                     if rejected_by_remote_race(&text) {
@@ -1325,6 +1344,7 @@ pub fn preview_topics(
     let g = Git {
         root: repo.root(),
         env: Vec::new(),
+        auth_env: Vec::new(),
         secrets: Vec::new(),
     };
     if !repo.is_git_repo() {

@@ -55,10 +55,8 @@ pub(crate) fn request_allowed(
     let id = origin
         .strip_prefix("chrome-extension://")
         .ok_or("Origin not allowed")?;
-    let id_ok = !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric());
-    if !id_ok
-        || (!allowed_ids.is_empty() && !allowed_ids.iter().any(|a| a.eq_ignore_ascii_case(id)))
-    {
+    let id_ok = id.len() == 32 && id.bytes().all(|b| (b'a'..=b'p').contains(&b));
+    if !id_ok || !allowed_ids.iter().any(|a| a.eq_ignore_ascii_case(id)) {
         return Err("Origin not allowed");
     }
     Ok(())
@@ -387,11 +385,12 @@ mod tests {
 
     #[test]
     fn only_loopback_hosts_on_our_port_are_allowed() {
-        assert!(request_allowed(&req(Some("127.0.0.1:17555"), Some(EXT)), 17555, &[]).is_ok());
-        assert!(request_allowed(&req(Some("localhost:17555"), Some(EXT)), 17555, &[]).is_ok());
-        assert!(request_allowed(&req(Some("127.0.0.1:17556"), Some(EXT)), 17555, &[]).is_err());
-        assert!(request_allowed(&req(Some("evil.example:17555"), Some(EXT)), 17555, &[]).is_err());
-        assert!(request_allowed(&req(None, Some(EXT)), 17555, &[]).is_err());
+        let ids = vec!["abcdefghijklmnopabcdefghijklmnop".to_string()];
+        assert!(request_allowed(&req(Some("127.0.0.1:17555"), Some(EXT)), 17555, &ids).is_ok());
+        assert!(request_allowed(&req(Some("localhost:17555"), Some(EXT)), 17555, &ids).is_ok());
+        assert!(request_allowed(&req(Some("127.0.0.1:17556"), Some(EXT)), 17555, &ids).is_err());
+        assert!(request_allowed(&req(Some("evil.example:17555"), Some(EXT)), 17555, &ids).is_err());
+        assert!(request_allowed(&req(None, Some(EXT)), 17555, &ids).is_err());
         let doubled = Request::builder()
             .uri("/")
             .header("Host", "127.0.0.1:17555")
@@ -399,18 +398,22 @@ mod tests {
             .header("Origin", EXT)
             .body(())
             .unwrap();
-        assert!(request_allowed(&doubled, 17555, &[]).is_err());
+        assert!(request_allowed(&doubled, 17555, &ids).is_err());
     }
 
     #[test]
     fn only_extension_origins_are_allowed() {
         let host = Some("127.0.0.1:1");
-        assert!(request_allowed(&req(host, Some("https://example.org")), 1, &[]).is_err());
-        assert!(request_allowed(&req(host, Some("chrome-extension://")), 1, &[]).is_err());
-        assert!(request_allowed(&req(host, None), 1, &[]).is_err());
         let ids = vec!["abcdefghijklmnopabcdefghijklmnop".to_string()];
+        assert!(request_allowed(&req(host, Some("https://example.org")), 1, &ids).is_err());
+        assert!(request_allowed(&req(host, Some("chrome-extension://")), 1, &ids).is_err());
+        assert!(request_allowed(&req(host, None), 1, &ids).is_err());
+        // Empty allow-list fails closed (F22), and non-[a-p] / wrong-length IDs are refused.
+        assert!(request_allowed(&req(host, Some(EXT)), 1, &[]).is_err());
         assert!(request_allowed(&req(host, Some(EXT)), 1, &ids).is_ok());
-        let other = "chrome-extension://ppppppppppppppppppppppppppppppppp";
+        let non_ap = "chrome-extension://zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";
+        assert!(request_allowed(&req(host, Some(non_ap)), 1, &[non_ap.into()]).is_err());
+        let other = "chrome-extension://pppppppppppppppppppppppppppppppp";
         assert!(request_allowed(&req(host, Some(other)), 1, &ids).is_err());
     }
 }

@@ -12,6 +12,14 @@ from contextlib import contextmanager
 from pathlib import Path
 
 
+def llama_env() -> dict[str, str]:
+    """Environment for `llama-server`, without Hugging Face credentials."""
+    env = dict(os.environ)
+    env.pop("HF_TOKEN", None)
+    env.pop("HUGGING_FACE_HUB_TOKEN", None)
+    return env
+
+
 def server_binary() -> str:
     """`$BBB_LLAMA_SERVER` (set by the application from its settings) or PATH."""
     return os.environ.get("BBB_LLAMA_SERVER", "llama-server")
@@ -20,11 +28,7 @@ def server_binary() -> str:
 def not_found_message(binary: str) -> str:
     """What the user sees when `llama-server` cannot be started: where it was looked for and
     what to do about it."""
-    where = (
-        f"at '{binary}'"
-        if os.path.dirname(binary)
-        else f"on the PATH (looked for '{binary}')"
-    )
+    where = f"at '{binary}'" if os.path.dirname(binary) else f"on the PATH (looked for '{binary}')"
     return (
         f"llama-server was not found {where}. "
         "Set its location in Settings > Processing or run the setup again."
@@ -75,7 +79,9 @@ def running(
     if mmproj:
         cmd += ["--mmproj", str(mmproj)]
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=llama_env()
+        )
     except FileNotFoundError as e:
         raise RuntimeError(not_found_message(binary)) from e
     except OSError as e:

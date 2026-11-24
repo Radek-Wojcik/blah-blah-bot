@@ -109,6 +109,9 @@ impl BridgeSettings {
         if self.port_fallbacks.len() > 32 {
             return Err("At most 32 fallback ports".into());
         }
+        if self.allowed_extension_ids.is_empty() {
+            return Err("At least one extension id is required".into());
+        }
         let id_ok = |id: &String| id.len() == 32 && id.bytes().all(|b| (b'a'..=b'p').contains(&b));
         if let Some(bad) = self.allowed_extension_ids.iter().find(|id| !id_ok(id)) {
             return Err(format!(
@@ -520,6 +523,11 @@ mod tests {
             ..BridgeSettings::default()
         };
         assert!(bad_id.validate().is_err());
+        let empty_ids = BridgeSettings {
+            allowed_extension_ids: Vec::new(),
+            ..BridgeSettings::default()
+        };
+        assert!(empty_ids.validate().is_err());
         let good_id = BridgeSettings {
             allowed_extension_ids: vec!["mddhpjgdobfbknicbomoojpbpkgfpima".into()],
             ..BridgeSettings::default()
