@@ -141,10 +141,7 @@ test.describe("projects and project settings on the mock backend", () => {
     await modal.getByRole("button", { name: "Add participant" }).click();
     await modal.getByLabel("Participant 5 name").fill("No Id");
     await modal.getByRole("tab", { name: "Integrations" }).click();
-    await modal
-      .locator("label", { hasText: "Webhook credential reference" })
-      .locator("input")
-      .fill("https://discord.example/hook");
+    await modal.getByLabel("Webhook credential reference").fill("https://discord.example/hook");
     await modal.getByRole("button", { name: "Save project settings" }).click();
     const problems = modal.getByRole("alert", { name: "Problems" });
     await expect(problems).toContainText(
@@ -661,7 +658,7 @@ test.describe("language model settings on the mock backend", () => {
     await page.goto(MODELS);
     const form = page.getByRole("form", { name: "AI Models" });
     await expect(form.getByLabel("Default language model (GGUF)")).toHaveValue(/gemma-4-12b/);
-    const ctxInput = form.locator("label", { hasText: "Context size" }).locator("input");
+    const ctxInput = form.getByLabel("Context size (tokens)", { exact: true });
     await ctxInput.fill("1000");
     await expect(form.getByRole("alert")).toContainText("between 2048");
     await expect(form.getByRole("button", { name: "Save AI model settings" })).toBeDisabled();

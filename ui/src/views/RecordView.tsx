@@ -4,16 +4,11 @@ import { HelpPopover } from "../components/HelpPopover";
 import { RecorderPanel } from "../components/RecorderPanel";
 import type { Settings } from "../ipc/types";
 
-export interface RecordViewProps {
-  onProcessNow?: (meetingId: string) => void;
-  onAddToQueue?: (meetingId: string) => void;
-}
-
 /**
  * Dedicated Main UI recording screen with source selection, live audio levels,
  * project/report configuration, and quick hotkey/source tips.
  */
-export function RecordView(props: RecordViewProps = {}) {
+export function RecordView() {
   const backend = useBackend();
   const [settings, setSettings] = useState<Settings | null>(null);
 
@@ -49,11 +44,7 @@ export function RecordView(props: RecordViewProps = {}) {
       </div>
 
       <div className="queue-layout-grid">
-        <RecorderPanel
-          compact={false}
-          onProcessNow={props.onProcessNow}
-          onAddToQueue={props.onAddToQueue}
-        />
+        <RecorderPanel compact={false} />
 
         <aside className="panel quiet" aria-label="Recording tips">
           <div className="panel-body">

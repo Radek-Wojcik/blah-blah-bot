@@ -881,11 +881,14 @@ export function ProjectSettingsModal({ cycleId, onClose, onSaved }: ProjectSetti
             <div className="form targets">
               <fieldset>
                 <legend>GitHub</legend>
-                <div className="form" aria-label={`GitHub repository of ${details.repoId}`}>
+                <div
+                  className="form"
+                  role="form"
+                  aria-label={`GitHub repository of ${details.repoId}`}
+                >
                   <label>
-                    GitHub repository (owner/name)
+                    GitHub repository of {details.repoId} (owner/name)
                     <input
-                      aria-label="GitHub repository"
                       value={githubRepoInput}
                       placeholder="owner/name"
                       autoComplete="off"
@@ -1045,7 +1048,7 @@ export function ProjectSettingsModal({ cycleId, onClose, onSaved }: ProjectSetti
                     {validWebhookRef && (
                       <div
                         className="secret-form"
-                        role="group"
+                        role="form"
                         aria-label={`Webhook for ${trimmedWebhookRef}`}
                       >
                         <p className="token-state">
@@ -1059,6 +1062,7 @@ export function ProjectSettingsModal({ cycleId, onClose, onSaved }: ProjectSetti
                           Discord webhook URL
                           <input
                             id={webhookSecretInputId}
+                            aria-label={`Webhook for ${trimmedWebhookRef}`}
                             type="password"
                             autoComplete="off"
                             spellCheck={false}

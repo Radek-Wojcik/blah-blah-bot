@@ -5,6 +5,7 @@ import { BackendProvider } from "../backend-context";
 import { createMockBackend } from "../ipc/mock";
 import type { QueueState } from "../ipc/types";
 import { Main } from "./Main";
+import { ProcessPrompt } from "./ProcessPrompt";
 import { formatEta, QueueView } from "./Queue";
 import { RecordView } from "./RecordView";
 import { Widget } from "./Widget";
@@ -44,17 +45,16 @@ afterEach(() => {
 });
 
 describe("RecordView", () => {
-  it("renders full RecorderPanel, hotkey tips, HelpPopover, and handles post-stop actions", async () => {
+  it("renders full RecorderPanel, hotkey tips, HelpPopover, and handles post-stop ProcessPrompt", async () => {
     const backend = createMockBackend({ clockRate: 0 });
     const processSpy = vi.spyOn(backend, "processMeeting");
     const briefingSpy = vi.spyOn(backend, "openBriefing").mockResolvedValue();
-    const onProcessNow = vi.fn();
-    const onAddToQueue = vi.fn();
 
     await act(async () => {
       root.render(
         <BackendProvider value={backend}>
-          <RecordView onProcessNow={onProcessNow} onAddToQueue={onAddToQueue} />
+          <RecordView />
+          <ProcessPrompt />
         </BackendProvider>,
       );
     });
@@ -85,7 +85,7 @@ describe("RecordView", () => {
     });
     expect(host.querySelector(".help-popover-card")?.textContent).toContain("Main window recorder");
 
-    // Record and stop to trigger post-stop prompt.
+    // Record and stop to trigger ProcessPrompt dialog, then dismiss with Later.
     const recordBtn = host.querySelector("button.btn-record") as HTMLButtonElement;
     await act(async () => {
       recordBtn.click();
@@ -99,16 +99,19 @@ describe("RecordView", () => {
     });
     await flush();
 
-    const addToQueueBtn = Array.from(host.querySelectorAll("button")).find(
-      (b) => b.textContent === "Add to queue",
+    const dialog1 = host.querySelector('[role="dialog"]') as HTMLElement;
+    expect(dialog1).not.toBeNull();
+    expect(dialog1.textContent).toContain("Process now or later?");
+    const laterBtn = Array.from(dialog1.querySelectorAll("button")).find(
+      (b) => b.textContent === "Later",
     ) as HTMLButtonElement;
-    expect(addToQueueBtn).not.toBeUndefined();
+    expect(laterBtn).not.toBeUndefined();
     await act(async () => {
-      addToQueueBtn.click();
+      laterBtn.click();
     });
     await flush();
-    expect(processSpy).toHaveBeenCalledTimes(1);
-    expect(onAddToQueue).toHaveBeenCalledTimes(1);
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(processSpy).not.toHaveBeenCalled();
 
     // Record and stop again, then click Process now.
     await act(async () => {
@@ -120,7 +123,9 @@ describe("RecordView", () => {
     });
     await flush();
 
-    const processNowBtn = Array.from(host.querySelectorAll("button")).find(
+    const dialog2 = host.querySelector('[role="dialog"]') as HTMLElement;
+    expect(dialog2).not.toBeNull();
+    const processNowBtn = Array.from(dialog2.querySelectorAll("button")).find(
       (b) => b.textContent === "Process now",
     ) as HTMLButtonElement;
     expect(processNowBtn).not.toBeUndefined();
@@ -128,10 +133,11 @@ describe("RecordView", () => {
       processNowBtn.click();
     });
     await flush();
-    expect(onProcessNow).toHaveBeenCalledTimes(1);
+    expect(processSpy).toHaveBeenCalledTimes(1);
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
   });
 
-  it("suppresses duplicate ProcessPrompt modal when RecorderPanel is visible in Main Record view", async () => {
+  it("opens ProcessPrompt modal with backend selection when stopping in Main Record view", async () => {
     const backend = createMockBackend({ clockRate: 0 });
 
     await act(async () => {
@@ -160,8 +166,11 @@ describe("RecordView", () => {
     });
     await flush();
 
-    expect(host.querySelector(".recorder-post-stop")).not.toBeNull();
-    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(host.querySelector(".recorder-post-stop")).toBeNull();
+    const dialogs = host.querySelectorAll('[role="dialog"]');
+    expect(dialogs).toHaveLength(1);
+    expect(dialogs[0].textContent).toContain("Process now or later?");
+    expect(dialogs[0].textContent).toContain("Local model");
   });
 });
 
@@ -224,9 +233,11 @@ describe("Widget", () => {
     });
     await flush();
 
-    // Widget shows inline post-stop banner without duplicate ProcessPrompt modal.
-    expect(host.querySelector(".recorder-post-stop")).not.toBeNull();
-    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    // Widget opens ProcessPrompt modal on stop without an inline post-stop banner.
+    expect(host.querySelector(".recorder-post-stop")).toBeNull();
+    const dialog = host.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    expect(dialog?.textContent).toContain("Process now or later?");
   });
 
   it("ticks captured browser_tab sources by default in mock backend", async () => {

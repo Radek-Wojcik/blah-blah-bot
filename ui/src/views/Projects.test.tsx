@@ -460,9 +460,11 @@ describe("ProjectDetailView, ProjectSettingsModal, and ImportMeetingModal", () =
     await flush();
 
     // GitHub repository link editing & access test.
-    const repoInput = host.querySelector<HTMLInputElement>(
-      'input[aria-label="GitHub repository"]',
+    const repoForm = host.querySelector<HTMLElement>(
+      '[role="form"][aria-label="GitHub repository of team-cycles"]',
     )!;
+    expect(repoForm).not.toBeNull();
+    const repoInput = repoForm.querySelector<HTMLInputElement>('input[placeholder="owner/name"]')!;
     await setInputValue(repoInput, "demo-org/updated-nomad");
     await act(async () => {
       findButton("Save link").click();
@@ -478,7 +480,7 @@ describe("ProjectDetailView, ProjectSettingsModal, and ImportMeetingModal", () =
 
     // Discord webhook store / test / clear.
     const webhookGroup = host.querySelector<HTMLElement>(
-      '[role="group"][aria-label="Webhook for cred:discord/nomad"]',
+      '[role="form"][aria-label="Webhook for cred:discord/nomad"]',
     )!;
     expect(webhookGroup).not.toBeNull();
     const webhookInput = webhookGroup.querySelector<HTMLInputElement>('input[type="password"]')!;

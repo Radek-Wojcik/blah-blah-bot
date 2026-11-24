@@ -224,7 +224,7 @@ test.describe("publishing on the mock backend", () => {
       .getByRole("article", { name: "Project Nomad rover" })
       .getByRole("button", { name: "Open project" })
       .click();
-    const tasks = page.getByRole("region", { name: "Tasks" });
+    const tasks = page.getByRole("region", { name: "Tasks", exact: true });
     await expect(tasks).toContainText("demo-org/nomad-cycles · 3 open, 1 done");
     await expect(tasks).toContainText("As of 2026-11-12");
     await tasks.getByRole("button", { name: "Refresh from GitHub" }).click();
@@ -576,10 +576,7 @@ test.describe("the rule of a target is chosen explicitly", () => {
       await expect(options.getByRole("listitem").nth(1)).toContainText("(in use)");
     }
     // Saved as it is shown.
-    await page
-      .locator("label", { hasText: "Webhook credential reference" })
-      .locator("input")
-      .fill("cred:discord/updates");
+    await page.getByLabel("Webhook credential reference").fill("cred:discord/updates");
     await page.getByRole("button", { name: "Save project settings" }).click();
     await expect(
       page.getByRole("status").filter({ hasText: "Project settings saved." }),

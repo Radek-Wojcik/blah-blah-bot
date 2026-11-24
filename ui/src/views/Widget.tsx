@@ -1,5 +1,6 @@
 import { RecorderPanel } from "../components/RecorderPanel";
 import { DetectionPrompt } from "./DetectionPrompt";
+import { ProcessPrompt } from "./ProcessPrompt";
 
 /**
  * Compact tray recorder popup backed by `RecorderPanel` with live audio-reactive
@@ -9,7 +10,12 @@ export function Widget() {
   const showDetection = new URLSearchParams(window.location.search).has("detectms");
 
   if (!showDetection) {
-    return <RecorderPanel compact={true} />;
+    return (
+      <>
+        <RecorderPanel compact={true} />
+        <ProcessPrompt />
+      </>
+    );
   }
 
   return (
@@ -18,6 +24,7 @@ export function Widget() {
       <div style={{ padding: "0 clamp(8px, 3vmin, 16px) clamp(8px, 3vmin, 16px)" }}>
         <DetectionPrompt embedded />
       </div>
+      <ProcessPrompt />
     </div>
   );
 }

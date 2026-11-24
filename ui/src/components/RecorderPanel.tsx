@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { useBackend } from "../backend-context";
 import { newCycleError } from "../cycles";
 import { formatDuration } from "../format";
@@ -41,10 +41,6 @@ export interface RecorderPanelProps {
   cycleId?: string;
   /** Optional callback when the user changes the selected project/cycle. */
   onCycleChange?: (cycleId: string) => void;
-  /** Optional callback after the user chooses "Process now" on a stopped recording. */
-  onProcessNow?: (meetingId: string) => void;
-  /** Optional callback after the user chooses "Add to queue" on a stopped recording. */
-  onAddToQueue?: (meetingId: string) => void;
   className?: string;
 }
 
@@ -52,17 +48,10 @@ export interface RecorderPanelProps {
  * Self-contained recording control component ready to embed in both `RecordView.tsx` (Main UI)
  * and `Widget.tsx` (tray). Includes Project/Cycle picker, Report mode selector, Source checklist
  * with `restorePersistedSelection` and auto-saving `saveLastSources`, live `WaveformEq`, elapsed
- * timer, Screenshot button, Record/Stop button, and post-stop "Process now / Add to queue" prompt.
+ * timer, Screenshot button, and Record/Stop button.
  */
 export function RecorderPanel(props: RecorderPanelProps = {}) {
-  const {
-    compact = false,
-    cycleId: controlledCycleId,
-    onCycleChange,
-    onProcessNow,
-    onAddToQueue,
-    className,
-  } = props;
+  const { compact = false, cycleId: controlledCycleId, onCycleChange, className } = props;
   const backend = useBackend();
   const state = useRecordingState();
   const recording = state.status === "recording";
@@ -78,8 +67,6 @@ export function RecorderPanel(props: RecorderPanelProps = {}) {
   const [newId, setNewId] = useState("");
   const [newName, setNewName] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [stoppedMeetingId, setStoppedMeetingId] = useState<string | null>(null);
-  const lastRecordedRef = useRef<string | null>(null);
   const cycleSelectId = useId();
   const modeSelectId = useId();
 
@@ -145,34 +132,6 @@ export function RecorderPanel(props: RecorderPanelProps = {}) {
     };
   }, [backend, activeCycleId, controlledCycleId]);
 
-  // Watch for a recording -> idle transition to show the post-stop prompt.
-  useEffect(() => {
-    if (recording) {
-      lastRecordedRef.current = state.meetingId;
-      return;
-    }
-    const justStopped = lastRecordedRef.current;
-    lastRecordedRef.current = null;
-    if (!justStopped) return;
-    let cancelled = false;
-    void backend
-      .getProcessingSettings()
-      .then((s) => {
-        if (cancelled) return;
-        if (s.processAfterRecording === "now") {
-          void backend.processMeeting(justStopped).catch((e) => setError(errorMessage(e)));
-        } else if (s.processAfterRecording === "ask") {
-          setStoppedMeetingId(justStopped);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setStoppedMeetingId(justStopped);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [backend, recording, state.meetingId]);
-
   const picked = choice ?? restorePersistedSelection(sources, lastKeys);
 
   const run = (p: Promise<unknown>) => {
@@ -207,7 +166,6 @@ export function RecorderPanel(props: RecorderPanelProps = {}) {
 
   const handleStartRecording = () => {
     setError(null);
-    setStoppedMeetingId(null);
     const problem = validateGate(effectiveForm, defaults);
     if (problem !== null) {
       setError(problem);
@@ -222,36 +180,7 @@ export function RecorderPanel(props: RecorderPanelProps = {}) {
   };
 
   const handleStopRecording = () => {
-    const currentId = state.meetingId;
-    if (currentId) lastRecordedRef.current = currentId;
     run(backend.stopRecording());
-  };
-
-  const handleProcessNow = () => {
-    if (!stoppedMeetingId) return;
-    const id = stoppedMeetingId;
-    setError(null);
-    backend
-      .processMeeting(id)
-      .then(() => backend.forceProcess(id).catch(() => undefined))
-      .then(() => {
-        setStoppedMeetingId(null);
-        onProcessNow?.(id);
-      })
-      .catch((e) => setError(errorMessage(e)));
-  };
-
-  const handleAddToQueue = () => {
-    if (!stoppedMeetingId) return;
-    const id = stoppedMeetingId;
-    setError(null);
-    backend
-      .processMeeting(id)
-      .then(() => {
-        setStoppedMeetingId(null);
-        onAddToQueue?.(id);
-      })
-      .catch((e) => setError(errorMessage(e)));
   };
 
   const live = state.sources.filter((s) => s.status === "recording" || s.status === "starting");
@@ -568,22 +497,6 @@ export function RecorderPanel(props: RecorderPanelProps = {}) {
         <p className="pick-warning" role="status">
           {doubled}
         </p>
-      )}
-
-      {stoppedMeetingId && !recording && (
-        <div className="banner recorder-post-stop" role="region" aria-label="Recording saved">
-          <span>
-            Recording saved. Process the transcript and report now or add it to the queue?
-          </span>
-          <div className="banner-actions">
-            <button type="button" className="btn btn-small btn-ghost" onClick={handleAddToQueue}>
-              Add to queue
-            </button>
-            <button type="button" className="btn btn-small btn-record" onClick={handleProcessNow}>
-              Process now
-            </button>
-          </div>
-        </div>
       )}
 
       {error && (

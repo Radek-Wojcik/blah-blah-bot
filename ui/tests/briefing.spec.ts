@@ -53,7 +53,11 @@ test.describe("project briefing on the mock backend", () => {
 
     // What is done is kept apart.
     await page.getByText("Done (1)").click();
-    await expect(page.getByRole("list", { name: "Done tasks" })).toContainText("Order the battery");
+    await expect(
+      page
+        .getByRole("region", { name: "Action items and tasks" })
+        .getByRole("list", { name: "Done tasks" }),
+    ).toContainText("Order the battery");
 
     await page.getByRole("button", { name: "Back to projects" }).click();
     await expect(page.getByRole("heading", { name: "Projects", level: 2 })).toBeVisible();
@@ -107,7 +111,7 @@ test.describe("project briefing on the mock backend", () => {
     await expect(nomad).toContainText("7 open tasks, 2 overdue · 2 open topics");
     await nomad.getByRole("button", { name: "Open project" }).click();
     await expect(page.locator(".brief-status")).toHaveText(/^State as of 2026-11-13\./);
-    await page.getByRole("button", { name: "Refresh" }).click();
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
     await expect(page.locator(".brief-status")).toHaveText(/^State as of 2026-11-13\./);
   });
 });

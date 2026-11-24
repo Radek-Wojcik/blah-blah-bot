@@ -6,6 +6,7 @@ import { errorMessage, useCycleFacts, useMeetings, useRecordingState } from "../
 import type { Briefing, BriefingTask, CycleDetails, CycleTask, MeetingSummary } from "../ipc/types";
 import { canProcess, jobStateLabel } from "../processing";
 import { taskCounts, tasksAsOf } from "../publish";
+import { CycleTasksView } from "./CycleTasks";
 import { ImportMeetingModal } from "./ImportMeetingModal";
 import { ProjectSettingsModal } from "./ProjectSettingsModal";
 
@@ -586,6 +587,17 @@ export function ProjectDetailView({ cycleId, onBack, onOpenMeeting }: ProjectDet
           </div>
         </section>
       </div>
+
+      {details?.repoId && tasks?.repo && (
+        <section className="panel" aria-label="Tasks">
+          <div className="panel-body">
+            <div className="publish-head">
+              <h3 className="sub-head">Tasks</h3>
+            </div>
+            <CycleTasksView cycleId={cycleId} repoId={details.repoId} />
+          </div>
+        </section>
+      )}
 
       <section aria-label="Project meetings">
         <div className="page-head">

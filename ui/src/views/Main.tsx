@@ -178,12 +178,7 @@ export function Main() {
               }
             />
           )}
-          {page === "record" && (
-            <RecordView
-              onProcessNow={() => setPage("queue")}
-              onAddToQueue={() => setPage("queue")}
-            />
-          )}
+          {page === "record" && <RecordView />}
           {page === "queue" && (
             <QueueView
               onOpenDraft={(id) =>
@@ -223,7 +218,7 @@ export function Main() {
           )}
         </div>
       </section>
-      {page !== "record" && <ProcessPrompt />}
+      <ProcessPrompt />
     </div>
   );
 }

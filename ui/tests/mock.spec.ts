@@ -636,7 +636,7 @@ test.describe("voice profiles on the mock backend", () => {
   test("a participant is renamed", async ({ page }) => {
     await page.goto(VOICES);
     const people = page.getByRole("list", { name: "Voice profiles" });
-    await expect(people.getByRole("listitem")).toHaveCount(3);
+    await expect(people.getByRole("listitem")).toHaveCount(5);
     await expect(people.getByText("4 samples")).toBeVisible();
     await page.getByRole("button", { name: "Rename Jan Demo" }).click();
     await page.getByLabel("New name for Jan Demo").fill("Jan Example");
@@ -664,13 +664,14 @@ test.describe("voice profiles on the mock backend", () => {
 
     await page.getByRole("button", { name: "Reset the voice of Alex Demo" }).click();
     await dialog.getByRole("button", { name: "Reset voice" }).click();
-    await expect(people.getByRole("listitem")).toHaveCount(2);
-    await expect(people.getByText("Alex Demo")).toHaveCount(0);
+    await expect(people.getByRole("listitem")).toHaveCount(5);
+    await expect(people.getByText("4 samples")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Reset the voice of Alex Demo" })).toBeDisabled();
 
     await page.getByRole("button", { name: "Delete Kasia Demo" }).click();
     const del = page.getByRole("dialog", { name: "Delete this participant?" });
     await del.getByRole("button", { name: "Delete participant" }).click();
-    await expect(people.getByRole("listitem")).toHaveCount(1);
+    await expect(people.getByRole("listitem")).toHaveCount(4);
     await expect(people.getByText("Kasia Demo")).toHaveCount(0);
   });
 
@@ -690,8 +691,9 @@ test.describe("voice profiles on the mock backend", () => {
     await page.getByRole("button", { name: "Delete all voice data" }).click();
     await dialog.getByRole("button", { name: "Delete all voice data" }).click();
     await expect(dialog).toHaveCount(0);
-    await expect(people.getByRole("listitem")).toHaveCount(0);
-    await expect(page.getByText(/No voice profiles yet/)).toBeVisible();
+    await expect(people.getByRole("listitem")).toHaveCount(5);
+    await expect(people.getByText(/\d+ samples?/)).toHaveCount(0);
+    await expect(people.getByText("No voice learned yet")).toHaveCount(5);
   });
 
   test("voice settings are saved and invalid thresholds are refused", async ({ page }) => {

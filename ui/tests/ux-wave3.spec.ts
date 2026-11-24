@@ -99,8 +99,8 @@ test.describe("wave 3 UX overhaul flows on the mock backend", () => {
     await page.goto(`${MAIN}&page=queue&jobms=400`);
 
     const side = page.getByRole("complementary", { name: "Queue GPU overrides (temporary)" });
-    await side.locator("label", { hasText: "Max GPU utilization" }).locator("input").fill("85");
-    await side.locator("label", { hasText: "Wait for idle" }).locator("input").fill("10");
+    await side.getByLabel("Max GPU utilization (%)", { exact: true }).fill("85");
+    await side.getByLabel("Wait for idle (seconds)", { exact: true }).fill("10");
     await side.getByRole("button", { name: "Apply override" }).click();
     await expect(side.getByRole("status")).toHaveText("Temporary GPU override applied.");
     await expect(side).toContainText("Override active: 85% max util · 10s idle");

@@ -129,7 +129,7 @@ describe("UnsavedDialog", () => {
 });
 
 describe("RecorderPanel", () => {
-  it("restores persisted sources, auto-saves toggled sources, records and shows post-stop prompt", async () => {
+  it("restores persisted sources, auto-saves toggled sources, records and returns to standby on stop", async () => {
     const backend = createMockBackend({ clockRate: 0 });
     await backend.saveLastSources(["mic:default", "app_name:discord"]);
 
@@ -170,7 +170,7 @@ describe("RecorderPanel", () => {
     });
     expect((await backend.recordingState()).status).toBe("recording");
 
-    // Stop recording and verify post-stop prompt appears.
+    // Stop recording and verify panel returns cleanly to standby without an inline banner.
     const stopBtn = host.querySelector("button.btn-stop") as HTMLButtonElement;
     expect(stopBtn).not.toBeNull();
     await act(async () => {
@@ -178,8 +178,7 @@ describe("RecorderPanel", () => {
       await new Promise((r) => setTimeout(r, 20));
     });
     expect((await backend.recordingState()).status).toBe("idle");
-    const postStop = host.querySelector(".recorder-post-stop");
-    expect(postStop).not.toBeNull();
-    expect(postStop?.textContent).toContain("Process now");
+    expect(host.querySelector(".recorder-post-stop")).toBeNull();
+    expect(host.textContent).toContain("Standby");
   });
 });
