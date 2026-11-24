@@ -719,6 +719,10 @@ test.describe("corrections to a published meeting", () => {
   }) => {
     await page.goto(DRAFT);
     await hooks(page, (h) => h.setVisibility("private"));
+    // Refresh the publish plan if the initial load completed before `setVisibility("private")`.
+    await statuses(page).getByRole("button", { name: "Reject t-1" }).click();
+    await expect(panel(page)).toContainText("· private");
+    await expect(panel(page)).not.toContainText("is public:");
     await expect(panel(page).getByRole("button", { name: "Publish", exact: true })).toBeEnabled();
     await panel(page).getByRole("button", { name: "Publish", exact: true }).click();
     await expect(panel(page).getByText("Published: everything was sent.")).toBeVisible({
