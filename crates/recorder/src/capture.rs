@@ -6,9 +6,9 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use wasapi::{
     initialize_mta, AudioCaptureClient, AudioClient, DeviceEnumerator, Direction, SampleType,
     StreamMode, WasapiError, WaveFormat,
@@ -81,10 +81,123 @@ impl Source {
     }
 }
 
+/// Number of waveform bars in the live audio envelope.
+pub const LEVEL_BARS: usize = 12;
+
+/// Fast attack factor when incoming energy exceeds the current envelope.
+const ENVELOPE_ATTACK: f32 = 0.85;
+/// Smooth decay factor when incoming energy is below the current envelope.
+const ENVELOPE_DECAY: f32 = 0.65;
+/// Values below this floor snap to `0.0`.
+const ENVELOPE_FLOOR: f32 = 0.0005;
+
+/// Real-time audio levels and 12-bar waveform envelope, normalized to `0.0..=1.0`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct AudioLevels {
+    pub peak: f32,
+    pub rms: f32,
+    pub bars: [f32; LEVEL_BARS],
+}
+
+impl Default for AudioLevels {
+    fn default() -> Self {
+        Self {
+            peak: 0.0,
+            rms: 0.0,
+            bars: [0.0; LEVEL_BARS],
+        }
+    }
+}
+
+impl AudioLevels {
+    /// Combine two level readings by taking the element-wise maximum, clamped to `0.0..=1.0`.
+    pub fn merge(self, other: Self) -> Self {
+        let mut bars = [0.0; LEVEL_BARS];
+        for (i, b) in bars.iter_mut().enumerate() {
+            *b = self.bars[i].max(other.bars[i]).clamp(0.0, 1.0);
+        }
+        Self {
+            peak: self.peak.max(other.peak).clamp(0.0, 1.0),
+            rms: self.rms.max(other.rms).clamp(0.0, 1.0),
+            bars,
+        }
+    }
+}
+
+fn is_demo_env() -> bool {
+    static DEMO: OnceLock<bool> = OnceLock::new();
+    *DEMO.get_or_init(|| std::env::var_os("BBB_DEMO").is_some())
+}
+
+#[inline]
+fn load_f32(atom: &AtomicU32) -> f32 {
+    let v = f32::from_bits(atom.load(Ordering::Relaxed));
+    if v.is_finite() {
+        v.clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
+#[inline]
+fn store_f32(atom: &AtomicU32, val: f32) {
+    let clamped = if val.is_finite() && val >= ENVELOPE_FLOOR {
+        val.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    atom.store(clamped.to_bits(), Ordering::Relaxed);
+}
+
+#[inline]
+fn smooth_step(prev: f32, target: f32) -> f32 {
+    let next = if target >= prev {
+        if prev <= ENVELOPE_FLOOR {
+            target
+        } else {
+            prev + (target - prev) * ENVELOPE_ATTACK
+        }
+    } else {
+        prev * ENVELOPE_DECAY + target * (1.0 - ENVELOPE_DECAY)
+    };
+    if next < ENVELOPE_FLOOR {
+        0.0
+    } else {
+        next.clamp(0.0, 1.0)
+    }
+}
+
+/// Generate a voice-like modulated 12-bar envelope from a demo tone block.
+pub fn compute_demo_bars(base_level: f32, seq: u32) -> [f32; LEVEL_BARS] {
+    if base_level <= 0.0 {
+        return [0.0; LEVEL_BARS];
+    }
+    let t = seq as f32 * 0.14;
+    let syllable = 0.55 + 0.45 * ((t * 0.75).sin() * (t * 0.27).cos()).abs();
+    let gain = (base_level * 2.2 * syllable).clamp(0.05, 1.0);
+    let mut bars = [0.0; LEVEL_BARS];
+    for (i, bar) in bars.iter_mut().enumerate() {
+        let pos = i as f32 / (LEVEL_BARS - 1) as f32;
+        // Arch shape (stronger in midrange vocal formants) plus travelling harmonic ripple.
+        let arch = 0.45 + 0.55 * (std::f32::consts::PI * pos).sin();
+        let ripple = 0.65 + 0.35 * (t * 1.35 + i as f32 * 0.62).sin();
+        *bar = (gain * arch * ripple).clamp(0.02, 1.0);
+    }
+    bars
+}
+
 /// Data shared by all capture threads of a recording.
 pub struct CaptureContext {
     /// Largest absolute sample (0 to 32768) seen since the last [`CaptureContext::take_peak`].
     pub peak: AtomicU32,
+    /// Smoothed normalized peak (`0.0..=1.0`, stored as `f32::to_bits`).
+    pub envelope_peak: AtomicU32,
+    /// Smoothed normalized RMS (`0.0..=1.0`, stored as `f32::to_bits`).
+    pub rms: AtomicU32,
+    /// Smoothed normalized 12-bar waveform envelope (`0.0..=1.0`, stored as `f32::to_bits`).
+    pub bars: [AtomicU32; LEVEL_BARS],
+    /// Monotonic packet counter used for demo envelope modulation.
+    pub packet_seq: AtomicU32,
     /// Performance counter value (100 ns units) that is time 0 of the session clock.
     pub clock_start_hns: u64,
     /// Set to true to ask every capture thread to finish.
@@ -101,19 +214,135 @@ pub struct CaptureContext {
 }
 
 impl CaptureContext {
+    /// Create a zeroed 12-bar atomic array.
+    pub fn empty_bars() -> [AtomicU32; LEVEL_BARS] {
+        std::array::from_fn(|_| AtomicU32::new(0))
+    }
+
+    /// Create a fresh [`CaptureContext`] for one track.
+    pub fn new(
+        clock_start_hns: u64,
+        journal: Arc<Mutex<Journal>>,
+        out_dir: PathBuf,
+        seg_samples: u64,
+        drift_correction: bool,
+    ) -> Self {
+        Self {
+            peak: AtomicU32::new(0),
+            envelope_peak: AtomicU32::new(0),
+            rms: AtomicU32::new(0),
+            bars: Self::empty_bars(),
+            packet_seq: AtomicU32::new(0),
+            clock_start_hns,
+            stop: AtomicBool::new(false),
+            journal,
+            out_dir,
+            seg_samples,
+            drift_correction,
+        }
+    }
+
     /// Read and reset the peak level, scaled to 0.0 to 1.0.
     pub fn take_peak(&self) -> f32 {
         self.peak.swap(0, Ordering::Relaxed) as f32 / 32768.0
     }
 
-    /// Record the peak of a block of samples.
+    /// Record a block of PCM samples, updating [`CaptureContext::peak`], [`CaptureContext::rms`]
+    /// and the 12-bar waveform envelope.
+    pub fn note_samples(&self, samples: &[i16]) {
+        self.note_samples_inner(samples, is_demo_env());
+    }
+
+    /// Record a block of PCM samples with an explicit demo-mode flag.
+    pub fn note_samples_with_demo(&self, samples: &[i16], demo: bool) {
+        self.note_samples_inner(samples, demo);
+    }
+
+    fn note_samples_inner(&self, samples: &[i16], demo: bool) {
+        if samples.is_empty() {
+            return;
+        }
+        let mut max_abs = 0u32;
+        let mut sum_sq = 0u64;
+        for &s in samples {
+            let a = u32::from(s.unsigned_abs());
+            if a > max_abs {
+                max_abs = a;
+            }
+            sum_sq += u64::from(a) * u64::from(a);
+        }
+        self.peak.fetch_max(max_abs, Ordering::Relaxed);
+
+        let len = samples.len();
+        let block_peak = (max_abs as f32 / 32768.0).clamp(0.0, 1.0);
+        let block_rms = (((sum_sq as f64 / len as f64).sqrt() / 32768.0) as f32).clamp(0.0, 1.0);
+
+        let seq = self.packet_seq.fetch_add(1, Ordering::Relaxed);
+        let target_bars = if max_abs == 0 {
+            [0.0; LEVEL_BARS]
+        } else if demo {
+            compute_demo_bars(block_rms.max(block_peak * 0.7), seq)
+        } else {
+            let mut out = [0.0f32; LEVEL_BARS];
+            for (i, bar) in out.iter_mut().enumerate() {
+                let start = (i * len / LEVEL_BARS).min(len - 1);
+                let end = (((i + 1) * len) / LEVEL_BARS).max(start + 1).min(len);
+                let slice = &samples[start..end];
+                let mut s_max = 0u32;
+                let mut s_sq = 0u64;
+                for &v in slice {
+                    let a = u32::from(v.unsigned_abs());
+                    if a > s_max {
+                        s_max = a;
+                    }
+                    s_sq += u64::from(a) * u64::from(a);
+                }
+                let s_peak = s_max as f32 / 32768.0;
+                let s_rms = ((s_sq as f64 / slice.len() as f64).sqrt() / 32768.0) as f32;
+                *bar = (s_rms * 0.65 + s_peak * 0.35).clamp(0.0, 1.0);
+            }
+            out
+        };
+
+        store_f32(
+            &self.envelope_peak,
+            smooth_step(load_f32(&self.envelope_peak), block_peak),
+        );
+        store_f32(&self.rms, smooth_step(load_f32(&self.rms), block_rms));
+        for (i, &target) in target_bars.iter().enumerate() {
+            let prev = load_f32(&self.bars[i]);
+            store_f32(&self.bars[i], smooth_step(prev, target));
+        }
+    }
+
+    /// Record the peak and 12-bar envelope of a block of samples.
     pub fn note_peak(&self, samples: &[i16]) {
-        let p = samples
-            .iter()
-            .map(|s| u32::from(s.unsigned_abs()))
-            .max()
-            .unwrap_or(0);
-        self.peak.fetch_max(p, Ordering::Relaxed);
+        self.note_samples(samples);
+    }
+
+    /// Read the current lock-free 12-bar audio envelope without modifying it.
+    pub fn levels(&self) -> AudioLevels {
+        let mut bars = [0.0; LEVEL_BARS];
+        for (i, b) in bars.iter_mut().enumerate() {
+            *b = load_f32(&self.bars[i]);
+        }
+        AudioLevels {
+            peak: load_f32(&self.envelope_peak),
+            rms: load_f32(&self.rms),
+            bars,
+        }
+    }
+
+    /// Read the current 12-bar audio envelope and apply one tick of decay so an idle stream
+    /// smoothly falls off to zero between polls.
+    pub fn take_levels(&self) -> AudioLevels {
+        let current = self.levels();
+        store_f32(&self.envelope_peak, current.peak * 0.7);
+        store_f32(&self.rms, current.rms * 0.7);
+        for (i, &b) in current.bars.iter().enumerate() {
+            store_f32(&self.bars[i], b * 0.7);
+        }
+        current
     }
 
     /// Milliseconds on the session clock now.
@@ -439,4 +668,98 @@ fn run_track_inner(
         s.status = TrackStatus::Stopped;
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::journal::JOURNAL_FILE_NAME;
+
+    fn test_context(label: &str) -> (test_tmp::TestDir, CaptureContext) {
+        let dir = test_tmp::TestDir::new(&format!("capture-ctx-{label}"));
+        let journal = Journal::create(&dir.path().join(JOURNAL_FILE_NAME)).unwrap();
+        let ctx = CaptureContext::new(
+            0,
+            Arc::new(Mutex::new(journal)),
+            dir.path().to_path_buf(),
+            16_000,
+            false,
+        );
+        (dir, ctx)
+    }
+
+    #[test]
+    fn silence_produces_zero_audio_levels_and_bars() {
+        let (_dir, ctx) = test_context("silence");
+        let silence = vec![0i16; 320];
+        ctx.note_samples_with_demo(&silence, false);
+        let levels = ctx.levels();
+        assert_eq!(levels.peak, 0.0);
+        assert_eq!(levels.rms, 0.0);
+        assert_eq!(levels.bars, [0.0; LEVEL_BARS]);
+
+        // Even with demo mode enabled, pure silence must produce 0.0 across all bars.
+        ctx.note_samples_with_demo(&silence, true);
+        let demo_levels = ctx.levels();
+        assert_eq!(demo_levels.peak, 0.0);
+        assert_eq!(demo_levels.rms, 0.0);
+        assert_eq!(demo_levels.bars, [0.0; LEVEL_BARS]);
+    }
+
+    #[test]
+    fn non_silent_pcm_populates_peak_rms_and_twelve_normalized_bars() {
+        let (_dir, ctx) = test_context("pcm");
+        let samples: Vec<i16> = (0..360)
+            .map(|i| {
+                let phase = i as f32 * 0.22;
+                let env = 0.4 + 0.6 * ((i as f32 / 360.0) * std::f32::consts::PI).sin();
+                (phase.sin() * env * 16_384.0) as i16
+            })
+            .collect();
+        ctx.note_samples_with_demo(&samples, false);
+        let levels = ctx.levels();
+        assert!(
+            levels.peak > 0.3 && levels.peak <= 1.0,
+            "unexpected peak {}",
+            levels.peak
+        );
+        assert!(
+            levels.rms > 0.1 && levels.rms <= 1.0,
+            "unexpected rms {}",
+            levels.rms
+        );
+        assert!(levels.rms <= levels.peak);
+        for (i, &bar) in levels.bars.iter().enumerate() {
+            assert!(
+                bar > 0.0 && bar <= 1.0,
+                "bar {i} out of range (0.0..=1.0]: {bar}"
+            );
+        }
+    }
+
+    #[test]
+    fn demo_envelope_modulates_steady_tone_into_varied_normalized_bars() {
+        let (_dir, ctx) = test_context("demo");
+        let steady_tone: Vec<i16> = (0..320)
+            .map(|i| ((i as f32 * 0.17).sin() * 9_000.0) as i16)
+            .collect();
+        ctx.note_samples_with_demo(&steady_tone, true);
+        let levels = ctx.levels();
+        assert!(levels.peak > 0.0 && levels.peak <= 1.0);
+        assert!(levels.rms > 0.0 && levels.rms <= 1.0);
+        for (i, &bar) in levels.bars.iter().enumerate() {
+            assert!(bar > 0.0 && bar <= 1.0, "demo bar {i} out of range: {bar}");
+        }
+        let min_bar = levels.bars.iter().copied().fold(f32::INFINITY, f32::min);
+        let max_bar = levels
+            .bars
+            .iter()
+            .copied()
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert!(
+            max_bar - min_bar > 0.02,
+            "expected voice-like variation across demo bars: {:?}",
+            levels.bars
+        );
+    }
 }

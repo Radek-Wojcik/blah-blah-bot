@@ -63,7 +63,10 @@ test.describe("static screenshots", () => {
   test("meeting list", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto("/?view=main&backend=mock&rate=0");
-    await expect(page.getByRole("article")).toHaveCount(5);
+    await expect(page.getByRole("article")).toHaveCount(3);
+    await expect(
+      page.getByRole("list", { name: "Standalone meetings" }).getByRole("listitem"),
+    ).toHaveCount(4);
     await settle(page);
     await page.screenshot({ path: path.join(OUT, "meeting-list.png") });
   });
@@ -96,8 +99,8 @@ test.describe("static screenshots", () => {
 
   test("speakers: participants and voice profiles", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
-    await page.goto("/?view=main&backend=mock&rate=0&page=settings");
-    const people = page.getByRole("list", { name: "Participants" });
+    await page.goto("/?view=main&backend=mock&rate=0&page=settings&tab=voices");
+    const people = page.getByRole("list", { name: "Voice profiles" });
     await expect(people.getByRole("listitem")).toHaveCount(3);
     await page
       .getByRole("heading", { name: "Voice profiles" })
@@ -109,7 +112,9 @@ test.describe("static screenshots", () => {
   // Stage 4. Run only these with: npx playwright test --project=screenshots -g "cycle settings|source popover|report mode gate"
   test("cycle settings", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 1100 });
-    await page.goto("/?view=main&backend=mock&rate=0&page=cycle&cycle=NOMAD");
+    await page.goto("/?view=main&backend=mock&rate=0&page=project&cycle=NOMAD");
+    await page.getByRole("button", { name: "Project settings" }).click();
+    await page.getByRole("tab", { name: "People & Glossary" }).click();
     await expect(page.getByRole("heading", { name: "Participants" })).toBeVisible();
     await expect(page.getByLabel("Participant 4 name")).toHaveValue("Piotr Demo");
     await settle(page);
@@ -119,10 +124,10 @@ test.describe("static screenshots", () => {
   // Stage 6. Run only this one with: npx playwright test --project=screenshots -g "briefing"
   test("briefing", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 1250 });
-    await page.goto("/?view=main&backend=mock&rate=0&page=briefing&cycle=NOMAD");
-    await expect(page.getByRole("region", { name: "Tasks of Alex Demo" })).toBeVisible();
+    await page.goto("/?view=main&backend=mock&rate=0&page=project&cycle=NOMAD");
+    await expect(page.getByRole("list", { name: "Top action items" })).toBeVisible();
     await expect(page.locator(".brief-status")).toHaveText(/^State as of 2026-11-13\./);
-    await expect(page.getByRole("button", { name: "Update" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Refresh" })).toBeEnabled();
     await settle(page);
     await page.screenshot({ path: path.join(OUT, "briefing.png") });
   });
@@ -243,11 +248,8 @@ test.describe("static screenshots", () => {
   test("report mode gate", async ({ page }) => {
     await page.setViewportSize({ width: 360, height: 640 });
     await page.goto("/?view=widget&backend=mock&rate=0");
-    await page.getByRole("button", { name: "Record" }).click();
-    const gate = page.getByRole("dialog", { name: "Choose the report for this recording" });
-    await gate.getByRole("button", { name: "Change…" }).click();
-    await gate.getByLabel("Report mode").selectOption("by-type");
-    await expect(gate.getByLabel("Meeting type")).toHaveValue("budget");
+    await page.getByLabel("Report mode").selectOption("by-type");
+    await expect(page.getByLabel("Meeting type")).toHaveValue("budget");
     await settle(page);
     await page.screenshot({ path: path.join(OUT, "report-mode-gate.png") });
   });
@@ -441,21 +443,13 @@ test.describe("static screenshots", () => {
   test("token setup", async ({ page }) => {
     // Tall enough for the whole page: an element taller than the window is stitched badly.
     await page.setViewportSize({ width: 1280, height: 2300 });
-    await page.goto("/?view=main&backend=mock&rate=0&page=settings");
-    const publishing = page.getByRole("region", { name: "Publishing" });
-    // The GitHub token is stored; the webhook is typed (masked) and not stored yet.
-    const webhook = publishing.getByRole("form", { name: "Webhook for cred:discord/nomad" });
-    await webhook.getByRole("button", { name: "Clear" }).click();
-    await expect(webhook).toContainText("No webhook stored");
-    await webhook
-      .getByLabel("Webhook for cred:discord/nomad")
-      .fill("https://discord.com/api/webhooks/000000000000000007/demo-token");
+    await page.goto("/?view=main&backend=mock&rate=0&page=settings&tab=connectors");
+    const connectors = page.getByRole("tabpanel", { name: "Connectors" });
     await expect(
-      publishing.getByRole("form", { name: "GitHub token for api.github.com" }),
+      connectors.getByRole("form", { name: "GitHub Token (api.github.com)" }),
     ).toContainText("Token stored");
-    await webhook.getByLabel("Webhook for cred:discord/nomad").blur();
     await settle(page);
-    await publishing.screenshot({ path: path.join(OUT, "token-setup.png") });
+    await connectors.screenshot({ path: path.join(OUT, "token-setup.png") });
   });
 });
 
@@ -468,15 +462,12 @@ test("record flow GIF", async ({ page }) => {
     await page.screenshot({ path: file });
     frames.push(file);
   };
-  await page.setViewportSize({ width: 340, height: 420 });
+  await page.setViewportSize({ width: 340, height: 520 });
   await page.goto("/?view=widget&backend=mock");
   await shot();
   await page.getByLabel("Discord").check();
   await shot();
   await page.getByRole("button", { name: "Record" }).click();
-  // The report mode gate comes first, with the last choice ready to confirm.
-  await shot();
-  await page.getByRole("button", { name: "Start recording" }).click();
   await shot();
   await page.waitForTimeout(1_200);
   await shot();
@@ -505,8 +496,11 @@ test("processing GIF", async ({ page }) => {
   await page.setViewportSize({ width: 960, height: 640 });
   await page.goto("/?view=main&backend=mock&jobms=1400");
   await shot();
-  const card = page.getByRole("article").filter({ hasText: "Kickoff" });
-  await card.getByRole("button", { name: "Process" }).click();
+  const row = page
+    .getByRole("list", { name: "Standalone meetings" })
+    .getByRole("listitem")
+    .filter({ hasText: "Kickoff" });
+  await row.getByRole("button", { name: "Process" }).click();
   await shot();
   await page.getByRole("button", { name: "Queue", exact: true }).click();
   const job = page.getByRole("article", { name: "Kickoff" });
@@ -570,12 +564,8 @@ test("draft editing GIF", async ({ page }) => {
   await page.goto("/?view=main&backend=mock&rate=0&page=transcript&meeting=m5");
   await expect(page.getByRole("img", { name: "Screenshot taken at 0:40" })).toBeVisible();
   await shot();
-  // From the transcript back to the list, then into the draft of the meeting.
-  await page.getByRole("button", { name: "Back to meetings" }).click();
-  const open = page.getByRole("button", { name: /^Open the draft of / }).first();
-  await expect(open).toBeVisible();
-  await shot();
-  await open.click();
+  // Switch from the Transcript tab directly to the Draft & Report tab.
+  await page.getByRole("tab", { name: "Draft & Report" }).click();
   const columns = page.getByLabel("Sections", { exact: true });
   await expect(columns.getByRole("region")).toHaveCount(4);
   await shot();

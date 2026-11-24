@@ -8,10 +8,19 @@ import type {
   MeetingSummary,
   OutboxState,
   QueueState,
+  RecordingLevels,
   RecordingState,
   SourceInfo,
   Topic,
 } from "./ipc/types";
+
+const IDLE_BARS: number[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+const idleLevels: RecordingLevels = {
+  peak: 0,
+  rms: 0,
+  bars: IDLE_BARS,
+};
 
 const idle: RecordingState = {
   status: "idle",
@@ -45,6 +54,33 @@ export function useRecordingState(): RecordingState {
     };
   }, [backend]);
   return state;
+}
+
+/**
+ * Live 12-bar audio levels while `active` is true, driven by `recording-levels` events from the
+ * backend. Resets to zeroed bars when inactive.
+ */
+export function useRecordingLevels(active = true): RecordingLevels {
+  const backend = useBackend();
+  const [levels, setLevels] = useState<RecordingLevels>(idleLevels);
+  useEffect(() => {
+    if (!active) return;
+    let off: (() => void) | undefined;
+    let cancelled = false;
+    void backend
+      .onRecordingLevels((next) => {
+        if (!cancelled) setLevels(next);
+      })
+      .then((u) => {
+        if (cancelled) u();
+        else off = u;
+      });
+    return () => {
+      cancelled = true;
+      off?.();
+    };
+  }, [backend, active]);
+  return active ? levels : idleLevels;
 }
 
 export function useMeetings(): { meetings: MeetingSummary[]; reload: () => void } {

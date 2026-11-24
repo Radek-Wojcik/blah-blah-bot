@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use store::{LlmChoice, LlmKind, MeetingDetails};
+use store::{LlmChoice, LlmKind, MeetingDetails, MeetingState, Screenshot, Segment, Store, Track};
 
 use crate::stage::Stage;
 use crate::supervisor::RunError;
@@ -568,6 +568,338 @@ pub fn step_name(stage: Stage) -> Option<&'static str> {
     }
 }
 
+// ----- media ingest and manual voice enrollment -----------------------------------------------
+
+/// Mode for media file ingest (`"audio_only"` or `"audio_and_slides"`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IngestMode {
+    AudioOnly,
+    #[default]
+    AudioAndSlides,
+}
+
+impl IngestMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AudioOnly => "audio_only",
+            Self::AudioAndSlides => "audio_and_slides",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "audio_only" => Some(Self::AudioOnly),
+            "audio_and_slides" => Some(Self::AudioAndSlides),
+            _ => None,
+        }
+    }
+}
+
+/// Request to ingest an external audio or video file into a meeting directory.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct IngestRequest {
+    pub meeting_id: String,
+    pub input_path: PathBuf,
+    pub meeting_dir: PathBuf,
+    pub mode: IngestMode,
+}
+
+/// One track entry produced by `ingest` in `work/ingest.json`.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct IngestTrack {
+    pub name: String,
+    pub source: String,
+    pub offset_ms: f64,
+    #[serde(default)]
+    pub segments: Vec<String>,
+}
+
+fn default_ingest_track() -> String {
+    "imported".into()
+}
+
+/// One 60 s WAV segment entry produced by `ingest` in `work/ingest.json`.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct IngestSegment {
+    #[serde(default = "default_ingest_track")]
+    pub track: String,
+    #[serde(default)]
+    pub segment: u32,
+    pub file: String,
+    pub offset_ms: f64,
+    #[serde(default)]
+    pub duration_ms: u64,
+    #[serde(default)]
+    pub samples: u64,
+}
+
+impl IngestSegment {
+    /// Sample count at 16 kHz (`samples` if reported, else `duration_ms * 16`).
+    pub fn sample_count(&self) -> u64 {
+        if self.samples > 0 {
+            self.samples
+        } else {
+            self.duration_ms.saturating_mul(16)
+        }
+    }
+}
+
+/// One extracted slide screenshot entry produced by `ingest` in `work/ingest.json`.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct IngestScreenshot {
+    pub file: String,
+    pub offset_ms: f64,
+}
+
+/// Parsed contents of `<meeting_dir>/work/ingest.json` after the worker finishes `ingest`.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct IngestResponse {
+    #[serde(default)]
+    pub meeting_id: String,
+    #[serde(default)]
+    pub duration_ms: i64,
+    #[serde(default)]
+    pub tracks: Vec<IngestTrack>,
+    #[serde(default)]
+    pub segments: Vec<IngestSegment>,
+    #[serde(default)]
+    pub screenshots: Vec<IngestScreenshot>,
+}
+
+/// Run the worker's `"ingest"` command for an imported audio or video file.
+pub fn run_ingest(
+    cfg: &WorkerConfig,
+    req: &IngestRequest,
+    on_event: impl FnMut(&WorkerEvent),
+) -> Result<IngestResponse, RunError> {
+    run_ingest_with(None, cfg, req, on_event)
+}
+
+/// [`run_ingest`] with an optional replacement launcher for tests.
+pub fn run_ingest_with(
+    launcher: Option<&Launcher>,
+    cfg: &WorkerConfig,
+    req: &IngestRequest,
+    on_event: impl FnMut(&WorkerEvent),
+) -> Result<IngestResponse, RunError> {
+    let work = req.meeting_dir.join("work");
+    std::fs::create_dir_all(&work).map_err(|e| RunError::new(e.to_string()))?;
+    let manifest_path = work.join("ingest-manifest.json");
+    let manifest = json!({
+        "version": 1,
+        "meeting_id": req.meeting_id,
+        "tracks": [],
+        "screenshots": [],
+        "options": {
+            "ingest": {
+                "input_path": req.input_path,
+                "mode": req.mode.as_str(),
+            }
+        }
+    });
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).unwrap_or_default(),
+    )
+    .map_err(|e| RunError::new(e.to_string()))?;
+
+    let cmd = command_with(cfg, launcher, &["run", "--frozen"]).tap(|c| {
+        if launcher.is_none() {
+            c.args(["python", "-m", "bbb_worker"]);
+        }
+        c.arg("ingest")
+            .arg("--manifest")
+            .arg(&manifest_path)
+            .arg("--meeting-dir")
+            .arg(&req.meeting_dir)
+            .arg("--input-path")
+            .arg(&req.input_path)
+            .arg("--mode")
+            .arg(req.mode.as_str());
+    });
+    run_process(cmd, cfg.step_timeout, on_event)?;
+
+    let out_path = work.join("ingest.json");
+    let bytes = std::fs::read(&out_path)
+        .map_err(|e| RunError::new(format!("could not read {}: {e}", out_path.display())))?;
+    let mut parsed: IngestResponse = serde_json::from_slice(&bytes)
+        .map_err(|e| RunError::new(format!("invalid ingest.json: {e}")))?;
+    if parsed.meeting_id.is_empty() {
+        parsed.meeting_id = req.meeting_id.clone();
+    }
+    for (idx, seg) in parsed.segments.iter_mut().enumerate() {
+        if seg.segment == 0 && idx > 0 {
+            seg.segment = idx as u32;
+        }
+    }
+    Ok(parsed)
+}
+
+/// Record the tracks, segments, screenshots and duration from [`IngestResponse`] in the store.
+pub fn record_ingest(
+    store: &Store,
+    meeting_id: &str,
+    resp: &IngestResponse,
+) -> Result<(), store::StoreError> {
+    let total_samples: u64 = resp.segments.iter().map(IngestSegment::sample_count).sum();
+    if resp.tracks.is_empty() {
+        store.upsert_track(
+            meeting_id,
+            &Track {
+                name: "imported".into(),
+                source: "file:imported".into(),
+                pid: None,
+                offset_ms: 0.0,
+                ended: true,
+                end_offset_ms: Some(resp.duration_ms as f64),
+                total_samples: Some(total_samples),
+            },
+        )?;
+    } else {
+        for t in &resp.tracks {
+            let track_samples: u64 = resp
+                .segments
+                .iter()
+                .filter(|s| s.track == t.name)
+                .map(IngestSegment::sample_count)
+                .sum();
+            store.upsert_track(
+                meeting_id,
+                &Track {
+                    name: t.name.clone(),
+                    source: t.source.clone(),
+                    pid: None,
+                    offset_ms: t.offset_ms,
+                    ended: true,
+                    end_offset_ms: Some(resp.duration_ms as f64),
+                    total_samples: Some(track_samples),
+                },
+            )?;
+        }
+    }
+    for (i, s) in resp.segments.iter().enumerate() {
+        store.add_segment(
+            meeting_id,
+            &Segment {
+                track: s.track.clone(),
+                segment: if s.segment == 0 && i > 0 {
+                    i as u32
+                } else {
+                    s.segment
+                },
+                file: s.file.clone(),
+                offset_ms: s.offset_ms,
+                samples: s.sample_count(),
+            },
+        )?;
+    }
+    for sc in &resp.screenshots {
+        store.add_screenshot(
+            meeting_id,
+            &Screenshot {
+                file: sc.file.clone(),
+                offset_ms: sc.offset_ms,
+            },
+        )?;
+    }
+    store.set_meeting_state(meeting_id, MeetingState::Stopped, Some(resp.duration_ms))?;
+    Ok(())
+}
+
+/// Request to enroll a speaker profile from a 15-30 s user-supplied audio/video sample.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct EnrollRequest {
+    pub input_path: PathBuf,
+    pub clip_out_path: PathBuf,
+    pub output_path: PathBuf,
+}
+
+/// Result written by the worker's `enroll` command to `output_path`.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct EnrollResponse {
+    pub embedding: Vec<f32>,
+    pub duration_ms: u64,
+    pub clip_file: String,
+}
+
+/// Run the worker's `"enroll"` command to extract a preview clip and 256-dim speaker embedding.
+pub fn run_enroll(
+    cfg: &WorkerConfig,
+    req: &EnrollRequest,
+    on_event: impl FnMut(&WorkerEvent),
+) -> Result<EnrollResponse, RunError> {
+    run_enroll_with(None, cfg, req, on_event)
+}
+
+/// [`run_enroll`] with an optional replacement launcher for tests.
+pub fn run_enroll_with(
+    launcher: Option<&Launcher>,
+    cfg: &WorkerConfig,
+    req: &EnrollRequest,
+    on_event: impl FnMut(&WorkerEvent),
+) -> Result<EnrollResponse, RunError> {
+    if let Some(parent) = req.clip_out_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| RunError::new(e.to_string()))?;
+    }
+    if let Some(parent) = req.output_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| RunError::new(e.to_string()))?;
+    }
+    let work_dir = req
+        .output_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    let manifest_path = work_dir.join("enroll-manifest.json");
+    let manifest = json!({
+        "version": 1,
+        "meeting_id": "enroll",
+        "tracks": [],
+        "screenshots": [],
+        "options": {
+            "enroll": {
+                "input_path": req.input_path,
+                "clip_out_path": req.clip_out_path,
+                "output_path": req.output_path,
+            }
+        }
+    });
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).unwrap_or_default(),
+    )
+    .map_err(|e| RunError::new(e.to_string()))?;
+
+    let cmd = command_with(cfg, launcher, &["run", "--frozen"]).tap(|c| {
+        if launcher.is_none() {
+            c.args(["python", "-m", "bbb_worker"]);
+        }
+        c.arg("enroll")
+            .arg("--manifest")
+            .arg(&manifest_path)
+            .arg("--meeting-dir")
+            .arg(&work_dir)
+            .arg("--input-path")
+            .arg(&req.input_path)
+            .arg("--clip-out-path")
+            .arg(&req.clip_out_path)
+            .arg("--output-path")
+            .arg(&req.output_path);
+    });
+    run_process(cmd, cfg.step_timeout, on_event)?;
+
+    let bytes = std::fs::read(&req.output_path)
+        .map_err(|e| RunError::new(format!("could not read {}: {e}", req.output_path.display())))?;
+    let parsed: EnrollResponse = serde_json::from_slice(&bytes)
+        .map_err(|e| RunError::new(format!("invalid enroll output JSON: {e}")))?;
+    if parsed.embedding.is_empty() || !parsed.embedding.iter().all(|x| x.is_finite()) {
+        return Err(RunError::new(
+            "enrollment produced an empty or non-finite speaker embedding",
+        ));
+    }
+    Ok(parsed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -896,5 +1228,69 @@ mod tests {
                 "step {step} must strip HUGGING_FACE_HUB_TOKEN"
             );
         }
+    }
+
+    #[test]
+    fn ingest_mode_and_response_round_trip_and_record_in_store() {
+        assert_eq!(IngestMode::AudioOnly.as_str(), "audio_only");
+        assert_eq!(IngestMode::AudioAndSlides.as_str(), "audio_and_slides");
+        assert_eq!(IngestMode::parse("audio_only"), Some(IngestMode::AudioOnly));
+        assert_eq!(
+            IngestMode::parse("audio_and_slides"),
+            Some(IngestMode::AudioAndSlides)
+        );
+        assert_eq!(IngestMode::parse("unknown"), None);
+
+        let resp: IngestResponse = serde_json::from_value(json!({
+            "meeting_id": "m-imp",
+            "duration_ms": 75_000,
+            "tracks": [{
+                "name": "imported",
+                "source": "file:demo.mp4",
+                "offset_ms": 0.0,
+                "segments": ["tracks/imported/000000.wav", "tracks/imported/000001.wav"]
+            }],
+            "segments": [
+                {
+                    "track": "imported",
+                    "segment": 0,
+                    "file": "tracks/imported/000000.wav",
+                    "offset_ms": 0.0,
+                    "duration_ms": 60_000,
+                    "samples": 960_000
+                },
+                {
+                    "track": "imported",
+                    "segment": 1,
+                    "file": "tracks/imported/000001.wav",
+                    "offset_ms": 60_000.0,
+                    "duration_ms": 15_000
+                }
+            ],
+            "screenshots": [
+                {"file": "img/slide-0001-0.png", "offset_ms": 0.0},
+                {"file": "img/slide-0002-12000.png", "offset_ms": 12_000.0}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(resp.segments[1].sample_count(), 240_000);
+
+        let s = Store::open_in_memory().unwrap();
+        s.create_meeting(&Meeting {
+            id: "m-imp".into(),
+            title: "Imported".into(),
+            started_unix_ms: 100,
+            duration_ms: None,
+            state: MeetingState::Recording,
+            dir: "m-imp".into(),
+        })
+        .unwrap();
+        record_ingest(&s, "m-imp", &resp).unwrap();
+        let d = s.get_meeting("m-imp").unwrap().unwrap();
+        assert_eq!(d.meeting.state, MeetingState::Stopped);
+        assert_eq!(d.meeting.duration_ms, Some(75_000));
+        assert_eq!(d.tracks.len(), 1);
+        assert_eq!(d.segments.len(), 2);
+        assert_eq!(d.screenshots.len(), 2);
     }
 }

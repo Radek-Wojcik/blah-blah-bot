@@ -4,18 +4,25 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::cycles;
 use crate::hotkeys;
-use crate::ipc::{IpcError, IpcResult, MeetingDetails, MeetingSummary};
+use crate::ipc::{self, IpcError, IpcResult, MeetingDetails, MeetingSummary};
 use crate::overlay;
-use crate::recording_dto::{RecordingState, SourceInfo, StartRecordingRequest};
+use crate::recording_dto::{RecordingLevelsDto, RecordingState, SourceInfo, StartRecordingRequest};
 use crate::settings::Settings;
 use crate::state::AppState;
 
 pub const EVENT_STATE: &str = "recording-state";
+pub const EVENT_LEVELS: &str = "recording-levels";
 pub const EVENT_MEETINGS: &str = "meetings-changed";
 
 pub fn emit_state(app: &AppHandle, state: &RecordingState) {
     if let Err(e) = app.emit(EVENT_STATE, state) {
         tracing::warn!(error = %e, "could not emit recording state");
+    }
+}
+
+pub fn emit_levels(app: &AppHandle, levels: &RecordingLevelsDto) {
+    if let Err(e) = app.emit(EVENT_LEVELS, levels) {
+        tracing::warn!(error = %e, "could not emit recording levels");
     }
 }
 
@@ -28,26 +35,37 @@ pub fn emit_meetings_changed(app: &AppHandle) {
 #[tauri::command]
 pub fn list_meetings(state: State<'_, AppState>) -> IpcResult<Vec<MeetingSummary>> {
     let jobs = state.processing().job_states();
-    state.with_store(|s| s.list_summaries()).map(|v| {
-        v.into_iter()
-            .map(|s| {
-                let mut summary: MeetingSummary = s.into();
+    let root = state.recordings_root().unwrap_or_default();
+    state.with_store(|s| {
+        let summaries = s.list_summaries()?;
+        Ok(summaries
+            .into_iter()
+            .map(|row| {
+                let dir = row.meeting.dir.clone();
+                let mut summary: MeetingSummary = row.into();
                 summary.job = jobs.get(&summary.id).copied();
+                ipc::enrich_meeting_summary(s, &root, &dir, &mut summary);
                 summary
             })
-            .collect()
+            .collect())
     })
 }
 
 #[tauri::command]
 pub fn get_meeting(state: State<'_, AppState>, id: String) -> IpcResult<MeetingDetails> {
+    let root = state.recordings_root().unwrap_or_default();
+    let jobs = state.processing().job_states();
     state
-        .with_store(|s| s.get_meeting(&id))?
-        .map(MeetingDetails::from)
-        .map(|mut d| {
-            d.summary.job = state.processing().job_states().get(&d.summary.id).copied();
-            d
-        })
+        .with_store(|s| {
+            let Some(details) = s.get_meeting(&id)? else {
+                return Ok(None);
+            };
+            let dir = details.meeting.dir.clone();
+            let mut dto = MeetingDetails::from(details);
+            dto.summary.job = jobs.get(&dto.summary.id).copied();
+            ipc::enrich_meeting_summary(s, &root, &dir, &mut dto.summary);
+            Ok(Some(dto))
+        })?
         .ok_or_else(|| IpcError::new("internal", "meeting not found"))
 }
 
@@ -186,4 +204,12 @@ pub fn save_settings(
     // Register first: a hotkey that is taken must not be saved.
     hotkeys::register(&app, &settings)?;
     state.save_settings(settings)
+}
+
+#[tauri::command]
+pub fn save_last_sources(state: State<'_, AppState>, keys: Vec<String>) -> IpcResult<Vec<String>> {
+    state.update_settings(|s| {
+        s.last_source_keys = keys;
+        Ok(s.last_source_keys.clone())
+    })
 }

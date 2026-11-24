@@ -898,7 +898,8 @@ fn hf_token_item(p: &Probe) -> SetupItem {
 }
 
 fn llama_needed(s: &ProcessingSettings) -> bool {
-    s.describe_screenshots || (s.llm.default_kind == LlmKind::Managed && !s.skip_reports)
+    (s.describe_screenshots && !s.skip_screenshot_analysis)
+        || (s.llm.default_kind == LlmKind::Managed && !s.skip_reports)
 }
 
 fn llama_item(s: &ProcessingSettings, p: &Probe) -> SetupItem {
@@ -1011,11 +1012,11 @@ fn llm_item(s: &ProcessingSettings, p: &Probe) -> SetupItem {
 }
 
 fn vision_item(s: &ProcessingSettings, p: &Probe) -> SetupItem {
-    if !s.describe_screenshots {
+    if !s.describe_screenshots || s.skip_screenshot_analysis {
         return skipped(
             KEY_VISION,
             "Screenshot analysis is turned off.",
-            "Turn it on in Settings > Processing to have screenshots described.",
+            "Turn it on in Settings > AI Models to have screenshots described.",
         );
     }
     if p.models_working {

@@ -256,6 +256,8 @@ export function demoProcessingSettings(): ProcessingSettings {
     describeScreenshots: true,
     skipReports: false,
     firstRunDone: true,
+    visionModelPath: "",
+    skipScreenshotAnalysis: false,
     voiceAccept: 0.75,
     voiceSuggest: 0.6,
     voiceMargin: 0.1,

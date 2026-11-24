@@ -269,22 +269,26 @@ def prepare(manifest: Manifest) -> tuple[dict[str, Any], str, list[windows.Windo
 def run(manifest: Manifest) -> None:
     cfg = llm_client.config_from(manifest.options)
     cfg.ensure_allowed()
+    protocol.progress(STEP, 0.05, "preparing windows")
     context, language, parts = prepare(manifest)
     results: list[dict[str, Any]] = []
     if parts:
+        total = len(parts)
         with llm_client.open_backend(cfg) as backend:
             for i, window in enumerate(parts):
-                fraction = i / len(parts)
+                start_frac = 0.10 + 0.85 * (i / total)
+                end_frac = 0.10 + 0.85 * ((i + 1) / total)
+                protocol.progress(STEP, start_frac, f"window {i + 1}/{total}")
                 results.append(
                     extract_window(
                         backend,
                         window,
                         context,
                         language,
-                        lambda message, f=fraction: protocol.progress(STEP, f, message),
+                        lambda message, f=start_frac: protocol.progress(STEP, f, message),
                     )
                 )
-                protocol.progress(STEP, (i + 1) / len(parts), f"window {i + 1}/{len(parts)}")
+                protocol.progress(STEP, end_frac, f"window {i + 1}/{total}")
     doc = {
         "version": 1,
         "meeting_id": manifest.meeting_id,

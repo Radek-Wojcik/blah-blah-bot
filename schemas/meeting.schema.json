@@ -29,6 +29,15 @@
       }
     },
     "summary": { "type": "string" },
+    "short_title": {
+      "type": "string",
+      "description": "Concise 3 to 8 word title derived from the summary or top decision/topic (at most 70 characters)."
+    },
+    "key_screenshots": {
+      "type": "array",
+      "description": "Selected distinct, high-information screenshot filenames from the meeting.",
+      "items": { "type": "string", "minLength": 1 }
+    },
     "items": {
       "type": "array",
       "items": {

@@ -26,15 +26,24 @@ import { validateVoiceSettings } from "../speakers";
 import type {
   ActiveSource,
   CloudPreview,
+  CycleDto,
+  DetectedModels,
+  GlobalVoiceProfile,
+  ImportMeetingInput,
   JobView,
+  LanguageSetting,
   LlmKind,
   MeetingDetails,
   MeetingSummary,
   ModelsProgress,
   ParticipantView,
   ProcessOptions,
+  ProjectPrefs,
+  QueueGpuOverride,
   QueueState,
+  RecordingLevels,
   RecordingState,
+  ReportMode,
   Settings,
   SetupProgress,
   SourceInfo,
@@ -42,6 +51,7 @@ import type {
   TranscriptData,
   VoiceView,
   VoicesData,
+  WizardCreateProjectInput,
 } from "./types";
 
 const MIN = 60_000;
@@ -106,17 +116,131 @@ function meeting(
   state: MeetingSummary["state"],
   trackCount: number,
   screenshotCount: number,
+  shortTitle: string | null = null,
+  reportUrl: string | null = null,
+  cycleId: string | null = null,
 ): MeetingSummary {
-  return { id, title, startedUnixMs, durationMs, state, trackCount, screenshotCount };
+  return {
+    id,
+    title,
+    startedUnixMs,
+    durationMs,
+    state,
+    trackCount,
+    screenshotCount,
+    shortTitle,
+    reportUrl,
+    cycleId,
+  };
 }
 
 const demoMeetings: MeetingSummary[] = [
-  meeting("m5", "ORBIT weekly sync", DEMO_NOW - 2 * 3600_000, 47 * MIN, "stopped", 3, 4),
-  meeting("m4", "Thruster review", DEMO_NOW - 26 * 3600_000, 82 * MIN, "stopped", 2, 1),
-  meeting("m3", "Budget check-in", DEMO_NOW - 50 * 3600_000, 31 * MIN, "stopped", 2, 0),
-  meeting("m2", "Ground station planning", DEMO_NOW - 98 * 3600_000, 64 * MIN, "stopped", 3, 7),
-  meeting("m1", "Kickoff", DEMO_NOW - 170 * 3600_000, 95 * MIN, "recovered", 3, 2),
+  meeting(
+    "m5",
+    "ORBIT weekly sync",
+    DEMO_NOW - 2 * 3600_000,
+    47 * MIN,
+    "stopped",
+    3,
+    4,
+    "Thruster test 7 pressure flat, budget 2% under",
+    "https://github.com/demo-org/nomad-cycles/blob/main/meetings/2026-11-13-m5/report.md",
+    "NOMAD",
+  ),
+  meeting(
+    "m4",
+    "Thruster review",
+    DEMO_NOW - 26 * 3600_000,
+    82 * MIN,
+    "stopped",
+    2,
+    1,
+    "Chamber valve ripple filter and second test stand",
+    null,
+    null,
+  ),
+  meeting(
+    "m3",
+    "Budget check-in",
+    DEMO_NOW - 50 * 3600_000,
+    31 * MIN,
+    "stopped",
+    2,
+    0,
+    "Q4 procurement underspend and battery order",
+    null,
+    null,
+  ),
+  meeting(
+    "m2",
+    "Ground station planning",
+    DEMO_NOW - 98 * 3600_000,
+    64 * MIN,
+    "stopped",
+    3,
+    7,
+    "Antenna array mount and Thursday dry run schedule",
+    "https://github.com/demo-org/nomad-cycles/blob/main/meetings/2026-11-09-m2/report.md",
+    null,
+  ),
+  meeting(
+    "m1",
+    "Kickoff",
+    DEMO_NOW - 170 * 3600_000,
+    95 * MIN,
+    "recovered",
+    3,
+    2,
+    "Nomad rover subsystem roles and CAN bus architecture",
+    "https://github.com/demo-org/nomad-cycles/blob/main/meetings/2026-11-06-m1/report.md",
+    null,
+  ),
 ];
+
+function wavBytes(freqHz: number, seconds: number, sampleRate = 8000): number[] {
+  const samples = Math.round(sampleRate * seconds);
+  const buf = new ArrayBuffer(44 + samples * 2);
+  const v = new DataView(buf);
+  const text = (at: number, s: string) =>
+    [...s].forEach((c, i) => v.setUint8(at + i, c.charCodeAt(0)));
+  text(0, "RIFF");
+  v.setUint32(4, 36 + samples * 2, true);
+  text(8, "WAVE");
+  text(12, "fmt ");
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true);
+  v.setUint32(24, sampleRate, true);
+  v.setUint32(28, sampleRate * 2, true);
+  v.setUint16(32, 2, true);
+  v.setUint16(34, 16, true);
+  text(36, "data");
+  v.setUint32(40, samples * 2, true);
+  const fade = Math.max(1, Math.round(sampleRate * 0.03));
+  for (let i = 0; i < samples; i += 1) {
+    const gain = Math.min(1, i / fade, (samples - i) / fade);
+    const x = Math.sin((2 * Math.PI * freqHz * i) / sampleRate) * 0.25 * gain;
+    v.setInt16(44 + i * 2, Math.round(x * 32767), true);
+  }
+  return Array.from(new Uint8Array(buf));
+}
+
+function computeMockLevels(elapsedMs: number, activeSources: ActiveSource[]): RecordingLevels {
+  const live = activeSources.filter((s) => s.status === "recording");
+  if (live.length === 0) {
+    return { peak: 0, rms: 0, bars: Array<number>(12).fill(0) };
+  }
+  const bars = Array.from({ length: 12 }, (_, i) => {
+    const wave =
+      0.18 +
+      0.48 * Math.abs(Math.sin(elapsedMs / 240 + i * 0.55)) +
+      0.24 * Math.abs(Math.cos(elapsedMs / 150 - i * 0.4));
+    return Math.min(1, Math.max(0.06, Number(wave.toFixed(3))));
+  });
+  const peak = Math.max(...bars);
+  const rms = Number(Math.sqrt(bars.reduce((acc, b) => acc + b * b, 0) / bars.length).toFixed(3));
+  return { peak, rms, bars };
+}
 
 export interface MockOptions {
   /** Start with a recording in progress (used for the widget screenshots). */
@@ -158,7 +282,22 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     recordingsDir: "Documents\\BlahBlahBot\\recordings",
     recordHotkey: "Ctrl+Alt+R",
     screenshotHotkey: "Ctrl+Alt+S",
+    localSaveEnabled: false,
+    localSaveDir: "",
+    lastSourceKeys: [],
   };
+  const projectPrefs = new Map<string, ProjectPrefs>([
+    [
+      "NOMAD",
+      {
+        cycleId: "NOMAD",
+        localSaveEnabled: false,
+        localSaveDir: "Documents\\BlahBlahBot\\notes",
+        llmKindOverride: null,
+        llmModelOverride: null,
+      },
+    ],
+  ]);
   // ----- the bridge to the Chrome extension -----
   const bridge = createMockBridge({
     now: () => Date.now(),
@@ -187,8 +326,10 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     screenshotCount: 0,
   };
   const stateListeners = new Set<{ cb: (s: RecordingState) => void }>();
+  const levelsListeners = new Set<{ cb: (l: RecordingLevels) => void }>();
   const meetingListeners = new Set<{ cb: () => void }>();
   let timer: ReturnType<typeof setInterval> | null = null;
+  let levelsTimer: ReturnType<typeof setInterval> | null = null;
   const rate = opts.clockRate ?? 1000;
 
   // ----- processing pipeline -----
@@ -208,7 +349,12 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       world.workerEnv,
       preparing ? "workerEnv" : null,
     );
-  let jobs: JobView[] = demoJobs();
+  let jobs: JobView[] = demoJobs().map((j) => ({
+    ...j,
+    scheduledUnixMs: null,
+    etaSeconds: j.state === "running" ? 42 : null,
+  }));
+  let gpuOverride: QueueGpuOverride | null = null;
   const transcripts = new Map<string, TranscriptData>([["m5", demoTranscript("m5")]]);
   const lock: { is: (meetingId: string) => boolean } = { is: () => false };
   const drafts = createMockDrafts(
@@ -231,6 +377,8 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
   if (opts.newDraft) drafts.leaveNewDraft("m5");
   /** The backend each job was started with; a job without an entry has none. */
   const plans = new Map<string, LlmPlan>();
+  /** Pre-schedule state and waiting reason per job so clearing a schedule restores them. */
+  const preSchedule = new Map<string, { state: JobView["state"]; waitingReason: string | null }>();
   /** Meetings the user confirmed sending to the cloud endpoint, with the host confirmed. */
   const confirmed = new Map<string, string>();
   // ----- speakers and voice profiles -----
@@ -321,13 +469,25 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
   const modelsListeners = new Set<{ cb: () => void }>();
   const setupListeners = new Set<{ cb: (p: SetupProgress) => void }>();
 
-  const emit = () => stateListeners.forEach((l) => l.cb(structuredClone(state)));
+  const emit = () => {
+    stateListeners.forEach((l) => l.cb(structuredClone(state)));
+    const levels =
+      state.status === "recording"
+        ? computeMockLevels(state.elapsedMs, state.sources)
+        : { peak: 0, rms: 0, bars: Array<number>(12).fill(0) };
+    levelsListeners.forEach((l) => l.cb(levels));
+  };
   const emitMeetings = () => meetingListeners.forEach((l) => l.cb());
-  const emitQueue = () => queueListeners.forEach((l) => l.cb({ jobs: structuredClone(jobs) }));
+  const queueSnapshot = (): QueueState => ({
+    jobs: structuredClone(jobs),
+    gpuOverride: structuredClone(gpuOverride),
+  });
+  const emitQueue = () => queueListeners.forEach((l) => l.cb(queueSnapshot()));
 
   const withJob = (m: MeetingSummary): MeetingSummary => ({
     ...m,
     job: jobs.find((j) => j.meetingId === m.id)?.state ?? null,
+    cycleId: m.cycleId !== undefined ? m.cycleId : cycleOf(m.id),
   });
 
   function patchJob(id: string, fn: (j: JobView) => JobView) {
@@ -379,12 +539,15 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         }
       }
       const finished = stages.every((s) => s.status === "done");
+      const progress = stagesProgress(stages);
       return {
         ...j,
         stages,
         state: finished ? "done" : "running",
         waitingReason: null,
-        progress: stagesProgress(stages),
+        progress,
+        scheduledUnixMs: finished ? null : (j.scheduledUnixMs ?? null),
+        etaSeconds: finished ? null : Math.max(1, Math.round((1 - progress) * 60)),
       };
     });
     const j = jobs.find((x) => x.meetingId === id);
@@ -398,6 +561,12 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       if (report?.cycleId && (plans.get(id) ?? NO_BACKEND).skip === null && !drafts.has(id))
         drafts.create(id, report);
       currentJob = null;
+      if (
+        driven.length === 0 ||
+        !jobs.some((x) => x.state === "running" || x.state === "queued" || x.state === "waiting")
+      ) {
+        gpuOverride = null;
+      }
       emitMeetings();
     }
     emitQueue();
@@ -444,6 +613,14 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       };
       emit();
     }, 1000);
+    if (rate > 0) {
+      let frame = 0;
+      levelsTimer = setInterval(() => {
+        frame += 1;
+        const levels = computeMockLevels(state.elapsedMs + frame * 100, state.sources);
+        levelsListeners.forEach((l) => l.cb(levels));
+      }, 100);
+    }
     emit();
   }
 
@@ -584,15 +761,21 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     stopRecording: async () => {
       if (state.status !== "recording") fail("not_recording", "Not recording");
       if (timer) clearInterval(timer);
+      if (levelsTimer) clearInterval(levelsTimer);
+      levelsTimer = null;
+      const stoppedId = state.meetingId ?? `m${meetings.length + 1}`;
       meetings = [
         meeting(
-          state.meetingId ?? `m${meetings.length + 1}`,
+          stoppedId,
           "Untitled meeting",
           DEMO_NOW,
           state.elapsedMs,
           "stopped",
           state.sources.length,
           state.screenshotCount,
+          null,
+          null,
+          cycleOf(stoppedId),
         ),
         ...meetings,
       ];
@@ -673,6 +856,8 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         progress: 0,
         waitingReason: null,
         stages: stageViews(),
+        scheduledUnixMs: null,
+        etaSeconds: 45,
       };
       jobs = existing ? jobs.map((j) => (j.meetingId === id ? fresh : j)) : [...jobs, fresh];
       transcripts.delete(id);
@@ -681,7 +866,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       emitQueue();
       emitMeetings();
     },
-    queueState: async () => ({ jobs: structuredClone(jobs) }),
+    queueState: async () => queueSnapshot(),
     retryJob: async (id) => {
       const j = jobs.find((x) => x.meetingId === id);
       if (!j) fail("internal", "Job not found");
@@ -701,9 +886,12 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       const j = jobs.find((x) => x.meetingId === id);
       if (!j) fail("internal", "Job not found");
       if (j.state === "running") fail("job_running", "A running job cannot be cancelled");
+      preSchedule.delete(id);
       jobs = jobs.filter((x) => x.meetingId !== id);
       const at = driven.indexOf(id);
       if (at >= 0) driven.splice(at, 1);
+      if (!jobs.some((x) => x.state === "running" || x.state === "queued" || x.state === "waiting"))
+        gpuOverride = null;
       emitQueue();
       emitMeetings();
     },
@@ -799,6 +987,11 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       const inCycle = splitKey(participantId);
       if (inCycle) {
         cycles.renameParticipant(inCycle.cycleId, inCycle.id, n);
+        const legacy = participants.find((x) => x.id === `p-${inCycle.id}`);
+        if (legacy) {
+          legacy.name = n;
+          participants.sort((a, b) => a.name.localeCompare(b.name));
+        }
         emitCycles();
         return;
       }
@@ -814,6 +1007,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       if (inCycle) {
         cycles.removeParticipant(inCycle.cycleId, inCycle.id);
         stats.delete(participantId);
+        participants = participants.filter((p) => p.id !== `p-${inCycle.id}`);
         emitCycles();
       }
       participants = participants.filter((p) => p.id !== participantId);
@@ -825,7 +1019,9 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     },
     resetProfile: async (participantId) => {
       stats.delete(participantId);
-      const p = participants.find((x) => x.id === participantId);
+      const inCycle = splitKey(participantId);
+      const legacyId = inCycle ? `p-${inCycle.id}` : participantId;
+      const p = participants.find((x) => x.id === legacyId);
       if (p) {
         p.sampleCount = 0;
         p.speechMs = 0;
@@ -965,11 +1161,436 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         recordingsDir: s.recordingsDir,
         recordHotkey: s.recordHotkey,
         screenshotHotkey: s.screenshotHotkey,
+        ...(s.localSaveEnabled === undefined ? {} : { localSaveEnabled: s.localSaveEnabled }),
+        ...(s.localSaveDir === undefined ? {} : { localSaveDir: s.localSaveDir }),
+        ...(s.lastSourceKeys === undefined ? {} : { lastSourceKeys: [...s.lastSourceKeys] }),
       });
+    },
+    saveLastSources: async (keys: string[]) => {
+      settings.lastSourceKeys = [...keys];
+      return [...settings.lastSourceKeys];
+    },
+    setQueueGpuOverride: async (overrideCfg: QueueGpuOverride | null) => {
+      gpuOverride = overrideCfg ? structuredClone(overrideCfg) : null;
+      if (
+        !jobs.some((x) => x.state === "running" || x.state === "queued" || x.state === "waiting")
+      ) {
+        gpuOverride = null;
+      }
+      emitQueue();
+      return queueSnapshot();
+    },
+    forceProcess: async (meetingId: string) => {
+      const m = meetings.find((x) => x.id === meetingId);
+      if (!m) fail("not_found", "Meeting not found");
+      preSchedule.delete(meetingId);
+      if (!plans.has(meetingId)) {
+        plans.set(meetingId, planLlm(meetingId, undefined));
+      }
+      const existing = jobs.find((j) => j.meetingId === meetingId);
+      if (existing) {
+        patchJob(meetingId, (j) => ({
+          ...j,
+          state: "running",
+          waitingReason: null,
+          scheduledUnixMs: null,
+          etaSeconds: j.etaSeconds ?? 30,
+          stages: j.stages.map((s) =>
+            s.status === "failed" ? { ...s, status: "pending", error: null } : s,
+          ),
+        }));
+      } else {
+        const fresh: JobView = {
+          meetingId,
+          title: m.title,
+          state: "running",
+          progress: 0,
+          waitingReason: null,
+          stages: stageViews(),
+          scheduledUnixMs: null,
+          etaSeconds: 45,
+        };
+        jobs = [...jobs, fresh];
+      }
+      enqueue(meetingId);
+      emitQueue();
+      emitMeetings();
+      return structuredClone(jobs.find((j) => j.meetingId === meetingId)!);
+    },
+    scheduleJob: async (meetingId: string, scheduledUnixMs: number | null) => {
+      const m = meetings.find((x) => x.id === meetingId);
+      if (!m) fail("not_found", "Meeting not found");
+      const existing = jobs.find((j) => j.meetingId === meetingId);
+      if (!existing) {
+        plans.set(meetingId, planLlm(meetingId, undefined));
+        jobs = [
+          ...jobs,
+          {
+            meetingId,
+            title: m.title,
+            state: scheduledUnixMs !== null ? "waiting" : "queued",
+            progress: 0,
+            waitingReason:
+              scheduledUnixMs !== null
+                ? `Scheduled for ${new Date(scheduledUnixMs).toISOString()}`
+                : null,
+            stages: stageViews(),
+            scheduledUnixMs,
+            etaSeconds: null,
+          },
+        ];
+      } else if (scheduledUnixMs !== null) {
+        if (!preSchedule.has(meetingId)) {
+          preSchedule.set(meetingId, {
+            state: existing.state,
+            waitingReason: existing.waitingReason,
+          });
+        }
+        patchJob(meetingId, (j) => ({
+          ...j,
+          scheduledUnixMs,
+          state: "waiting",
+          waitingReason: `Scheduled for ${new Date(scheduledUnixMs).toISOString()}`,
+        }));
+      } else {
+        const prev = preSchedule.get(meetingId);
+        preSchedule.delete(meetingId);
+        patchJob(meetingId, (j) => ({
+          ...j,
+          scheduledUnixMs: null,
+          state: prev
+            ? prev.state
+            : j.state === "waiting" && j.waitingReason?.startsWith("Scheduled")
+              ? "queued"
+              : j.state,
+          waitingReason: prev
+            ? prev.waitingReason
+            : j.waitingReason?.startsWith("Scheduled")
+              ? null
+              : j.waitingReason,
+        }));
+      }
+      if (scheduledUnixMs !== null) {
+        const at = driven.indexOf(meetingId);
+        if (at >= 0) driven.splice(at, 1);
+      } else {
+        const target = jobs.find((j) => j.meetingId === meetingId);
+        if (target?.state === "queued") enqueue(meetingId);
+      }
+      emitQueue();
+      emitMeetings();
+      return structuredClone(jobs.find((j) => j.meetingId === meetingId)!);
+    },
+    getProjectPrefs: async (cycleId: string) => {
+      const prefs = projectPrefs.get(cycleId) ?? {
+        cycleId,
+        localSaveEnabled: false,
+        localSaveDir: "",
+        llmKindOverride: null,
+        llmModelOverride: null,
+      };
+      return structuredClone(prefs);
+    },
+    saveProjectPrefs: async (prefs: ProjectPrefs) => {
+      const saved: ProjectPrefs = {
+        cycleId: prefs.cycleId,
+        localSaveEnabled: Boolean(prefs.localSaveEnabled),
+        localSaveDir: prefs.localSaveDir ?? "",
+        llmKindOverride: prefs.llmKindOverride ?? null,
+        llmModelOverride: prefs.llmModelOverride ?? null,
+      };
+      projectPrefs.set(saved.cycleId, structuredClone(saved));
+      return structuredClone(saved);
+    },
+    wizardCreateProject: async (req: WizardCreateProjectInput): Promise<CycleDto> => {
+      const id = req.id.trim();
+      const name = req.name.trim();
+      let repoId: string | undefined;
+      if (req.mode === "existing") {
+        const remoteUrl = (req.remoteUrl ?? "").trim();
+        const repoPath = (req.repoPath ?? "").trim();
+        if (remoteUrl !== "") {
+          const existingRepo = cycles
+            .listRepos()
+            .find((r) => r.remote?.toLowerCase() === remoteUrl.toLowerCase());
+          const repo = existingRepo ?? cycles.addRepo({ kind: "clone", url: remoteUrl });
+          repoId = repo.id;
+        } else if (repoPath !== "") {
+          const existingRepo = cycles
+            .listRepos()
+            .find((r) => r.path.toLowerCase() === repoPath.toLowerCase());
+          const repo = existingRepo ?? cycles.addRepo({ kind: "local", path: repoPath });
+          repoId = repo.id;
+        } else {
+          fail("invalid", "choose an existing folder or enter a remote repository address");
+        }
+      } else {
+        const repoPath = (req.repoPath ?? "").trim();
+        if (repoPath !== "") {
+          const existingRepo = cycles
+            .listRepos()
+            .find((r) => r.path.toLowerCase() === repoPath.toLowerCase());
+          const repo = existingRepo ?? cycles.addRepo({ kind: "local", path: repoPath });
+          repoId = repo.id;
+        }
+      }
+      const existingCycle = cycles.cycle(id);
+      const details = existingCycle ? cycles.getCycle(id) : cycles.createCycle(id, name, repoId);
+      const cycle = structuredClone(details.cycle);
+      if (name !== "") cycle.name = name;
+      if (
+        req.outputLanguage === "auto" ||
+        req.outputLanguage === "pl" ||
+        req.outputLanguage === "en"
+      ) {
+        cycle.languages.output = req.outputLanguage as LanguageSetting;
+      }
+      if (
+        req.defaultReportMode === "fixed" ||
+        req.defaultReportMode === "template" ||
+        req.defaultReportMode === "auto" ||
+        req.defaultReportMode === "by-type"
+      ) {
+        cycle.report.defaultMode = req.defaultReportMode as ReportMode;
+      }
+      if (req.githubRepo && req.githubRepo.trim() !== "") {
+        cycles.setGithubRepo(details.repoId, req.githubRepo.trim());
+        cycle.targets.github = { path: "meetings", publish: "on-approval", issues: true };
+      }
+      if (req.discordWebhookRef && req.discordWebhookRef.trim() !== "") {
+        cycle.targets.discord = {
+          webhook: req.discordWebhookRef.trim(),
+          publish: "on-approval",
+        };
+      }
+      const saved = cycles.saveCycle(cycle);
+      if (!saved.saved) {
+        const first = saved.issues[0];
+        fail(
+          "invalid",
+          first ? `${first.path}: ${first.message}` : "invalid project configuration",
+        );
+      }
+      projectPrefs.set(id, {
+        cycleId: id,
+        localSaveEnabled: Boolean(req.localSaveEnabled),
+        localSaveDir: req.localSaveDir ?? "",
+        llmKindOverride: null,
+        llmModelOverride: null,
+      });
+      emitCycles();
+      return structuredClone(saved.details!.cycle);
+    },
+    importMeeting: async (req: ImportMeetingInput): Promise<MeetingDetails> => {
+      const filePath = req.filePath.trim();
+      if (filePath === "") fail("invalid", "choose an audio or video file to import");
+      const cycleId = req.cycleId.trim();
+      if (cycleId === "") fail("report_mode_required", "choose a project before importing");
+      cycles.getCycle(cycleId);
+      const stem =
+        filePath
+          .split(/[/\\]/)
+          .pop()
+          ?.replace(/\.[^.]+$/, "") || "Imported recording";
+      const id = `m${meetings.length + 1}`;
+      const screenshotCount = req.mediaMode === "audio_and_slides" ? 4 : 0;
+      const summary = meeting(
+        id,
+        stem,
+        DEMO_NOW,
+        24 * MIN,
+        "stopped",
+        1,
+        screenshotCount,
+        `${stem} (${req.mediaMode === "audio_and_slides" ? "slides extracted" : "audio import"})`,
+        null,
+        cycleId,
+      );
+      meetings = [summary, ...meetings];
+      const mode: ReportMode =
+        req.reportMode === "fixed" ||
+        req.reportMode === "template" ||
+        req.reportMode === "auto" ||
+        req.reportMode === "by-type"
+          ? req.reportMode
+          : "auto";
+      reports.set(id, {
+        cycleId,
+        mode,
+        template: null,
+        meetingType: req.meetingType ?? null,
+        outputLanguage: req.outputLanguage ?? null,
+      });
+      plans.set(id, planLlm(id, undefined));
+      const newJob: JobView = {
+        meetingId: id,
+        title: stem,
+        state: req.processNow ? "queued" : "waiting",
+        progress: 0,
+        waitingReason: req.processNow ? null : "Added to processing queue",
+        stages: stageViews(),
+        scheduledUnixMs: null,
+        etaSeconds: req.processNow ? 45 : null,
+      };
+      jobs = [newJob, ...jobs];
+      if (req.processNow) enqueue(id);
+      emitMeetings();
+      emitQueue();
+      return {
+        summary: withJob(summary),
+        tracks: [
+          {
+            name: "imported",
+            source: filePath.split(/[/\\]/).pop() ?? filePath,
+            offsetMs: 0,
+            ended: true,
+          },
+        ],
+        screenshots: Array.from({ length: screenshotCount }, (_, i) => ({
+          file: `img/slide-${String(i + 1).padStart(4, "0")}-${(i + 1) * 30_000}.png`,
+          offsetMs: (i + 1) * 30_000,
+        })),
+      };
+    },
+    exportMeetingMarkdown: async (meetingId: string, destPath?: string | null) => {
+      const found = meetings.find((x) => x.id === meetingId);
+      if (!found) fail("not_found", "Meeting not found");
+      if (destPath && destPath.trim() !== "") return destPath.trim();
+      const cycleId = cycleOf(meetingId) ?? "NOMAD";
+      const dir =
+        projectPrefs.get(cycleId)?.localSaveDir ||
+        settings.localSaveDir ||
+        "Documents\\BlahBlahBot\\notes";
+      return `${dir}\\${cycleId}\\2026-11-13-${meetingId}\\report.md`;
+    },
+    autoDetectModels: async (): Promise<DetectedModels> => ({
+      llamaServerPath: processing.llamaServerPath || "C:\\Tools\\llama\\llama-server.exe",
+      llmModels: [
+        "D:\\Models\\gemma-4-12b-q4_k_m.gguf",
+        "D:\\Models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf",
+      ],
+      visionModels: ["D:\\Models\\Qwen3-VL-4B-Instruct-Q4_K_M.gguf"],
+      defaultLocalSaveDir: "Documents\\BlahBlahBot\\notes",
+    }),
+    listAllVoiceProfiles: async (): Promise<GlobalVoiceProfile[]> => {
+      const allCycles = cycles.listCycles();
+      const projectsForName = (name: string): string[] =>
+        allCycles
+          .filter((c) => cycles.participants(c.id).some((p) => sameName(p.name, name)))
+          .map((c) => c.id)
+          .sort();
+      const out: GlobalVoiceProfile[] = [];
+      for (const c of allCycles.filter((x) => x.valid)) {
+        for (const p of cycles.participants(c.id)) {
+          const fullId = keyOf(c.id, p.id);
+          const st = stats.get(fullId);
+          const sampleCount = st?.sampleCount ?? 0;
+          out.push({
+            id: fullId,
+            name: p.name,
+            cycleId: c.id,
+            projects: projectsForName(p.name),
+            sampleCount,
+            updatedUnixMs: DEMO_NOW - 3600_000,
+            hasSampleClip: sampleCount > 0,
+          });
+        }
+      }
+      const legacyShadowIds = new Set(["p-alex", "p-jan", "p-kasia"]);
+      for (const p of participants) {
+        if (
+          !legacyShadowIds.has(p.id) &&
+          !out.some((existing) => sameName(existing.name, p.name) && existing.cycleId !== null)
+        ) {
+          out.push({
+            id: p.id,
+            name: p.name,
+            cycleId: null,
+            projects: projectsForName(p.name),
+            sampleCount: p.sampleCount,
+            updatedUnixMs: DEMO_NOW - 7200_000,
+            hasSampleClip: p.sampleCount > 0,
+          });
+        }
+      }
+      return out.sort((a, b) => a.name.localeCompare(b.name));
+    },
+    voiceProfileSampleClip: async (participantId: string): Promise<number[]> => {
+      const inCycle = splitKey(participantId);
+      if (inCycle) {
+        const exists = cycles.participants(inCycle.cycleId).some((p) => p.id === inCycle.id);
+        if (!exists) fail("not_found", "participant not found");
+        if ((stats.get(participantId)?.sampleCount ?? 0) === 0) {
+          fail("not_found", "no sample clip available for this participant");
+        }
+      } else {
+        const found = participants.find((p) => p.id === participantId);
+        if (!found) fail("not_found", "participant not found");
+        if (found.sampleCount === 0) {
+          fail("not_found", "no sample clip available for this participant");
+        }
+      }
+      return wavBytes(260, 0.5, 8000);
+    },
+    enrollVoiceProfile: async (
+      name: string,
+      cycleId: string | null,
+      audioPath: string,
+    ): Promise<GlobalVoiceProfile> => {
+      const n = cleanName(name);
+      if (audioPath.trim() === "") fail("invalid", "choose an audio file for voice enrollment");
+      const allCycles = cycles.listCycles();
+      const projectsForName = (personName: string): string[] =>
+        allCycles
+          .filter((c) => cycles.participants(c.id).some((p) => sameName(p.name, personName)))
+          .map((c) => c.id)
+          .sort();
+      if (cycleId && cycleId.trim() !== "") {
+        const cid = cycleId.trim();
+        const pid = cycles.addParticipant(cid, n);
+        const fullId = keyOf(cid, pid);
+        const prev = stats.get(fullId) ?? { sampleCount: 0, speechMs: 0 };
+        const sampleCount = prev.sampleCount + 1;
+        stats.set(fullId, { sampleCount, speechMs: prev.speechMs + 20_000 });
+        emitCycles();
+        return {
+          id: fullId,
+          name: n,
+          cycleId: cid,
+          projects: projectsForName(n),
+          sampleCount,
+          updatedUnixMs: DEMO_NOW,
+          hasSampleClip: true,
+        };
+      }
+      let p = participants.find((x) => sameName(x.name, n));
+      if (!p) {
+        p = { id: `p-new-${nextParticipant++}`, name: n, sampleCount: 1, speechMs: 20_000 };
+        participants = [...participants, p].sort((a, b) => a.name.localeCompare(b.name));
+      } else {
+        p.sampleCount += 1;
+        p.speechMs += 20_000;
+      }
+      return {
+        id: p.id,
+        name: p.name,
+        cycleId: null,
+        projects: projectsForName(p.name),
+        sampleCount: p.sampleCount,
+        updatedUnixMs: DEMO_NOW,
+        hasSampleClip: true,
+      };
     },
     ...bridge.methods,
     ...detection.methods,
     onRecordingState: (cb) => subscribe(stateListeners, cb),
+    onRecordingLevels: (cb) => {
+      const sub = subscribe(levelsListeners, cb);
+      if (state.status === "recording") {
+        queueMicrotask(() => cb(computeMockLevels(state.elapsedMs, state.sources)));
+      }
+      return sub;
+    },
     onMeetingsChanged: (cb) => subscribe(meetingListeners, cb),
     onQueueChanged: (cb) => subscribe(queueListeners, cb),
     onModelsProgress: (cb) => subscribe(progressListeners, cb),

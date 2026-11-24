@@ -12,7 +12,7 @@ const goTo = (page: Page, step: RegExp) => steps(page).getByRole("button", { nam
 
 async function leaveSetup(page: Page) {
   await page.getByRole("button", { name: "Leave setup" }).click();
-  await expect(page.getByRole("heading", { name: "Meetings", level: 2 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Projects", level: 2 })).toBeVisible();
 }
 
 test.describe("first-run wizard on the mock backend", () => {
@@ -86,7 +86,7 @@ test.describe("first-run wizard on the mock backend", () => {
     await page.getByRole("button", { name: "Create first cycle" }).click();
     await expect(page.getByText("Cycle WEEKLY was created.")).toBeVisible();
     await page.getByRole("button", { name: "Finish" }).click();
-    await expect(page.getByRole("heading", { name: "Meetings", level: 2 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Projects", level: 2 })).toBeVisible();
     await expect(page.getByText(/Setup is incomplete/)).toHaveCount(0);
   });
 
@@ -107,7 +107,7 @@ test.describe("first-run wizard on the mock backend", () => {
     // The demo already has cycles: the step says so and only offers to finish.
     await expect(page.getByText(/There are already \d+ cycles\./)).toBeVisible();
     await page.getByRole("button", { name: "Finish", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Meetings", level: 2 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Projects", level: 2 })).toBeVisible();
     await expect(page.getByText(/Setup is incomplete/)).toHaveCount(0);
   });
 
@@ -218,6 +218,7 @@ test.describe("first-run wizard on the mock backend", () => {
     await leaveSetup(page);
 
     await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("tab", { name: "Processing" }).click();
     await page.getByRole("button", { name: "Run setup again" }).click();
     await expect(title(page, "Welcome")).toBeVisible();
   });

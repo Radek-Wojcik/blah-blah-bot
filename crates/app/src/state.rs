@@ -220,6 +220,10 @@ impl AppState {
         &self.data_dir
     }
 
+    pub fn is_demo(&self) -> bool {
+        self.demo
+    }
+
     /// The registered cycle repositories.
     pub fn cycle_repos(&self) -> Vec<CycleRepoSetting> {
         self.settings

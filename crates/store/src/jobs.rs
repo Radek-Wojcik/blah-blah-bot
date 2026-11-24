@@ -61,6 +61,9 @@ pub struct JobRow {
     pub updated_unix_ms: i64,
     /// Free-form JSON options chosen when the job was created (language, backends).
     pub options: String,
+    /// Optional future timestamp (Unix ms) before which the job should not start automatically.
+    #[serde(default)]
+    pub scheduled_unix_ms: Option<i64>,
     pub stages: Vec<StageRow>,
 }
 
@@ -106,18 +109,20 @@ impl Store {
         let head = self
             .conn
             .query_row(
-                "SELECT created_unix_ms, updated_unix_ms, options FROM jobs WHERE meeting_id = ?1",
+                "SELECT created_unix_ms, updated_unix_ms, options, scheduled_unix_ms
+                 FROM jobs WHERE meeting_id = ?1",
                 params![meeting_id],
                 |r| {
                     Ok((
                         r.get::<_, i64>(0)?,
                         r.get::<_, i64>(1)?,
                         r.get::<_, String>(2)?,
+                        r.get::<_, Option<i64>>(3)?,
                     ))
                 },
             )
             .optional()?;
-        let Some((created_unix_ms, updated_unix_ms, options)) = head else {
+        let Some((created_unix_ms, updated_unix_ms, options, scheduled_unix_ms)) = head else {
             return Ok(None);
         };
         let mut stmt = self.conn.prepare(
@@ -153,6 +158,7 @@ impl Store {
             created_unix_ms,
             updated_unix_ms,
             options,
+            scheduled_unix_ms,
             stages,
         }))
     }
@@ -256,6 +262,19 @@ impl Store {
         )? > 0)
     }
 
+    /// Set or clear the scheduled execution timestamp (Unix ms) for a job.
+    /// Returns `false` when the meeting has no job.
+    pub fn set_job_schedule(
+        &self,
+        meeting_id: &str,
+        scheduled_unix_ms: Option<i64>,
+    ) -> Result<bool> {
+        Ok(self.conn.execute(
+            "UPDATE jobs SET scheduled_unix_ms = ?2 WHERE meeting_id = ?1",
+            params![meeting_id, scheduled_unix_ms],
+        )? > 0)
+    }
+
     pub fn delete_job(&self, meeting_id: &str) -> Result<bool> {
         Ok(self.conn.execute(
             "DELETE FROM jobs WHERE meeting_id = ?1",
@@ -345,5 +364,20 @@ mod tests {
         s.create_job("m1", &["asr"], "{}", 10).unwrap();
         s.delete_meeting("m1").unwrap();
         assert!(s.get_job("m1").unwrap().is_none());
+    }
+
+    #[test]
+    fn job_schedule_can_be_set_and_cleared() {
+        let s = store_with_meeting();
+        assert!(!s.set_job_schedule("m1", Some(50_000)).unwrap());
+        s.create_job("m1", &["asr"], "{}", 10).unwrap();
+        assert_eq!(s.get_job("m1").unwrap().unwrap().scheduled_unix_ms, None);
+        assert!(s.set_job_schedule("m1", Some(50_000)).unwrap());
+        assert_eq!(
+            s.get_job("m1").unwrap().unwrap().scheduled_unix_ms,
+            Some(50_000)
+        );
+        assert!(s.set_job_schedule("m1", None).unwrap());
+        assert_eq!(s.get_job("m1").unwrap().unwrap().scheduled_unix_ms, None);
     }
 }

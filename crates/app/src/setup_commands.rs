@@ -10,10 +10,10 @@ use std::sync::Arc;
 use queue::worker::{self, JobOptions};
 use serde::Serialize;
 use store::LlmKind;
-use tauri::{Emitter, State};
+use tauri::State;
 
 use crate::ipc::{IpcError, IpcResult};
-use crate::processing::{Processing, EVENT_SETUP_PROGRESS};
+use crate::processing::Processing;
 use crate::secrets;
 use crate::setup::{
     self, DetectEnv, GgufFile, JobNeeds, LlamaResolution, PathCheck, PathKind, PathProblem, Probe,
@@ -108,7 +108,9 @@ pub(crate) fn ensure_ready(state: &AppState, meeting_id: &str, job: &JobOptions)
         )
     };
     let needs = JobNeeds {
-        vision: settings.describe_screenshots && has_screenshots,
+        vision: settings.describe_screenshots
+            && !settings.skip_screenshot_analysis
+            && has_screenshots,
         llm_local: job.llm.as_ref().is_some_and(|l| l.kind == LlmKind::Managed),
         llm_missing: has_cycle && job.llm.is_none() && !settings.skip_reports,
     };
@@ -224,19 +226,17 @@ pub fn prepare_worker_env(state: State<'_, AppState>) -> IpcResult<()> {
     let spawned = std::thread::Builder::new()
         .name("worker-env".into())
         .spawn(move || {
-            let app = processing.app().clone();
             let emit = |line: &str, done: bool, ok: Option<bool>, error: Option<String>| {
-                let _ = app.emit(
-                    EVENT_SETUP_PROGRESS,
-                    SetupProgress {
-                        key: setup::KEY_WORKER_ENV,
-                        line: line.to_string(),
-                        fraction: done.then_some(1.0).filter(|_| ok == Some(true)),
-                        done,
-                        ok,
-                        error,
-                    },
-                );
+                if let Ok(payload) = serde_json::to_value(SetupProgress {
+                    key: setup::KEY_WORKER_ENV,
+                    line: line.to_string(),
+                    fraction: done.then_some(1.0).filter(|_| ok == Some(true)),
+                    done,
+                    ok,
+                    error,
+                }) {
+                    processing.emit_setup_progress(payload);
+                }
             };
             emit("Preparing the processing environment", false, None, None);
             let result = setup::run_uv_sync(&uv, &worker_dir, &env_dir, |line| {

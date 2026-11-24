@@ -836,7 +836,8 @@ function LlmStep({ ctx }: { ctx: Ctx }) {
 function VisionStep({ ctx }: { ctx: Ctx }) {
   const { status, settings, change, act } = ctx;
   const item = itemOf(status, "vision");
-  const on = settings?.describeScreenshots ?? true;
+  const on =
+    (settings?.describeScreenshots ?? true) && !(settings?.skipScreenshotAnalysis ?? false);
   return (
     <>
       <p>
@@ -859,7 +860,15 @@ function VisionStep({ ctx }: { ctx: Ctx }) {
           <button
             type="button"
             className="btn btn-ghost btn-small"
-            onClick={() => void act(change((s) => ({ ...s, describeScreenshots: false })))}
+            onClick={() =>
+              void act(
+                change((s) => ({
+                  ...s,
+                  describeScreenshots: false,
+                  skipScreenshotAnalysis: true,
+                })),
+              )
+            }
           >
             Skip screenshot analysis
           </button>
@@ -867,7 +876,15 @@ function VisionStep({ ctx }: { ctx: Ctx }) {
           <button
             type="button"
             className="btn btn-small"
-            onClick={() => void act(change((s) => ({ ...s, describeScreenshots: true })))}
+            onClick={() =>
+              void act(
+                change((s) => ({
+                  ...s,
+                  describeScreenshots: true,
+                  skipScreenshotAnalysis: false,
+                })),
+              )
+            }
           >
             Turn screenshot analysis on
           </button>

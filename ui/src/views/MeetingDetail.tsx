@@ -1,0 +1,192 @@
+import { useEffect, useState } from "react";
+import { useBackend } from "../backend-context";
+import { formatDateTimeUtc, formatDuration } from "../format";
+import { errorMessage } from "../hooks";
+import type { MeetingDetails } from "../ipc/types";
+import { jobStateLabel } from "../processing";
+import { DraftEditor } from "./DraftEditor";
+import { isSafeHttpUrl } from "./ProjectDetail";
+import { SpeakersView } from "./Speakers";
+import { TranscriptView } from "./Transcript";
+
+export type MeetingDetailTab = "draft" | "transcript" | "speakers";
+
+export interface MeetingDetailViewProps {
+  meetingId: string;
+  initialTab?: MeetingDetailTab;
+  highlightMs?: number | null;
+  onBack: () => void;
+  onOpenQueue: () => void;
+}
+
+/**
+ * Tabbed meeting workspace combining Draft & Report, Transcript, and Speakers views, plus a
+ * one-click local Markdown (.md) export button in the header.
+ */
+export function MeetingDetailView({
+  meetingId,
+  initialTab = "draft",
+  highlightMs = null,
+  onBack,
+  onOpenQueue,
+}: MeetingDetailViewProps) {
+  const backend = useBackend();
+  const [tab, setTab] = useState<MeetingDetailTab>(initialTab);
+  const [jumpMs, setJumpMs] = useState<number | null>(highlightMs);
+  const [details, setDetails] = useState<MeetingDetails | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportedPath, setExportedPath] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void backend
+      .getMeeting(meetingId)
+      .then((d) => {
+        if (!cancelled) setDetails(d);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [backend, meetingId]);
+
+  const handleExport = async () => {
+    setExportError(null);
+    setExportedPath(null);
+    setExporting(true);
+    try {
+      const savedPath = await backend.exportMeetingMarkdown(meetingId);
+      setExportedPath(savedPath);
+    } catch (e) {
+      setExportError(errorMessage(e));
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const summary = details?.summary;
+  const heading = summary?.shortTitle?.trim() || summary?.title || meetingId;
+  const safeReportUrl = isSafeHttpUrl(summary?.reportUrl) ? summary.reportUrl : null;
+
+  return (
+    <>
+      <div className="page-head">
+        <div>
+          <h2>
+            <span className="glitch" data-text={heading}>
+              {heading}
+            </span>
+          </h2>
+          {summary && (
+            <p className="card-when" style={{ margin: "4px 0 0" }}>
+              {formatDateTimeUtc(summary.startedUnixMs)} UTC
+              {summary.durationMs !== null && ` · ${formatDuration(summary.durationMs)}`}
+              {summary.shortTitle && summary.shortTitle !== summary.title && ` · ${summary.title}`}
+              {summary.job && (
+                <>
+                  {" "}
+                  <span className={`badge badge-job-${summary.job}`}>
+                    {jobStateLabel(summary.job)}
+                  </span>
+                </>
+              )}
+            </p>
+          )}
+        </div>
+
+        <span className="head-actions">
+          {safeReportUrl && (
+            <a
+              className="btn btn-small"
+              href={safeReportUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              View on GitHub
+            </a>
+          )}
+          <button
+            type="button"
+            className="btn btn-small btn-record"
+            disabled={exporting}
+            onClick={() => void handleExport()}
+          >
+            {exporting ? "Saving…" : "Download note (.md)"}
+          </button>
+          <button type="button" className="btn btn-small btn-ghost" onClick={onBack}>
+            Back
+          </button>
+        </span>
+      </div>
+
+      {exportedPath && (
+        <p className="valid-note" role="status">
+          Saved note to {exportedPath}
+        </p>
+      )}
+      {exportError && (
+        <p className="error" role="alert">
+          {exportError}
+        </p>
+      )}
+
+      <div className="pane-toggle" role="tablist" aria-label="Meeting sections">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "draft"}
+          className={tab === "draft" ? "btn btn-small btn-stop" : "btn btn-small btn-ghost"}
+          onClick={() => setTab("draft")}
+        >
+          Draft &amp; Report
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "transcript"}
+          className={tab === "transcript" ? "btn btn-small btn-stop" : "btn btn-small btn-ghost"}
+          onClick={() => setTab("transcript")}
+        >
+          Transcript
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "speakers"}
+          className={tab === "speakers" ? "btn btn-small btn-stop" : "btn btn-small btn-ghost"}
+          onClick={() => setTab("speakers")}
+        >
+          Speakers
+        </button>
+      </div>
+
+      {tab === "draft" && (
+        <DraftEditor
+          meetingId={meetingId}
+          onBack={onBack}
+          onOpenTranscript={(atMs) => {
+            setJumpMs(atMs);
+            setTab("transcript");
+          }}
+          onOpenQueue={onOpenQueue}
+        />
+      )}
+      {tab === "transcript" && (
+        <TranscriptView
+          meetingId={meetingId}
+          highlightMs={jumpMs}
+          onBack={onBack}
+          onOpenSpeakers={() => setTab("speakers")}
+        />
+      )}
+      {tab === "speakers" && (
+        <SpeakersView
+          meetingId={meetingId}
+          onBack={onBack}
+          onOpenTranscript={() => setTab("transcript")}
+        />
+      )}
+    </>
+  );
+}

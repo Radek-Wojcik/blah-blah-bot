@@ -83,6 +83,21 @@ impl Stage {
             Self::Merge | Self::SpeakerId | Self::Clips | Self::AudioCleanup => false,
         }
     }
+
+    /// Relative weight of this stage in overall job progress (sums to 100 across all 9 stages).
+    pub const fn weight(self) -> f32 {
+        match self {
+            Self::Asr => 30.0,
+            Self::Diarize => 28.0,
+            Self::Merge => 2.0,
+            Self::SpeakerId => 2.0,
+            Self::Clips => 2.0,
+            Self::AudioCleanup => 1.0,
+            Self::Vision => 12.0,
+            Self::Extract => 15.0,
+            Self::Reduce => 8.0,
+        }
+    }
 }
 
 /// What the queue should do next for one job.
@@ -127,17 +142,63 @@ pub fn audio_is_expendable(job: &JobRow) -> bool {
     })
 }
 
-/// Share of stages that are done, for progress bars.
+/// Whether a stage row represents a skipped stage (`done` with an explanatory `note`).
+fn row_is_skipped(row: &store::StageRow) -> bool {
+    row.status == StageStatus::Done && row.note.is_some()
+}
+
+/// Normalized weight (`0.0..=1.0`) of `stage` among the non-skipped stages of `job`.
+pub fn stage_weight(job: &JobRow, stage: Stage) -> f32 {
+    let mut total = 0.0f32;
+    let mut target = 0.0f32;
+    for st in STAGES {
+        let row = job.stages.iter().find(|s| s.stage == st.as_str());
+        if row.is_some_and(row_is_skipped) {
+            continue;
+        }
+        let w = st.weight();
+        total += w;
+        if st == stage {
+            target = w;
+        }
+    }
+    if total <= 0.0 {
+        0.0
+    } else {
+        target / total
+    }
+}
+
+/// Overall weighted progress (`0.0..=1.0`) of a job across its non-skipped stages.
 pub fn progress(job: &JobRow) -> f32 {
-    let done = STAGES
-        .iter()
-        .filter(|st| {
-            job.stages
-                .iter()
-                .any(|s| s.stage == st.as_str() && s.status == StageStatus::Done)
-        })
-        .count();
-    done as f32 / STAGES.len() as f32
+    progress_with_live(job, None)
+}
+
+/// Overall weighted progress (`0.0..=1.0`) of a job across its non-skipped stages, smoothly
+/// incorporating the intra-stage progress (`0.0..=1.0`) of the currently running stage.
+pub fn progress_with_live(job: &JobRow, live: Option<(Stage, f32)>) -> f32 {
+    let mut total = 0.0f32;
+    let mut completed = 0.0f32;
+    for st in STAGES {
+        let row = job.stages.iter().find(|s| s.stage == st.as_str());
+        if row.is_some_and(row_is_skipped) {
+            continue;
+        }
+        let w = st.weight();
+        total += w;
+        if row.is_some_and(|r| r.status == StageStatus::Done) {
+            completed += w;
+        } else if let Some((live_stage, fraction)) = live {
+            if live_stage == st {
+                completed += w * fraction.clamp(0.0, 1.0);
+            }
+        }
+    }
+    if total <= 0.0 {
+        1.0
+    } else {
+        (completed / total).clamp(0.0, 1.0)
+    }
 }
 
 #[cfg(test)]
@@ -152,6 +213,7 @@ mod tests {
             created_unix_ms: 0,
             updated_unix_ms: 0,
             options: "{}".into(),
+            scheduled_unix_ms: None,
             stages: STAGES
                 .iter()
                 .enumerate()
@@ -256,7 +318,28 @@ mod tests {
     #[test]
     fn progress_counts_done_stages() {
         let p = progress(&job(&[Done, Done]));
-        assert!((p - 2.0 / 9.0).abs() < 1e-6);
+        // Asr (30) + Diarize (28) = 58 / 100.
+        assert!((p - 0.58).abs() < 1e-6, "got {p}");
+    }
+
+    #[test]
+    fn progress_weights_intra_stage_and_normalizes_skipped_stages() {
+        let mut j = job(&[Done, Running]);
+        // Smooth intra-stage progress while Diarize is halfway (30 + 28 * 0.5 = 44 / 100).
+        let p_half = progress_with_live(&j, Some((Stage::Diarize, 0.5)));
+        assert!((p_half - 0.44).abs() < 1e-6, "got {p_half}");
+
+        // Mark Extract (15) and Reduce (8) as skipped (`done` with a note).
+        // Remaining active weight is 100 - 15 - 8 = 77.
+        for name in ["extract", "reduce"] {
+            let row = j.stages.iter_mut().find(|s| s.stage == name).unwrap();
+            row.status = Done;
+            row.note = Some("the meeting has no cycle".into());
+        }
+        let p_norm = progress_with_live(&j, Some((Stage::Diarize, 0.5)));
+        assert!((p_norm - 44.0 / 77.0).abs() < 1e-6, "got {p_norm}");
+        assert!((stage_weight(&j, Stage::Asr) - 30.0 / 77.0).abs() < 1e-6);
+        assert_eq!(stage_weight(&j, Stage::Extract), 0.0);
     }
 
     #[test]

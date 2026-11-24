@@ -71,8 +71,8 @@ fn session_levels(device: &wasapi::Device, index: i32) -> (Option<f32>, Option<b
     }
 }
 
-/// List sessions of all active render devices. Session 0 (system sounds) is included with
-/// pid 0.
+/// List sessions of all active render devices. System sound and system audio host sessions
+/// (`pid == 0`, `AudioSrv.dll`, `audiodg`, `svchost`, `system`) are excluded.
 pub fn list_sessions() -> Result<Vec<SessionInfo>> {
     list_sessions_of(&[Direction::Render])
 }
@@ -120,15 +120,23 @@ fn list_sessions_of(directions: &[Direction]) -> Result<Vec<SessionInfo>> {
                     continue;
                 };
                 let pid = session.get_process_id().unwrap_or(0);
+                if pid == 0 {
+                    continue;
+                }
                 let proc = sys.process(sysinfo::Pid::from_u32(pid));
+                let process = proc
+                    .map(|p| p.name().to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let display_name = session.get_display_name().unwrap_or_default();
+                if crate::source_list::is_system_audio_session(pid, &process, &display_name) {
+                    continue;
+                }
                 let (volume, muted, peak) = session_levels(&device, i);
                 out.push(SessionInfo {
                     pid,
                     parent_pid: proc.and_then(|p| p.parent()).map(sysinfo::Pid::as_u32),
-                    process: proc
-                        .map(|p| p.name().to_string_lossy().into_owned())
-                        .unwrap_or_default(),
-                    display_name: session.get_display_name().unwrap_or_default(),
+                    process,
+                    display_name,
                     state: session
                         .get_state()
                         .map_or_else(|_| "unknown".into(), |s| s.to_string()),
@@ -361,8 +369,9 @@ impl SessionMonitor {
             })
         };
         for pid in pids {
-            self.apps
-                .insert(*pid, resolve_app(*pid, &self.known, lookup));
+            let resolved = resolve_app(*pid, &self.known, lookup)
+                .filter(|r| !crate::source_list::is_system_audio_host(&r.app));
+            self.apps.insert(*pid, resolved);
         }
     }
 }

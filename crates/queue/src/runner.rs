@@ -1,16 +1,19 @@
 //! The production [`StageRunner`]: worker steps through `uv`, audio cleanup in Rust.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use store::Store;
+use store::{SampleRow, Store};
 
 use crate::cleanup::{self, AudioRetention};
 use crate::context::{self, ContextEnv, ContextOutcome, CycleSource};
 use crate::stage::Stage;
 use crate::supervisor::{now_ms, RunError, StageRunner};
 use crate::voices::{self, VoiceSettings};
-use crate::worker::{self, JobOptions, Launcher, LlmOptions, Secret, WorkerConfig, WorkerEvent};
+use crate::worker::{
+    self, EnrollRequest, EnrollResponse, IngestRequest, IngestResponse, JobOptions, Launcher,
+    LlmOptions, Secret, WorkerConfig, WorkerEvent,
+};
 
 /// Settings read before every stage, so changes apply to the next stage without a restart.
 pub struct RunnerSettings {
@@ -294,4 +297,72 @@ fn ensure_something_was_extracted(meeting_dir: &std::path::Path) -> Result<(), R
         )));
     }
     Ok(())
+}
+
+/// Run the worker's `"ingest"` command for an imported media file and persist the resulting
+/// tracks, segments, screenshots and duration in `store`.
+pub fn ingest_meeting(
+    store: &Store,
+    cfg: &WorkerConfig,
+    launcher: Option<&Launcher>,
+    req: &IngestRequest,
+    on_event: impl FnMut(&WorkerEvent),
+) -> Result<IngestResponse, RunError> {
+    if launcher.is_none() {
+        worker::ensure_environment(cfg)?;
+    }
+    let resp = worker::run_ingest_with(launcher, cfg, req, on_event)?;
+    worker::record_ingest(store, &req.meeting_id, &resp)
+        .map_err(|e| RunError::new(e.to_string()))?;
+    Ok(resp)
+}
+
+/// Run the worker's `"enroll"` command on a 15-30 s user-supplied sample file, save the preview
+/// clip under `<meeting_root>/.voice-samples/<participant_id>.wav`, and store the 256-dim
+/// voice sample and `sample_clip_file` on `participant_id` in `store`.
+pub fn enroll_participant_voice(
+    store: &Store,
+    cfg: &WorkerConfig,
+    launcher: Option<&Launcher>,
+    participant_id: &str,
+    input_path: &Path,
+    meeting_root: &Path,
+    on_event: impl FnMut(&WorkerEvent),
+) -> Result<EnrollResponse, RunError> {
+    if launcher.is_none() {
+        worker::ensure_environment(cfg)?;
+    }
+    let rel_clip = voices::participant_sample_clip_rel(participant_id);
+    let clip_out_path = meeting_root.join(&rel_clip);
+    let output_path = meeting_root
+        .join(voices::VOICE_SAMPLES_DIR)
+        .join(format!("{}.enroll.json", participant_id.replace(':', "_")));
+    let req = EnrollRequest {
+        input_path: input_path.to_path_buf(),
+        clip_out_path,
+        output_path: output_path.clone(),
+    };
+    let resp = worker::run_enroll_with(launcher, cfg, &req, on_event)?;
+    let _ = std::fs::remove_file(&output_path);
+    let _ = std::fs::remove_file(
+        meeting_root
+            .join(voices::VOICE_SAMPLES_DIR)
+            .join("enroll-manifest.json"),
+    );
+
+    store
+        .put_sample(
+            participant_id,
+            &SampleRow {
+                source_key: "manual_enroll".into(),
+                embedding: resp.embedding.clone(),
+                speech_ms: resp.duration_ms.max(10_000),
+            },
+            now_ms(),
+        )
+        .map_err(|e| RunError::new(e.to_string()))?;
+    store
+        .set_participant_sample_clip(participant_id, Some(&rel_clip))
+        .map_err(|e| RunError::new(e.to_string()))?;
+    Ok(resp)
 }

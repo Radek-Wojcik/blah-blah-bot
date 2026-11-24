@@ -16,6 +16,8 @@ pub struct Participant {
     pub name: String,
     pub created_unix_ms: i64,
     pub cycle_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_clip_file: Option<String>,
 }
 
 /// A participant with the size of the voice profile.
@@ -26,6 +28,8 @@ pub struct ParticipantInfo {
     pub sample_count: u32,
     pub speech_ms: u64,
     pub cycle_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_clip_file: Option<String>,
 }
 
 impl ParticipantInfo {
@@ -150,6 +154,27 @@ impl Store {
         Ok(())
     }
 
+    /// Find a participant by id.
+    pub fn get_participant(&self, id: &str) -> Result<Option<Participant>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id, name, created_unix_ms, cycle_id, sample_clip_file
+                 FROM participants WHERE id = ?1",
+                params![id],
+                |r| {
+                    Ok(Participant {
+                        id: r.get(0)?,
+                        name: r.get(1)?,
+                        created_unix_ms: r.get(2)?,
+                        cycle_id: r.get(3)?,
+                        sample_clip_file: r.get(4)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
     /// Find a participant of the legacy local list by name.
     pub fn find_participant_by_name(&self, name: &str) -> Result<Option<Participant>> {
         self.find_participant_by_name_in(None, name)
@@ -165,7 +190,7 @@ impl Store {
         Ok(self
             .conn
             .query_row(
-                "SELECT id, name, created_unix_ms, cycle_id FROM participants
+                "SELECT id, name, created_unix_ms, cycle_id, sample_clip_file FROM participants
                  WHERE name = ?1 AND cycle_id IS ?2",
                 params![name, cycle_id],
                 |r| {
@@ -174,10 +199,23 @@ impl Store {
                         name: r.get(1)?,
                         created_unix_ms: r.get(2)?,
                         cycle_id: r.get(3)?,
+                        sample_clip_file: r.get(4)?,
                     })
                 },
             )
             .optional()?)
+    }
+
+    /// Set or clear the retained preview clip path (relative to recordings root) for a participant.
+    pub fn set_participant_sample_clip(
+        &self,
+        participant_id: &str,
+        file: Option<&str>,
+    ) -> Result<bool> {
+        Ok(self.conn.execute(
+            "UPDATE participants SET sample_clip_file = ?2 WHERE id = ?1",
+            params![participant_id, file],
+        )? > 0)
     }
 
     pub fn rename_participant(&self, id: &str, name: &str) -> Result<bool> {
@@ -201,6 +239,12 @@ impl Store {
         self.query_participants(None)
     }
 
+    /// Every participant across all cycles and global (`cycle_id IS NULL`) participants,
+    /// including their `cycle_id`, `sample_count`, `speech_ms` and `sample_clip_file`.
+    pub fn list_all_participants_with_profiles(&self) -> Result<Vec<ParticipantInfo>> {
+        self.query_participants(None)
+    }
+
     /// The participants a meeting of this cycle can use: the cycle's own, none of the others.
     /// `None` is the legacy local list, which is what meetings without a cycle use.
     pub fn list_participants_for(&self, cycle_id: Option<&str>) -> Result<Vec<ParticipantInfo>> {
@@ -220,7 +264,8 @@ impl Store {
         };
         let cycle: Option<&str> = scope.flatten();
         let sql = format!(
-            "SELECT p.id, p.name, COUNT(s.source_key), COALESCE(SUM(s.speech_ms), 0), p.cycle_id
+            "SELECT p.id, p.name, COUNT(s.source_key), COALESCE(SUM(s.speech_ms), 0), p.cycle_id,
+                    p.sample_clip_file
              FROM participants p LEFT JOIN voice_samples s ON s.participant_id = p.id
              WHERE {filter}
              GROUP BY p.id ORDER BY p.name COLLATE NOCASE, p.id"
@@ -233,6 +278,7 @@ impl Store {
                 sample_count: r.get(2)?,
                 speech_ms: r.get::<_, i64>(3)? as u64,
                 cycle_id: r.get(4)?,
+                sample_clip_file: r.get(5)?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -323,21 +369,38 @@ impl Store {
 
     /// Forget a participant's voice but keep the participant.
     pub fn reset_profile(&self, participant_id: &str) -> Result<usize> {
-        Ok(self.conn.execute(
+        let tx = self.conn.unchecked_transaction()?;
+        let removed = tx.execute(
             "DELETE FROM voice_samples WHERE participant_id = ?1",
             params![participant_id],
-        )?)
+        )?;
+        tx.execute(
+            "UPDATE participants SET sample_clip_file = NULL WHERE id = ?1",
+            params![participant_id],
+        )?;
+        tx.commit()?;
+        Ok(removed)
     }
 
     /// Delete every voice profile, every stored voice embedding of every meeting and every
     /// clip row. Returns the relative paths of the clip files to remove. Participants stay.
     pub fn delete_all_voice_data(&self) -> Result<Vec<String>> {
         let tx = self.conn.unchecked_transaction()?;
-        let files: Vec<String> = {
+        let mut files: Vec<String> = {
             let mut stmt = tx.prepare("SELECT file FROM voice_clips")?;
             let rows = stmt.query_map([], |r| r.get(0))?;
             rows.collect::<std::result::Result<_, _>>()?
         };
+        {
+            let mut stmt = tx.prepare(
+                "SELECT sample_clip_file FROM participants WHERE sample_clip_file IS NOT NULL",
+            )?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            for r in rows {
+                files.push(r?);
+            }
+        }
+        tx.execute("UPDATE participants SET sample_clip_file = NULL", [])?;
         tx.execute("DELETE FROM voice_samples", [])?;
         tx.execute("DELETE FROM voice_clips", [])?;
         tx.execute("DELETE FROM meeting_voices", [])?;
@@ -682,5 +745,41 @@ mod tests {
         assert!(s.all_profiles().unwrap().is_empty());
         assert!(s.list_meeting_voices("m").unwrap().is_empty());
         assert_eq!(s.list_participants().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn sample_clip_file_is_stored_and_listed_across_all_participants() {
+        let s = store();
+        s.create_participant("global-ola", "Ola", 1).unwrap();
+        s.create_participant_in(Some("NOMAD"), "NOMAD:jan", "Jan", 2)
+            .unwrap();
+        assert!(s
+            .set_participant_sample_clip("global-ola", Some(".voice-samples/global-ola.wav"))
+            .unwrap());
+        let ola = s.get_participant("global-ola").unwrap().unwrap();
+        assert_eq!(
+            ola.sample_clip_file.as_deref(),
+            Some(".voice-samples/global-ola.wav")
+        );
+        let all = s.list_all_participants_with_profiles().unwrap();
+        assert_eq!(all.len(), 2);
+        let ola_info = all.iter().find(|p| p.id == "global-ola").unwrap();
+        assert_eq!(
+            ola_info.sample_clip_file.as_deref(),
+            Some(".voice-samples/global-ola.wav")
+        );
+        assert_eq!(ola_info.cycle_id, None);
+        let jan_info = all.iter().find(|p| p.id == "NOMAD:jan").unwrap();
+        assert_eq!(jan_info.cycle_id.as_deref(), Some("NOMAD"));
+        assert_eq!(jan_info.sample_clip_file, None);
+
+        s.reset_profile("global-ola").unwrap();
+        assert_eq!(
+            s.get_participant("global-ola")
+                .unwrap()
+                .unwrap()
+                .sample_clip_file,
+            None
+        );
     }
 }

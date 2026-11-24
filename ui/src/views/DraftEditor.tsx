@@ -1065,6 +1065,9 @@ function ReportPane({ meetingId, view }: { meetingId: string; view: DraftView })
   const [variant, setVariant] = useState<RenderVariant>("markdown");
   const [chat, setChat] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [exportedPath, setExportedPath] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
   const [rendered, setRendered] = useState(false);
   const markdown = view.reportMarkdown;
 
@@ -1087,6 +1090,16 @@ function ReportPane({ meetingId, view }: { meetingId: string; view: DraftView })
       .writeText(text)
       .then(() => setCopied("Copied"))
       .catch(() => setCopied("Could not copy. Select the text and copy it."));
+  };
+  const exportMarkdown = () => {
+    setExportError(null);
+    setExportedPath(null);
+    setExporting(true);
+    void backend
+      .exportMeetingMarkdown(meetingId)
+      .then((path) => setExportedPath(`Saved note to ${path}`))
+      .catch((e) => setExportError(errorMessage(e)))
+      .finally(() => setExporting(false));
   };
   return (
     <section className="report-pane" aria-label="Report">
@@ -1123,8 +1136,26 @@ function ReportPane({ meetingId, view }: { meetingId: string; view: DraftView })
           </button>
         </span>
         {copied && <span role="status">{copied}</span>}
+        {exportedPath && (
+          <span className="valid-note" role="status">
+            {exportedPath}
+          </span>
+        )}
+        {exportError && (
+          <span className="error" role="alert">
+            {exportError}
+          </span>
+        )}
         <button className="btn btn-small" onClick={copy}>
           Copy
+        </button>
+        <button
+          className="btn btn-small btn-record"
+          type="button"
+          disabled={exporting}
+          onClick={exportMarkdown}
+        >
+          {exporting ? "Saving…" : "Download note (.md)"}
         </button>
       </div>
       {rendered ? (

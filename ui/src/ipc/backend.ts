@@ -11,6 +11,7 @@ import type {
   CycleTargets,
   CycleTasks,
   CycleRepoView,
+  DetectedModels,
   DetectionAnswer,
   DetectionPrompt,
   DetectionSettings,
@@ -18,6 +19,10 @@ import type {
   DraftSection,
   DraftView,
   GithubAccess,
+  GlobalVoiceProfile,
+  ImportMeetingInput,
+  JobView,
+  MeetingDetail,
   MeetingDetails,
   MeetingSummary,
   ModelStatus,
@@ -25,6 +30,7 @@ import type {
   ProcessOptions,
   GgufFile,
   ProcessingSettings,
+  ProjectPrefs,
   ProposedStatus,
   PublicRepoConfirmation,
   PublishMode,
@@ -35,8 +41,11 @@ import type {
   PublishingSecrets,
   OutboxState,
   PullResult,
+  QueueGpuOverride,
   QueueState,
+  QueueView,
   Region,
+  RecordingLevels,
   RecordingState,
   RenderVariant,
   ReportDefaults,
@@ -59,6 +68,7 @@ import type {
   ParticipantView,
   VoicesData,
   WebhookCheck,
+  WizardCreateProjectInput,
 } from "./types";
 
 export type Unsubscribe = () => void;
@@ -337,7 +347,39 @@ export interface Backend {
   /** Deletes a correction that was never queued (`correction_queued` otherwise). */
   deleteCorrection(meetingId: string, id: string): Promise<Corrections>;
 
+  /** Persist last-selected stable source keys in settings.json. */
+  saveLastSources(keys: string[]): Promise<string[]>;
+  /** Set or clear the temporary in-memory GPU threshold override for the processing queue. */
+  setQueueGpuOverride(overrideCfg: QueueGpuOverride | null): Promise<QueueView>;
+  /** Bypass the GPU guard and start processing a meeting immediately. */
+  forceProcess(meetingId: string): Promise<JobView>;
+  /** Schedule a queued job for a future timestamp (Unix ms), or clear the schedule with null. */
+  scheduleJob(meetingId: string, scheduledUnixMs: number | null): Promise<JobView>;
+  /** Read per-project local preferences (local markdown export and model overrides). */
+  getProjectPrefs(cycleId: string): Promise<ProjectPrefs>;
+  /** Save per-project local preferences. */
+  saveProjectPrefs(prefs: ProjectPrefs): Promise<ProjectPrefs>;
+  /** Guided project creation wizard (auto-managed local repo or existing folder/remote). */
+  wizardCreateProject(req: WizardCreateProjectInput): Promise<CycleDto>;
+  /** Import an external audio or video recording into a project and enqueue processing. */
+  importMeeting(req: ImportMeetingInput): Promise<MeetingDetail>;
+  /** Export a standalone Markdown report note to disk and return the written path. */
+  exportMeetingMarkdown(meetingId: string, destPath?: string | null): Promise<string>;
+  /** Scan common local folders for llama-server, GGUF models, and default local save path. */
+  autoDetectModels(): Promise<DetectedModels>;
+  /** List all voice profiles across all projects with project memberships and sample clip state. */
+  listAllVoiceProfiles(): Promise<GlobalVoiceProfile[]>;
+  /** Read a participant's preserved sample clip WAV bytes. */
+  voiceProfileSampleClip(participantId: string): Promise<number[]>;
+  /** Manually enroll a 15-30 s voice sample for a participant. */
+  enrollVoiceProfile(
+    name: string,
+    cycleId: string | null,
+    audioPath: string,
+  ): Promise<GlobalVoiceProfile>;
+
   onRecordingState(cb: (state: RecordingState) => void): Promise<Unsubscribe>;
+  onRecordingLevels(cb: (levels: RecordingLevels) => void): Promise<Unsubscribe>;
   onMeetingsChanged(cb: () => void): Promise<Unsubscribe>;
   onQueueChanged(cb: (state: QueueState) => void): Promise<Unsubscribe>;
   onModelsProgress(cb: (progress: ModelsProgress) => void): Promise<Unsubscribe>;

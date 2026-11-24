@@ -12,7 +12,7 @@ mod outbox;
 mod publications;
 mod voices;
 
-pub use cycles::{LlmChoice, LlmKind, ReportSettings, SyncOutcome};
+pub use cycles::{LlmChoice, LlmKind, ProjectPrefs, ReportSettings, SyncOutcome};
 pub use jobs::{JobRow, StageRow, StageStatus};
 pub use outbox::{
     retry_delay_ms, Failure, NewOp, OpState, OutboxKind, OutboxOp, OutboxTarget, BACKOFF_BASE_MS,
@@ -415,6 +415,52 @@ fn meeting_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Meeting>> {
 }
 
 #[cfg(test)]
+pub(crate) mod test_tmp {
+    use std::ops::Deref;
+    use std::path::{Path, PathBuf};
+
+    pub struct TestDir(tempfile::TempDir);
+
+    fn root() -> PathBuf {
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .expect("the workspace root")
+            .to_path_buf();
+        let root = workspace.join("target").join("test-tmp");
+        std::fs::create_dir_all(&root).expect("create target/test-tmp");
+        root
+    }
+
+    impl TestDir {
+        pub fn new(label: &str) -> Self {
+            let dir = tempfile::Builder::new()
+                .prefix(&format!("bbb-{label}-"))
+                .tempdir_in(root())
+                .expect("create a scratch folder in target/test-tmp");
+            Self(dir)
+        }
+
+        pub fn path(&self) -> &Path {
+            self.0.path()
+        }
+    }
+
+    impl Deref for TestDir {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            self.0.path()
+        }
+    }
+
+    impl AsRef<Path> for TestDir {
+        fn as_ref(&self) -> &Path {
+            self.0.path()
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -449,10 +495,7 @@ mod tests {
 
     #[test]
     fn reopening_keeps_data_and_version() {
-        let dir = tempfile::Builder::new()
-            .prefix("bbb-store-")
-            .tempdir()
-            .unwrap();
+        let dir = test_tmp::TestDir::new("store-reopen");
         let path = dir.path().join("test.db");
         {
             let s = Store::open(&path).unwrap();

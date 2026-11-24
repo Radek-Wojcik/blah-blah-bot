@@ -5,6 +5,8 @@ import type { SourceInfo, SourceKind } from "./ipc/types";
 
 export type SectionId = "microphone" | "applications" | "browser";
 
+export type SelectionChoice = Set<string>;
+
 export interface SourceSection {
   id: SectionId;
   title: string;
@@ -77,10 +79,68 @@ function browserRows(members: SourceInfo[]): SourceRow[] {
  * What is ticked before the user chooses: the microphone (or the first source) and every tab
  * the extension has captured, because capturing a tab is the user's choice to record it.
  */
-export function defaultSelection(sources: SourceInfo[]): Set<string> {
+export function defaultSelection(sources: SourceInfo[]): SelectionChoice {
   if (sources.length === 0) return new Set();
   const first = sources.find((s) => s.kind === "microphone") ?? sources[0];
   return new Set([first.id, ...sources.filter((s) => s.kind === "browser_tab").map((s) => s.id)]);
+}
+
+/**
+ * Stable identifier for a source across application restarts, even when Windows process PIDs change.
+ */
+export function sourceStableKey(s: SourceInfo): string {
+  switch (s.kind) {
+    case "microphone":
+      return "mic:default";
+    case "browser":
+      return "browser:chrome";
+    case "browser_tab":
+      return s.id.startsWith("tab:") ? s.id : `tab:${s.id}`;
+    case "application":
+      return `app_name:${(s.name ?? s.label).trim().toLowerCase()}`;
+  }
+}
+
+/**
+ * Restores a persisted source selection from stable keys (or raw source ids), falling back to
+ * `defaultSelection(sources)` when no persisted keys match any available source.
+ */
+export function restorePersistedSelection(
+  sources: SourceInfo[],
+  lastKeys?: string[] | null,
+): SelectionChoice {
+  if (sources.length === 0) return new Set();
+  if (!lastKeys || lastKeys.length === 0) return defaultSelection(sources);
+  const keySet = new Set(lastKeys.map((k) => k.trim().toLowerCase()));
+  const rawSet = new Set(lastKeys);
+  const picked = new Set<string>();
+  for (const s of sources) {
+    const stable = sourceStableKey(s);
+    if (
+      rawSet.has(stable) ||
+      keySet.has(stable.toLowerCase()) ||
+      rawSet.has(s.id) ||
+      keySet.has(s.id.toLowerCase()) ||
+      (s.kind === "browser_tab" && rawSet.has(`tab:${s.id}`))
+    ) {
+      picked.add(s.id);
+    }
+  }
+  return picked.size > 0 ? picked : defaultSelection(sources);
+}
+
+/** Converts a set of chosen source ids into stable persistence keys for `saveLastSources`. */
+export function selectionStableKeys(
+  sources: SourceInfo[],
+  selectedIds: Iterable<string>,
+): string[] {
+  const out: string[] = [];
+  for (const id of selectedIds) {
+    const src = sources.find((s) => s.id === id);
+    const key = src ? sourceStableKey(src) : id;
+    if (!out.includes(key)) out.push(key);
+  }
+  return out;
 }
 
 /** The text shown at the end of a row. */

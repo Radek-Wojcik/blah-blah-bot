@@ -4,69 +4,91 @@ import { recordFromGate } from "./helpers";
 const MAIN = "/?view=main&backend=mock&rate=0";
 const DRAFT = `${MAIN}&page=draft&meeting=m5`;
 
-async function openCycles(page: Page) {
+async function openProjects(page: Page) {
   await page.goto(MAIN);
-  await page.getByRole("button", { name: "Cycles", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Cycles", level: 2 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Projects", level: 2 })).toBeVisible();
 }
 
-test.describe("cycles on the mock backend", () => {
-  test("lists the repositories with their state and the cycles in them", async ({ page }) => {
-    await openCycles(page);
-    const clone = page.getByRole("article", { name: "Repository team-cycles" });
-    await expect(clone.getByText("State as of 2026-11-12")).toBeVisible();
-    await expect(clone.getByRole("list", { name: "Cycles of team-cycles" })).toContainText(
-      "Nomad rover",
-    );
+async function openProjectSettings(page: Page, cycleId: string) {
+  await page.goto(`${MAIN}&page=project&cycle=${cycleId}`);
+  await page.getByRole("button", { name: "Project settings" }).click();
+  await expect(page.getByRole("dialog", { name: /Project Settings/ })).toBeVisible();
+}
+
+test.describe("projects and project settings on the mock backend", () => {
+  test("lists projects with their state, pulls updates, and marks invalid ones", async ({
+    page,
+  }) => {
+    await openProjects(page);
+    const nomad = page.getByRole("article", { name: "Project Nomad rover" });
+    await expect(nomad).toContainText("Updated 2026-11-12");
+    await expect(nomad).toContainText("7 open tasks, 2 overdue · 2 open topics");
+
+    const sandbox = page.getByRole("article", { name: "Project Sandbox" });
+    await expect(sandbox).toContainText("Local project");
+
+    // A broken project is listed with the reason, not hidden.
+    const broken = page.getByRole("article", { name: "Project Old project" });
+    await expect(broken.getByText("Needs fixing")).toBeVisible();
     await expect(
-      page.getByRole("article", { name: "Repository local" }).getByText("Local repository"),
-    ).toBeVisible();
-    // A broken cycle is listed with the reason, not hidden.
-    await expect(clone.getByText("Needs fixing")).toBeVisible();
-    await expect(
-      clone.getByText(/participants\[1\]\.id: duplicate participant id "sam"/),
+      broken.getByText(/participants\[1\]\.id: duplicate participant id "sam"/),
     ).toBeVisible();
 
-    await clone.getByRole("button", { name: "Pull team-cycles" }).click();
-    await expect(clone.getByRole("status")).toHaveText("Updated from the remote.");
-    await expect(clone.getByText("State as of 2026-11-13")).toBeVisible();
+    await nomad.getByRole("button", { name: "Open project" }).click();
+    await expect(page.locator(".brief-status")).toHaveText(/^State as of 2026-11-13\./);
   });
 
   test("a clone that cannot be updated is shown as offline", async ({ page }) => {
-    await openCycles(page);
-    await page.getByLabel("Repository address").fill("https://offline.example/offline-cycles.git");
-    await page.getByRole("button", { name: "Add repository" }).click();
-    const repo = page.getByRole("article", { name: "Repository offline-cycles" });
-    await expect(repo).toBeVisible();
-    await repo.getByRole("button", { name: "Pull offline-cycles" }).click();
-    await expect(repo.getByText("Offline", { exact: true })).toBeVisible();
-    await expect(repo.getByText(/showing the state of the last successful pull/)).toBeVisible();
+    await openProjects(page);
+    await page.getByRole("button", { name: "New Project" }).click();
+    const dialog = page.getByRole("dialog", { name: "Create New Project" });
+    await dialog.getByLabel("Project name").fill("Offline Cycles");
+    await dialog.getByRole("radio", { name: /Connect existing repository/ }).click();
+    await dialog
+      .getByLabel("Remote repository URL")
+      .fill("https://offline.example/offline-cycles.git");
+    await dialog.getByRole("button", { name: "Next" }).click();
+    await dialog.getByRole("button", { name: "Create project" }).click();
+
+    await expect(page.getByRole("heading", { name: "Offline Cycles", level: 2 })).toBeVisible();
+    await expect(page.locator(".brief-status")).toContainText(/Could not update/);
+    await expect(page.getByText("Offline", { exact: true })).toBeVisible();
   });
 
-  test("create a cycle with a participant and a template", async ({ page }) => {
-    await openCycles(page);
-    await page.getByLabel("Cycle id").fill("ROVER2");
-    await page.getByLabel("Name", { exact: true }).fill("Rover two");
-    await page.getByRole("button", { name: "Create cycle" }).click();
-    await expect(page.getByText("Rover two · repository local")).toBeVisible();
+  test("create a project with a participant and a template", async ({ page }) => {
+    await openProjects(page);
+    await page.getByRole("button", { name: "New Project" }).click();
+    const wizard = page.getByRole("dialog", { name: "Create New Project" });
+    await wizard.getByLabel("Project name").fill("Rover two");
+    await wizard.getByLabel("Project ID").fill("ROVER2");
+    await wizard.getByRole("button", { name: "Next" }).click();
+    await wizard.getByRole("button", { name: "Create project" }).click();
 
-    // Nothing changed yet: Save is disabled.
-    const save = page.getByRole("button", { name: "Save", exact: true });
+    await expect(page.getByRole("heading", { name: "Rover two", level: 2 })).toBeVisible();
+    await page.getByRole("button", { name: "Project settings" }).click();
+    const modal = page.getByRole("dialog", { name: /Project Settings/ });
+    await modal.getByRole("tab", { name: "People & Glossary" }).click();
+
+    // Nothing changed yet: Save project settings is disabled.
+    const save = modal.getByRole("button", { name: "Save project settings" });
     await expect(save).toBeDisabled();
 
-    await page.getByRole("button", { name: "Add participant" }).click();
-    await page.getByLabel("Participant 1 id").fill("kat");
-    await page.getByLabel("Participant 1 name").fill("Kat Demo");
-    await page.getByLabel("Participant 1 GitHub login").fill("kat-demo");
+    await modal.getByRole("button", { name: "Add participant" }).click();
+    await modal.getByLabel("Participant 1 id").fill("kat");
+    await modal.getByLabel("Participant 1 name").fill("Kat Demo");
+    await modal.getByLabel("Participant 1 GitHub login").fill("kat-demo");
     await expect(save).toBeEnabled();
     await save.click();
-    await expect(page.getByRole("status").filter({ hasText: "Saved" })).toBeVisible();
+    await expect(
+      modal.getByRole("status").filter({ hasText: "Project settings saved." }),
+    ).toBeVisible();
     await expect(save).toBeDisabled();
 
     // A template: an unknown placeholder is shown while typing and blocks saving.
-    await page.getByLabel("New template name").fill("weekly");
-    await page.getByRole("button", { name: "New template" }).click();
-    const group = page.getByRole("group", { name: "Template weekly" });
+    await modal.getByRole("tab", { name: "Report & Templates" }).click();
+    await modal.getByLabel("New template name").fill("weekly");
+    await modal.getByRole("button", { name: "New template" }).click();
+    const group = modal.getByRole("group", { name: "Template weekly" });
     const body = group.getByRole("textbox", { name: "Template body" });
     await body.fill("# {title}\n\n{nonsense}\n");
     await expect(group.getByRole("alert", { name: "Template problems" })).toContainText(
@@ -81,40 +103,47 @@ test.describe("cycles on the mock backend", () => {
     await expect(group.getByText("The template is valid.")).toBeVisible();
     await group.getByRole("button", { name: "Save template" }).click();
     await expect(group.getByRole("status")).toHaveText("Template saved");
-    await expect(page.getByRole("list", { name: "Templates" })).toContainText(
+    await expect(modal.getByRole("list", { name: "Templates" })).toContainText(
       "weekly · 1 sections",
     );
 
-    // The new cycle and its template are usable in the report defaults.
-    const defaultTemplate = page.getByLabel("Default template");
+    // The new project and its template are usable in the report defaults.
+    const defaultTemplate = modal.getByLabel("Default template");
     await expect(defaultTemplate.locator("option", { hasText: "weekly" })).toHaveCount(1);
   });
 
   test("problems of a save are shown at the top and next to the field", async ({ page }) => {
-    await page.goto(`${MAIN}&page=cycle&cycle=NOMAD`);
-    await page.getByRole("button", { name: "Add participant" }).click();
-    await page.getByLabel("Participant 5 id").fill("alex");
-    await page.getByLabel("Participant 5 name").fill("Another Alex");
-    await page.getByRole("button", { name: "Save", exact: true }).click();
-    const problems = page.getByRole("alert", { name: "Problems" });
+    await openProjectSettings(page, "NOMAD");
+    const modal = page.getByRole("dialog", { name: /Project Settings/ });
+    await modal.getByRole("tab", { name: "People & Glossary" }).click();
+    await modal.getByRole("button", { name: "Add participant" }).click();
+    await modal.getByLabel("Participant 5 id").fill("alex");
+    await modal.getByLabel("Participant 5 name").fill("Another Alex");
+    await modal.getByRole("button", { name: "Save project settings" }).click();
+    const problems = modal.getByRole("alert", { name: "Problems" });
     await expect(problems).toContainText("participants[4].id: duplicate participant id");
     await expect(
-      page.getByRole("alert").filter({ hasText: /^duplicate participant id/ }),
+      modal.getByRole("alert").filter({ hasText: /^duplicate participant id/ }),
     ).toBeVisible();
     // Fixing it saves and clears the problems.
-    await page.getByLabel("Participant 5 id").fill("alex2");
-    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await modal.getByLabel("Participant 5 id").fill("alex2");
+    await modal.getByRole("button", { name: "Save project settings" }).click();
     await expect(problems).toHaveCount(0);
-    await expect(page.getByRole("status").filter({ hasText: "Saved" })).toBeVisible();
+    await expect(
+      modal.getByRole("status").filter({ hasText: "Project settings saved." }),
+    ).toBeVisible();
   });
 
   test("an empty participant id and a bad webhook are refused", async ({ page }) => {
-    await page.goto(`${MAIN}&page=cycle&cycle=NOMAD`);
-    await page.getByRole("button", { name: "Add participant" }).click();
-    await page.getByLabel("Participant 5 name").fill("No Id");
-    await page.getByLabel("Webhook reference").fill("https://discord.example/hook");
-    await page.getByRole("button", { name: "Save", exact: true }).click();
-    const problems = page.getByRole("alert", { name: "Problems" });
+    await openProjectSettings(page, "NOMAD");
+    const modal = page.getByRole("dialog", { name: /Project Settings/ });
+    await modal.getByRole("tab", { name: "People & Glossary" }).click();
+    await modal.getByRole("button", { name: "Add participant" }).click();
+    await modal.getByLabel("Participant 5 name").fill("No Id");
+    await modal.getByRole("tab", { name: "Integrations" }).click();
+    await modal.getByLabel("Webhook credential reference").fill("https://discord.example/hook");
+    await modal.getByRole("button", { name: "Save project settings" }).click();
+    const problems = modal.getByRole("alert", { name: "Problems" });
     await expect(problems).toContainText(
       "participants[4].id: the participant id must not be empty",
     );
@@ -122,93 +151,85 @@ test.describe("cycles on the mock backend", () => {
   });
 
   test("the report defaults and the meeting types can be edited", async ({ page }) => {
-    await page.goto(`${MAIN}&page=cycle&cycle=NOMAD`);
-    await page.getByLabel("Default mode").selectOption("by-type");
-    await expect(page.getByText("The meeting type picks a template of the cycle.")).toBeVisible();
-    await page.getByRole("button", { name: "Add meeting type" }).click();
-    await page.getByLabel("Meeting type 4", { exact: true }).fill("weekly");
-    await page.getByRole("button", { name: "Save", exact: true }).click();
-    await expect(page.getByRole("status").filter({ hasText: "Saved" })).toBeVisible();
-    await page.getByRole("button", { name: "Remove meeting type 4" }).click();
-    await page.getByLabel("Instruction").fill("Keep it short.");
-    await expect(page.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
+    await openProjectSettings(page, "NOMAD");
+    const modal = page.getByRole("dialog", { name: /Project Settings/ });
+    await modal.getByRole("tab", { name: "Report & Templates" }).click();
+    await modal.getByLabel("Default report mode").selectOption("by-type");
+    await expect(modal.getByText("The meeting type picks a template of the cycle.")).toBeVisible();
+    await modal.getByRole("button", { name: "Add meeting type" }).click();
+    await modal.getByLabel("Meeting type 4", { exact: true }).fill("weekly");
+    await modal.getByRole("button", { name: "Save project settings" }).click();
+    await expect(
+      modal.getByRole("status").filter({ hasText: "Project settings saved." }),
+    ).toBeVisible();
+    await modal
+      .getByRole("list", { name: "Meeting types" })
+      .getByRole("listitem")
+      .nth(3)
+      .getByRole("button", { name: "Remove" })
+      .click();
+    await modal.getByLabel("Custom AI instruction").fill("Keep it short.");
+    await expect(modal.getByRole("button", { name: "Save project settings" })).toBeEnabled();
   });
 });
 
-test.describe("report mode gate on the mock backend", () => {
+test.describe("recorder panel report selection on the mock backend", () => {
   const WIDGET = "/?view=widget&backend=mock&rate=0";
-  const gateOf = (page: Page) =>
-    page.getByRole("dialog", { name: "Choose the report for this recording" });
 
-  test("shows the last choice and starts only when it is confirmed", async ({ page }) => {
+  test("shows the last choice preselected and starts recording immediately", async ({ page }) => {
     await page.goto(WIDGET);
-    await page.getByRole("button", { name: "Record" }).click();
-    const gate = gateOf(page);
-    await expect(gate.getByText("Record with:")).toBeVisible();
-    await expect(gate.getByText("NOMAD · fixed")).toBeVisible();
-    // Nothing is recording yet.
-    await expect(page.getByText("Standby")).toBeVisible();
-    await gate.getByRole("button", { name: "Cancel" }).click();
-    await expect(gate).toHaveCount(0);
+    await expect(page.getByLabel("Cycle", { exact: true })).toHaveValue("NOMAD");
+    await expect(page.getByLabel("Report mode", { exact: true })).toHaveValue("fixed");
     await expect(page.getByText("Standby")).toBeVisible();
 
     await page.getByRole("button", { name: "Record" }).click();
-    await gate.getByRole("button", { name: "Start recording" }).click();
     await expect(page.getByText("Recording", { exact: true })).toBeVisible();
   });
 
   test("refuses without a mode and passes with one", async ({ page }) => {
     await page.goto(WIDGET);
-    await page.getByRole("button", { name: "Record" }).click();
-    const gate = gateOf(page);
-    await gate.getByRole("button", { name: "Change…" }).click();
-    const start = gate.getByRole("button", { name: "Start recording" });
-    await expect(gate.getByLabel("Cycle", { exact: true })).toHaveValue("NOMAD");
-    // The cycle's default is preselected; no mode is also a state the user can choose.
-    await expect(gate.getByLabel("Report mode")).toHaveValue("fixed");
-    await gate.getByLabel("Report mode").selectOption("");
+    const start = page.getByRole("button", { name: "Record" });
+    await expect(page.getByLabel("Cycle", { exact: true })).toHaveValue("NOMAD");
+    await expect(page.getByLabel("Report mode", { exact: true })).toHaveValue("fixed");
+    await page.getByLabel("Report mode", { exact: true }).selectOption("");
     await expect(start).toBeDisabled();
-    await expect(gate.getByRole("status")).toHaveText("Choose a report mode.");
 
-    await gate.getByLabel("Report mode").selectOption("by-type");
-    await expect(gate.getByText("The meeting type picks a template of the cycle.")).toBeVisible();
-    await gate.getByLabel("Meeting type").selectOption("");
+    await page.getByLabel("Report mode", { exact: true }).selectOption("by-type");
+    await expect(page.getByText("The meeting type picks a template of the cycle.")).toBeVisible();
+    await page.getByLabel("Meeting type").selectOption("");
     await expect(start).toBeDisabled();
-    await expect(gate.getByRole("status")).toHaveText("Choose the meeting type.");
-    await gate.getByLabel("Meeting type").selectOption("budget");
+    await page.getByLabel("Meeting type").selectOption("budget");
     await expect(start).toBeEnabled();
     await start.click();
     await expect(page.getByText("Recording", { exact: true })).toBeVisible();
 
-    // The choice is remembered for the next time.
+    // The choice stays selected after stopping.
     await page.getByRole("button", { name: "Stop" }).click();
-    await page.getByRole("button", { name: "Later" }).click();
-    await page.getByRole("button", { name: "Record" }).click();
-    await expect(gate.getByText("NOMAD · by-type (budget)")).toBeVisible();
+    await page
+      .getByRole("dialog", { name: "Process now or later?" })
+      .getByRole("button", { name: "Later" })
+      .click();
+    await expect(page.getByLabel("Cycle", { exact: true })).toHaveValue("NOMAD");
+    await expect(page.getByLabel("Report mode", { exact: true })).toHaveValue("by-type");
+    await expect(page.getByLabel("Meeting type")).toHaveValue("budget");
   });
 
   test("a cycle that needs fixing cannot be chosen", async ({ page }) => {
     await page.goto(WIDGET);
-    await page.getByRole("button", { name: "Record" }).click();
-    const gate = gateOf(page);
-    await gate.getByRole("button", { name: "Change…" }).click();
-    await expect(gate.getByRole("option", { name: /OLDPROJ.*needs fixing/ })).toBeDisabled();
-    await gate.getByLabel("Cycle", { exact: true }).selectOption("SANDBOX");
-    await expect(gate.getByLabel("Report mode")).toHaveValue("fixed");
-    await expect(gate.getByRole("button", { name: "Start recording" })).toBeEnabled();
+    await expect(page.getByRole("option", { name: /OLDPROJ.*needs fixing/ })).toBeDisabled();
+    await page.getByLabel("Cycle", { exact: true }).selectOption("SANDBOX");
+    await expect(page.getByLabel("Report mode", { exact: true })).toHaveValue("fixed");
+    await expect(page.getByRole("button", { name: "Record" })).toBeEnabled();
   });
 
-  test("a new cycle can be created from the gate", async ({ page }) => {
+  test("a new cycle can be created from the recorder panel", async ({ page }) => {
     await page.goto(WIDGET);
+    await page.getByRole("button", { name: "New cycle…" }).click();
+    await page.getByLabel("Cycle id").fill("BRAND-NEW");
+    await page.getByLabel("Name", { exact: true }).fill("Brand new");
+    await page.getByRole("button", { name: "Create cycle" }).click();
+    await expect(page.getByLabel("Cycle", { exact: true })).toHaveValue("BRAND-NEW");
     await page.getByRole("button", { name: "Record" }).click();
-    const gate = gateOf(page);
-    await gate.getByRole("button", { name: "Change…" }).click();
-    await gate.getByRole("button", { name: "New cycle…" }).click();
-    await gate.getByLabel("Cycle id").fill("BRAND-NEW");
-    await gate.getByLabel("Name", { exact: true }).fill("Brand new");
-    await gate.getByRole("button", { name: "Create cycle" }).click();
-    await expect(gate.getByLabel("Cycle", { exact: true })).toHaveValue("BRAND-NEW");
-    await gate.getByRole("button", { name: "Start recording" }).click();
     await expect(page.getByText("Recording", { exact: true })).toBeVisible();
   });
 });
@@ -221,8 +242,16 @@ test.describe("draft editor on the mock backend", () => {
 
   test("is reachable from the meeting list and the queue", async ({ page }) => {
     await page.goto(MAIN);
-    const card = page.getByRole("article").filter({ hasText: "ORBIT weekly sync" });
-    await card.getByRole("button", { name: "Open the draft of ORBIT weekly sync" }).click();
+    await page
+      .getByRole("article", { name: "Project Nomad rover" })
+      .getByRole("button", { name: "Open project" })
+      .click();
+    await page
+      .getByRole("list", { name: "Meetings list" })
+      .getByRole("listitem")
+      .filter({ hasText: "ORBIT weekly sync" })
+      .getByRole("button", { name: "Open" })
+      .click();
     await expect(page.getByRole("heading", { name: "Draft" })).toBeVisible();
 
     await page.goto(`${MAIN}&page=queue`);
@@ -553,7 +582,8 @@ test.describe("cloud confirmation on the mock backend", () => {
     await page.goto(`${MAIN}&jobms=400`);
     // Kickoff has no cycle, so its extraction is skipped; it still gets a transcript.
     await page
-      .getByRole("article")
+      .getByRole("list", { name: "Standalone meetings" })
+      .getByRole("listitem")
       .filter({ hasText: "Kickoff" })
       .getByRole("button", { name: "Process", exact: true })
       .click();
@@ -561,8 +591,13 @@ test.describe("cloud confirmation on the mock backend", () => {
     await expect(
       page.getByRole("article", { name: "Kickoff" }).getByText("Processed", { exact: true }),
     ).toBeVisible({ timeout: 20_000 });
-    await page.getByRole("button", { name: "Meetings", exact: true }).click();
-    await page.getByRole("button", { name: "Open the draft of Kickoff" }).click();
+    await page.getByRole("button", { name: "Projects", exact: true }).click();
+    await page
+      .getByRole("list", { name: "Standalone meetings" })
+      .getByRole("listitem")
+      .filter({ hasText: "Kickoff" })
+      .getByRole("button", { name: "Open" })
+      .click();
     await page.getByRole("button", { name: "Build draft…" }).click();
     const build = page.getByRole("dialog", { name: "Build the draft" });
     await build.getByLabel(/^Cloud/).check();
@@ -599,46 +634,42 @@ test.describe("cloud confirmation on the mock backend", () => {
 });
 
 test.describe("language model settings on the mock backend", () => {
-  const SETTINGS = `${MAIN}&page=settings`;
+  const MODELS = `${MAIN}&page=settings&tab=models`;
+  const CONNECTORS = `${MAIN}&page=settings&tab=connectors`;
 
   test("keys are write-only: only the saved flag is shown", async ({ page }) => {
-    await page.goto(SETTINGS);
-    const section = page.getByRole("region", { name: "Language model" });
-    await expect(section.getByText("Cloud API key: saved")).toBeVisible();
-    await expect(section.getByText("External server key: not saved")).toBeVisible();
+    await page.goto(CONNECTORS);
+    const ext = page.getByRole("form", { name: "External LLM API Key" });
+    const cloud = page.getByRole("form", { name: "Cloud LLM API Key" });
+    await expect(cloud.getByText("API key stored")).toBeVisible();
+    await expect(ext.getByText("No API key stored")).toBeVisible();
 
-    await section
-      .getByRole("form", { name: "External server key" })
-      .locator("input")
-      .fill("not-shown-anywhere");
-    await section.getByRole("button", { name: "Save external key" }).click();
-    await expect(section.getByText("External server key: saved")).toBeVisible();
-    await expect(
-      section.getByRole("form", { name: "External server key" }).locator("input"),
-    ).toHaveValue("");
+    await ext.getByLabel("External LLM API Key").fill("not-shown-anywhere");
+    await ext.getByRole("button", { name: "Store" }).click();
+    await expect(ext.getByText("API key stored")).toBeVisible();
+    await expect(ext.getByLabel("External LLM API Key")).toHaveValue("");
     await expect(page.locator("body")).not.toContainText("not-shown-anywhere");
 
-    await section.getByRole("button", { name: "Clear cloud key" }).click();
-    await expect(section.getByText("Cloud API key: not saved")).toBeVisible();
+    await cloud.getByRole("button", { name: "Clear" }).click();
+    await expect(cloud.getByText("No API key stored")).toBeVisible();
   });
 
   test("the model settings are validated and saved", async ({ page }) => {
-    await page.goto(SETTINGS);
-    const section = page.getByRole("region", { name: "Language model" });
-    await expect(section.getByLabel("Model file (GGUF)")).toHaveValue(/gemma-4-12b/);
-    await section.getByLabel(/Context size/).fill("1000");
-    await expect(section.getByRole("alert")).toContainText("between 2048");
-    await expect(
-      section.getByRole("button", { name: "Save language model settings" }),
-    ).toBeDisabled();
-    await section.getByLabel(/Context size/).fill("8192");
-    await section.getByLabel("Default language model").selectOption("external");
-    await section.getByRole("button", { name: "Save language model settings" }).click();
-    await expect(section.getByRole("status")).toHaveText("Language model settings saved");
+    await page.goto(MODELS);
+    const form = page.getByRole("form", { name: "AI Models" });
+    await expect(form.getByLabel("Default language model (GGUF)")).toHaveValue(/gemma-4-12b/);
+    const ctxInput = form.getByLabel("Context size (tokens)", { exact: true });
+    await ctxInput.fill("1000");
+    await expect(form.getByRole("alert")).toContainText("between 2048");
+    await expect(form.getByRole("button", { name: "Save AI model settings" })).toBeDisabled();
+    await ctxInput.fill("8192");
+    await form.getByLabel("Default LLM backend", { exact: true }).selectOption("external");
+    await form.getByRole("button", { name: "Save AI model settings" }).click();
+    await expect(form.getByRole("status")).toHaveText("AI model settings saved.");
   });
 
   test("the cycle repositories are listed in the settings", async ({ page }) => {
-    await page.goto(SETTINGS);
+    await page.goto(`${MAIN}&page=settings&tab=preferences`);
     const repos = page.getByRole("list", { name: "Cycle repositories" });
     await expect(repos.getByRole("listitem")).toHaveCount(2);
     await expect(repos).toContainText("State as of 2026-11-12");

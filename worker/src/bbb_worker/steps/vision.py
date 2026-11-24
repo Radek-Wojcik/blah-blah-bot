@@ -67,11 +67,14 @@ def run(manifest: Manifest) -> None:
     out_path = manifest.work_dir / "descriptions.json"
     items: list[dict[str, Any]] = []
     if not manifest.screenshots:
+        protocol.progress("vision", 0.05, "no screenshots")
         doc = {"version": 1, "meeting_id": manifest.meeting_id, "items": items}
         schema.validate("screenshot-descriptions", doc)
         write_json(out_path, doc)
+        protocol.progress("vision", 1.0, "no screenshots")
         return
 
+    protocol.progress("vision", 0.05, "starting vision model")
     transcript_doc = read_json(manifest.work_dir / "transcript.json")
     edits_path = manifest.work_dir / "edits.json"
     excluded = excluded_ids(read_json(edits_path) if edits_path.exists() else None)
@@ -90,8 +93,12 @@ def run(manifest: Manifest) -> None:
         )
         model_name = "Qwen3-VL-8B-Instruct"
 
+    total = len(manifest.screenshots)
     with server as base:
         for i, (rel, offset_ms) in enumerate(manifest.screenshots):
+            start_frac = 0.10 + 0.85 * (i / total)
+            end_frac = 0.10 + 0.85 * ((i + 1) / total)
+            protocol.progress("vision", start_frac, f"describing {rel} ({i + 1}/{total})")
             image = (manifest.meeting_dir / rel).read_bytes()
             prompt = PROMPT.format(
                 language=language, context=context_text(transcript_doc, offset_ms, excluded)
@@ -105,8 +112,9 @@ def run(manifest: Manifest) -> None:
                     "model": model_name,
                 }
             )
-            protocol.progress("vision", (i + 1) / len(manifest.screenshots), rel)
+            protocol.progress("vision", end_frac, rel)
 
     doc = {"version": 1, "meeting_id": manifest.meeting_id, "items": items}
     schema.validate("screenshot-descriptions", doc)
     write_json(out_path, doc)
+    protocol.progress("vision", 1.0, f"{len(items)} screenshots")

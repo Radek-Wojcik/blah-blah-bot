@@ -125,6 +125,23 @@ export function createTauriBackend(): Backend {
       invoke("add_correction", { meetingId, text, item, issue, date }),
     publishCorrections: (meetingId, ids) => invoke("publish_corrections", { meetingId, ids }),
     deleteCorrection: (meetingId, id) => invoke("delete_correction", { meetingId, id }),
+    saveLastSources: (keys) => invoke("save_last_sources", { keys }),
+    setQueueGpuOverride: (overrideCfg) => invoke("set_queue_gpu_override", { overrideCfg }),
+    forceProcess: (meetingId) => invoke("force_process", { meetingId }),
+    scheduleJob: (meetingId, scheduledUnixMs) =>
+      invoke("schedule_job", { meetingId, scheduledUnixMs }),
+    getProjectPrefs: (cycleId) => invoke("get_project_prefs", { cycleId }),
+    saveProjectPrefs: (prefs) => invoke("save_project_prefs", { prefs }),
+    wizardCreateProject: (req) => invoke("wizard_create_project", { req }),
+    importMeeting: (req) => invoke("import_meeting", { req }),
+    exportMeetingMarkdown: (meetingId, destPath) =>
+      invoke("export_meeting_markdown", { meetingId, destPath: destPath ?? null }),
+    autoDetectModels: () => invoke("auto_detect_models"),
+    listAllVoiceProfiles: () => invoke("list_all_voice_profiles"),
+    voiceProfileSampleClip: (participantId) =>
+      invoke("voice_profile_sample_clip", { participantId }),
+    enrollVoiceProfile: (name, cycleId, audioPath) =>
+      invoke("enroll_voice_profile", { name, cycleId, audioPath }),
     getSettings: () => invoke("get_settings"),
     saveSettings: (settings) => invoke("save_settings", { settings }),
     bridgeStatus: () => invoke("bridge_status"),
@@ -136,6 +153,7 @@ export function createTauriBackend(): Backend {
     detectionPrompt: () => invoke("detection_prompt"),
     answerDetection: (key, answer) => invoke("answer_detection", { key, answer }),
     onRecordingState: (cb) => listen("recording-state", (e) => cb(e.payload as never)),
+    onRecordingLevels: (cb) => listen("recording-levels", (e) => cb(e.payload as never)),
     onMeetingsChanged: (cb) => listen("meetings-changed", () => cb()),
     onQueueChanged: (cb) => listen("queue-changed", (e) => cb(e.payload as never)),
     onModelsProgress: (cb) => listen("models-progress", (e) => cb(e.payload as never)),

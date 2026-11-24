@@ -679,8 +679,16 @@ fn changed(app: &AppHandle, meeting_id: &str) {
 }
 
 fn after(app: &AppHandle, meeting_id: &str, view: IpcResult<DraftView>) -> IpcResult<DraftView> {
-    let view = view.and_then(|v| with_lock(&app.state::<AppState>(), meeting_id, v));
+    let state = app.state::<AppState>();
+    let view = view.and_then(|v| with_lock(&state, meeting_id, v));
     if view.is_ok() {
+        if let Err(e) = crate::local_export::auto_export_if_enabled(&state, meeting_id) {
+            tracing::warn!(
+                meeting = %meeting_id,
+                error = %e,
+                "automatic local markdown export failed"
+            );
+        }
         changed(app, meeting_id);
     }
     view
