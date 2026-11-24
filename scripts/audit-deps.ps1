@@ -108,7 +108,7 @@ function Invoke-RustAudit {
         & cargo deny check advisories bans licenses sources
         if ($LASTEXITCODE -ne 0) { $failures.Add('rust: cargo deny check failed') }
     }
-    if (Test-CargoSubcommand 'audit') {
+    elseif (Test-CargoSubcommand 'audit') {
         $ranTool = $true
         & cargo audit
         if ($LASTEXITCODE -ne 0) { $failures.Add('rust: cargo audit reported advisories') }
