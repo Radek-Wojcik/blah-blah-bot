@@ -14,6 +14,8 @@ import { cleanupDirs, freshDir } from "../support/e2e-tmp";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const OUT = path.resolve(here, "../../docs/img");
+const TRANSITION_MS = 110;
+const HOLD_MS = 320;
 
 test.use({ colorScheme: "dark", deviceScaleFactor: 1 });
 
@@ -25,6 +27,62 @@ test.afterEach(() => {
 async function settle(page: Page) {
   await page.evaluate(() => document.fonts.ready);
   await page.waitForTimeout(400);
+}
+
+interface GifFrame {
+  file: string;
+  durationMs: number;
+}
+
+function createGifRecorder(page: Page) {
+  const frames: GifFrame[] = [];
+  const dir = freshDir("gif");
+
+  const snap = async (durationMs = TRANSITION_MS, waitMs = 0) => {
+    if (waitMs > 0) await page.waitForTimeout(waitMs);
+    const file = path.join(dir, `f${String(frames.length).padStart(3, "0")}.png`);
+    await page.screenshot({ path: file });
+    frames.push({ file, durationMs });
+  };
+
+  const hold = async (waitMs = 150) => {
+    await snap(HOLD_MS, waitMs);
+  };
+
+  const burst = async (count: number, intervalMs = 90, durationMs = TRANSITION_MS) => {
+    for (let i = 0; i < count; i++) {
+      await snap(durationMs, intervalMs);
+    }
+  };
+
+  const smoothScrollTo = async (locator: ReturnType<Page["locator"]>, steps = 4) => {
+    const targetY = await locator.evaluate((el) => {
+      const rect = el.getBoundingClientRect();
+      return Math.max(0, window.scrollY + rect.top - 16);
+    });
+    const startY = await page.evaluate(() => window.scrollY);
+    for (let i = 1; i <= steps; i++) {
+      const y = Math.round(startY + ((targetY - startY) * i) / steps);
+      await page.evaluate((top) => window.scrollTo({ top, behavior: "instant" }), y);
+      await snap(TRANSITION_MS, 70);
+    }
+  };
+
+  const save = (filename: string, maxBytes: number) => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const outPath = path.join(OUT, filename);
+    const durations = frames.map((f) => String(f.durationMs)).join(",");
+    execFileSync("python", [
+      path.join(here, "make-gif.py"),
+      outPath,
+      durations,
+      ...frames.map((f) => f.file),
+    ]);
+    const size = fs.statSync(outPath).size;
+    expect(size).toBeLessThan(maxBytes);
+  };
+
+  return { snap, hold, burst, smoothScrollTo, save };
 }
 
 test.describe("static screenshots", () => {
@@ -40,7 +98,7 @@ test.describe("static screenshots", () => {
 
   test("source picker", async ({ page }) => {
     // Taller than the other widget shots: the Browser section lists captured tabs.
-    await page.setViewportSize({ width: 340, height: 600 });
+    await page.setViewportSize({ width: 340, height: 860 });
     await page.goto("/?view=widget&backend=mock&rate=0&tabs=1");
     await page.getByLabel("Discord").check();
     await settle(page);
@@ -85,13 +143,10 @@ test.describe("static screenshots", () => {
   });
 
   test("speakers: participants and voice profiles", async ({ page }) => {
-    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.setViewportSize({ width: 1280, height: 1080 });
     await page.goto("/?view=main&backend=mock&rate=0&page=settings&tab=voices");
     const people = page.getByRole("list", { name: "Voice profiles" });
-    await expect(people.getByRole("listitem")).toHaveCount(3);
-    await page
-      .getByRole("heading", { name: "Voice profiles" })
-      .evaluate((el) => el.scrollIntoView({ block: "start" }));
+    await expect(people.getByRole("listitem")).toHaveCount(5);
     await settle(page);
     await page.screenshot({ path: path.join(OUT, "speakers-profiles.png") });
   });
@@ -114,7 +169,7 @@ test.describe("static screenshots", () => {
     await page.goto("/?view=main&backend=mock&rate=0&page=project&cycle=NOMAD");
     await expect(page.getByRole("list", { name: "Top action items" })).toBeVisible();
     await expect(page.locator(".brief-status")).toHaveText(/^State as of 2026-11-13\./);
-    await expect(page.getByRole("button", { name: "Refresh" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeEnabled();
     await settle(page);
     await page.screenshot({ path: path.join(OUT, "briefing.png") });
   });
@@ -233,9 +288,9 @@ test.describe("static screenshots", () => {
   });
 
   test("report mode gate", async ({ page }) => {
-    await page.setViewportSize({ width: 360, height: 640 });
+    await page.setViewportSize({ width: 360, height: 780 });
     await page.goto("/?view=widget&backend=mock&rate=0");
-    await page.getByLabel("Report mode").selectOption("by-type");
+    await page.getByLabel("Report mode", { exact: true }).selectOption("by-type");
     await expect(page.getByLabel("Meeting type")).toHaveValue("budget");
     await settle(page);
     await page.screenshot({ path: path.join(OUT, "report-mode-gate.png") });
@@ -379,270 +434,196 @@ test.describe("static screenshots", () => {
 });
 
 test("record flow GIF", async ({ page }) => {
-  const frames: string[] = [];
-  const dir = freshDir("gif");
-  const shot = async () => {
-    await page.waitForTimeout(450);
-    const file = path.join(dir, `f${String(frames.length).padStart(2, "0")}.png`);
-    await page.screenshot({ path: file });
-    frames.push(file);
-  };
-  await page.setViewportSize({ width: 340, height: 520 });
+  const gif = createGifRecorder(page);
+  await page.setViewportSize({ width: 340, height: 680 });
   await page.goto("/?view=widget&backend=mock");
-  await shot();
+  await gif.hold(350);
   await page.getByLabel("Discord").check();
-  await shot();
+  await gif.hold(140);
   await page.getByRole("button", { name: "Record" }).click();
-  await shot();
-  await page.waitForTimeout(1_200);
-  await shot();
+  await expect(page.getByText("Recording", { exact: true })).toBeVisible();
+  await gif.burst(6, 100);
   await page.getByLabel("Add source").selectOption({ label: "Chrome (whole browser)" });
-  await shot();
+  await gif.hold(120);
   await page.getByRole("button", { name: /Screenshot/ }).click();
-  await shot();
-  await page.waitForTimeout(900);
-  await shot();
+  await gif.burst(4, 100);
   await page.getByRole("button", { name: "Stop" }).click();
-  await shot();
-  fs.mkdirSync(OUT, { recursive: true });
-  execFileSync("python", [
-    path.join(here, "make-gif.py"),
-    path.join(OUT, "record-flow.gif"),
-    "900",
-    ...frames,
-  ]);
-  expect(fs.statSync(path.join(OUT, "record-flow.gif")).size).toBeLessThan(10_000_000);
+  await expect(page.getByRole("dialog", { name: "Process now or later?" })).toBeVisible();
+  await gif.hold(160);
+  gif.save("record-flow.gif", 1_500_000);
 });
 
 test("processing GIF", async ({ page }) => {
-  const frames: string[] = [];
-  const dir = freshDir("gif");
-  const shot = async (wait = 350) => {
-    await page.waitForTimeout(wait);
-    const file = path.join(dir, `f${String(frames.length).padStart(2, "0")}.png`);
-    await page.screenshot({ path: file });
-    frames.push(file);
-  };
+  const gif = createGifRecorder(page);
   await page.setViewportSize({ width: 960, height: 640 });
-  await page.goto("/?view=main&backend=mock&jobms=1400");
-  await shot();
+  await page.goto("/?view=main&backend=mock&jobms=450");
+  await expect(page.getByRole("article")).toHaveCount(3);
+  await gif.hold(350);
   const row = page
     .getByRole("list", { name: "Standalone meetings" })
     .getByRole("listitem")
     .filter({ hasText: "Kickoff" });
   await row.getByRole("button", { name: "Process" }).click();
-  await shot();
+  await gif.hold(140);
   await page.getByRole("button", { name: "Queue", exact: true }).click();
   const job = page.getByRole("article", { name: "Kickoff" });
   await expect(job).toBeVisible();
-  // One frame per stage while the simulated pipeline advances.
-  for (let i = 0; i < 6; i++) await shot(1_300);
-  await expect(job.getByText("Processed", { exact: true })).toBeVisible({ timeout: 20_000 });
-  await shot();
-  fs.mkdirSync(OUT, { recursive: true });
-  execFileSync("python", [
-    path.join(here, "make-gif.py"),
-    path.join(OUT, "processing.gif"),
-    "900",
-    ...frames,
-  ]);
-  expect(fs.statSync(path.join(OUT, "processing.gif")).size).toBeLessThan(10_000_000);
+  await gif.snap(TRANSITION_MS, 80);
+  const doneBadge = job.getByText("Processed", { exact: true });
+  for (let i = 0; i < 45; i++) {
+    if (await doneBadge.isVisible()) break;
+    await gif.snap(TRANSITION_MS, 100);
+  }
+  await expect(doneBadge).toBeVisible({ timeout: 20_000 });
+  await gif.hold(160);
+  gif.save("processing.gif", 2_000_000);
 });
 
 test("naming voices GIF", async ({ page }) => {
-  const frames: string[] = [];
-  const dir = freshDir("gif");
-  const shot = async (wait = 350) => {
-    await page.waitForTimeout(wait);
-    const file = path.join(dir, `f${String(frames.length).padStart(2, "0")}.png`);
-    await page.screenshot({ path: file });
-    frames.push(file);
-  };
+  const gif = createGifRecorder(page);
   await page.setViewportSize({ width: 960, height: 760 });
   await page.goto("/?view=main&backend=mock&rate=0&page=speakers&meeting=m5");
   const voice = (label: string) => page.getByRole("article", { name: label });
   await expect(page.getByRole("article")).toHaveCount(4);
-  await shot();
+  await gif.hold(350);
   // Listen to a clip of the first unknown voice.
   await page.getByRole("button", { name: "Play clip 1 of SPEAKER_02" }).click();
-  await shot();
+  await gif.burst(3, 110);
   const first = voice("SPEAKER_02");
   await first.getByLabel("Name for SPEAKER_02").selectOption({ label: "New participant…" });
-  await first.getByLabel(/Name of the new participant/).fill("Mira Demo");
-  await shot();
+  await gif.snap(TRANSITION_MS, 90);
+  const nameInput = first.getByLabel(/Name of the new participant/);
+  await nameInput.fill("Mira");
+  await gif.snap(TRANSITION_MS, 80);
+  await nameInput.fill("Mira Demo");
+  await gif.hold(120);
   await first.getByRole("button", { name: "Create and name" }).click();
   await expect(first.getByText("Named by you")).toBeVisible();
-  await shot();
+  await gif.hold(140);
   // Accept the suggestion and name the second unknown voice from the list.
   await voice("SPEAKER_01")
     .getByRole("button", { name: /^Accept/ })
     .click();
-  await shot();
+  await gif.hold(140);
   await voice("SPEAKER_03").getByLabel("Name for SPEAKER_03").selectOption({ label: "Jan Demo" });
   await expect(page.getByRole("status")).toContainText("3 of 4");
-  await shot(600);
-  fs.mkdirSync(OUT, { recursive: true });
-  execFileSync("python", [
-    path.join(here, "make-gif.py"),
-    path.join(OUT, "naming-voices.gif"),
-    "1400",
-    ...frames,
-  ]);
-  expect(fs.statSync(path.join(OUT, "naming-voices.gif")).size).toBeLessThan(10_000_000);
+  await gif.hold(180);
+  gif.save("naming-voices.gif", 1_500_000);
 });
 
 test("draft editing GIF", async ({ page }) => {
-  const frames: string[] = [];
-  const dir = freshDir("gif");
-  const shot = async (wait = 350) => {
-    await page.waitForTimeout(wait);
-    const file = path.join(dir, `f${String(frames.length).padStart(2, "0")}.png`);
-    await page.screenshot({ path: file });
-    frames.push(file);
-  };
-  await page.setViewportSize({ width: 1000, height: 1000 });
+  const gif = createGifRecorder(page);
+  await page.setViewportSize({ width: 960, height: 900 });
   await page.goto("/?view=main&backend=mock&rate=0&page=transcript&meeting=m5");
   await expect(page.getByRole("img", { name: "Screenshot taken at 0:40" })).toBeVisible();
-  await shot();
+  await gif.hold(350);
   // Switch from the Transcript tab directly to the Draft & Report tab.
   await page.getByRole("tab", { name: "Draft & Report" }).click();
   const columns = page.getByLabel("Sections", { exact: true });
   await expect(columns.getByRole("region")).toHaveCount(4);
-  await shot();
+  await gif.hold(160);
   // The source of an item: the quote and the time in the meeting.
   const ground = "Update the ground station schedule for Thursday.";
   await page.getByRole("button", { name: `Source of: ${ground}` }).click();
   await expect(page.getByRole("dialog", { name: `Source of: ${ground}` })).toBeVisible();
-  await shot();
+  await gif.hold(180);
   await page.getByRole("button", { name: `Source of: ${ground}` }).click();
+  await gif.snap(TRANSITION_MS, 90);
   // A template with its own sections.
-  await page.getByLabel("Report mode").selectOption("template");
+  await page.getByLabel("Report mode", { exact: true }).selectOption("template");
   const template = page.getByLabel("Template", { exact: true });
   await expect(template).toBeVisible();
+  await gif.snap(TRANSITION_MS, 90);
   await template.selectOption("budget-review");
   await expect(template).toHaveValue("budget-review");
   await expect(columns.getByRole("region").first()).toBeVisible();
-  await shot(600);
+  await gif.hold(160);
   // Move an item to another section from its menu.
   const move = page.getByLabel(/^Move to section:/).first();
   const text = (await move.getAttribute("aria-label"))!.replace("Move to section: ", "");
   const options = await move.locator("option").allTextContents();
   const target = options.filter((o) => o !== "Move to…")[0]!;
   await move.focus();
-  await shot();
+  await gif.snap(TRANSITION_MS, 90);
   await move.selectOption({ label: target });
   await expect(
     page
       .getByRole("list", { name: `Items of ${target}` })
       .getByRole("button", { name: text, exact: true }),
   ).toBeVisible();
-  await shot(600);
+  await gif.hold(160);
   await page.getByRole("button", { name: "Rendered report" }).click();
   await expect(page.getByLabel("Rendered report")).toContainText(text);
-  await shot(600);
-  fs.mkdirSync(OUT, { recursive: true });
-  execFileSync("python", [
-    path.join(here, "make-gif.py"),
-    path.join(OUT, "draft-editing.gif"),
-    "1300",
-    ...frames,
-  ]);
-  expect(fs.statSync(path.join(OUT, "draft-editing.gif")).size).toBeLessThan(1_500_000);
+  await gif.hold(180);
+  gif.save("draft-editing.gif", 1_500_000);
 });
 
 test("approve statuses and publish GIF", async ({ page }) => {
-  const frames: string[] = [];
-  const dir = freshDir("gif");
-  const shot = async (wait = 350) => {
-    await page.waitForTimeout(wait);
-    const file = path.join(dir, `f${String(frames.length).padStart(2, "0")}.png`);
-    await page.screenshot({ path: file });
-    frames.push(file);
-  };
-  await page.setViewportSize({ width: 1000, height: 820 });
-  await page.goto("/?view=main&backend=mock&rate=0&jobms=900&page=draft&meeting=m5");
+  const gif = createGifRecorder(page);
+  await page.setViewportSize({ width: 960, height: 820 });
+  await page.goto("/?view=main&backend=mock&rate=0&jobms=250&page=draft&meeting=m5");
   const changes = page.getByRole("region", { name: "Status changes" });
   await expect(changes.getByRole("listitem")).toHaveCount(3);
-  const top = (locator: ReturnType<Page["locator"]>) =>
-    locator.evaluate((el) => el.scrollIntoView({ block: "start" }));
-  await top(changes.getByRole("heading", { name: "Status changes" }));
-  await shot();
+  await changes
+    .getByRole("heading", { name: "Status changes" })
+    .evaluate((el) => el.scrollIntoView({ block: "start" }));
+  await gif.hold(250);
   // Each status change shows its quote; the user decides.
   await changes.getByRole("button", { name: "Approve #12" }).click();
-  await shot();
+  await gif.snap(TRANSITION_MS, 90);
   await changes.getByRole("button", { name: "Approve #11" }).click();
-  await shot();
+  await gif.snap(TRANSITION_MS, 90);
   await changes.getByRole("button", { name: "Approve t-1" }).click();
   await expect(changes.getByRole("status")).toContainText("3 of 3 approved");
-  await shot();
-  // The publishing panel: what will happen, then Publish, with the public repository asked once.
+  await gif.hold(140);
+  // Smooth scroll to the publishing panel and topics diff, then Publish.
   const panel = page.getByRole("region", { name: "Publishing" });
-  await top(panel.getByRole("heading", { name: "Publishing" }));
-  await shot();
-  // Before it is published the plan shows each topic of topics.yaml, before and after.
-  await top(panel.getByRole("heading", { name: "topics.yaml: before and after" }));
-  await shot();
+  await gif.smoothScrollTo(panel.getByRole("heading", { name: "Publishing" }), 2);
+  await gif.hold(120);
+  await gif.smoothScrollTo(
+    panel.getByRole("heading", { name: "topics.yaml: before and after" }),
+    2,
+  );
+  await gif.hold(140);
   await panel.getByRole("button", { name: "Publish", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Publish to a public repository?" });
   await expect(dialog).toBeVisible();
-  await shot();
+  await gif.hold(140);
   await dialog.getByRole("checkbox").check();
-  await shot();
+  await gif.snap(TRANSITION_MS, 90);
   await dialog.getByRole("button", { name: "Publish to a public repository" }).click();
-  await top(panel.getByRole("heading", { name: "Outbox" }));
-  // The outbox runs one operation at a time.
-  for (let i = 0; i < 4; i++) await shot(1_700);
-  await expect(panel.getByText("Published: everything was sent.")).toBeVisible({
-    timeout: 30_000,
-  });
-  await shot(600);
-  await top(panel.getByRole("heading", { name: "topics.yaml", exact: true }));
-  await shot(600);
-  fs.mkdirSync(OUT, { recursive: true });
-  execFileSync("python", [
-    path.join(here, "make-gif.py"),
-    path.join(OUT, "approve-and-publish.gif"),
-    "1300",
-    ...frames,
-  ]);
-  expect(fs.statSync(path.join(OUT, "approve-and-publish.gif")).size).toBeLessThan(3_000_000);
+  await gif.smoothScrollTo(panel.getByRole("heading", { name: "Outbox" }), 2);
+  const publishedBanner = panel.getByText("Published: everything was sent.");
+  for (let i = 0; i < 20; i++) {
+    if (await publishedBanner.isVisible()) break;
+    await gif.snap(TRANSITION_MS, 120);
+  }
+  await expect(publishedBanner).toBeVisible({ timeout: 30_000 });
+  await gif.hold(140);
+  await gif.smoothScrollTo(panel.getByRole("heading", { name: "topics.yaml", exact: true }), 2);
+  await gif.hold(180);
+  gif.save("approve-and-publish.gif", 2_000_000);
 });
 
 // Stage 6. Run only this one with: npx playwright test --project=screenshots -g "detect and record"
 test("detect and record GIF", async ({ page }) => {
-  const frames: string[] = [];
-  const dir = freshDir("gif");
-  const shot = async (wait = 450) => {
-    await page.waitForTimeout(wait);
-    const file = path.join(dir, `f${String(frames.length).padStart(2, "0")}.png`);
-    await page.screenshot({ path: file });
-    frames.push(file);
-  };
+  const gif = createGifRecorder(page);
   await page.setViewportSize({ width: 340, height: 600 });
-  // The mock raises a prompt for a fictional Discord call 2.5 seconds after it starts.
-  await page.goto("/?view=widget&backend=mock&tabs=1&detectms=2500");
-  await shot(300);
+  // The mock raises a prompt for a fictional Discord call shortly after it starts.
+  await page.goto("/?view=widget&backend=mock&tabs=1&detectms=900");
+  await gif.hold(250);
   const prompt = page.getByRole("alertdialog", { name: "Record this call?" });
   await expect(prompt).toBeVisible();
-  await shot();
+  await gif.hold(160);
   await prompt.getByRole("button", { name: "Record" }).click();
   await expect(page.getByText("Recording", { exact: true })).toBeVisible();
-  await shot(700);
+  await gif.burst(6, 100);
   await page
     .getByLabel("Add source")
     .selectOption({ label: "Tab: Budget sheet (sheets.example.org)" });
-  await shot();
-  await page.waitForTimeout(900);
-  await shot();
+  await gif.burst(5, 100);
   await page.getByRole("button", { name: "Stop" }).click();
   await expect(page.getByRole("dialog", { name: "Process now or later?" })).toBeVisible();
-  await shot();
-  fs.mkdirSync(OUT, { recursive: true });
-  execFileSync("python", [
-    path.join(here, "make-gif.py"),
-    path.join(OUT, "detect-and-record.gif"),
-    "1100",
-    ...frames,
-  ]);
-  expect(fs.statSync(path.join(OUT, "detect-and-record.gif")).size).toBeLessThan(10_000_000);
+  await gif.hold(160);
+  gif.save("detect-and-record.gif", 1_500_000);
 });
