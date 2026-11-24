@@ -109,6 +109,10 @@ pub struct MeetingSummary {
     pub screenshot_count: u32,
     /// State of the processing job, when the meeting has one.
     pub job: Option<crate::processing::JobState>,
+    #[serde(default)]
+    pub short_title: Option<String>,
+    #[serde(default)]
+    pub report_url: Option<String>,
 }
 
 impl From<store::MeetingSummary> for MeetingSummary {
@@ -122,8 +126,60 @@ impl From<store::MeetingSummary> for MeetingSummary {
             track_count: s.track_count,
             screenshot_count: s.screenshot_count,
             job: None,
+            short_title: None,
+            report_url: None,
         }
     }
+}
+
+/// Derive a concise short title (up to 8 words, 70 characters) from the first summary phrase.
+pub fn derive_short_title(summary_text: &str) -> Option<String> {
+    let first = summary_text
+        .split(['.', '!', '?', '\n', ';'])
+        .map(str::trim)
+        .find(|s| !s.is_empty())?;
+    let words: Vec<&str> = first.split_whitespace().take(8).collect();
+    if words.is_empty() {
+        return None;
+    }
+    let mut out = words.join(" ");
+    if out.chars().count() > 70 {
+        out = out.chars().take(67).collect::<String>();
+        out.push_str("...");
+    }
+    Some(out)
+}
+
+/// Read `short_title` from `<meeting_dir>/work/draft.json` or derive it from `summary`.
+pub fn read_draft_short_title(meeting_dir: &std::path::Path) -> Option<String> {
+    let bytes = std::fs::read(meeting_dir.join("work").join("draft.json")).ok()?;
+    let val: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    if let Some(st) = val
+        .get("short_title")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return Some(st.to_string());
+    }
+    val.get("summary")
+        .and_then(|v| v.as_str())
+        .and_then(derive_short_title)
+}
+
+/// Populate `short_title` and `report_url` on a [`MeetingSummary`].
+pub fn enrich_meeting_summary(
+    store: &store::Store,
+    recordings_root: &std::path::Path,
+    dir: &str,
+    summary: &mut MeetingSummary,
+) {
+    summary.short_title = read_draft_short_title(&recordings_root.join(dir));
+    summary.report_url = store
+        .get_publication(&summary.id)
+        .ok()
+        .flatten()
+        .and_then(|p| p.report_url);
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -193,5 +249,48 @@ mod background_error_tests {
         assert_eq!(err.code, "internal");
         assert!(!err.message.contains("SECRET"));
         assert!(!err.message.contains("panicked"));
+    }
+
+    #[test]
+    fn enrich_meeting_summary_reads_short_title_and_report_url() {
+        let dir = test_tmp::TestDir::new("ipc-enrich");
+        let store = store::Store::open_in_memory().unwrap();
+        store
+            .create_meeting(&store::Meeting {
+                id: "m1".into(),
+                title: "Meeting 1".into(),
+                started_unix_ms: 1000,
+                duration_ms: Some(5000),
+                state: store::MeetingState::Stopped,
+                dir: "m1".into(),
+            })
+            .unwrap();
+        store
+            .put_publication(&store::Publication {
+                meeting_id: "m1".into(),
+                cycle_id: "C1".into(),
+                folder: Some("C1/2026-11-24".into()),
+                repo_key: Some("github.com/o/r".into()),
+                commit_sha: Some("abc".into()),
+                report_url: Some("https://github.com/o/r/blob/main/report.md".into()),
+                snapshot_dir: "snap".into(),
+                published_unix_ms: Some(2000),
+            })
+            .unwrap();
+        let work = dir.path().join("m1").join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::write(
+            work.join("draft.json"),
+            r#"{"short_title":"Sprint Launch Plan","summary":"Ignored fallback"}"#,
+        )
+        .unwrap();
+
+        let mut summary: MeetingSummary = store.list_summaries().unwrap().remove(0).into();
+        enrich_meeting_summary(&store, dir.path(), "m1", &mut summary);
+        assert_eq!(summary.short_title.as_deref(), Some("Sprint Launch Plan"));
+        assert_eq!(
+            summary.report_url.as_deref(),
+            Some("https://github.com/o/r/blob/main/report.md")
+        );
     }
 }

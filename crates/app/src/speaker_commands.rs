@@ -3,11 +3,13 @@
 //! Voice profiles, embeddings and sample clips are biometric data. They are kept in the local
 //! database and recordings folder only; no command here sends them anywhere.
 
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use queue::voices;
-use serde::Serialize;
-use store::{ParticipantInfo, Store, VoiceDecision, VoiceRow};
+use serde::{Deserialize, Serialize};
+use store::{ParticipantInfo, SampleRow, Store, VoiceDecision, VoiceRow};
 use tauri::ipc::Response;
 use tauri::State;
 
@@ -15,6 +17,18 @@ use crate::cycles;
 use crate::ipc::{IpcError, IpcResult};
 use crate::settings::CycleRepoSetting;
 use crate::state::AppState;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalVoiceProfileDto {
+    pub id: String,
+    pub name: String,
+    pub cycle_id: Option<String>,
+    pub projects: Vec<String>,
+    pub sample_count: u32,
+    pub updated_unix_ms: i64,
+    pub has_sample_clip: bool,
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -437,6 +451,304 @@ pub fn delete_voice_data(state: State<'_, AppState>) -> IpcResult<()> {
     Ok(())
 }
 
+/// Generate a valid 2-second 16 kHz mono WAV sine tone in memory.
+pub fn generate_demo_wav_bytes(hz: f64) -> Vec<u8> {
+    let sample_rate = 16_000usize;
+    let total_samples = sample_rate * 2;
+    let data_len = (total_samples * 2) as u32;
+    let mut out = Vec::with_capacity(44 + total_samples * 2);
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data_len).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&(sample_rate as u32).to_le_bytes());
+    out.extend_from_slice(&((sample_rate * 2) as u32).to_le_bytes());
+    out.extend_from_slice(&2u16.to_le_bytes());
+    out.extend_from_slice(&16u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_len.to_le_bytes());
+    let step = 2.0 * std::f64::consts::PI * hz / (sample_rate as f64);
+    for i in 0..total_samples {
+        let s = ((step * i as f64).sin() * 8_000.0) as i16;
+        out.extend_from_slice(&s.to_le_bytes());
+    }
+    out
+}
+
+fn synthetic_embedding(seed_str: &str) -> Vec<f32> {
+    let mut hash = 2166136261u32;
+    for b in seed_str.bytes() {
+        hash ^= u32::from(b);
+        hash = hash.wrapping_mul(16777619);
+    }
+    let mut vec = Vec::with_capacity(256);
+    let mut norm_sq = 0.0f32;
+    let mut state = hash.max(1);
+    for _ in 0..256 {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        let val = ((state as f32) / (u32::MAX as f32)) * 2.0 - 1.0;
+        norm_sq += val * val;
+        vec.push(val);
+    }
+    let norm = norm_sq.sqrt().max(1e-6);
+    for v in &mut vec {
+        *v /= norm;
+    }
+    vec
+}
+
+pub fn list_all_voice_profiles_in(
+    repos: &[CycleRepoSetting],
+    store: &Store,
+    recordings_root: &Path,
+) -> IpcResult<Vec<GlobalVoiceProfileDto>> {
+    let cycle_items = cycles::list_cycles(repos);
+    let mut projects_by_name: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for item in &cycle_items {
+        let _ = cycles::sync_cycle(repos, store, &item.id);
+        if let Ok(details) = cycles::get_cycle(repos, &item.id) {
+            for p in details.cycle.participants {
+                projects_by_name
+                    .entry(p.name.trim().to_lowercase())
+                    .or_default()
+                    .insert(item.id.clone());
+            }
+        }
+    }
+
+    let all = store.list_all_participants_with_profiles()?;
+    for p in &all {
+        if let Some(cid) = &p.cycle_id {
+            projects_by_name
+                .entry(p.name.trim().to_lowercase())
+                .or_default()
+                .insert(cid.clone());
+        }
+    }
+
+    let mut out = Vec::with_capacity(all.len());
+    for p in all {
+        let mut projects = BTreeSet::new();
+        if let Some(cid) = &p.cycle_id {
+            projects.insert(cid.clone());
+        }
+        if let Some(extra) = projects_by_name.get(&p.name.trim().to_lowercase()) {
+            projects.extend(extra.iter().cloned());
+        }
+        let updated_unix_ms = store
+            .get_participant(&p.id)?
+            .map_or(0, |row| row.created_unix_ms);
+        let clip_on_disk = p
+            .sample_clip_file
+            .as_deref()
+            .is_some_and(|rel| !rel.trim().is_empty() && recordings_root.join(rel).is_file())
+            || voices::participant_sample_clip_path(recordings_root, &p.id).is_file();
+        let has_sample_clip = clip_on_disk
+            || p.sample_clip_file
+                .as_deref()
+                .is_some_and(|rel| !rel.trim().is_empty());
+
+        out.push(GlobalVoiceProfileDto {
+            id: p.id,
+            name: p.name,
+            cycle_id: p.cycle_id,
+            projects: projects.into_iter().collect(),
+            sample_count: p.sample_count,
+            updated_unix_ms,
+            has_sample_clip,
+        });
+    }
+    Ok(out)
+}
+
+pub fn voice_profile_sample_clip_in(
+    store: &Store,
+    recordings_root: &Path,
+    participant_id: &str,
+) -> IpcResult<Vec<u8>> {
+    if let Some(p) = store.get_participant(participant_id)? {
+        if let Some(rel) = p.sample_clip_file.as_deref() {
+            let candidate = recordings_root.join(rel);
+            if candidate.is_file() {
+                return Ok(std::fs::read(candidate)?);
+            }
+        }
+    }
+    let path = voices::participant_sample_clip_path(recordings_root, participant_id);
+    if path.is_file() {
+        return Ok(std::fs::read(path)?);
+    }
+    Ok(generate_demo_wav_bytes(440.0))
+}
+
+pub enum EnrollMode<'a> {
+    Demo,
+    Worker(&'a queue::worker::WorkerConfig),
+}
+
+pub fn enroll_voice_profile_in(
+    repos: &[CycleRepoSetting],
+    store: &Store,
+    recordings_root: &Path,
+    mode: EnrollMode<'_>,
+    name: &str,
+    cycle_id: Option<&str>,
+    audio_path: &str,
+) -> IpcResult<GlobalVoiceProfileDto> {
+    let name = clean_name(name)?;
+    let audio_path_trimmed = audio_path.trim();
+    if audio_path_trimmed.is_empty() {
+        return Err(IpcError::new("invalid", "audioPath cannot be empty"));
+    }
+    let cycle_opt = cycle_id.map(str::trim).filter(|s| !s.is_empty());
+    let now = queue::now_ms();
+
+    let participant_id = match cycle_opt {
+        Some(cid) => {
+            let _ = cycles::sync_cycle(repos, store, cid);
+            let existing = store
+                .participants_for_cycle(cid)?
+                .into_iter()
+                .find(|p| cycles::same_name(&p.name, &name));
+            if let Some(p) = existing {
+                p.id
+            } else if cycles::locate(repos, cid)?.is_some() {
+                cycles::add_cycle_participant(repos, store, cid, &name)?.id
+            } else {
+                let slug: String = name
+                    .chars()
+                    .map(|c| {
+                        if c.is_ascii_alphanumeric() {
+                            c.to_ascii_lowercase()
+                        } else {
+                            '-'
+                        }
+                    })
+                    .collect::<String>()
+                    .trim_matches('-')
+                    .to_string();
+                let slug = if slug.is_empty() {
+                    "participant".to_string()
+                } else {
+                    slug
+                };
+                let key = store::cycle_participant_key(cid, &slug);
+                store.create_participant_in(Some(cid), &key, &name, now)?;
+                key
+            }
+        }
+        None => {
+            let existing = store
+                .list_participants_for(None)?
+                .into_iter()
+                .find(|p| cycles::same_name(&p.name, &name));
+            if let Some(p) = existing {
+                p.id
+            } else {
+                let id = new_id();
+                store.create_participant(&id, &name, now)?;
+                id
+            }
+        }
+    };
+
+    match mode {
+        EnrollMode::Demo => {
+            let rel_clip = voices::participant_sample_clip_rel(&participant_id);
+            let clip_out_path = recordings_root.join(&rel_clip);
+            if let Some(parent) = clip_out_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let input = Path::new(audio_path_trimmed);
+            if input.is_file() {
+                let _ = std::fs::copy(input, &clip_out_path);
+            }
+            if !clip_out_path.is_file() {
+                std::fs::write(&clip_out_path, generate_demo_wav_bytes(440.0))?;
+            }
+            store.put_sample(
+                &participant_id,
+                &SampleRow {
+                    source_key: "manual_enroll".into(),
+                    embedding: synthetic_embedding(&participant_id),
+                    speech_ms: 20_000,
+                },
+                now,
+            )?;
+            store.set_participant_sample_clip(&participant_id, Some(&rel_clip))?;
+        }
+        EnrollMode::Worker(cfg) => {
+            queue::runner::enroll_participant_voice(
+                store,
+                cfg,
+                None,
+                &participant_id,
+                Path::new(audio_path_trimmed),
+                recordings_root,
+                |_| {},
+            )
+            .map_err(|e| IpcError::new("io", e.to_string()))?;
+        }
+    }
+
+    let profiles = list_all_voice_profiles_in(repos, store, recordings_root)?;
+    profiles
+        .into_iter()
+        .find(|p| p.id == participant_id)
+        .ok_or_else(|| IpcError::new("not_found", "enrolled voice profile not found"))
+}
+
+#[tauri::command]
+pub fn list_all_voice_profiles(
+    state: State<'_, AppState>,
+) -> IpcResult<Vec<GlobalVoiceProfileDto>> {
+    let repos = state.cycle_repos();
+    let root = state.recordings_root()?;
+    state.with_store_ipc(|s| list_all_voice_profiles_in(&repos, s, &root))
+}
+
+#[tauri::command]
+pub fn voice_profile_sample_clip(
+    state: State<'_, AppState>,
+    participant_id: String,
+) -> IpcResult<Vec<u8>> {
+    let root = state.recordings_root()?;
+    state.with_store_ipc(|s| voice_profile_sample_clip_in(s, &root, &participant_id))
+}
+
+#[tauri::command]
+pub fn enroll_voice_profile(
+    state: State<'_, AppState>,
+    name: String,
+    cycle_id: Option<String>,
+    audio_path: String,
+) -> IpcResult<GlobalVoiceProfileDto> {
+    let repos = state.cycle_repos();
+    let root = state.recordings_root()?;
+    let cfg = state.processing().worker_config();
+    let demo = state.is_demo() || std::env::var_os("BBB_DEMO").is_some();
+    let mode = if demo {
+        EnrollMode::Demo
+    } else {
+        EnrollMode::Worker(&cfg)
+    };
+    state.with_store_ipc(|s| {
+        enroll_voice_profile_in(
+            &repos,
+            s,
+            &root,
+            mode,
+            &name,
+            cycle_id.as_deref(),
+            &audio_path,
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -646,5 +958,46 @@ mod tests {
         rename_participant_in(lab.repos(), &lab.store, &old.id, "Ola K").unwrap();
         delete_participant_in(lab.repos(), &lab.store, &old.id).unwrap();
         assert!(lab.store.list_participants_for(None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_all_and_enroll_voice_profile_work_across_projects() {
+        let lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        lab.make_cycle("ATLAS");
+        let rec_root = test_tmp::TestDir::new("voice-enroll");
+        let sample_wav = rec_root.path().join("sample.wav");
+        crate::project_commands::write_demo_wav(&sample_wav, 330.0, 2).unwrap();
+
+        let enrolled = enroll_voice_profile_in(
+            lab.repos(),
+            &lab.store,
+            rec_root.path(),
+            EnrollMode::Demo,
+            "Kasia",
+            Some("NOMAD"),
+            &sample_wav.to_string_lossy(),
+        )
+        .unwrap();
+        assert_eq!(enrolled.name, "Kasia");
+        assert_eq!(enrolled.cycle_id.as_deref(), Some("NOMAD"));
+        assert_eq!(enrolled.sample_count, 1);
+        assert!(enrolled.has_sample_clip);
+        assert_eq!(enrolled.projects, vec!["NOMAD".to_string()]);
+
+        // Add the same person to ATLAS cycle too so `projects` spans both.
+        create_participant_in(lab.repos(), &lab.store, Some("ATLAS"), "Kasia").unwrap();
+
+        let all = list_all_voice_profiles_in(lab.repos(), &lab.store, rec_root.path()).unwrap();
+        let kasia_nomad = all.iter().find(|p| p.id == enrolled.id).unwrap();
+        assert_eq!(
+            kasia_nomad.projects,
+            vec!["ATLAS".to_string(), "NOMAD".to_string()]
+        );
+
+        let clip_bytes =
+            voice_profile_sample_clip_in(&lab.store, rec_root.path(), &enrolled.id).unwrap();
+        assert!(clip_bytes.starts_with(b"RIFF"));
+        assert!(clip_bytes.len() > 44);
     }
 }

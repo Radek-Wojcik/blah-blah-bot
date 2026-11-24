@@ -11,7 +11,9 @@ use tauri::State;
 
 use crate::ipc::{IpcError, IpcResult};
 use crate::llm::{self, CloudPreview};
-use crate::processing::{ModelStatus, ProcessingSettings, QueueState};
+use crate::processing::{
+    self, JobView, ModelStatus, ProcessingSettings, QueueGpuOverrideDto, QueueState, QueueView,
+};
 use crate::secrets;
 use crate::state::AppState;
 
@@ -125,12 +127,41 @@ pub fn process_meeting(
             secrets::get(name).is_some()
         })
     })?;
+    state.with_store_ipc(|s| {
+        processing::apply_project_prefs_to_job_options(s, &id, &settings, &mut job)
+    })?;
     state.processing().process(&id, job)
 }
 
 #[tauri::command]
 pub fn queue_state(state: State<'_, AppState>) -> IpcResult<QueueState> {
     state.processing().queue_state()
+}
+
+#[tauri::command]
+pub fn set_queue_gpu_override(
+    state: State<'_, AppState>,
+    override_cfg: Option<QueueGpuOverrideDto>,
+) -> IpcResult<QueueView> {
+    state.processing().set_gpu_override(override_cfg)
+}
+
+#[tauri::command]
+pub fn force_process(state: State<'_, AppState>, meeting_id: String) -> IpcResult<JobView> {
+    state.with_store_ipc(|s| crate::draft_commands::ensure_draft_unlocked(s, &meeting_id))?;
+    state.processing().force_process(&meeting_id)
+}
+
+#[tauri::command]
+pub fn schedule_job(
+    state: State<'_, AppState>,
+    meeting_id: String,
+    scheduled_unix_ms: Option<i64>,
+) -> IpcResult<JobView> {
+    state.with_store_ipc(|s| crate::draft_commands::ensure_draft_unlocked(s, &meeting_id))?;
+    state
+        .processing()
+        .schedule_job(&meeting_id, scheduled_unix_ms)
 }
 
 #[tauri::command]

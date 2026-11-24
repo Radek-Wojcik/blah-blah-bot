@@ -11,8 +11,8 @@ use store::{Meeting, MeetingState, ReportSettings, Screenshot, Segment, Store, T
 
 use crate::ipc::{IpcError, IpcResult};
 use crate::recording_dto::{
-    ActiveSource, RecordingState, RecordingStatus, SourceInfo, SourceKind, SourceStatus,
-    StartRecordingRequest,
+    ActiveSource, RecordingLevelsDto, RecordingState, RecordingStatus, SourceInfo, SourceKind,
+    SourceStatus, StartRecordingRequest,
 };
 
 /// Seconds in one audio segment of a real recording.
@@ -385,6 +385,13 @@ impl Recorder {
         Ok(logged)
     }
 
+    /// Current 12-bar live audio levels while a recording session is active.
+    pub fn levels(&self) -> Option<RecordingLevelsDto> {
+        let guard = self.active.lock().ok()?;
+        let a = guard.as_ref()?;
+        Some(a.session.levels().into())
+    }
+
     /// State for the widget. Reads and resets the level meters, so call it from one place.
     pub fn tick(&self) -> Option<RecordingState> {
         let mut guard = self.active.lock().ok()?;
@@ -506,5 +513,30 @@ mod tests {
         assert_eq!(track.source, "browser-tab");
         assert!(track.ended);
         assert!(track.total_samples.unwrap_or(0) > 16_000 * 4 / 10);
+    }
+
+    #[test]
+    fn levels_returns_12_bars_while_recording_and_none_when_idle() {
+        use recorder::session::ToneBackend;
+        let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
+        let recorder = Recorder::new(store, Arc::new(ToneBackend), true);
+        assert_eq!(recorder.levels(), None);
+        let root = test_tmp::TestDir::new("recording-levels");
+        let req = StartRecordingRequest {
+            title: None,
+            source_ids: vec!["tone:440".into()],
+            report: None,
+            use_last_report: false,
+        };
+        recorder
+            .start(root.path(), req, ReportSettings::default())
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        let levels = recorder.levels().expect("levels while active");
+        assert_eq!(levels.bars.len(), 12);
+        assert!(levels.peak >= 0.0 && levels.peak <= 1.0);
+        assert!(levels.rms >= 0.0 && levels.rms <= 1.0);
+        recorder.stop().unwrap();
+        assert_eq!(recorder.levels(), None);
     }
 }

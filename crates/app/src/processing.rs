@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use queue::cleanup::AudioRetention;
@@ -211,18 +211,32 @@ fn env_dir_from(data_dir: &Path, shared: Option<std::ffi::OsString>) -> PathBuf 
 
 // ----- GPU gate with live settings -----------------------------------------------------------
 
-/// The GPU gate, rebuilt when the thresholds in the settings change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueGpuOverrideDto {
+    pub gpu_max_util_percent: u32,
+    pub gpu_idle_seconds: u32,
+}
+
+/// The GPU gate, rebuilt when the thresholds in the settings or queue override change.
 struct SettingsGate {
     settings: Arc<Mutex<ProcessingSettings>>,
+    gpu_override: Arc<Mutex<Option<QueueGpuOverrideDto>>>,
     inner: Mutex<(NvmlSampler, Guard)>,
 }
 
 impl GpuGate for SettingsGate {
     fn check(&self, stage: Stage) -> GateDecision {
-        let policy = match self.settings.lock() {
+        let mut policy = match self.settings.lock() {
             Ok(s) => s.guard_policy(),
             Err(_) => return GateDecision::Wait("settings are unavailable".into()),
         };
+        if let Ok(ovr) = self.gpu_override.lock() {
+            if let Some(cfg) = *ovr {
+                policy.max_util_percent = cfg.gpu_max_util_percent;
+                policy.idle_ms = u64::from(cfg.gpu_idle_seconds) * 1000;
+            }
+        }
         let Ok(mut inner) = self.inner.lock() else {
             return GateDecision::Wait("internal error in the GPU guard".into());
         };
@@ -267,13 +281,19 @@ pub struct JobView {
     pub state: JobState,
     pub progress: f32,
     pub waiting_reason: Option<String>,
+    pub scheduled_unix_ms: Option<i64>,
+    pub eta_seconds: Option<u64>,
     pub stages: Vec<StageView>,
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct QueueState {
     pub jobs: Vec<JobView>,
+    pub gpu_override: Option<QueueGpuOverrideDto>,
 }
+
+pub type QueueView = QueueState;
 
 #[derive(Debug, Clone)]
 struct Live {
@@ -309,11 +329,65 @@ const MODEL_INFO: [(&str, &str, bool); 4] = [
 
 // ----- service --------------------------------------------------------------------------------
 
+/// Side-effect hooks invoked by [`Processing`] (UI event emission and post-reduce actions).
+/// Abstracted behind a trait so unit tests can construct [`Processing`] without a Tauri runtime.
+pub trait ProcessingHooks: Send + Sync {
+    fn emit_queue(&self, state: &QueueState);
+    fn emit_models_progress(&self, payload: serde_json::Value);
+    fn emit_models_changed(&self);
+    fn on_reduce_completed(&self, meeting_id: &str);
+}
+
+struct TauriProcessingHooks(AppHandle);
+
+impl ProcessingHooks for TauriProcessingHooks {
+    fn emit_queue(&self, state: &QueueState) {
+        if let Err(e) = self.0.emit(EVENT_QUEUE, state) {
+            tracing::warn!(error = %e, "could not emit the queue state");
+        }
+    }
+
+    fn emit_models_progress(&self, payload: serde_json::Value) {
+        let _ = self.0.emit(EVENT_MODELS_PROGRESS, payload);
+    }
+
+    fn emit_models_changed(&self) {
+        let _ = self.0.emit(EVENT_MODELS_CHANGED, ());
+    }
+
+    fn on_reduce_completed(&self, meeting_id: &str) {
+        if let Some(state) = self.0.try_state::<crate::state::AppState>() {
+            state.publishing().draft_completed(meeting_id);
+            if let Err(e) = crate::local_export::auto_export_if_enabled(&state, meeting_id) {
+                tracing::warn!(
+                    meeting = %meeting_id,
+                    error = %e,
+                    "automatic local markdown export failed"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+struct NoopProcessingHooks;
+
+#[cfg(test)]
+impl ProcessingHooks for NoopProcessingHooks {
+    fn emit_queue(&self, _state: &QueueState) {}
+    fn emit_models_progress(&self, _payload: serde_json::Value) {}
+    fn emit_models_changed(&self) {}
+    fn on_reduce_completed(&self, _meeting_id: &str) {}
+}
+
 pub struct Processing {
-    app: AppHandle,
+    hooks: Arc<dyn ProcessingHooks>,
     store: Arc<Mutex<Store>>,
     supervisor: Arc<Supervisor>,
     settings: Arc<Mutex<ProcessingSettings>>,
+    gpu_override: Arc<Mutex<Option<QueueGpuOverrideDto>>>,
+    had_active_jobs: AtomicBool,
+    driver_wake: Arc<(Mutex<bool>, Condvar)>,
     settings_path: PathBuf,
     env_dir: PathBuf,
     live: Arc<Mutex<HashMap<String, Live>>>,
@@ -335,8 +409,27 @@ impl Processing {
         meeting_root: impl Fn() -> PathBuf + Send + Sync + 'static,
         cycle_repos: impl Fn() -> Vec<CycleRepoSetting> + Send + Sync + 'static,
     ) -> Arc<Self> {
+        Self::new_with_hooks(
+            Arc::new(TauriProcessingHooks(app)),
+            store,
+            data_dir,
+            config_dir,
+            meeting_root,
+            cycle_repos,
+        )
+    }
+
+    pub fn new_with_hooks(
+        hooks: Arc<dyn ProcessingHooks>,
+        store: Arc<Mutex<Store>>,
+        data_dir: &Path,
+        config_dir: &Path,
+        meeting_root: impl Fn() -> PathBuf + Send + Sync + 'static,
+        cycle_repos: impl Fn() -> Vec<CycleRepoSetting> + Send + Sync + 'static,
+    ) -> Arc<Self> {
         let settings_path = config_dir.join("processing.json");
         let settings = Arc::new(Mutex::new(ProcessingSettings::load(&settings_path)));
+        let gpu_override: Arc<Mutex<Option<QueueGpuOverrideDto>>> = Arc::default();
         let env_dir = worker_env_dir(data_dir);
         let live: Arc<Mutex<HashMap<String, Live>>> = Arc::default();
         let cycle_repos: RepoList = Arc::new(cycle_repos);
@@ -383,6 +476,7 @@ impl Processing {
 
         let gate = SettingsGate {
             settings: settings.clone(),
+            gpu_override: gpu_override.clone(),
             inner: Mutex::new((
                 NvmlSampler::new(),
                 Guard::new(
@@ -401,10 +495,13 @@ impl Processing {
         ));
 
         let this = Arc::new(Self {
-            app,
+            hooks,
             store,
             supervisor,
             settings,
+            gpu_override,
+            had_active_jobs: AtomicBool::new(false),
+            driver_wake: Arc::new((Mutex::new(false), Condvar::new())),
             settings_path,
             env_dir,
             live,
@@ -425,6 +522,43 @@ impl Processing {
                 }
             });
         }
+        this
+    }
+
+    #[cfg(test)]
+    pub fn new_for_test(
+        store: Arc<Mutex<Store>>,
+        dir: &Path,
+        runner: Arc<dyn queue::StageRunner>,
+        gate: Arc<dyn GpuGate>,
+    ) -> Arc<Self> {
+        let settings_path = dir.join("processing.json");
+        let settings = Arc::new(Mutex::new(ProcessingSettings::default()));
+        let gpu_override: Arc<Mutex<Option<QueueGpuOverrideDto>>> = Arc::default();
+        let supervisor = Arc::new(Supervisor::new(store.clone(), runner, gate, MAX_CRASHES));
+        let this = Arc::new(Self {
+            hooks: Arc::new(NoopProcessingHooks),
+            store,
+            supervisor,
+            settings,
+            gpu_override,
+            had_active_jobs: AtomicBool::new(false),
+            driver_wake: Arc::new((Mutex::new(false), Condvar::new())),
+            settings_path,
+            env_dir: dir.join("worker-venv"),
+            live: Arc::default(),
+            pulls: PullLedger::default(),
+            cycle_repos: Arc::new(Vec::new),
+            last_event: Mutex::new(Instant::now() - EVENT_THROTTLE),
+            driver_running: Arc::default(),
+            models_busy: Arc::default(),
+        });
+        let weak = Arc::downgrade(&this);
+        this.supervisor.set_listener(move |_| {
+            if let Some(p) = weak.upgrade() {
+                p.emit_queue();
+            }
+        });
         this
     }
 
@@ -504,7 +638,7 @@ impl Processing {
         }
     }
 
-    fn worker_config(&self) -> WorkerConfig {
+    pub(crate) fn worker_config(&self) -> WorkerConfig {
         let s = self.settings.lock().map(|s| s.clone()).unwrap_or_default();
         worker_config(&s, &self.env_dir, None)
     }
@@ -515,6 +649,28 @@ impl Processing {
     }
 
     // ----- queue
+
+    fn wake_driver(self: &Arc<Self>) {
+        if let Ok(mut notified) = self.driver_wake.0.lock() {
+            *notified = true;
+            self.driver_wake.1.notify_all();
+        }
+        self.kick();
+    }
+
+    fn wait_driver_poll(&self, timeout: Duration) {
+        let Ok(mut guard) = self.driver_wake.0.lock() else {
+            std::thread::sleep(timeout);
+            return;
+        };
+        if *guard {
+            *guard = false;
+            return;
+        }
+        if let Ok((mut g, _)) = self.driver_wake.1.wait_timeout(guard, timeout) {
+            *g = false;
+        }
+    }
 
     /// Resume jobs interrupted by a crash or exit. Call once at start.
     pub fn resume_interrupted(self: &Arc<Self>) {
@@ -528,14 +684,15 @@ impl Processing {
         }
     }
 
-    pub fn process(self: &Arc<Self>, meeting_id: &str, options: JobOptions) -> IpcResult<()> {
+    pub fn process(self: &Arc<Self>, meeting_id: &str, mut options: JobOptions) -> IpcResult<()> {
+        let llm_settings = self.llm_settings()?;
         let state = {
             let store = self.store.lock().map_err(poisoned)?;
-            store
+            let details = store
                 .get_meeting(meeting_id)?
-                .ok_or_else(|| IpcError::new("not_found", "meeting not found"))?
-                .meeting
-                .state
+                .ok_or_else(|| IpcError::new("not_found", "meeting not found"))?;
+            apply_project_prefs_to_job_options(&store, meeting_id, &llm_settings, &mut options)?;
+            details.meeting.state
         };
         if !matches!(
             state,
@@ -554,9 +711,134 @@ impl Processing {
         if !created {
             self.apply_llm_to_existing_job(meeting_id, &options)?;
         }
+        self.had_active_jobs.store(true, Ordering::SeqCst);
         self.emit_queue();
-        self.kick();
+        self.wake_driver();
         Ok(())
+    }
+
+    /// Enqueue a processing job without immediately kicking the background driver.
+    pub fn enqueue_only(&self, meeting_id: &str, mut options: JobOptions) -> IpcResult<()> {
+        let llm_settings = self.llm_settings()?;
+        let state = {
+            let store = self.store.lock().map_err(poisoned)?;
+            let details = store
+                .get_meeting(meeting_id)?
+                .ok_or_else(|| IpcError::new("not_found", "meeting not found"))?;
+            apply_project_prefs_to_job_options(&store, meeting_id, &llm_settings, &mut options)?;
+            details.meeting.state
+        };
+        if !matches!(
+            state,
+            store::MeetingState::Stopped | store::MeetingState::Recovered
+        ) {
+            return Err(IpcError::new(
+                "invalid_state",
+                "only a finished recording can be processed",
+            ));
+        }
+        let json = serde_json::to_string(&options).unwrap_or_else(|_| "{}".into());
+        let created = self
+            .supervisor
+            .enqueue(meeting_id, &json)
+            .map_err(|e| IpcError::new("internal", e.to_string()))?;
+        if !created {
+            self.apply_llm_to_existing_job(meeting_id, &options)?;
+        }
+        self.had_active_jobs.store(true, Ordering::SeqCst);
+        self.emit_queue();
+        Ok(())
+    }
+
+    pub fn set_gpu_override(
+        self: &Arc<Self>,
+        override_cfg: Option<QueueGpuOverrideDto>,
+    ) -> IpcResult<QueueState> {
+        if let Some(cfg) = &override_cfg {
+            if cfg.gpu_max_util_percent == 0 || cfg.gpu_max_util_percent > 100 {
+                return Err(IpcError::new(
+                    "invalid",
+                    "the GPU utilization limit must be between 1 and 100",
+                ));
+            }
+        }
+        *self.gpu_override.lock().map_err(poisoned)? = override_cfg;
+        if self.has_runnable() {
+            self.had_active_jobs.store(true, Ordering::SeqCst);
+        }
+        self.emit_queue();
+        if override_cfg.is_some() && self.has_runnable() {
+            self.wake_driver();
+        }
+        self.queue_state()
+    }
+
+    pub fn force_process(self: &Arc<Self>, meeting_id: &str) -> IpcResult<JobView> {
+        self.ensure_job_exists(meeting_id)?;
+        self.supervisor
+            .set_schedule(meeting_id, None)
+            .map_err(|e| IpcError::new("internal", e.to_string()))?;
+        self.supervisor.force_job(meeting_id);
+        self.had_active_jobs.store(true, Ordering::SeqCst);
+        self.emit_queue();
+        self.wake_driver();
+        self.job_view(meeting_id)
+    }
+
+    pub fn schedule_job(
+        self: &Arc<Self>,
+        meeting_id: &str,
+        scheduled_unix_ms: Option<i64>,
+    ) -> IpcResult<JobView> {
+        self.ensure_job_exists(meeting_id)?;
+        self.supervisor
+            .set_schedule(meeting_id, scheduled_unix_ms)
+            .map_err(|e| IpcError::new("internal", e.to_string()))?;
+        self.had_active_jobs.store(true, Ordering::SeqCst);
+        self.emit_queue();
+        self.wake_driver();
+        self.job_view(meeting_id)
+    }
+
+    fn ensure_job_exists(&self, meeting_id: &str) -> IpcResult<()> {
+        let has_job = {
+            let store = self.store.lock().map_err(poisoned)?;
+            store.get_job(meeting_id)?.is_some()
+        };
+        if has_job {
+            return Ok(());
+        }
+        let llm_settings = self.llm_settings()?;
+        let mut options = JobOptions::default();
+        {
+            let store = self.store.lock().map_err(poisoned)?;
+            let details = store
+                .get_meeting(meeting_id)?
+                .ok_or_else(|| IpcError::new("not_found", "meeting not found"))?;
+            if !matches!(
+                details.meeting.state,
+                store::MeetingState::Stopped | store::MeetingState::Recovered
+            ) {
+                return Err(IpcError::new(
+                    "invalid_state",
+                    "only a finished recording can be processed",
+                ));
+            }
+            apply_project_prefs_to_job_options(&store, meeting_id, &llm_settings, &mut options)?;
+        }
+        let json = serde_json::to_string(&options).unwrap_or_else(|_| "{}".into());
+        self.supervisor
+            .enqueue(meeting_id, &json)
+            .map_err(|e| IpcError::new("internal", e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn job_view(&self, meeting_id: &str) -> IpcResult<JobView> {
+        let q = self.queue_state()?;
+        q.jobs
+            .into_iter()
+            .find(|j| j.meeting_id == meeting_id)
+            .ok_or_else(|| IpcError::new("not_found", "job not found"))
     }
 
     /// A job that exists keeps its options, except for a backend chosen now.
@@ -612,8 +894,9 @@ impl Processing {
         self.supervisor
             .retry(meeting_id)
             .map_err(|e| IpcError::new("not_found", e.to_string()))?;
+        self.had_active_jobs.store(true, Ordering::SeqCst);
         self.emit_queue();
-        self.kick();
+        self.wake_driver();
         Ok(())
     }
 
@@ -630,8 +913,19 @@ impl Processing {
         }
         store.delete_job(meeting_id)?;
         drop(store);
+        self.supervisor.clear_force(meeting_id);
+        if !self.has_runnable() {
+            self.reset_gpu_override_on_idle();
+        }
         self.emit_queue();
         Ok(())
+    }
+
+    fn reset_gpu_override_on_idle(&self) {
+        self.had_active_jobs.store(false, Ordering::SeqCst);
+        if let Ok(mut ovr) = self.gpu_override.lock() {
+            *ovr = None;
+        }
     }
 
     /// Start the background driver unless it is already running. It works through every
@@ -686,13 +980,37 @@ impl Processing {
         !self.runnable_ids().is_empty()
     }
 
+    fn has_scheduled_or_running(&self) -> bool {
+        let Ok(store) = self.store.lock() else {
+            return false;
+        };
+        let now = queue::now_ms();
+        store
+            .list_job_ids()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|id| store.get_job(&id).ok().flatten())
+            .any(|j| {
+                matches!(queue::next_step(&j), Next::Run { .. })
+                    && (j.stages.iter().any(|s| s.status == StageStatus::Running)
+                        || j.scheduled_unix_ms.is_some_and(|ts| ts > now))
+            })
+    }
+
     fn drive(&self) {
+        let mut wake_lock: Option<recorder::SystemWakeLock> = None;
         loop {
             let ids = self.runnable_ids();
             if ids.is_empty() {
+                self.reset_gpu_override_on_idle();
                 break;
             }
+            self.had_active_jobs.store(true, Ordering::SeqCst);
+            if wake_lock.is_none() {
+                wake_lock = Some(recorder::SystemWakeLock::acquire());
+            }
             let mut progressed = false;
+            let mut earliest_schedule_wait: Option<Duration> = None;
             for id in ids {
                 self.prepare_step(&id);
                 match self.supervisor.step(&id) {
@@ -700,14 +1018,22 @@ impl Processing {
                         progressed = true;
                         // The draft is complete: what the cycle publishes by itself goes now.
                         if matches!(stage, Stage::Reduce) {
-                            if let Some(state) = self.app.try_state::<crate::state::AppState>() {
-                                state.publishing().draft_completed(&id);
-                            }
+                            self.hooks.on_reduce_completed(&id);
                         }
                     }
                     Ok(StepOutcome::Failed { stage, error }) => {
                         tracing::error!(meeting = %id, stage = stage.as_str(), %error, "stage failed");
                         progressed = true;
+                    }
+                    Ok(StepOutcome::Scheduled {
+                        scheduled_unix_ms, ..
+                    }) => {
+                        let remain_ms = (scheduled_unix_ms - queue::now_ms()).max(0) as u64;
+                        let wait = Duration::from_millis(remain_ms).min(WAIT_POLL);
+                        earliest_schedule_wait = Some(match earliest_schedule_wait {
+                            Some(cur) => cur.min(wait),
+                            None => wait,
+                        });
                     }
                     Ok(_) => {}
                     Err(e) => tracing::error!(error = %e, "queue step failed"),
@@ -716,11 +1042,19 @@ impl Processing {
                     l.remove(&id);
                 }
             }
+            if !self.has_runnable() {
+                self.reset_gpu_override_on_idle();
+            }
             self.emit_queue();
             if !progressed {
-                std::thread::sleep(WAIT_POLL);
+                if !self.has_scheduled_or_running() {
+                    wake_lock = None;
+                }
+                let wait = earliest_schedule_wait.unwrap_or(WAIT_POLL);
+                self.wait_driver_poll(wait);
             }
         }
+        drop(wake_lock);
         self.emit_queue();
     }
 
@@ -729,13 +1063,15 @@ impl Processing {
     pub fn queue_state(&self) -> IpcResult<QueueState> {
         let store = self.store.lock().map_err(poisoned)?;
         let live = self.live.lock().map_err(poisoned)?.clone();
+        let now = queue::now_ms();
         let mut jobs = Vec::new();
         for id in store.list_job_ids()? {
             let Some(job) = store.get_job(&id)? else {
                 continue;
             };
-            let title = store
-                .get_meeting(&id)?
+            let meeting_details = store.get_meeting(&id)?;
+            let duration_ms = meeting_details.as_ref().and_then(|d| d.meeting.duration_ms);
+            let title = meeting_details
                 .map(|d| d.meeting.title)
                 .unwrap_or_else(|| id.clone());
             let live_now = live.get(&id);
@@ -773,24 +1109,40 @@ impl Processing {
                     }
                 })
                 .collect();
-            let mut progress = queue::progress(&job);
-            if let Some(l) = live_now {
-                progress += (l.fraction as f32) / STAGES.len() as f32;
-            }
+            let live_pair = live_now.map(|l| (l.stage, l.fraction as f32));
+            let progress = queue::progress_with_live(&job, live_pair);
+            let eta_seconds = estimate_eta_seconds(&job, state, progress, duration_ms, now);
             jobs.push(JobView {
                 meeting_id: id,
                 title,
                 state,
-                progress: progress.min(1.0),
+                progress,
                 waiting_reason: if state == JobState::Waiting {
                     waiting_reason
                 } else {
                     None
                 },
+                scheduled_unix_ms: job.scheduled_unix_ms,
+                eta_seconds,
                 stages,
             });
         }
-        Ok(QueueState { jobs })
+        drop(store);
+        let has_active = jobs.iter().any(|j| {
+            matches!(
+                j.state,
+                JobState::Queued | JobState::Waiting | JobState::Running
+            )
+        });
+        if has_active {
+            self.had_active_jobs.store(true, Ordering::SeqCst);
+        } else if self.had_active_jobs.swap(false, Ordering::SeqCst) {
+            if let Ok(mut ovr) = self.gpu_override.lock() {
+                *ovr = None;
+            }
+        }
+        let gpu_override = *self.gpu_override.lock().map_err(poisoned)?;
+        Ok(QueueState { jobs, gpu_override })
     }
 
     /// Job state of one meeting, for the meeting list.
@@ -807,9 +1159,7 @@ impl Processing {
 
     fn emit_queue(&self) {
         if let Ok(state) = self.queue_state() {
-            if let Err(e) = self.app.emit(EVENT_QUEUE, &state) {
-                tracing::warn!(error = %e, "could not emit the queue state");
-            }
+            self.hooks.emit_queue(&state);
         }
     }
 
@@ -867,30 +1217,24 @@ impl Processing {
                             fraction, message, ..
                         } = ev
                         {
-                            let _ = this.app.emit(
-                                EVENT_MODELS_PROGRESS,
-                                serde_json::json!({
-                                    "key": refs.first().copied().unwrap_or(""),
-                                    "fraction": fraction,
-                                    "message": message,
-                                }),
-                            );
+                            this.hooks.emit_models_progress(serde_json::json!({
+                                "key": refs.first().copied().unwrap_or(""),
+                                "fraction": fraction,
+                                "message": message,
+                            }));
                         }
                     })
                 });
                 if let Err(e) = result {
                     tracing::error!(error = %e.message, "model download failed");
-                    let _ = this.app.emit(
-                        EVENT_MODELS_PROGRESS,
-                        serde_json::json!({
-                            "key": refs.first().copied().unwrap_or(""),
-                            "fraction": 0.0,
-                            "message": format!("Failed: {}", e.message),
-                        }),
-                    );
+                    this.hooks.emit_models_progress(serde_json::json!({
+                        "key": refs.first().copied().unwrap_or(""),
+                        "fraction": 0.0,
+                        "message": format!("Failed: {}", e.message),
+                    }));
                 }
                 this.models_busy.store(false, Ordering::SeqCst);
-                let _ = this.app.emit(EVENT_MODELS_CHANGED, ());
+                this.hooks.emit_models_changed();
             });
         if spawned.is_err() {
             self.models_busy.store(false, Ordering::SeqCst);
@@ -898,6 +1242,149 @@ impl Processing {
         }
         Ok(())
     }
+}
+
+/// Estimate remaining seconds for an active/queued/waiting job based on `progress_with_live`
+/// and elapsed stage execution time, falling back to a reasonable initial estimate.
+pub fn estimate_eta_seconds(
+    job: &store::JobRow,
+    state: JobState,
+    progress: f32,
+    meeting_duration_ms: Option<i64>,
+    now_ms: i64,
+) -> Option<u64> {
+    if matches!(state, JobState::Done | JobState::Failed) || progress >= 1.0 {
+        return None;
+    }
+    let remaining = (1.0 - progress.clamp(0.0, 1.0)).max(0.0);
+    if remaining <= 0.0 {
+        return None;
+    }
+    let baseline_total_secs = match meeting_duration_ms {
+        Some(ms) if ms > 0 => ((ms as f32 / 1000.0) * 0.25).clamp(30.0, 3600.0),
+        _ => 120.0,
+    };
+    let baseline_remaining = baseline_total_secs * remaining;
+
+    let mut elapsed_ms: i64 = 0;
+    for row in &job.stages {
+        if row.status == StageStatus::Done && row.note.is_some() {
+            continue;
+        }
+        match (row.status, row.started_unix_ms, row.finished_unix_ms) {
+            (StageStatus::Done, Some(start), Some(end)) if end > start => {
+                elapsed_ms += end - start;
+            }
+            (StageStatus::Running, Some(start), _) if now_ms > start => {
+                elapsed_ms += now_ms - start;
+            }
+            _ => {}
+        }
+    }
+
+    let est_secs = if progress > 0.03 && elapsed_ms >= 500 {
+        let elapsed_secs = elapsed_ms as f32 / 1000.0;
+        let rate_remaining = elapsed_secs * (remaining / progress);
+        let blend = ((progress - 0.03) / 0.22).clamp(0.0, 1.0);
+        baseline_remaining * (1.0 - blend) + rate_remaining * blend
+    } else {
+        baseline_remaining
+    };
+    Some(est_secs.ceil().max(1.0) as u64)
+}
+
+/// Apply `ProjectPrefs.llm_kind_override` and `llm_model_override` to `JobOptions` when building
+/// options for a meeting of `cycle_id`.
+pub fn apply_project_prefs_to_job_options(
+    store: &Store,
+    meeting_id: &str,
+    llm_settings: &LlmSettings,
+    options: &mut JobOptions,
+) -> IpcResult<()> {
+    let Some(cycle_id) = store
+        .get_report_settings(meeting_id)?
+        .and_then(|r| r.cycle_id)
+    else {
+        return Ok(());
+    };
+    let prefs = store.get_project_prefs(&cycle_id)?;
+    let kind_ovr = prefs
+        .llm_kind_override
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let model_ovr = prefs
+        .llm_model_override
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if kind_ovr.is_none() && model_ovr.is_none() {
+        return Ok(());
+    }
+
+    if let Some(k) = kind_ovr {
+        let kind = llm::parse_kind(k)?;
+        let need_replace = options.llm.as_ref().is_none_or(|l| l.kind != kind);
+        if need_replace {
+            let built =
+                llm_settings
+                    .options_for(kind)
+                    .unwrap_or_else(|_| queue::worker::LlmOptions {
+                        kind,
+                        model_path: (kind == LlmKind::Managed)
+                            .then(|| llm_settings.managed.model_path.trim().to_string())
+                            .filter(|s| !s.is_empty()),
+                        ctx: (kind == LlmKind::Managed).then_some(llm_settings.managed.ctx),
+                        base_url: match kind {
+                            LlmKind::Managed => None,
+                            LlmKind::External => {
+                                Some(llm_settings.external.base_url.trim().to_string())
+                                    .filter(|s| !s.is_empty())
+                            }
+                            LlmKind::Cloud => Some(llm_settings.cloud.base_url.trim().to_string())
+                                .filter(|s| !s.is_empty()),
+                        },
+                        model: match kind {
+                            LlmKind::Managed => None,
+                            LlmKind::External => {
+                                Some(llm_settings.external.model.trim().to_string())
+                                    .filter(|s| !s.is_empty())
+                            }
+                            LlmKind::Cloud => Some(llm_settings.cloud.model.trim().to_string())
+                                .filter(|s| !s.is_empty()),
+                        },
+                        cloud_confirmed: false,
+                    });
+            options.llm = Some(built);
+        }
+    }
+
+    if let Some(m) = model_ovr {
+        if options.llm.is_none() {
+            let kind = llm_settings.default_kind;
+            options.llm = Some(llm_settings.options_for(kind).unwrap_or_else(|_| {
+                queue::worker::LlmOptions {
+                    kind,
+                    model_path: None,
+                    ctx: (kind == LlmKind::Managed).then_some(llm_settings.managed.ctx),
+                    base_url: (kind == LlmKind::External)
+                        .then(|| llm_settings.external.base_url.trim().to_string())
+                        .filter(|s| !s.is_empty()),
+                    model: None,
+                    cloud_confirmed: false,
+                }
+            }));
+        }
+        if let Some(llm_opts) = options.llm.as_mut() {
+            if llm_opts.kind == LlmKind::Managed {
+                llm_opts.model_path = Some(m.to_string());
+                llm_opts.model = Some(m.to_string());
+            } else {
+                llm_opts.model = Some(m.to_string());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Gives an existing job the backend chosen now: the job's options keep everything else, and
@@ -1164,5 +1651,117 @@ mod tests {
         let json = serde_json::to_string(&new).unwrap();
         // No key material is ever part of the settings.
         assert!(!json.to_lowercase().contains("apikey"));
+    }
+
+    struct FastRunner;
+    impl queue::StageRunner for FastRunner {
+        fn run(&self, _meeting_id: &str, _stage: Stage) -> Result<(), queue::RunError> {
+            Ok(())
+        }
+    }
+
+    struct AlwaysBusyGate;
+    impl GpuGate for AlwaysBusyGate {
+        fn check(&self, _stage: Stage) -> GateDecision {
+            GateDecision::Wait("GPU busy".into())
+        }
+    }
+
+    #[test]
+    fn gpu_override_auto_resets_when_queue_becomes_idle_and_schedule_force_work() {
+        let dir = test_tmp::TestDir::new("proc-queue-ctrl");
+        let store = Arc::new(Mutex::new(job_store()));
+        let proc = Processing::new_for_test(
+            store.clone(),
+            dir.path(),
+            Arc::new(FastRunner),
+            Arc::new(AlwaysBusyGate),
+        );
+
+        let ovr = QueueGpuOverrideDto {
+            gpu_max_util_percent: 95,
+            gpu_idle_seconds: 1,
+        };
+        let q = proc.set_gpu_override(Some(ovr)).unwrap();
+        assert_eq!(q.gpu_override, Some(ovr));
+        assert_eq!(q.jobs.len(), 1);
+        assert!(q.jobs[0].eta_seconds.is_some());
+
+        // Schedule the job into the future and verify scheduled_unix_ms is surfaced.
+        let future = queue::now_ms() + 600_000;
+        let scheduled = proc.schedule_job("m1", Some(future)).unwrap();
+        assert_eq!(scheduled.scheduled_unix_ms, Some(future));
+
+        // Force process clears the schedule, bypasses the AlwaysBusyGate, and drives to Done.
+        let forced = proc.force_process("m1").unwrap();
+        assert_eq!(forced.scheduled_unix_ms, None);
+
+        // Wait for the fast background driver to finish the job and drop back to idle.
+        for _ in 0..100 {
+            let q_now = proc.queue_state().unwrap();
+            if q_now.jobs[0].state == JobState::Done && !proc.driver_running.load(Ordering::SeqCst)
+            {
+                assert_eq!(q_now.jobs[0].progress, 1.0);
+                assert_eq!(q_now.jobs[0].eta_seconds, None);
+                assert_eq!(
+                    q_now.gpu_override, None,
+                    "gpu_override must auto-reset when zero active/waiting/scheduled jobs remain"
+                );
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("queue driver did not finish forced job in time");
+    }
+
+    #[test]
+    fn project_prefs_override_llm_kind_and_model_on_job_options() {
+        let s = job_store();
+        s.set_report_settings(
+            "m1",
+            &store::ReportSettings {
+                cycle_id: Some("NOMAD".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.set_project_prefs(&store::ProjectPrefs {
+            cycle_id: "NOMAD".into(),
+            local_save_enabled: false,
+            local_save_dir: String::new(),
+            llm_kind_override: Some("external".into()),
+            llm_model_override: Some("qwen3:14b".into()),
+        })
+        .unwrap();
+
+        let mut llm_settings = LlmSettings::default();
+        llm_settings.external.base_url = "http://127.0.0.1:11434/v1".into();
+        llm_settings.external.model = "default-model".into();
+
+        let mut opts = JobOptions::default();
+        apply_project_prefs_to_job_options(&s, "m1", &llm_settings, &mut opts).unwrap();
+        let chosen = opts.llm.unwrap();
+        assert_eq!(chosen.kind, LlmKind::External);
+        assert_eq!(chosen.model.as_deref(), Some("qwen3:14b"));
+    }
+
+    #[test]
+    fn eta_decreases_as_live_progress_advances() {
+        let s = job_store();
+        s.set_stage_status("m1", "asr", StageStatus::Running, None, 1_000)
+            .unwrap();
+        let job = s.get_job("m1").unwrap().unwrap();
+        let p0 = queue::progress_with_live(&job, Some((Stage::Asr, 0.0)));
+        let p1 = queue::progress_with_live(&job, Some((Stage::Asr, 0.9)));
+        assert!(p1 > p0);
+        let eta0 =
+            estimate_eta_seconds(&job, JobState::Running, p0, Some(600_000), 11_000).unwrap();
+        let eta1 =
+            estimate_eta_seconds(&job, JobState::Running, p1, Some(600_000), 11_000).unwrap();
+        assert!(eta1 < eta0);
+        assert_eq!(
+            estimate_eta_seconds(&job, JobState::Done, 1.0, Some(600_000), 11_000),
+            None
+        );
     }
 }

@@ -96,6 +96,34 @@ impl RecordingState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingLevelsDto {
+    pub peak: f32,
+    pub rms: f32,
+    pub bars: [f32; 12],
+}
+
+impl Default for RecordingLevelsDto {
+    fn default() -> Self {
+        Self {
+            peak: 0.0,
+            rms: 0.0,
+            bars: [0.0; 12],
+        }
+    }
+}
+
+impl From<recorder::AudioLevels> for RecordingLevelsDto {
+    fn from(levels: recorder::AudioLevels) -> Self {
+        Self {
+            peak: levels.peak,
+            rms: levels.rms,
+            bars: levels.bars,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StartRecordingRequest {

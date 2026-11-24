@@ -235,6 +235,15 @@ pub struct Settings {
     pub recordings_dir: String,
     pub record_hotkey: String,
     pub screenshot_hotkey: String,
+    /// Automatically export Markdown reports and transcripts to a local directory.
+    #[serde(default)]
+    pub local_save_enabled: bool,
+    /// Target directory for local Markdown exports when `local_save_enabled` is true.
+    #[serde(default)]
+    pub local_save_dir: String,
+    /// Stable keys of the last selected audio sources in the recorder picker.
+    #[serde(default)]
+    pub last_source_keys: Vec<String>,
     /// Registered cycle repositories. Changed only through the cycle commands: a settings
     /// save from the UI keeps the stored list.
     pub cycle_repos: Vec<CycleRepoSetting>,
@@ -253,6 +262,9 @@ impl Default for Settings {
             recordings_dir: String::new(),
             record_hotkey: "Ctrl+Alt+R".into(),
             screenshot_hotkey: "Ctrl+Alt+S".into(),
+            local_save_enabled: false,
+            local_save_dir: String::new(),
+            last_source_keys: Vec::new(),
             cycle_repos: Vec::new(),
             last_report: None,
             bridge: BridgeSettings::default(),
@@ -291,6 +303,9 @@ impl Settings {
         self.last_report = current.last_report.clone();
         self.bridge.clients = current.bridge.clients.clone();
         self.detection = current.detection.clone();
+        if self.last_source_keys.is_empty() {
+            self.last_source_keys = current.last_source_keys.clone();
+        }
         self
     }
 
@@ -334,6 +349,9 @@ mod tests {
             recordings_dir: "D:\\Rec".into(),
             record_hotkey: "Ctrl+F9".into(),
             screenshot_hotkey: "Ctrl+F10".into(),
+            local_save_enabled: true,
+            local_save_dir: "D:\\Notes".into(),
+            last_source_keys: vec!["mic:default".into()],
             cycle_repos: vec![CycleRepoSetting {
                 id: "local".into(),
                 path: "D:/Cycles".into(),

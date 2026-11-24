@@ -11,10 +11,12 @@ mod hotkeys;
 mod ipc;
 mod issue_sync;
 mod llm;
+mod local_export;
 mod logging;
 mod overlay;
 mod processing;
 mod processing_commands;
+mod project_commands;
 mod publish_commands;
 mod publish_secrets;
 mod publishing;
@@ -28,7 +30,7 @@ mod sources;
 mod speaker_commands;
 mod state;
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -38,6 +40,8 @@ use state::AppState;
 
 /// How often the widget gets a fresh recording state (levels, elapsed time).
 const TICK: Duration = Duration::from_millis(250);
+/// How often live 12-bar audio levels are emitted while a recording session is active.
+const LEVELS_TICK: Duration = Duration::from_millis(60);
 
 /// Show the main window and bring it to the front.
 fn show_main(app: &AppHandle) {
@@ -104,18 +108,28 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Background thread that pushes the recording state to the UI while recording.
+/// Background thread that pushes live audio levels (~60 ms) and full recording state (250 ms)
+/// to the UI while recording.
 fn start_ticker(app: AppHandle) {
     let spawned = std::thread::Builder::new()
         .name("recording-ticker".into())
-        .spawn(move || loop {
-            std::thread::sleep(TICK);
-            let state = app.state::<AppState>();
-            if let Some(s) = state.recorder.tick() {
-                commands::emit_state(&app, &s);
+        .spawn(move || {
+            let mut last_state = Instant::now() - TICK;
+            loop {
+                std::thread::sleep(LEVELS_TICK);
+                let state = app.state::<AppState>();
+                if let Some(levels) = state.recorder.levels() {
+                    commands::emit_levels(&app, &levels);
+                }
+                if last_state.elapsed() >= TICK {
+                    last_state = Instant::now();
+                    if let Some(s) = state.recorder.tick() {
+                        commands::emit_state(&app, &s);
+                    }
+                    // Every way to start or stop a recording ends up here within one tick.
+                    state.browser().sync_recording(state.recorder.meeting_id());
+                }
             }
-            // Every way to start or stop a recording ends up here within one tick.
-            state.browser().sync_recording(state.recorder.meeting_id());
         });
     if let Err(e) = spawned {
         tracing::error!(error = %e, "could not start the state ticker");
@@ -209,6 +223,7 @@ pub fn run() {
             commands::take_screenshot,
             commands::get_settings,
             commands::save_settings,
+            commands::save_last_sources,
             browser::bridge_status,
             browser::start_pairing,
             browser::cancel_pairing,
@@ -219,6 +234,9 @@ pub fn run() {
             detection::answer_detection,
             processing_commands::process_meeting,
             processing_commands::queue_state,
+            processing_commands::set_queue_gpu_override,
+            processing_commands::force_process,
+            processing_commands::schedule_job,
             processing_commands::retry_job,
             processing_commands::cancel_job,
             processing_commands::get_transcript,
@@ -230,6 +248,12 @@ pub fn run() {
             processing_commands::clear_hf_token,
             processing_commands::model_status,
             processing_commands::download_models,
+            project_commands::get_project_prefs,
+            project_commands::save_project_prefs,
+            project_commands::wizard_create_project,
+            project_commands::import_meeting,
+            project_commands::export_meeting_markdown,
+            project_commands::auto_detect_models,
             speaker_commands::get_meeting_voices,
             speaker_commands::assign_voice,
             speaker_commands::assign_voice_new,
@@ -242,6 +266,9 @@ pub fn run() {
             speaker_commands::delete_participant,
             speaker_commands::reset_profile,
             speaker_commands::delete_voice_data,
+            speaker_commands::list_all_voice_profiles,
+            speaker_commands::voice_profile_sample_clip,
+            speaker_commands::enroll_voice_profile,
             processing_commands::set_cloud_key,
             processing_commands::clear_cloud_key,
             processing_commands::cloud_key_present,
