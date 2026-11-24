@@ -1,6 +1,6 @@
 # Dependency audit
 
-Date: 2026-11-21 (the `url` advisory was added on a re-run on 2026-11-22). Scope: release 0.5.0 plus the crates added by the Stage 5 branch. Windows 10 x64 is the only supported target.
+Date: 2026-11-24. Scope: release 0.7.0 (Stages 5 and 6 merged into the Stage 8 prep branch). Windows 10 x64 is the only supported target.
 
 ## How to run
 
@@ -20,21 +20,18 @@ The script is read-only. It writes reports to `target/audit/` and removes its te
 
 Tool versions: cargo 1.100.0, npm 11.20.0, node 26.13.1, uv 0.11.15, pip-audit 2.10.1.
 
-## Stage 5 branch additions
+## Stage 5 and Stage 6 additions (`v0.7.0`)
 
-`git diff main..origin/stage/5-publish` over all `Cargo.toml` files adds one workspace crate, `publishers`, and moves two dependencies:
-
-- `ureq 3.5` (`default-features = false`, `native-tls-no-default`). Already in the lock file through `cycle-store` on main, so no new third-party crate enters the build. TLS is Windows Schannel (`native-tls`, `schannel`); there is no OpenSSL and no rustls.
-- `tempfile 3`: optional, only behind the `test-support` feature and as a dev dependency. Never part of a release build.
-- `store` swaps `tempfile` for `serde_json`; `worker/pyproject.toml` loses three lines (no dependency change).
-
-`Cargo.lock` of that branch differs from main only by the `publishers` entry. Re-run the audit after the merge.
+- **Stage 5 (`publishers`):** `ureq 3.5` (`default-features = false`, `native-tls-no-default`). Already in the lock file through `cycle-store` on main, so no new third-party crate enters the build. TLS is Windows Schannel (`native-tls`, `schannel`); there is no OpenSSL and no rustls. `tempfile 3` is optional behind `test-support` and dev-only.
+- **Stage 6 (`bridge`, `extension/`):** adds direct dependencies `tungstenite 0.30.0`, `getrandom 0.3.4` and `sha2 0.10.9` (`MIT OR Apache-2.0`), plus permissive transitive crates `chacha20 0.10.2`, `const-oid 0.10.3`, `data-encoding 2.11.1` (MIT), `hybrid-array 0.4.15`, `rand 0.10.4`, `rand_core 0.10.1` and `sha1 0.11.0`. The Chrome extension (`extension/`) has **zero runtime dependencies** (plain `tsc`); its dev tooling (`typescript-eslint` bumped to `^8.73.0` to match `ui/`) is not distributed.
+- **CI `audit` job:** `scripts/audit-deps.ps1` runs `cargo deny check advisories bans licenses sources` (using `[graph] targets = ["x86_64-pc-windows-msvc"]` in `deny.toml`) and falls back to `cargo audit` only when `cargo-deny` is not installed, so Linux-only transitive crates of Tauri no longer fail Windows CI. Unused `"Apache-2.0 WITH LLVM-exception"` was removed from `deny.toml`, and `continue-on-error: true` was removed from the `audit` job in `.github/workflows/ci.yml`.
 
 ## Findings
 
 | # | Area | Finding | Severity | Disposition |
 |---|---|---|---|---|
 | 1 | Rust | `url 2.5.8`: RUSTSEC-2026-0592, stack overflow in `Url::origin()` on deeply nested `blob:` URLs | Medium (denial of service, needs untrusted URLs) | Fixed: `cargo update -p url --precise 2.5.9` (also `form_urlencoded` 1.2.3). `cargo check --workspace --locked` passes. |
+| 1b | Rust | `cookie 0.18.2`: RUSTSEC-2026-0594, private cookie nonces can repeat in processes that fork (pulled in by Tauri) | Medium (forking Unix processes only; Windows does not fork) | Fixed: `cargo update -p cookie` -> `0.18.3` (`osv.dev` clean). |
 | 2 | Rust | `chrono 0.4.45`: RUSTSEC-2026-0543, unmaintained notice (informational, no vulnerability). Pulled in by `serde_with` inside the Tauri stack | Informational | Accepted. Not a direct dependency, nothing to bump; revisit when Tauri drops it. |
 | 3 | Rust | `glib`, `proc-macro-error`, `zbus_names`, `zvariant`, `zvariant_derive` have notices in `Cargo.lock` (RUSTSEC-2024-0429, -2024-0370, -2026-0371, -0370, -0372) | Low | Not applicable: Linux-only crates of Tauri, not in the Windows build (`cargo metadata --filter-platform`). `deny.toml` restricts the graph to the Windows target. |
 | 4 | UI | `minimatch` 7.0.0 - 11.0.0 via `typescript-eslint` 8.72.2: GHSA-g3hv-75wg-m249, ReDoS in glob matching. Seven moderate advisories, all one chain | Moderate, dev tooling only | Fixed: `typescript-eslint` 8.73.0 (`package.json` and lock file). `npm audit` reports 0 for all dependencies. Lint was not re-run. |
@@ -47,7 +44,7 @@ The ignore list for the worker (findings 5 and 6) lives in `$AcceptedPython` at 
 
 ## Licenses
 
-Rust, Windows build, 296 third-party crates: no GPL, AGPL, LGPL or unknown license. Five crates are MPL-2.0 (`cssparser`, `cssparser-macros`, `selectors`, `dtoa-short`, `option-ext`): file-level copyleft, used unmodified, source available on crates.io, so there is no obligation beyond naming them (done in `NOTICE`). 18 crates are Unicode-3.0 (the ICU family). `rusqlite` compiles SQLite, which is public domain.
+Rust, Windows build, 309 third-party normal-dependency crates (`cargo metadata --filter-platform x86_64-pc-windows-msvc`): no GPL, AGPL, LGPL or unknown license. Five crates are MPL-2.0 (`cssparser`, `cssparser-macros`, `selectors`, `dtoa-short`, `option-ext`): file-level copyleft, used unmodified, source available on crates.io, so there is no obligation beyond naming them (done in `NOTICE`). 18 crates are Unicode-3.0 (the ICU family). `rusqlite` compiles SQLite, which is public domain.
 
 UI shipped set: react, react-dom, scheduler (MIT), `@tauri-apps/api` (Apache-2.0 OR MIT). Dev tooling includes 12 MPL-2.0 and 3 BlueOak-1.0.0 packages; none is shipped.
 
@@ -79,4 +76,4 @@ Bielik 11B v3, Llama, DiariZen, Coqui XTTS and MMS-TTS stay excluded (reasons in
 
 - `cargo deny` and `cargo audit`: not installed, and installing them means a long compile. The script falls back to osv.dev. `deny.toml` has not been exercised.
 - `cargo about` and the `third-party-licenses.html` for the installer resources: not installed, not generated. `NOTICE` carries the direct dependencies and the per-license summary; the per-crate list is `target/audit/rust-licenses.txt`.
-- The audit has not run on the merged Stage 5 to 7 tree.
+- Stage 7 (Discord bot and Notion): audit to be re-run after Stage 7 is merged.

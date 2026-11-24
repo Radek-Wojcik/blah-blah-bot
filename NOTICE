@@ -5,10 +5,10 @@ This project is released under the MIT License (see LICENSE). It uses the third-
 components listed below. Model weights are not part of this repository or of the installer;
 the application downloads them on first use, or the user supplies them.
 
-Inventory date: 2026-11-21. Versions are the ones locked in Cargo.lock, ui/package-lock.json
-and worker/uv.lock at release 0.5.0. Licenses were taken from package metadata and, for the
-models, re-checked online on 2026-11-21. How to repeat the check: scripts/audit-deps.ps1.
-Findings and decisions: docs/DEPENDENCY-AUDIT.md.
+Inventory date: 2026-11-24. Versions are the ones locked in Cargo.lock, ui/package-lock.json
+and worker/uv.lock at release 0.7.0 (Stages 5 and 6 merged). Licenses were taken from
+package metadata and, for the models, re-checked online on 2026-11-21. How to repeat the
+check: scripts/audit-deps.ps1. Findings and decisions: docs/DEPENDENCY-AUDIT.md.
 
 Policy (ADR 0012): the code and the default models use permissive licenses only (MIT,
 Apache-2.0, BSD, CC-BY-4.0). No GPL, AGPL or non-commercial component is linked into or
@@ -20,11 +20,12 @@ shipped with the application.
 
 Rust crates (the desktop application and its libraries)
     The full list of crates linked into the Windows build, with versions and licenses, is
-    produced by scripts/audit-deps.ps1 (target/audit/rust-licenses.txt). It covers 296
-    third-party crates. Most are MIT OR Apache-2.0 or MIT; the others are Unicode-3.0 (18),
-    MPL-2.0 (5), Unlicense OR MIT (10), Zlib (2), BSD-3-Clause (4), ISC (1) and a few
-    triple-licensed crates (MIT, Apache-2.0 and Zlib, 0BSD or CC0-1.0 as alternatives).
-    Every crate carries at least one permissive license. Direct dependencies:
+    produced by scripts/audit-deps.ps1 (target/audit/rust-licenses.txt). It covers 309
+    third-party normal-dependency crates on x86_64-pc-windows-msvc. Most are MIT OR
+    Apache-2.0 or MIT; the others are Unicode-3.0 (18), MPL-2.0 (5), Unlicense OR MIT (10),
+    Zlib (2), BSD-3-Clause (2), ISC (1) and a few triple-licensed crates (MIT, Apache-2.0
+    and Zlib, 0BSD or CC0-1.0 as alternatives). Every crate carries at least one permissive
+    license. Direct dependencies:
 
     Tauri 2.12.5, tauri-build, tauri-plugin-global-shortcut, tauri-plugin-single-instance
                                  Apache-2.0 OR MIT   https://github.com/tauri-apps/tauri
@@ -46,14 +47,24 @@ Rust crates (the desktop application and its libraries)
     jsonschema 0.30.0            MIT                 https://github.com/Stranger6667/jsonschema
     png 0.18.1                   MIT OR Apache-2.0   https://github.com/image-rs/image-png
     sha2 0.10.9                  MIT OR Apache-2.0   https://github.com/RustCrypto/hashes
+    getrandom 0.3.4              MIT OR Apache-2.0   https://github.com/rust-random/getrandom
+    tungstenite 0.30.0           MIT OR Apache-2.0   https://github.com/snapview/tungstenite-rs
     sysinfo 0.38.4               MIT                 https://github.com/GuillaumeGomez/sysinfo
     tracing 0.1.44, tracing-subscriber 0.3.23, tracing-appender 0.2.5
                                  MIT                 https://github.com/tokio-rs/tracing
 
+    Transitive crates added with the Stage 6 bridge (all permissive): chacha20 0.10.2,
+    const-oid 0.10.3, data-encoding 2.11.1 (MIT), hybrid-array 0.4.15, rand 0.10.4,
+    rand_core 0.10.1, sha1 0.11.0.
     Crates under MPL-2.0 (file-level copyleft; used unmodified from crates.io, whose source
     is the corresponding source): cssparser, cssparser-macros, selectors, dtoa-short,
     option-ext. Crates under Unicode-3.0: the icu_* family and its helpers
     (https://www.unicode.org/license.txt). Crates under Zlib: foldhash, zlib-rs.
+
+Chrome extension (extension/, compiled into the release zip)
+    Ships zero third-party runtime dependencies: compiled with plain tsc, and the release
+    zip holds only this project's own scripts, HTML pages, manifest and icons. Its dev and
+    test tooling (TypeScript, ESLint, Vitest, Playwright, Prettier) is not distributed.
 
 User interface (bundled by Vite into the application)
     react 19.3.1                 MIT                 https://github.com/facebook/react
