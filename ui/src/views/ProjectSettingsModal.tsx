@@ -1,0 +1,934 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useBackend } from "../backend-context";
+import { HelpPopover } from "../components/HelpPopover";
+import {
+  type TypeRow,
+  duplicateTypes,
+  emptyParticipant,
+  isDirty,
+  issueText,
+  issuesOf,
+  typeRows,
+  withTypeRows,
+} from "../cycles";
+import { errorMessage } from "../hooks";
+import type {
+  CycleDetails,
+  CycleDto,
+  CycleIssue,
+  CycleParticipant,
+  DetectedModels,
+  LanguageSetting,
+  ProjectPrefs,
+  PublishMode,
+  ReportMode,
+} from "../ipc/types";
+import { DEFAULT_PUBLISH_RULE } from "../publish";
+import { MODE_HELP, MODE_NAMES, REPORT_MODES } from "../report-gate";
+import { Modal } from "./Modal";
+import { RuleChoice } from "./RuleChoice";
+import { TemplateEditor } from "./TemplateEditor";
+
+type SettingsTab = "local" | "people" | "report" | "integrations";
+
+const LANGUAGES: { value: LanguageSetting; label: string }[] = [
+  { value: "auto", label: "Auto" },
+  { value: "en", label: "English" },
+  { value: "pl", label: "Polish" },
+];
+
+const PUBLISH_OPTIONS: { value: PublishMode; label: string }[] = [
+  { value: "on-approval", label: "After approval in the draft" },
+  { value: "auto", label: "Automatically" },
+  { value: "off", label: "Never" },
+];
+
+function FieldProblems({ issues, path }: { issues: CycleIssue[]; path: string }) {
+  const here = issuesOf(issues, path);
+  if (here.length === 0) return null;
+  return (
+    <small className="field-issue" role="alert">
+      {here.map((i) => i.message).join(" ")}
+    </small>
+  );
+}
+
+export interface ProjectSettingsModalProps {
+  cycleId: string;
+  onClose: () => void;
+  onSaved?: () => void;
+}
+
+/**
+ * Combined modal for project settings: machine-local preferences (local auto-export & LLM
+ * override) plus shared cycle configuration (participants, glossary, report defaults, targets).
+ */
+export function ProjectSettingsModal({ cycleId, onClose, onSaved }: ProjectSettingsModalProps) {
+  const backend = useBackend();
+  const [tab, setTab] = useState<SettingsTab>("local");
+  const [prefs, setPrefs] = useState<ProjectPrefs | null>(null);
+  const [savedPrefs, setSavedPrefs] = useState<ProjectPrefs | null>(null);
+  const [detected, setDetected] = useState<DetectedModels | null>(null);
+
+  const [details, setDetails] = useState<CycleDetails | null>(null);
+  const [cycle, setCycle] = useState<CycleDto | null>(null);
+  const [rows, setRows] = useState<TypeRow[]>([]);
+  const [issues, setIssues] = useState<CycleIssue[]>([]);
+
+  const [savingPrefs, setSavingPrefs] = useState(false);
+  const [savingCycle, setSavingCycle] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const adoptCycle = useCallback((d: CycleDetails) => {
+    setDetails(d);
+    setCycle(structuredClone(d.cycle));
+    setRows(typeRows(d.cycle.report.byType));
+    setIssues(d.issues);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void backend
+      .getProjectPrefs(cycleId)
+      .then((p) => {
+        if (cancelled) return;
+        setPrefs(p);
+        setSavedPrefs(structuredClone(p));
+      })
+      .catch((e) => !cancelled && setError(errorMessage(e)));
+    void backend
+      .getCycle(cycleId)
+      .then((d) => {
+        if (!cancelled) adoptCycle(d);
+      })
+      .catch((e) => !cancelled && setError(errorMessage(e)));
+    void backend
+      .autoDetectModels()
+      .then((d) => !cancelled && setDetected(d))
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [backend, cycleId, adoptCycle]);
+
+  const editedCycle = useMemo(() => (cycle ? withTypeRows(cycle, rows) : null), [cycle, rows]);
+  const cycleDirty =
+    details !== null && editedCycle !== null && isDirty(details.cycle, editedCycle);
+  const prefsDirty =
+    prefs !== null && savedPrefs !== null && JSON.stringify(prefs) !== JSON.stringify(savedPrefs);
+  const dupTypes = duplicateTypes(rows);
+
+  const saveLocalPrefs = async () => {
+    if (!prefs) return;
+    setError(null);
+    setMessage(null);
+    setSavingPrefs(true);
+    try {
+      const next = await backend.saveProjectPrefs({
+        ...prefs,
+        llmKindOverride: prefs.llmKindOverride || null,
+        llmModelOverride: prefs.llmKindOverride ? prefs.llmModelOverride?.trim() || null : null,
+      });
+      setPrefs(next);
+      setSavedPrefs(structuredClone(next));
+      setMessage("Local preferences saved.");
+      onSaved?.();
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setSavingPrefs(false);
+    }
+  };
+
+  const saveCycleSettings = async () => {
+    if (!editedCycle) return;
+    setError(null);
+    setMessage(null);
+    setSavingCycle(true);
+    try {
+      const res = await backend.saveCycle(editedCycle);
+      if (res.saved && res.details) {
+        adoptCycle(res.details);
+        setMessage(
+          res.warnings.length > 0
+            ? `Project settings saved. ${res.warnings.join(" ")}`
+            : "Project settings saved.",
+        );
+        onSaved?.();
+      } else {
+        setIssues(res.issues);
+        setError("Fix the highlighted project settings before saving.");
+      }
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setSavingCycle(false);
+    }
+  };
+
+  const patchCycle = (p: Partial<CycleDto>) => cycle && setCycle({ ...cycle, ...p });
+  const setParticipant = (i: number, p: Partial<CycleParticipant>) =>
+    cycle &&
+    patchCycle({ participants: cycle.participants.map((x, j) => (j === i ? { ...x, ...p } : x)) });
+  const setReport = (p: Partial<CycleDto["report"]>) =>
+    cycle && patchCycle({ report: { ...cycle.report, ...p } });
+  const setTargets = (p: Partial<CycleDto["targets"]>) =>
+    cycle && patchCycle({ targets: { ...cycle.targets, ...p } });
+
+  const templateNames = details?.templates.map((t) => t.name) ?? [];
+  const github = cycle?.targets.github;
+  const discordRef = cycle?.targets.discord;
+  const notion = cycle?.targets.notion;
+
+  return (
+    <Modal title={`Project Settings · ${cycle?.name ?? cycleId}`} onClose={onClose} wide>
+      <div className="pane-toggle" role="tablist" aria-label="Project settings sections">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "local"}
+          className={tab === "local" ? "btn btn-small btn-stop" : "btn btn-small btn-ghost"}
+          onClick={() => setTab("local")}
+        >
+          Local &amp; AI
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "people"}
+          className={tab === "people" ? "btn btn-small btn-stop" : "btn btn-small btn-ghost"}
+          onClick={() => setTab("people")}
+        >
+          People &amp; Glossary
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "report"}
+          className={tab === "report" ? "btn btn-small btn-stop" : "btn btn-small btn-ghost"}
+          onClick={() => setTab("report")}
+        >
+          Report &amp; Templates
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "integrations"}
+          className={tab === "integrations" ? "btn btn-small btn-stop" : "btn btn-small btn-ghost"}
+          onClick={() => setTab("integrations")}
+        >
+          Integrations
+        </button>
+      </div>
+
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+      {message && (
+        <p className="valid-note" role="status">
+          {message}
+        </p>
+      )}
+
+      {tab === "local" && prefs && (
+        <form
+          className="form"
+          aria-label="Machine-local project preferences"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void saveLocalPrefs();
+          }}
+        >
+          <p className="section-hint">
+            These preferences stay on this computer only and are never committed to the project
+            repository.
+          </p>
+
+          <fieldset>
+            <legend>
+              Local folder auto-save{" "}
+              <HelpPopover
+                title="Local folder auto-save"
+                text="Automatically export a standalone Markdown (.md) copy of each finished meeting note to a folder on this PC."
+              />
+            </legend>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={prefs.localSaveEnabled}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setPrefs({
+                    ...prefs,
+                    localSaveEnabled: checked,
+                    localSaveDir:
+                      checked && prefs.localSaveDir.trim() === "" && detected?.defaultLocalSaveDir
+                        ? detected.defaultLocalSaveDir
+                        : prefs.localSaveDir,
+                  });
+                }}
+              />
+              Auto-export finished notes as Markdown (.md) for this project
+            </label>
+            <label>
+              Local export folder
+              <input
+                aria-label="Local export folder"
+                value={prefs.localSaveDir}
+                placeholder={detected?.defaultLocalSaveDir || "Documents\\BlahBlahBot\\notes"}
+                onChange={(e) => setPrefs({ ...prefs, localSaveDir: e.target.value })}
+              />
+              <small>Leave empty to fall back to the global folder in Settings.</small>
+            </label>
+          </fieldset>
+
+          <fieldset>
+            <legend>
+              AI model override{" "}
+              <HelpPopover
+                title="Per-project AI override"
+                text="Override the global language model for this project only — for example, use a smaller local model or a remote API for a specific project."
+                recommended="Use global model (Default)"
+              />
+            </legend>
+            <label>
+              Model backend for this project
+              <select
+                aria-label="Model backend override"
+                value={prefs.llmKindOverride ?? ""}
+                onChange={(e) =>
+                  setPrefs({
+                    ...prefs,
+                    llmKindOverride: e.target.value === "" ? null : e.target.value,
+                  })
+                }
+              >
+                <option value="">Use global model (Default)</option>
+                <option value="managed">Managed local model (llama-server)</option>
+                <option value="external">External server (OpenAI-compatible)</option>
+                <option value="cloud">Cloud API (per-meeting confirmation)</option>
+              </select>
+            </label>
+            {prefs.llmKindOverride && (
+              <label>
+                Model name or GGUF path (optional)
+                <input
+                  aria-label="Model override value"
+                  list="project-detected-models"
+                  value={prefs.llmModelOverride ?? ""}
+                  placeholder={
+                    prefs.llmKindOverride === "managed"
+                      ? "D:\\Models\\gemma-4-12b-q4_k_m.gguf"
+                      : "e.g. gpt-4o-mini or local-model"
+                  }
+                  onChange={(e) => setPrefs({ ...prefs, llmModelOverride: e.target.value || null })}
+                />
+                {detected && detected.llmModels.length > 0 && (
+                  <datalist id="project-detected-models">
+                    {detected.llmModels.map((m) => (
+                      <option key={m} value={m} />
+                    ))}
+                  </datalist>
+                )}
+              </label>
+            )}
+          </fieldset>
+
+          <div className="actions">
+            <button className="btn btn-ghost" type="button" onClick={onClose}>
+              Close
+            </button>
+            <button className="btn btn-record" type="submit" disabled={!prefsDirty || savingPrefs}>
+              {savingPrefs ? "Saving…" : "Save local preferences"}
+            </button>
+          </div>
+        </form>
+      )}
+
+      {tab !== "local" && cycle && details && (
+        <div className="form">
+          {issues.length > 0 && (
+            <div className="issues" role="alert" aria-label="Problems">
+              <strong>
+                {issues.length === 1 ? "1 problem" : `${issues.length} problems`} in project config:
+              </strong>
+              <ul>
+                {issues.map((i, n) => (
+                  <li key={n}>{issueText(i)}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {tab === "people" && (
+            <>
+              <div className="form-row">
+                <label>
+                  <span className="field-label-row">
+                    Project ID
+                    <HelpPopover
+                      title="Project ID"
+                      text="The folder name in the repository and issue label prefix. It cannot be renamed after creation."
+                    />
+                  </span>
+                  <input value={cycle.id} readOnly aria-readonly="true" />
+                </label>
+                <label>
+                  Project name
+                  <input
+                    aria-label="Project name"
+                    value={cycle.name}
+                    onChange={(e) => patchCycle({ name: e.target.value })}
+                  />
+                  <FieldProblems issues={issues} path="name" />
+                </label>
+              </div>
+
+              <h4 className="field-head">Participants</h4>
+              <p className="section-hint">
+                People in this project. Voice recognition and task assignees link to each
+                person&apos;s ID.
+              </p>
+              <ul className="rows" aria-label="Participants">
+                {cycle.participants.map((p, i) => {
+                  const at = `participants[${i}]`;
+                  const kind = p.discord ? (p.discord.roleId !== undefined ? "role" : "user") : "";
+                  const discordId = p.discord?.userId ?? p.discord?.roleId ?? "";
+                  return (
+                    <li key={i} className="row-grid">
+                      <label>
+                        ID
+                        <input
+                          aria-label={`Participant ${i + 1} id`}
+                          value={p.id}
+                          onChange={(e) => setParticipant(i, { id: e.target.value })}
+                        />
+                        <FieldProblems issues={issues} path={`${at}.id`} />
+                      </label>
+                      <label>
+                        Name
+                        <input
+                          aria-label={`Participant ${i + 1} name`}
+                          value={p.name}
+                          onChange={(e) => setParticipant(i, { name: e.target.value })}
+                        />
+                        <FieldProblems issues={issues} path={`${at}.name`} />
+                      </label>
+                      <label>
+                        GitHub login
+                        <input
+                          aria-label={`Participant ${i + 1} GitHub login`}
+                          value={p.github ?? ""}
+                          onChange={(e) =>
+                            setParticipant(i, { github: e.target.value || undefined })
+                          }
+                        />
+                        <FieldProblems issues={issues} path={`${at}.github`} />
+                      </label>
+                      <label>
+                        Discord
+                        <select
+                          aria-label={`Participant ${i + 1} Discord kind`}
+                          value={kind}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setParticipant(i, {
+                              discord:
+                                v === ""
+                                  ? undefined
+                                  : v === "role"
+                                    ? { roleId: discordId }
+                                    : { userId: discordId },
+                            });
+                          }}
+                        >
+                          <option value="">None</option>
+                          <option value="user">User ID</option>
+                          <option value="role">Role ID</option>
+                        </select>
+                      </label>
+                      {kind !== "" && (
+                        <label>
+                          Discord ID
+                          <input
+                            aria-label={`Participant ${i + 1} Discord id`}
+                            value={discordId}
+                            inputMode="numeric"
+                            onChange={(e) =>
+                              setParticipant(i, {
+                                discord:
+                                  kind === "role"
+                                    ? { roleId: e.target.value }
+                                    : { userId: e.target.value },
+                              })
+                            }
+                          />
+                          <FieldProblems issues={issues} path={`${at}.discord.user_id`} />
+                          <FieldProblems issues={issues} path={`${at}.discord.role_id`} />
+                        </label>
+                      )}
+                      <button
+                        className="btn btn-small btn-ghost row-remove"
+                        type="button"
+                        aria-label={`Remove participant ${i + 1}`}
+                        onClick={() =>
+                          patchCycle({
+                            participants: cycle.participants.filter((_, j) => j !== i),
+                          })
+                        }
+                      >
+                        Remove
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+              <button
+                className="btn btn-small"
+                type="button"
+                onClick={() =>
+                  patchCycle({ participants: [...cycle.participants, emptyParticipant()] })
+                }
+              >
+                Add participant
+              </button>
+
+              <h4 className="field-head">Glossary</h4>
+              <p className="section-hint">
+                Project acronyms or domain terms to spell accurately in transcripts and notes.
+              </p>
+              <ul className="rows" aria-label="Glossary">
+                {cycle.glossary.map((g, i) => (
+                  <li key={i} className="row-grid">
+                    <label>
+                      Term
+                      <input
+                        aria-label={`Glossary term ${i + 1}`}
+                        value={g.term}
+                        onChange={(e) =>
+                          patchCycle({
+                            glossary: cycle.glossary.map((x, j) =>
+                              j === i ? { ...x, term: e.target.value } : x,
+                            ),
+                          })
+                        }
+                      />
+                      <FieldProblems issues={issues} path={`glossary[${i}].term`} />
+                    </label>
+                    <label>
+                      Hint
+                      <input
+                        aria-label={`Glossary hint ${i + 1}`}
+                        value={g.hint ?? ""}
+                        onChange={(e) =>
+                          patchCycle({
+                            glossary: cycle.glossary.map((x, j) =>
+                              j === i ? { ...x, hint: e.target.value || undefined } : x,
+                            ),
+                          })
+                        }
+                      />
+                    </label>
+                    <button
+                      className="btn btn-small btn-ghost row-remove"
+                      type="button"
+                      aria-label={`Remove glossary term ${i + 1}`}
+                      onClick={() =>
+                        patchCycle({ glossary: cycle.glossary.filter((_, j) => j !== i) })
+                      }
+                    >
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <button
+                className="btn btn-small"
+                type="button"
+                onClick={() => patchCycle({ glossary: [...cycle.glossary, { term: "" }] })}
+              >
+                Add term
+              </button>
+            </>
+          )}
+
+          {tab === "report" && (
+            <>
+              <div className="form-row">
+                <label>
+                  Transcription language
+                  <select
+                    aria-label="Transcription language"
+                    value={cycle.languages.asr}
+                    onChange={(e) =>
+                      patchCycle({
+                        languages: { ...cycle.languages, asr: e.target.value as LanguageSetting },
+                      })
+                    }
+                  >
+                    {LANGUAGES.map((l) => (
+                      <option key={l.value} value={l.value}>
+                        {l.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Report language
+                  <select
+                    aria-label="Report language"
+                    value={cycle.languages.output}
+                    onChange={(e) =>
+                      patchCycle({
+                        languages: {
+                          ...cycle.languages,
+                          output: e.target.value as LanguageSetting,
+                        },
+                      })
+                    }
+                  >
+                    {LANGUAGES.map((l) => (
+                      <option key={l.value} value={l.value}>
+                        {l.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <div className="form-row">
+                <label>
+                  Default report mode
+                  <select
+                    aria-label="Default report mode"
+                    value={cycle.report.defaultMode}
+                    onChange={(e) => setReport({ defaultMode: e.target.value as ReportMode })}
+                  >
+                    {REPORT_MODES.map((m) => (
+                      <option key={m} value={m}>
+                        {MODE_NAMES[m]}
+                      </option>
+                    ))}
+                  </select>
+                  <small>{MODE_HELP[cycle.report.defaultMode]}</small>
+                </label>
+                <label>
+                  Default template
+                  <select
+                    aria-label="Default template"
+                    value={cycle.report.defaultTemplate}
+                    onChange={(e) => setReport({ defaultTemplate: e.target.value })}
+                  >
+                    {!templateNames.includes(cycle.report.defaultTemplate) && (
+                      <option value={cycle.report.defaultTemplate}>
+                        {cycle.report.defaultTemplate} (missing)
+                      </option>
+                    )}
+                    {templateNames.map((n) => (
+                      <option key={n} value={n}>
+                        {n}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <label>
+                Custom AI instruction
+                <textarea
+                  rows={3}
+                  value={cycle.report.instruction}
+                  placeholder="Group tasks by person, keep summaries concise."
+                  onChange={(e) => setReport({ instruction: e.target.value })}
+                />
+              </label>
+
+              <h4 className="field-head">Meeting types</h4>
+              <ul className="rows" aria-label="Meeting types">
+                {rows.map((r, i) => (
+                  <li key={i} className="row-grid">
+                    <label>
+                      Type
+                      <input
+                        aria-label={`Meeting type ${i + 1}`}
+                        value={r.type}
+                        onChange={(e) =>
+                          setRows(
+                            rows.map((x, j) => (j === i ? { ...x, type: e.target.value } : x)),
+                          )
+                        }
+                      />
+                    </label>
+                    <label>
+                      Template
+                      <select
+                        aria-label={`Template of meeting type ${i + 1}`}
+                        value={r.template}
+                        onChange={(e) =>
+                          setRows(
+                            rows.map((x, j) => (j === i ? { ...x, template: e.target.value } : x)),
+                          )
+                        }
+                      >
+                        {!templateNames.includes(r.template) && (
+                          <option value={r.template}>{r.template || "Choose…"}</option>
+                        )}
+                        {templateNames.map((n) => (
+                          <option key={n} value={n}>
+                            {n}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      className="btn btn-small btn-ghost row-remove"
+                      type="button"
+                      onClick={() => setRows(rows.filter((_, j) => j !== i))}
+                    >
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              {dupTypes.length > 0 && (
+                <p className="error" role="alert">
+                  Duplicate meeting types: {dupTypes.join(", ")}.
+                </p>
+              )}
+              <button
+                className="btn btn-small"
+                type="button"
+                onClick={() =>
+                  setRows([...rows, { type: "", template: cycle.report.defaultTemplate }])
+                }
+              >
+                Add meeting type
+              </button>
+
+              <h4 className="field-head">Templates</h4>
+              <TemplateEditor
+                cycleId={cycleId}
+                templates={details.templates}
+                onChanged={() =>
+                  void backend
+                    .getCycle(cycleId)
+                    .then((d) =>
+                      setDetails((cur) =>
+                        cur
+                          ? { ...cur, templates: d.templates, issues: d.issues, valid: d.valid }
+                          : d,
+                      ),
+                    )
+                }
+              />
+            </>
+          )}
+
+          {tab === "integrations" && (
+            <div className="form targets">
+              <fieldset>
+                <legend>GitHub</legend>
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={github != null}
+                    onChange={(e) =>
+                      setTargets({
+                        github: e.target.checked
+                          ? { path: "meetings", publish: DEFAULT_PUBLISH_RULE.github }
+                          : null,
+                      })
+                    }
+                  />
+                  Commit meeting reports to the repository
+                </label>
+                {github && (
+                  <>
+                    <label>
+                      <span className="field-label-row">
+                        Folder for meeting reports
+                        <HelpPopover
+                          title="Report folder"
+                          text="Relative folder inside the Git repository where Markdown reports are committed (use forward slashes)."
+                          recommended="meetings"
+                        />
+                      </span>
+                      <input
+                        value={github.path}
+                        onChange={(e) =>
+                          setTargets({ github: { ...github, path: e.target.value } })
+                        }
+                      />
+                      <FieldProblems issues={issues} path="targets.github.path" />
+                    </label>
+                    <label className="check">
+                      <input
+                        type="checkbox"
+                        checked={github.issues !== false}
+                        onChange={(e) =>
+                          setTargets({
+                            github: { ...github, issues: e.target.checked ? undefined : false },
+                          })
+                        }
+                      />
+                      Create GitHub issues for tasks and write back approved status changes
+                    </label>
+                    <div className="field-group">
+                      <span className="field-label">When to publish</span>
+                      <RuleChoice
+                        name="GitHub"
+                        target="github"
+                        value={github.publish ?? DEFAULT_PUBLISH_RULE.github}
+                        onChange={(publish) => setTargets({ github: { ...github, publish } })}
+                      />
+                    </div>
+                  </>
+                )}
+              </fieldset>
+
+              <fieldset>
+                <legend>Discord</legend>
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={discordRef != null}
+                    onChange={(e) =>
+                      setTargets({
+                        discord: e.target.checked
+                          ? { webhook: "cred:", publish: DEFAULT_PUBLISH_RULE.discord }
+                          : null,
+                      })
+                    }
+                  />
+                  Post a summary to a Discord channel
+                </label>
+                {discordRef && (
+                  <>
+                    <label>
+                      <span className="field-label-row">
+                        Webhook credential reference
+                        <HelpPopover
+                          title="Credential reference"
+                          text="Use cred:name to reference a Discord webhook stored safely in Windows Credential Manager. Never paste raw webhook URLs here."
+                          recommended="cred:discord/project"
+                        />
+                      </span>
+                      <input
+                        value={discordRef.webhook}
+                        placeholder="cred:discord/nomad"
+                        onChange={(e) =>
+                          setTargets({ discord: { ...discordRef, webhook: e.target.value } })
+                        }
+                      />
+                      <FieldProblems issues={issues} path="targets.discord.webhook" />
+                    </label>
+                    <label>
+                      Message template
+                      <select
+                        aria-label="Discord template"
+                        value={discordRef.template ?? ""}
+                        onChange={(e) =>
+                          setTargets({
+                            discord: { ...discordRef, template: e.target.value || undefined },
+                          })
+                        }
+                      >
+                        <option value="">Same as report</option>
+                        {templateNames.map((n) => (
+                          <option key={n} value={n}>
+                            {n}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="field-group">
+                      <span className="field-label">When to publish</span>
+                      <RuleChoice
+                        name="Discord"
+                        target="discord"
+                        value={discordRef.publish ?? DEFAULT_PUBLISH_RULE.discord}
+                        onChange={(publish) => setTargets({ discord: { ...discordRef, publish } })}
+                      />
+                    </div>
+                  </>
+                )}
+              </fieldset>
+
+              <fieldset>
+                <legend>Notion</legend>
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={notion != null}
+                    onChange={(e) =>
+                      setTargets({
+                        notion: e.target.checked ? { database: "", publish: "on-approval" } : null,
+                      })
+                    }
+                  />
+                  Add the report to a Notion database
+                </label>
+                {notion && (
+                  <>
+                    <label>
+                      <span className="field-label-row">
+                        Database ID or cred: reference
+                        <HelpPopover
+                          title="Notion database"
+                          text="Provide a Notion database ID or a cred: reference stored in Windows Credential Manager."
+                        />
+                      </span>
+                      <input
+                        value={notion.database}
+                        placeholder="cred:notion/project-db"
+                        onChange={(e) =>
+                          setTargets({ notion: { ...notion, database: e.target.value } })
+                        }
+                      />
+                      <FieldProblems issues={issues} path="targets.notion.database" />
+                    </label>
+                    <label>
+                      When to publish
+                      <select
+                        aria-label="Notion publish"
+                        value={notion.publish}
+                        onChange={(e) =>
+                          setTargets({
+                            notion: { ...notion, publish: e.target.value as PublishMode },
+                          })
+                        }
+                      >
+                        {PUBLISH_OPTIONS.map((p) => (
+                          <option key={p.value} value={p.value}>
+                            {p.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </>
+                )}
+              </fieldset>
+            </div>
+          )}
+
+          <div className="actions">
+            <button className="btn btn-ghost" type="button" onClick={onClose}>
+              Close
+            </button>
+            <button
+              className="btn btn-record"
+              type="button"
+              disabled={!cycleDirty || savingCycle}
+              onClick={() => void saveCycleSettings()}
+            >
+              {savingCycle ? "Saving…" : "Save project settings"}
+            </button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
