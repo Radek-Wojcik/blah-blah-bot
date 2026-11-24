@@ -13,7 +13,7 @@ The script is read-only. It writes reports to `target/audit/` and removes its te
 
 | Area | Tool used | Notes |
 |---|---|---|
-| Rust advisories | `cargo deny` or `cargo audit` when installed, else osv.dev (carries the RustSec database) | Neither cargo-deny nor cargo-audit was installed here. `deny.toml` is committed but was not run locally. CI installs both (job `audit`). |
+| Rust advisories | `cargo deny` (or `cargo audit` fallback when installed, else osv.dev, which carries the RustSec database) | Neither cargo-deny nor cargo-audit was installed here. `deny.toml` is committed and used by CI (job `audit`, running `cargo-deny`). |
 | Rust licenses | `cargo metadata --filter-platform x86_64-pc-windows-msvc` | Reachable through normal dependencies, workspace crates excluded. |
 | UI | `npm audit --omit=dev --audit-level=high`, plus a full `npm audit` | No install needed, the lock file is enough. |
 | Worker, benchmarks | `uv export --frozen --no-hashes --no-dev`, then `uvx pip-audit --no-deps --disable-pip` | pip-audit 2.10.1 in an ephemeral environment under `target/audit`. |

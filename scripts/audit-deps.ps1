@@ -4,10 +4,10 @@
 
 .DESCRIPTION
   Checks, in order:
-    1. Rust. `cargo deny check` when cargo-deny is installed (uses deny.toml); otherwise the
-       crates of the Windows build are looked up on osv.dev (which carries the RustSec
-       advisories). `cargo audit` runs as well when it is installed. Always prints a licence
-       summary taken from `cargo metadata` and fails on GPL-family or missing licences.
+    1. Rust. `cargo deny check` when cargo-deny is installed (uses deny.toml); otherwise
+       `cargo audit` when cargo-audit is installed; otherwise the crates of the Windows
+       build are looked up on osv.dev (which carries the RustSec advisories). Always prints a
+       licence summary taken from `cargo metadata` and fails on GPL-family or missing licences.
     2. UI. `npm audit --omit=dev --audit-level=high` (fails) and a full `npm audit`
        (informational, dev tooling only).
     3. Worker and benchmarks. `uv export` of the lock file, then `uvx pip-audit` on the

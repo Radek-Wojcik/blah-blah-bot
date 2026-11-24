@@ -18,7 +18,7 @@ Draft notes for 1.0.0. Nothing here is released yet.
 - Requirements traceability matrix for all 52 requirements, with a script that checks its references ([docs/TRACEABILITY.md](docs/TRACEABILITY.md)).
 - Documentation: user guide, troubleshooting by error code, limitations, install guide with the clean-machine test procedure, security review, dependency audit, contributor test rules.
 - `scripts/test-all.ps1` and helpers that keep every test's temporary files inside the repository and check that none are left in the system temp folder.
-- Read-only dependency audit script, `deny.toml` and a non-blocking audit job in CI.
+- Read-only dependency audit script, `deny.toml` and an audit job in CI.
 - `NOTICE` completed with every dependency and downloadable model.
 
 ### Changed

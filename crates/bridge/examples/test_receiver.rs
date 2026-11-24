@@ -338,6 +338,9 @@ fn parse_args() -> Result<Args, String> {
     if a.ports.is_empty() {
         a.ports.push(bridge::server::DEFAULT_PORT);
     }
+    if a.ids.is_empty() {
+        a.ids.push(bridge::server::EXTENSION_ID.to_string());
+    }
     Ok(a)
 }
 
