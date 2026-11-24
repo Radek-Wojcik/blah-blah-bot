@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useBackend } from "../backend-context";
 import { formatDuration } from "../format";
 import { useRecordingState } from "../hooks";
@@ -76,8 +76,24 @@ function initialRoute(): Route {
 
 export function Main() {
   const [route, setRoute] = useState<Route>(initialRoute);
+  const [settingsDirty, setSettingsDirty] = useState(false);
+  const [pendingRoute, setPendingRoute] = useState<Route | null>(null);
   const page = route.page;
-  const setPage = (p: Page) => setRoute({ page: p, meetingId: null });
+
+  const navigate = useCallback(
+    (next: Route) => {
+      if (page === "settings" && settingsDirty && next.page !== "settings") {
+        setPendingRoute(next);
+        return;
+      }
+      setPendingRoute(null);
+      if (next.page !== "settings") setSettingsDirty(false);
+      setRoute(next);
+    },
+    [page, settingsDirty],
+  );
+
+  const setPage = (p: Page) => navigate({ page: p, meetingId: null });
   const inProjects = page === "projects" || page === "project" || page === "meeting";
   const recording = useRecordingState();
   const backend = useBackend();
@@ -86,13 +102,13 @@ export function Main() {
     let off: (() => void) | undefined;
     let stopped = false;
     void backend
-      .onOpenBriefing((cycleId) => setRoute({ page: "project", meetingId: null, cycleId }))
+      .onOpenBriefing((cycleId) => navigate({ page: "project", meetingId: null, cycleId }))
       .then((u) => (stopped ? u() : (off = u)));
     return () => {
       stopped = true;
       off?.();
     };
-  }, [backend]);
+  }, [backend, navigate]);
 
   return (
     <div className="main">
@@ -191,10 +207,23 @@ export function Main() {
               onOpenQueue={() => setPage("queue")}
             />
           )}
-          {page === "settings" && <SettingsView initialTab={route.settingsTab} />}
+          {page === "settings" && (
+            <SettingsView
+              initialTab={route.settingsTab}
+              onDirtyChange={setSettingsDirty}
+              pendingExit={pendingRoute !== null}
+              onConfirmExit={() => {
+                const next = pendingRoute;
+                setPendingRoute(null);
+                setSettingsDirty(false);
+                if (next) setRoute(next);
+              }}
+              onCancelExit={() => setPendingRoute(null)}
+            />
+          )}
         </div>
       </section>
-      <ProcessPrompt />
+      {page !== "record" && <ProcessPrompt />}
     </div>
   );
 }

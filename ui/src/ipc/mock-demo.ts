@@ -253,6 +253,8 @@ export function demoProcessingSettings(): ProcessingSettings {
     llamaServerPath: "C:\\Tools\\llama\\llama-server.exe",
     modelsDir: "Documents\\BlahBlahBot\\models",
     hfTokenSet: false,
+    visionModelPath: "",
+    skipScreenshotAnalysis: false,
     voiceAccept: 0.75,
     voiceSuggest: 0.6,
     voiceMargin: 0.1,

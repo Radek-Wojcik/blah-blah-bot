@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { useBackend } from "../backend-context";
 import { HelpPopover } from "../components/HelpPopover";
 import { cycleIdError, newCycleError } from "../cycles";
@@ -44,6 +44,9 @@ export function ProjectWizard({ onClose, onCreated }: ProjectWizardProps) {
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const defaultModeId = useId();
+  const githubRepoId = useId();
+  const discordRefId = useId();
 
   useEffect(() => {
     let cancelled = false;
@@ -290,14 +293,15 @@ export function ProjectWizard({ onClose, onCreated }: ProjectWizardProps) {
             </select>
           </label>
 
-          <label>
-            <span className="field-label-row">
-              Default report mode
+          <div className="field-block">
+            <div className="field-label-row">
+              <label htmlFor={defaultModeId}>Default report mode</label>
               <HelpPopover title="Default report mode" recommended="Auto">
                 <p>{MODE_HELP[defaultReportMode]}</p>
               </HelpPopover>
-            </span>
+            </div>
             <select
+              id={defaultModeId}
               aria-label="Default report mode"
               value={defaultReportMode}
               onChange={(e) => setDefaultReportMode(e.target.value as ReportMode)}
@@ -309,40 +313,42 @@ export function ProjectWizard({ onClose, onCreated }: ProjectWizardProps) {
               ))}
             </select>
             <small>{MODE_HELP[defaultReportMode]}</small>
-          </label>
+          </div>
 
-          <label>
-            <span className="field-label-row">
-              GitHub repository (optional)
+          <div className="field-block">
+            <div className="field-label-row">
+              <label htmlFor={githubRepoId}>GitHub repository (optional)</label>
               <HelpPopover
                 title="GitHub repository"
                 text="Link an owner/name repository to publish reports and track action items as GitHub issues."
               />
-            </span>
+            </div>
             <input
+              id={githubRepoId}
               aria-label="GitHub repository"
               value={githubRepo}
               placeholder="owner/name"
               onChange={(e) => setGithubRepo(e.target.value)}
             />
-          </label>
+          </div>
 
-          <label>
-            <span className="field-label-row">
-              Discord webhook reference (optional)
+          <div className="field-block">
+            <div className="field-label-row">
+              <label htmlFor={discordRefId}>Discord webhook reference (optional)</label>
               <HelpPopover
                 title="Discord webhook reference"
                 text="Enter a cred: reference name stored in your Windows Credential Manager so the secret URL is never committed to Git."
                 recommended="cred:discord/project"
               />
-            </span>
+            </div>
             <input
+              id={discordRefId}
               aria-label="Discord webhook reference"
               value={discordWebhookRef}
               placeholder="cred:discord/project"
               onChange={(e) => setDiscordWebhookRef(e.target.value)}
             />
-          </label>
+          </div>
 
           <fieldset>
             <legend>Local folder auto-save</legend>

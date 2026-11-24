@@ -26,16 +26,21 @@ const TABS: { id: SettingsTab; label: string }[] = [
   { id: "voices", label: "Voice Profiles" },
 ];
 
+export interface SettingsViewProps {
+  initialTab?: SettingsTab;
+  onDirtyChange?: (dirty: boolean) => void;
+  pendingExit?: boolean;
+  onConfirmExit?: () => void;
+  onCancelExit?: () => void;
+}
+
 /**
  * Tabbed application settings with left section navigation, unsaved-change tracking,
  * and confirmation before switching away from a modified tab.
  */
-export function SettingsView(
-  props: {
-    initialTab?: SettingsTab;
-  } = {},
-) {
-  const [tab, setTab] = useState<SettingsTab>(props.initialTab ?? "models");
+export function SettingsView(props: SettingsViewProps = {}) {
+  const { initialTab, onDirtyChange, pendingExit, onConfirmExit, onCancelExit } = props;
+  const [tab, setTab] = useState<SettingsTab>(initialTab ?? "models");
   const [dirty, setDirty] = useState(false);
   const [pendingTab, setPendingTab] = useState<SettingsTab | null>(null);
   const [saving, setSaving] = useState(false);
@@ -44,6 +49,16 @@ export function SettingsView(
   const registerHandle = useCallback((handle: SettingsTabHandle | null) => {
     handleRef.current = handle;
   }, []);
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
+  useEffect(() => {
+    if (pendingExit && !dirty) {
+      onConfirmExit?.();
+    }
+  }, [pendingExit, dirty, onConfirmExit]);
 
   useEffect(() => {
     if (!dirty) return;
@@ -75,9 +90,12 @@ export function SettingsView(
         if (pendingTab) {
           setTab(pendingTab);
           setPendingTab(null);
+        } else if (pendingExit) {
+          onConfirmExit?.();
         }
       } else {
         setPendingTab(null);
+        onCancelExit?.();
       }
     } finally {
       setSaving(false);
@@ -90,6 +108,8 @@ export function SettingsView(
     if (pendingTab) {
       setTab(pendingTab);
       setPendingTab(null);
+    } else if (pendingExit) {
+      onConfirmExit?.();
     }
   };
 
@@ -131,14 +151,21 @@ export function SettingsView(
           aria-labelledby={`settings-tab-${tab}`}
         >
           <UnsavedDialog
-            open={pendingTab !== null}
+            open={pendingTab !== null || Boolean(pendingExit)}
             dirty={dirty}
             saving={saving}
             title="You have unsaved changes"
-            message="Save your changes before switching to another settings section?"
+            message={
+              pendingExit
+                ? "Save your changes before leaving Settings?"
+                : "Save your changes before switching to another settings section?"
+            }
             onSave={handleSave}
             onDiscard={handleDiscard}
-            onCancel={() => setPendingTab(null)}
+            onCancel={() => {
+              setPendingTab(null);
+              onCancelExit?.();
+            }}
           />
 
           {tab === "models" && (

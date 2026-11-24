@@ -16,6 +16,8 @@ export interface MeetingSummary {
   shortTitle?: string | null;
   /** Published report URL when the meeting has been published. */
   reportUrl?: string | null;
+  /** Project/cycle ID associated with this meeting, or null when standalone. */
+  cycleId?: string | null;
 }
 
 export interface TrackInfo {
@@ -432,6 +434,10 @@ export interface ProcessingSettings {
   clipMaxDays: number;
   /** Language-model backend settings (always present from the backend). */
   llm?: LlmSettings;
+  /** Path to a local vision GGUF model for screenshot descriptions. */
+  visionModelPath?: string;
+  /** Skip vision model analysis and keep captured screenshots on disk only. */
+  skipScreenshotAnalysis?: boolean;
 }
 
 export type ModelKey = "whisper-turbo" | "whisper-large-v3" | "diarization" | "vision";

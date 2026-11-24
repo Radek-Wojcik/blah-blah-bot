@@ -115,6 +115,7 @@ function meeting(
   screenshotCount: number,
   shortTitle: string | null = null,
   reportUrl: string | null = null,
+  cycleId: string | null = null,
 ): MeetingSummary {
   return {
     id,
@@ -126,6 +127,7 @@ function meeting(
     screenshotCount,
     shortTitle,
     reportUrl,
+    cycleId,
   };
 }
 
@@ -140,6 +142,7 @@ const demoMeetings: MeetingSummary[] = [
     4,
     "Thruster test 7 pressure flat, budget 2% under",
     "https://github.com/demo-org/nomad-cycles/blob/main/meetings/2026-11-13-m5/report.md",
+    "NOMAD",
   ),
   meeting(
     "m4",
@@ -150,6 +153,7 @@ const demoMeetings: MeetingSummary[] = [
     2,
     1,
     "Chamber valve ripple filter and second test stand",
+    null,
     null,
   ),
   meeting(
@@ -162,6 +166,7 @@ const demoMeetings: MeetingSummary[] = [
     0,
     "Q4 procurement underspend and battery order",
     null,
+    null,
   ),
   meeting(
     "m2",
@@ -173,6 +178,7 @@ const demoMeetings: MeetingSummary[] = [
     7,
     "Antenna array mount and Thursday dry run schedule",
     "https://github.com/demo-org/nomad-cycles/blob/main/meetings/2026-11-09-m2/report.md",
+    null,
   ),
   meeting(
     "m1",
@@ -184,6 +190,7 @@ const demoMeetings: MeetingSummary[] = [
     2,
     "Nomad rover subsystem roles and CAN bus architecture",
     "https://github.com/demo-org/nomad-cycles/blob/main/meetings/2026-11-06-m1/report.md",
+    null,
   ),
 ];
 
@@ -269,7 +276,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     screenshotHotkey: "Ctrl+Alt+S",
     localSaveEnabled: false,
     localSaveDir: "",
-    lastSourceKeys: ["mic:default"],
+    lastSourceKeys: [],
   };
   const projectPrefs = new Map<string, ProjectPrefs>([
     [
@@ -456,6 +463,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
   const withJob = (m: MeetingSummary): MeetingSummary => ({
     ...m,
     job: jobs.find((j) => j.meetingId === m.id)?.state ?? null,
+    cycleId: m.cycleId !== undefined ? m.cycleId : cycleOf(m.id),
   });
 
   function patchJob(id: string, fn: (j: JobView) => JobView) {
@@ -731,15 +739,19 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       if (timer) clearInterval(timer);
       if (levelsTimer) clearInterval(levelsTimer);
       levelsTimer = null;
+      const stoppedId = state.meetingId ?? `m${meetings.length + 1}`;
       meetings = [
         meeting(
-          state.meetingId ?? `m${meetings.length + 1}`,
+          stoppedId,
           "Untitled meeting",
           DEMO_NOW,
           state.elapsedMs,
           "stopped",
           state.sources.length,
           state.screenshotCount,
+          null,
+          null,
+          cycleOf(stoppedId),
         ),
         ...meetings,
       ];
@@ -942,6 +954,11 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       const inCycle = splitKey(participantId);
       if (inCycle) {
         cycles.renameParticipant(inCycle.cycleId, inCycle.id, n);
+        const legacy = participants.find((x) => x.id === `p-${inCycle.id}`);
+        if (legacy) {
+          legacy.name = n;
+          participants.sort((a, b) => a.name.localeCompare(b.name));
+        }
         emitCycles();
         return;
       }
@@ -957,6 +974,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       if (inCycle) {
         cycles.removeParticipant(inCycle.cycleId, inCycle.id);
         stats.delete(participantId);
+        participants = participants.filter((p) => p.id !== `p-${inCycle.id}`);
         emitCycles();
       }
       participants = participants.filter((p) => p.id !== participantId);
@@ -968,7 +986,9 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     },
     resetProfile: async (participantId) => {
       stats.delete(participantId);
-      const p = participants.find((x) => x.id === participantId);
+      const inCycle = splitKey(participantId);
+      const legacyId = inCycle ? `p-${inCycle.id}` : participantId;
+      const p = participants.find((x) => x.id === legacyId);
       if (p) {
         p.sampleCount = 0;
         p.speechMs = 0;
@@ -1281,6 +1301,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         screenshotCount,
         `${stem} (${req.mediaMode === "audio_and_slides" ? "slides extracted" : "audio import"})`,
         null,
+        cycleId,
       );
       meetings = [summary, ...meetings];
       const mode: ReportMode =
@@ -1356,27 +1377,26 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
           .map((c) => c.id)
           .sort();
       const out: GlobalVoiceProfile[] = [];
-      for (const c of allCycles) {
+      for (const c of allCycles.filter((x) => x.valid)) {
         for (const p of cycles.participants(c.id)) {
           const fullId = keyOf(c.id, p.id);
           const st = stats.get(fullId);
           const sampleCount = st?.sampleCount ?? 0;
-          if (sampleCount > 0) {
-            out.push({
-              id: fullId,
-              name: p.name,
-              cycleId: c.id,
-              projects: projectsForName(p.name),
-              sampleCount,
-              updatedUnixMs: DEMO_NOW - 3600_000,
-              hasSampleClip: true,
-            });
-          }
+          out.push({
+            id: fullId,
+            name: p.name,
+            cycleId: c.id,
+            projects: projectsForName(p.name),
+            sampleCount,
+            updatedUnixMs: DEMO_NOW - 3600_000,
+            hasSampleClip: sampleCount > 0,
+          });
         }
       }
+      const legacyShadowIds = new Set(["p-alex", "p-jan", "p-kasia"]);
       for (const p of participants) {
         if (
-          p.sampleCount > 0 &&
+          !legacyShadowIds.has(p.id) &&
           !out.some((existing) => sameName(existing.name, p.name) && existing.cycleId !== null)
         ) {
           out.push({
@@ -1386,7 +1406,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
             projects: projectsForName(p.name),
             sampleCount: p.sampleCount,
             updatedUnixMs: DEMO_NOW - 7200_000,
-            hasSampleClip: true,
+            hasSampleClip: p.sampleCount > 0,
           });
         }
       }
@@ -1397,8 +1417,15 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       if (inCycle) {
         const exists = cycles.participants(inCycle.cycleId).some((p) => p.id === inCycle.id);
         if (!exists) fail("not_found", "participant not found");
-      } else if (!participants.some((p) => p.id === participantId)) {
-        fail("not_found", "participant not found");
+        if ((stats.get(participantId)?.sampleCount ?? 0) === 0) {
+          fail("not_found", "no sample clip available for this participant");
+        }
+      } else {
+        const found = participants.find((p) => p.id === participantId);
+        if (!found) fail("not_found", "participant not found");
+        if (found.sampleCount === 0) {
+          fail("not_found", "no sample clip available for this participant");
+        }
       }
       return wavBytes(260, 0.5, 8000);
     },

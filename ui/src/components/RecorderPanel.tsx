@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useBackend } from "../backend-context";
 import { newCycleError } from "../cycles";
 import { formatDuration } from "../format";
@@ -80,12 +80,14 @@ export function RecorderPanel(props: RecorderPanelProps = {}) {
   const [error, setError] = useState<string | null>(null);
   const [stoppedMeetingId, setStoppedMeetingId] = useState<string | null>(null);
   const lastRecordedRef = useRef<string | null>(null);
+  const cycleSelectId = useId();
+  const modeSelectId = useId();
 
   const loadCyclesAndSettings = useCallback(() => {
     void Promise.all([backend.listCycles(), backend.getSettings()])
       .then(([list, settings]) => {
         setCycles(list);
-        setLastKeys(settings.lastSourceKeys ?? ["mic:default"]);
+        setLastKeys(settings.lastSourceKeys ?? []);
         setForm((prev) => {
           const targetCycle =
             controlledCycleId ??
@@ -231,6 +233,7 @@ export function RecorderPanel(props: RecorderPanelProps = {}) {
     setError(null);
     backend
       .processMeeting(id)
+      .then(() => backend.forceProcess(id).catch(() => undefined))
       .then(() => {
         setStoppedMeetingId(null);
         onProcessNow?.(id);
@@ -241,8 +244,14 @@ export function RecorderPanel(props: RecorderPanelProps = {}) {
   const handleAddToQueue = () => {
     if (!stoppedMeetingId) return;
     const id = stoppedMeetingId;
-    setStoppedMeetingId(null);
-    onAddToQueue?.(id);
+    setError(null);
+    backend
+      .processMeeting(id)
+      .then(() => {
+        setStoppedMeetingId(null);
+        onAddToQueue?.(id);
+      })
+      .catch((e) => setError(errorMessage(e)));
   };
 
   const live = state.sources.filter((s) => s.status === "recording" || s.status === "starting");
@@ -293,16 +302,17 @@ export function RecorderPanel(props: RecorderPanelProps = {}) {
                   templates.
                 </p>
               ) : (
-                <label className="inline-field">
-                  <span className="field-label-row">
-                    Project / Cycle
+                <div className="inline-field">
+                  <div className="field-label-row">
+                    <label htmlFor={cycleSelectId}>Project / Cycle</label>
                     <HelpPopover
                       title="Project / Cycle"
                       text="Each project stores its participants, glossary, report templates, and publishing targets."
                       recommended="Pick the project that matches this meeting series."
                     />
-                  </span>
+                  </div>
                   <select
+                    id={cycleSelectId}
                     aria-label="Cycle"
                     value={activeCycleId}
                     onChange={(e) => {
@@ -320,21 +330,22 @@ export function RecorderPanel(props: RecorderPanelProps = {}) {
                       </option>
                     ))}
                   </select>
-                </label>
+                </div>
               )}
 
               {!noCycles && activeCycleId !== "" && (
                 <>
-                  <label className="inline-field">
-                    <span className="field-label-row">
-                      Report mode
+                  <div className="inline-field">
+                    <div className="field-label-row">
+                      <label htmlFor={modeSelectId}>Report mode</label>
                       <HelpPopover
                         title="Report mode"
                         text="Controls how extracted tasks, decisions, and notes are organized into sections."
                         recommended="Auto or Fixed for general meetings; Template or By type for recurring formats."
                       />
-                    </span>
+                    </div>
                     <select
+                      id={modeSelectId}
                       aria-label="Report mode"
                       value={form.mode}
                       onChange={(e) =>
@@ -352,7 +363,7 @@ export function RecorderPanel(props: RecorderPanelProps = {}) {
                       ))}
                     </select>
                     {form.mode !== "" && <small>{MODE_HELP[form.mode]}</small>}
-                  </label>
+                  </div>
 
                   {form.mode === "template" && (
                     <label className="inline-field">
@@ -427,10 +438,22 @@ export function RecorderPanel(props: RecorderPanelProps = {}) {
             </div>
 
             {!creatingCycle && !noCycles && (
-              <div style={{ marginTop: 8 }}>
+              <div className="actions" style={{ marginTop: 8, justifyContent: "space-between" }}>
                 <button className="link-btn" type="button" onClick={() => setCreatingCycle(true)}>
                   New cycle…
                 </button>
+                {activeCycleId !== "" && (
+                  <button
+                    className="link-btn"
+                    type="button"
+                    title={`Open briefing of ${activeCycleId}`}
+                    onClick={() =>
+                      backend.openBriefing(activeCycleId).catch((e) => setError(errorMessage(e)))
+                    }
+                  >
+                    Open briefing
+                  </button>
+                )}
               </div>
             )}
 

@@ -2,13 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useBackend } from "../backend-context";
 import { dueLabel, plural, sourceLabel, statusLine, summaryLine } from "../briefing";
 import { formatDateTimeUtc, formatDuration } from "../format";
-import { errorMessage, useMeetings, useRecordingState } from "../hooks";
-import type { Briefing, BriefingTask, CycleDetails, MeetingSummary } from "../ipc/types";
+import { errorMessage, useCycleFacts, useMeetings, useRecordingState } from "../hooks";
+import type { Briefing, BriefingTask, CycleDetails, CycleTask, MeetingSummary } from "../ipc/types";
 import { canProcess, jobStateLabel } from "../processing";
+import { taskCounts, tasksAsOf } from "../publish";
 import { ImportMeetingModal } from "./ImportMeetingModal";
 import { ProjectSettingsModal } from "./ProjectSettingsModal";
 
-export type MeetingWithCycle = MeetingSummary & { cycleId?: string | null };
+export type MeetingWithCycle = MeetingSummary;
 
 interface TaskWithOwner {
   task: BriefingTask;
@@ -40,13 +41,7 @@ export function useMeetingCycles(
 
   const unresolvedIds = useMemo(
     () =>
-      meetings
-        .filter((m) => {
-          if (localImported?.has(m.id)) return false;
-          const explicit = (m as MeetingWithCycle).cycleId;
-          return explicit === undefined;
-        })
-        .map((m) => m.id),
+      meetings.filter((m) => !localImported?.has(m.id) && m.cycleId === undefined).map((m) => m.id),
     [meetings, localImported],
   );
 
@@ -88,9 +83,8 @@ export function useMeetingCycles(
         out[m.id] = localImported.get(m.id) ?? null;
         continue;
       }
-      const explicit = (m as MeetingWithCycle).cycleId;
-      if (explicit !== undefined) {
-        out[m.id] = explicit;
+      if (m.cycleId !== undefined) {
+        out[m.id] = m.cycleId;
         continue;
       }
       out[m.id] = fallbackMap[m.id] ?? null;
@@ -239,6 +233,39 @@ function TaskRow({ item, today, done }: { item: TaskWithOwner; today: string; do
   );
 }
 
+function CycleIssueRow({ task, done }: { task: CycleTask; done: boolean }) {
+  const safeUrl = isSafeHttpUrl(task.url) ? task.url : null;
+  return (
+    <li className="cycle-row">
+      <div className="cycle-main">
+        <span className={done ? "cycle-name brief-done-text" : "cycle-name"}>
+          <span className={done ? "badge badge-job-done" : "badge badge-job-running"}>
+            {done ? "Done" : "Open"}
+          </span>{" "}
+          #{task.number} {task.title}
+        </span>
+        {(task.assignee || task.meeting) && (
+          <span className="person-meta">
+            {[task.assignee, task.meeting ? `Meeting ${task.meeting}` : null]
+              .filter(Boolean)
+              .join(" · ")}
+          </span>
+        )}
+      </div>
+      {safeUrl && (
+        <a
+          className="btn btn-small btn-ghost"
+          href={safeUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Issue
+        </a>
+      )}
+    </li>
+  );
+}
+
 export interface ProjectDetailViewProps {
   cycleId: string;
   onBack: () => void;
@@ -249,11 +276,15 @@ export interface ProjectDetailViewProps {
 export function ProjectDetailView({ cycleId, onBack, onOpenMeeting }: ProjectDetailViewProps) {
   const backend = useBackend();
   const { meetings, reload: reloadMeetings } = useMeetings();
+  const { tasks, reload: reloadTasks } = useCycleFacts(cycleId);
   const recording = useRecordingState();
 
   const [details, setDetails] = useState<CycleDetails | null>(null);
   const [briefing, setBriefing] = useState<Briefing | null>(null);
   const [refreshing, setRefreshing] = useState(true);
+  const [showAllTasks, setShowAllTasks] = useState(false);
+  const [syncingIssues, setSyncingIssues] = useState(false);
+  const [issueSyncNote, setIssueSyncNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
@@ -322,6 +353,27 @@ export function ProjectDetailView({ cycleId, onBack, onOpenMeeting }: ProjectDet
   const actOnMeeting = (p: Promise<unknown>) => {
     setError(null);
     void p.then(reloadMeetings).catch((e) => setError(errorMessage(e)));
+  };
+
+  const handleSyncIssues = async () => {
+    if (!details?.repoId) return;
+    setError(null);
+    setIssueSyncNote(null);
+    setSyncingIssues(true);
+    try {
+      const r = await backend.pullCycleRepo(details.repoId);
+      if (r.outcome === "failed") {
+        setError(r.error ?? "Could not sync GitHub issues.");
+      } else {
+        setIssueSyncNote("GitHub issues synced.");
+      }
+      reloadTasks();
+      loadBriefing(false);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setSyncingIssues(false);
+    }
   };
 
   const title = details?.cycle.name ?? briefing?.cycleName ?? cycleId;
@@ -422,49 +474,114 @@ export function ProjectDetailView({ cycleId, onBack, onOpenMeeting }: ProjectDet
             <div className="publish-head">
               <h3 className="sub-head">Action items &amp; Tasks</h3>
               {briefing && <span className="chip">{summaryLine(briefing)}</span>}
+              <span className="head-actions">
+                <button
+                  type="button"
+                  className="btn btn-small btn-ghost"
+                  aria-pressed={showAllTasks}
+                  onClick={() => setShowAllTasks((v) => !v)}
+                >
+                  {showAllTasks ? "Urgent briefing" : "All tasks"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-small"
+                  disabled={syncingIssues || !details?.repoId}
+                  onClick={() => void handleSyncIssues()}
+                >
+                  {syncingIssues ? "Syncing…" : "Sync GitHub issues"}
+                </button>
+              </span>
             </div>
 
-            {!briefing && !error && <p className="empty">Loading tasks…</p>}
-
-            {briefing && sortedTasks.length === 0 && (
-              <p className="empty">No open action items for this project.</p>
+            {issueSyncNote && (
+              <p className="brief-status" role="status">
+                {issueSyncNote}
+              </p>
             )}
 
-            {briefing && topTasks.length > 0 && (
-              <ul className="cycle-rows" aria-label="Top action items">
-                {topTasks.map((item) => (
-                  <TaskRow key={item.task.id} item={item} today={briefing.today} />
-                ))}
-              </ul>
-            )}
+            {showAllTasks ? (
+              !tasks ? (
+                <p className="empty">Loading GitHub issues…</p>
+              ) : !tasks.repo ? (
+                <p className="empty">
+                  This project&apos;s repository is not linked to GitHub. Link it in Project
+                  Settings → Integrations.
+                </p>
+              ) : (
+                <>
+                  <p className="brief-status" role="status">
+                    {tasks.repo} · {taskCounts(tasks)}. {tasksAsOf(tasks)}
+                  </p>
+                  {tasks.open.length === 0 && tasks.done.length === 0 && (
+                    <p className="empty">
+                      No GitHub issues yet. Issues appear here after a meeting is published.
+                    </p>
+                  )}
+                  {tasks.open.length > 0 && (
+                    <ul className="cycle-rows" aria-label="Open GitHub issues">
+                      {tasks.open.map((t) => (
+                        <CycleIssueRow key={t.number} task={t} done={false} />
+                      ))}
+                    </ul>
+                  )}
+                  {tasks.done.length > 0 && (
+                    <details className="brief-done" open>
+                      <summary>Done ({tasks.done.length})</summary>
+                      <ul className="cycle-rows" aria-label="Done GitHub issues">
+                        {tasks.done.map((t) => (
+                          <CycleIssueRow key={t.number} task={t} done />
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+                </>
+              )
+            ) : (
+              <>
+                {!briefing && !error && <p className="empty">Loading tasks…</p>}
 
-            {briefing && extraTasks.length > 0 && (
-              <details className="brief-done">
-                <summary>
-                  Show {extraTasks.length} more {extraTasks.length === 1 ? "task" : "tasks"}
-                </summary>
-                <ul className="cycle-rows" aria-label="More action items">
-                  {extraTasks.map((item) => (
-                    <TaskRow key={item.task.id} item={item} today={briefing.today} />
-                  ))}
-                </ul>
-              </details>
-            )}
+                {briefing && sortedTasks.length === 0 && (
+                  <p className="empty">No open action items for this project.</p>
+                )}
 
-            {briefing && briefing.done.length > 0 && (
-              <details className="brief-done">
-                <summary>Done ({briefing.done.length})</summary>
-                <ul className="cycle-rows" aria-label="Done tasks">
-                  {briefing.done.map((t) => (
-                    <TaskRow
-                      key={t.id}
-                      item={{ task: t, assignee: "Completed" }}
-                      today={briefing.today}
-                      done
-                    />
-                  ))}
-                </ul>
-              </details>
+                {briefing && topTasks.length > 0 && (
+                  <ul className="cycle-rows" aria-label="Top action items">
+                    {topTasks.map((item) => (
+                      <TaskRow key={item.task.id} item={item} today={briefing.today} />
+                    ))}
+                  </ul>
+                )}
+
+                {briefing && extraTasks.length > 0 && (
+                  <details className="brief-done">
+                    <summary>
+                      Show {extraTasks.length} more {extraTasks.length === 1 ? "task" : "tasks"}
+                    </summary>
+                    <ul className="cycle-rows" aria-label="More action items">
+                      {extraTasks.map((item) => (
+                        <TaskRow key={item.task.id} item={item} today={briefing.today} />
+                      ))}
+                    </ul>
+                  </details>
+                )}
+
+                {briefing && briefing.done.length > 0 && (
+                  <details className="brief-done">
+                    <summary>Done ({briefing.done.length})</summary>
+                    <ul className="cycle-rows" aria-label="Done tasks">
+                      {briefing.done.map((t) => (
+                        <TaskRow
+                          key={t.id}
+                          item={{ task: t, assignee: "Completed" }}
+                          today={briefing.today}
+                          done
+                        />
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </>
             )}
           </div>
         </section>
@@ -505,6 +622,7 @@ export function ProjectDetailView({ cycleId, onBack, onOpenMeeting }: ProjectDet
           onSaved={() => {
             loadCycleDetails();
             loadBriefing(false);
+            reloadTasks();
           }}
         />
       )}

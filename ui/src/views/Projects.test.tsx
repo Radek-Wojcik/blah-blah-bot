@@ -380,6 +380,136 @@ describe("ProjectDetailView, ProjectSettingsModal, and ImportMeetingModal", () =
     );
     expect(host.textContent).toContain("sprint-demo");
   });
+
+  it("uses MeetingSummary.cycleId directly without N+1 IPC calls and renders GitHub issue sync & All tasks", async () => {
+    const base = createMockBackend({ clockRate: 0 });
+    const draftSpy = vi.spyOn(base, "getDraft");
+    const voicesSpy = vi.spyOn(base, "getMeetingVoices");
+    const pullSpy = vi.spyOn(base, "pullCycleRepo");
+    const backend: Backend = {
+      ...base,
+      listMeetings: async () => [
+        {
+          id: "m-fresh",
+          title: "Fresh 0-participant meeting",
+          startedUnixMs: Date.now(),
+          durationMs: 60_000,
+          state: "stopped",
+          trackCount: 1,
+          screenshotCount: 0,
+          cycleId: "NOMAD",
+        },
+      ],
+    };
+
+    await act(async () => {
+      root.render(
+        <BackendProvider value={backend}>
+          <ProjectDetailView cycleId="NOMAD" onBack={vi.fn()} onOpenMeeting={vi.fn()} />
+        </BackendProvider>,
+      );
+    });
+    await flush();
+
+    // Unprocessed 0-participant meeting with cycleId appears without calling getDraft/getMeetingVoices.
+    expect(host.textContent).toContain("Fresh 0-participant meeting");
+    expect(draftSpy).not.toHaveBeenCalled();
+    expect(voicesSpy).not.toHaveBeenCalled();
+
+    // Toggle "All tasks" to view GitHub issues and sync from GitHub.
+    await act(async () => {
+      findButton("All tasks").click();
+    });
+    await flush();
+    expect(host.querySelector('ul[aria-label="Open GitHub issues"]')).not.toBeNull();
+    expect(host.textContent).toContain("demo-org/nomad-cycles");
+
+    await act(async () => {
+      findButton("Sync GitHub issues").click();
+    });
+    await flush();
+    expect(pullSpy).toHaveBeenCalledWith("team-cycles");
+    expect(host.textContent).toContain("GitHub issues synced.");
+  });
+
+  it("edits GitHub repository link and stores/tests/clears Discord webhook inside ProjectSettingsModal Integrations", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    const setRepoSpy = vi.spyOn(backend, "setGithubRepo");
+    const testGithubSpy = vi.spyOn(backend, "testGithubAccess");
+    const setSecretSpy = vi.spyOn(backend, "setTargetSecret");
+    const testWebhookSpy = vi.spyOn(backend, "testDiscordWebhook");
+    const clearSecretSpy = vi.spyOn(backend, "clearTargetSecret");
+
+    await act(async () => {
+      root.render(
+        <BackendProvider value={backend}>
+          <ProjectDetailView cycleId="NOMAD" onBack={vi.fn()} onOpenMeeting={vi.fn()} />
+        </BackendProvider>,
+      );
+    });
+    await flush();
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('button[aria-label="Project settings"]')!.click();
+    });
+    await flush();
+
+    await act(async () => {
+      findButton("Integrations").click();
+    });
+    await flush();
+
+    // GitHub repository link editing & access test.
+    const repoInput = host.querySelector<HTMLInputElement>(
+      'input[aria-label="GitHub repository"]',
+    )!;
+    await setInputValue(repoInput, "demo-org/updated-nomad");
+    await act(async () => {
+      findButton("Save link").click();
+    });
+    await flush();
+    expect(setRepoSpy).toHaveBeenCalledWith("team-cycles", "demo-org/updated-nomad", "");
+
+    await act(async () => {
+      findButton("Test access").click();
+    });
+    await flush();
+    expect(testGithubSpy).toHaveBeenCalledWith("NOMAD");
+
+    // Discord webhook store / test / clear.
+    const webhookGroup = host.querySelector<HTMLElement>(
+      '[role="group"][aria-label="Webhook for cred:discord/nomad"]',
+    )!;
+    expect(webhookGroup).not.toBeNull();
+    const webhookInput = webhookGroup.querySelector<HTMLInputElement>('input[type="password"]')!;
+    await setInputValue(
+      webhookInput,
+      "https://discord.com/api/webhooks/000000000000000999/secret-token",
+    );
+    await act(async () => {
+      findButton("Store", webhookGroup).click();
+    });
+    await flush();
+    expect(setSecretSpy).toHaveBeenCalledWith(
+      "cred:discord/nomad",
+      "https://discord.com/api/webhooks/000000000000000999/secret-token",
+    );
+    expect(webhookGroup.textContent).toContain("0000...0999");
+
+    await act(async () => {
+      findButton("Test webhook", webhookGroup).click();
+    });
+    await flush();
+    expect(testWebhookSpy).toHaveBeenCalledWith("cred:discord/nomad");
+    expect(webhookGroup.textContent).toContain("The webhook exists.");
+
+    await act(async () => {
+      findButton("Clear", webhookGroup).click();
+    });
+    await flush();
+    expect(clearSecretSpy).toHaveBeenCalledWith("cred:discord/nomad");
+    expect(webhookGroup.textContent).toContain("No webhook stored");
+  });
 });
 
 describe("MeetingDetailView and DraftEditor markdown export", () => {

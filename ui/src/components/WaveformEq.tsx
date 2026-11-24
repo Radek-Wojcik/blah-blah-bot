@@ -72,7 +72,6 @@ export function WaveformEq(props: WaveformEqProps) {
           data-level={val.toFixed(2)}
           style={{
             transform: `scaleY(${val.toFixed(3)})`,
-            height: `${Math.round(val * 100)}%`,
           }}
         />
       ))}

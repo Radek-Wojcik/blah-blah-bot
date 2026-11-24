@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BackendProvider } from "../backend-context";
 import { createMockBackend } from "../ipc/mock";
 import type { QueueState } from "../ipc/types";
+import { Main } from "./Main";
 import { formatEta, QueueView } from "./Queue";
 import { RecordView } from "./RecordView";
 import { Widget } from "./Widget";
@@ -45,6 +46,8 @@ afterEach(() => {
 describe("RecordView", () => {
   it("renders full RecorderPanel, hotkey tips, HelpPopover, and handles post-stop actions", async () => {
     const backend = createMockBackend({ clockRate: 0 });
+    const processSpy = vi.spyOn(backend, "processMeeting");
+    const briefingSpy = vi.spyOn(backend, "openBriefing").mockResolvedValue();
     const onProcessNow = vi.fn();
     const onAddToQueue = vi.fn();
 
@@ -61,6 +64,16 @@ describe("RecordView", () => {
     expect(host.querySelector(".ticker")).toBeNull();
     expect(host.textContent).toContain("Ctrl+Alt+R");
     expect(host.textContent).toContain("Ctrl+Alt+S");
+
+    // Open briefing button calls openBriefing for selected cycle.
+    const openBriefingBtn = Array.from(host.querySelectorAll("button")).find(
+      (b) => b.textContent === "Open briefing",
+    ) as HTMLButtonElement;
+    expect(openBriefingBtn).not.toBeUndefined();
+    await act(async () => {
+      openBriefingBtn.click();
+    });
+    expect(briefingSpy).toHaveBeenCalledWith("NOMAD");
 
     // Open tip HelpPopover.
     const helpBtn = host.querySelector(
@@ -93,6 +106,8 @@ describe("RecordView", () => {
     await act(async () => {
       addToQueueBtn.click();
     });
+    await flush();
+    expect(processSpy).toHaveBeenCalledTimes(1);
     expect(onAddToQueue).toHaveBeenCalledTimes(1);
 
     // Record and stop again, then click Process now.
@@ -114,6 +129,39 @@ describe("RecordView", () => {
     });
     await flush();
     expect(onProcessNow).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses duplicate ProcessPrompt modal when RecorderPanel is visible in Main Record view", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+
+    await act(async () => {
+      root.render(
+        <BackendProvider value={backend}>
+          <Main />
+        </BackendProvider>,
+      );
+    });
+    await flush(6);
+
+    const recordNav = Array.from(host.querySelectorAll("nav button")).find(
+      (b) => b.textContent === "Record",
+    ) as HTMLButtonElement;
+    await act(async () => {
+      recordNav.click();
+    });
+    await flush(6);
+
+    await act(async () => {
+      (host.querySelector("button.btn-record") as HTMLButtonElement).click();
+    });
+    await flush();
+    await act(async () => {
+      (host.querySelector("button.btn-stop") as HTMLButtonElement).click();
+    });
+    await flush();
+
+    expect(host.querySelector(".recorder-post-stop")).not.toBeNull();
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
   });
 });
 
@@ -167,11 +215,36 @@ describe("Widget", () => {
     expect(liveEq.dataset.active).toBe("true");
     expect(liveEq.classList.contains("waveform-eq-live")).toBe(true);
     expect(Number(liveEq.dataset.peak)).toBeGreaterThan(0);
+    const firstBar = liveEq.querySelector(".waveform-eq-bar") as HTMLElement;
+    expect(firstBar.style.transform).toMatch(/^scaleY\(/);
+    expect(firstBar.style.height).toBe("");
 
     await act(async () => {
       (host.querySelector("button.btn-stop") as HTMLButtonElement).click();
     });
     await flush();
+
+    // Widget shows inline post-stop banner without duplicate ProcessPrompt modal.
+    expect(host.querySelector(".recorder-post-stop")).not.toBeNull();
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("ticks captured browser_tab sources by default in mock backend", async () => {
+    const backend = createMockBackend({ clockRate: 0, browserTabs: "ok" });
+    await act(async () => {
+      root.render(
+        <BackendProvider value={backend}>
+          <Widget />
+        </BackendProvider>,
+      );
+    });
+    await flush(6);
+
+    const checkboxes = Array.from(
+      host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
+    );
+    // mic:default + 3 captured browser tabs should be ticked by default.
+    expect(checkboxes.filter((c) => c.checked)).toHaveLength(4);
   });
 });
 
@@ -227,17 +300,37 @@ describe("QueueView", () => {
       "Applies only to jobs currently in the queue. Automatically reverts to global settings once the queue finishes.",
     );
 
-    const maxUtilInput = Array.from(sidePanel.querySelectorAll("label"))
-      .find((l) => l.textContent?.includes("Max GPU utilization"))!
-      .querySelector("input") as HTMLInputElement;
-    const idleInput = Array.from(sidePanel.querySelectorAll("label"))
-      .find((l) => l.textContent?.includes("Wait for idle"))!
-      .querySelector("input") as HTMLInputElement;
+    const maxUtilLabel = Array.from(sidePanel.querySelectorAll("label")).find((l) =>
+      l.textContent?.includes("Max GPU utilization"),
+    )!;
+    const maxUtilInput = (
+      maxUtilLabel.htmlFor
+        ? sidePanel.querySelector(`#${CSS.escape(maxUtilLabel.htmlFor)}`)
+        : maxUtilLabel.querySelector("input")
+    ) as HTMLInputElement;
+    const idleLabel = Array.from(sidePanel.querySelectorAll("label")).find((l) =>
+      l.textContent?.includes("Wait for idle"),
+    )!;
+    const idleInput = (
+      idleLabel.htmlFor
+        ? sidePanel.querySelector(`#${CSS.escape(idleLabel.htmlFor)}`)
+        : idleLabel.querySelector("input")
+    ) as HTMLInputElement;
+
+    expect(maxUtilInput.min).toBe("1");
+    expect(maxUtilInput.max).toBe("100");
+    await setInputValue(maxUtilInput, "0");
+    const overrideForm = sidePanel.querySelector("form") as HTMLFormElement;
+    await act(async () => {
+      overrideForm.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    await flush();
+    expect(sidePanel.textContent).toContain("Max GPU utilization must be between 1% and 100%.");
+    expect(setOverrideSpy).not.toHaveBeenCalled();
 
     await setInputValue(maxUtilInput, "85");
     await setInputValue(idleInput, "10");
 
-    const overrideForm = sidePanel.querySelector("form") as HTMLFormElement;
     await act(async () => {
       overrideForm.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     });

@@ -263,7 +263,7 @@ export function ConnectorsTab() {
                     testDisabledReason={
                       testCycle
                         ? undefined
-                        : "Create or link a valid project on the Cycles page to test repository access."
+                        : "Create or link a valid project on the Projects page to test repository access."
                     }
                   />
                 );
@@ -435,7 +435,8 @@ export function ConnectorsTab() {
           </h3>
           <p className="notice" style={{ margin: 0 }}>
             There is no global Discord webhook here. Discord webhooks and Notion database targets
-            are configured per project inside <strong>Project Settings</strong> on the Cycles page.
+            are configured per project inside <strong>Project Settings</strong> on the Projects
+            page.
           </p>
         </div>
       </div>

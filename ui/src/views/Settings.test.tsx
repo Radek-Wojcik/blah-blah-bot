@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BackendProvider } from "../backend-context";
 import type { Backend } from "../ipc/backend";
 import { createMockBackend } from "../ipc/mock";
+import { Main } from "./Main";
 import { SettingsView, type SettingsTab } from "./Settings";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -64,7 +65,10 @@ function inputByLabel(labelPrefix: string, container: ParentNode = host): HTMLIn
   const label = Array.from(container.querySelectorAll<HTMLLabelElement>("label")).find((l) =>
     l.textContent?.trim().startsWith(labelPrefix),
   );
-  const input = label?.querySelector("input");
+  const input =
+    (label?.htmlFor
+      ? host.querySelector<HTMLInputElement>(`#${CSS.escape(label.htmlFor)}`)
+      : null) ?? label?.querySelector("input");
   if (!input) throw new Error(`Input not found for label: ${labelPrefix}`);
   return input;
 }
@@ -340,5 +344,132 @@ describe("SettingsView", () => {
     expect(host.querySelector('ul[aria-label="Voice profiles"]')!.textContent).toContain(
       "Marta Enroll",
     );
+  });
+
+  it("persists vision model path and skip-screenshot toggle through ProcessingSettings", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    const saveSpy = vi.spyOn(backend, "saveProcessingSettings");
+    await mount(backend, "models");
+
+    await act(async () => {
+      setInputValue(inputByLabel("Vision model path (GGUF)"), "D:\\Models\\qwen3-vl-8b-q4.gguf");
+      inputByLabel("Skip screenshot analysis").click();
+    });
+    await flush();
+
+    await act(async () => {
+      buttonByText("Save AI model settings").click();
+    });
+    await flush();
+
+    expect(saveSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        visionModelPath: "D:\\Models\\qwen3-vl-8b-q4.gguf",
+        skipScreenshotAnalysis: true,
+      }),
+    );
+
+    // Switch away and back; settings reload from backend.
+    await clickTab("Connectors");
+    await clickTab("AI Models");
+    expect(inputByLabel("Vision model path (GGUF)").value).toBe("D:\\Models\\qwen3-vl-8b-q4.gguf");
+    expect(inputByLabel("Skip screenshot analysis").checked).toBe(true);
+  });
+
+  it("renders Connected project repositories in Preferences, pulls repos, and updates copy to Projects page", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    const pullSpy = vi.spyOn(backend, "pullCycleRepo");
+    await mount(backend, "preferences");
+
+    expect(host.textContent).toContain("Connected project repositories");
+    const repoList = host.querySelector('ul[aria-label="Cycle repositories"]')!;
+    expect(repoList).not.toBeNull();
+    expect(repoList.querySelectorAll("li").length).toBe(2);
+    expect(repoList.textContent).toContain("State as of 2026-11-12");
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('button[aria-label="Pull team-cycles"]')!.click();
+    });
+    await flush();
+    expect(pullSpy).toHaveBeenCalledWith("team-cycles");
+
+    await clickTab("Connectors");
+    expect(host.textContent).not.toContain("Cycles page");
+    expect(host.textContent).toContain("Projects page");
+  });
+
+  it("guards main sidebar navigation when Settings has unsaved changes", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    const saveSpy = vi.spyOn(backend, "saveProcessingSettings");
+
+    await act(async () => {
+      root.render(
+        <BackendProvider value={backend}>
+          <Main />
+        </BackendProvider>,
+      );
+    });
+    await flush();
+
+    const sidebar = host.querySelector('nav[aria-label="Main navigation"]')!;
+    await act(async () => {
+      buttonByText("Settings", sidebar).click();
+    });
+    await flush();
+
+    await clickTab("Processing");
+    await act(async () => {
+      setInputValue(inputByLabel("Max GPU utilization (%)"), "52");
+    });
+    await flush();
+
+    // Clicking Queue in main sidebar opens UnsavedDialog.
+    await act(async () => {
+      buttonByText("Queue", sidebar).click();
+    });
+    await flush();
+
+    const dialog = host.querySelector('[role="dialog"]')!;
+    expect(dialog).not.toBeNull();
+    expect(dialog.textContent).toContain("Save your changes before leaving Settings?");
+
+    // Cancel keeps user in Settings.
+    await act(async () => {
+      buttonByText("Cancel", dialog).click();
+    });
+    await flush();
+    expect(host.querySelector("#settings-heading")).not.toBeNull();
+    expect(inputByLabel("Max GPU utilization (%)").value).toBe("52");
+
+    // Clicking Queue again and choosing Save persists and navigates to Queue.
+    await act(async () => {
+      buttonByText("Queue", sidebar).click();
+    });
+    await flush();
+    const dialog2 = host.querySelector('[role="dialog"]')!;
+    await act(async () => {
+      buttonByText("Save", dialog2).click();
+    });
+    await flush();
+
+    expect(saveSpy).toHaveBeenCalledWith(expect.objectContaining({ gpuMaxUtilPercent: 52 }));
+    expect(host.querySelector('ul[aria-label="Processing jobs"]')).not.toBeNull();
+  });
+
+  it("does not reveal duplicate Global rows when renaming or resetting a cycle voice profile", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    await backend.renameParticipant("NOMAD:jan", "Janek Demo");
+    await backend.resetProfile("NOMAD:alex");
+
+    const all = await backend.listAllVoiceProfiles();
+    const names = all.map((p) => p.name);
+    expect(names).not.toContain("Jan Demo");
+    expect(names.filter((n) => n === "Alex Demo")).toHaveLength(1);
+    const alex = all.find((p) => p.id === "NOMAD:alex")!;
+    expect(alex.sampleCount).toBe(0);
+    expect(alex.hasSampleClip).toBe(false);
+    await expect(backend.voiceProfileSampleClip("NOMAD:alex")).rejects.toMatchObject({
+      code: "not_found",
+    });
   });
 });

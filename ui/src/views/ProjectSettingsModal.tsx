@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { useBackend } from "../backend-context";
 import { HelpPopover } from "../components/HelpPopover";
 import {
@@ -17,13 +17,15 @@ import type {
   CycleDto,
   CycleIssue,
   CycleParticipant,
+  CycleRepoView,
   DetectedModels,
   LanguageSetting,
   ProjectPrefs,
   PublishMode,
+  PublishingSecrets,
   ReportMode,
 } from "../ipc/types";
-import { DEFAULT_PUBLISH_RULE } from "../publish";
+import { DEFAULT_PUBLISH_RULE, parseWebhook } from "../publish";
 import { MODE_HELP, MODE_NAMES, REPORT_MODES } from "../report-gate";
 import { Modal } from "./Modal";
 import { RuleChoice } from "./RuleChoice";
@@ -80,12 +82,51 @@ export function ProjectSettingsModal({ cycleId, onClose, onSaved }: ProjectSetti
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const [repos, setRepos] = useState<CycleRepoView[]>([]);
+  const [secrets, setSecrets] = useState<PublishingSecrets | null>(null);
+  const [githubRepoInput, setGithubRepoInput] = useState("");
+  const [githubApiInput, setGithubApiInput] = useState("");
+  const [repoBusy, setRepoBusy] = useState(false);
+  const [repoMsg, setRepoMsg] = useState<{ text: string; kind: "status" | "error" } | null>(null);
+
+  const [webhookInput, setWebhookInput] = useState("");
+  const [webhookBusy, setWebhookBusy] = useState(false);
+  const [webhookMsg, setWebhookMsg] = useState<{ text: string; kind: "status" | "error" } | null>(
+    null,
+  );
+  const [storedWebhookRefs, setStoredWebhookRefs] = useState<Set<string>>(() => new Set());
+
+  const projectIdInputId = useId();
+  const reportFolderInputId = useId();
+  const webhookRefInputId = useId();
+  const webhookSecretInputId = useId();
+  const notionDbInputId = useId();
+
   const adoptCycle = useCallback((d: CycleDetails) => {
     setDetails(d);
     setCycle(structuredClone(d.cycle));
     setRows(typeRows(d.cycle.report.byType));
     setIssues(d.issues);
   }, []);
+
+  const loadIntegrations = useCallback(
+    (repoId?: string) => {
+      void Promise.all([backend.listCycleRepos(), backend.publishingSecrets()])
+        .then(([repoList, sec]) => {
+          setRepos(repoList);
+          setSecrets(sec);
+          if (repoId) {
+            const match = repoList.find((r) => r.id === repoId);
+            if (match) {
+              setGithubRepoInput(match.githubRepo ?? "");
+              setGithubApiInput(match.githubApi ?? "");
+            }
+          }
+        })
+        .catch(() => undefined);
+    },
+    [backend],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -100,7 +141,9 @@ export function ProjectSettingsModal({ cycleId, onClose, onSaved }: ProjectSetti
     void backend
       .getCycle(cycleId)
       .then((d) => {
-        if (!cancelled) adoptCycle(d);
+        if (cancelled) return;
+        adoptCycle(d);
+        loadIntegrations(d.repoId);
       })
       .catch((e) => !cancelled && setError(errorMessage(e)));
     void backend
@@ -110,7 +153,7 @@ export function ProjectSettingsModal({ cycleId, onClose, onSaved }: ProjectSetti
     return () => {
       cancelled = true;
     };
-  }, [backend, cycleId, adoptCycle]);
+  }, [backend, cycleId, adoptCycle, loadIntegrations]);
 
   const editedCycle = useMemo(() => (cycle ? withTypeRows(cycle, rows) : null), [cycle, rows]);
   const cycleDirty =
@@ -180,6 +223,113 @@ export function ProjectSettingsModal({ cycleId, onClose, onSaved }: ProjectSetti
   const github = cycle?.targets.github;
   const discordRef = cycle?.targets.discord;
   const notion = cycle?.targets.notion;
+  const currentRepo = details ? repos.find((r) => r.id === details.repoId) : undefined;
+  const repoLinkDirty =
+    currentRepo !== undefined &&
+    (githubRepoInput.trim() !== (currentRepo.githubRepo ?? "") ||
+      githubApiInput.trim() !== (currentRepo.githubApi ?? ""));
+
+  const trimmedWebhookRef = discordRef?.webhook.trim() ?? "";
+  const validWebhookRef = /^cred:[A-Za-z0-9][A-Za-z0-9_./-]*$/.test(trimmedWebhookRef);
+  const matchedSecret = validWebhookRef
+    ? secrets?.targets.find((t) => t.reference === trimmedWebhookRef)
+    : undefined;
+  const isWebhookSet = Boolean(matchedSecret?.set || storedWebhookRefs.has(trimmedWebhookRef));
+
+  const saveGithubLink = async () => {
+    if (!details) return;
+    setRepoMsg(null);
+    setRepoBusy(true);
+    try {
+      const saved = await backend.setGithubRepo(
+        details.repoId,
+        githubRepoInput.trim(),
+        githubApiInput.trim(),
+      );
+      setGithubRepoInput(saved.githubRepo ?? "");
+      setGithubApiInput(saved.githubApi ?? "");
+      setRepos((cur) => cur.map((r) => (r.id === saved.id ? saved : r)));
+      setRepoMsg({ text: "GitHub repository link saved.", kind: "status" });
+      onSaved?.();
+    } catch (e) {
+      setRepoMsg({ text: errorMessage(e), kind: "error" });
+    } finally {
+      setRepoBusy(false);
+    }
+  };
+
+  const testGithubLink = async () => {
+    setRepoMsg(null);
+    setRepoBusy(true);
+    try {
+      const r = await backend.testGithubAccess(cycleId);
+      setRepoMsg({ text: r.message, kind: r.ok ? "status" : "error" });
+    } catch (e) {
+      setRepoMsg({ text: errorMessage(e), kind: "error" });
+    } finally {
+      setRepoBusy(false);
+    }
+  };
+
+  const storeDiscordWebhook = async () => {
+    if (!validWebhookRef) return;
+    const problem = parseWebhook(webhookInput);
+    if (typeof problem === "string") {
+      setWebhookMsg({ text: problem, kind: "error" });
+      return;
+    }
+    setWebhookMsg(null);
+    setWebhookBusy(true);
+    try {
+      await backend.setTargetSecret(trimmedWebhookRef, webhookInput);
+      setWebhookInput("");
+      setStoredWebhookRefs((cur) => new Set(cur).add(trimmedWebhookRef));
+      const sec = await backend.publishingSecrets();
+      setSecrets(sec);
+      setWebhookMsg({ text: "Webhook stored.", kind: "status" });
+      onSaved?.();
+    } catch (e) {
+      setWebhookMsg({ text: errorMessage(e), kind: "error" });
+    } finally {
+      setWebhookBusy(false);
+    }
+  };
+
+  const clearDiscordWebhook = async () => {
+    if (!validWebhookRef) return;
+    setWebhookMsg(null);
+    setWebhookBusy(true);
+    try {
+      await backend.clearTargetSecret(trimmedWebhookRef);
+      setStoredWebhookRefs((cur) => {
+        const next = new Set(cur);
+        next.delete(trimmedWebhookRef);
+        return next;
+      });
+      const sec = await backend.publishingSecrets();
+      setSecrets(sec);
+      setWebhookMsg({ text: "Webhook removed.", kind: "status" });
+      onSaved?.();
+    } catch (e) {
+      setWebhookMsg({ text: errorMessage(e), kind: "error" });
+    } finally {
+      setWebhookBusy(false);
+    }
+  };
+
+  const testDiscordSecret = async () => {
+    if (!validWebhookRef) return;
+    setWebhookMsg(null);
+    setWebhookBusy(true);
+    try {
+      const res = await backend.testDiscordWebhook(trimmedWebhookRef);
+      setWebhookMsg({ text: res.message, kind: res.ok ? "status" : "error" });
+    } catch (e) {
+      setWebhookMsg({ text: errorMessage(e), kind: "error" });
+    } finally {
+      setWebhookBusy(false);
+    }
+  };
 
   return (
     <Modal title={`Project Settings · ${cycle?.name ?? cycleId}`} onClose={onClose} wide>
@@ -366,16 +516,16 @@ export function ProjectSettingsModal({ cycleId, onClose, onSaved }: ProjectSetti
           {tab === "people" && (
             <>
               <div className="form-row">
-                <label>
-                  <span className="field-label-row">
-                    Project ID
+                <div className="field-block">
+                  <div className="field-label-row">
+                    <label htmlFor={projectIdInputId}>Project ID</label>
                     <HelpPopover
                       title="Project ID"
                       text="The folder name in the repository and issue label prefix. It cannot be renamed after creation."
                     />
-                  </span>
-                  <input value={cycle.id} readOnly aria-readonly="true" />
-                </label>
+                  </div>
+                  <input id={projectIdInputId} value={cycle.id} readOnly aria-readonly="true" />
+                </div>
                 <label>
                   Project name
                   <input
@@ -731,6 +881,67 @@ export function ProjectSettingsModal({ cycleId, onClose, onSaved }: ProjectSetti
             <div className="form targets">
               <fieldset>
                 <legend>GitHub</legend>
+                <div className="form" aria-label={`GitHub repository of ${details.repoId}`}>
+                  <label>
+                    GitHub repository (owner/name)
+                    <input
+                      aria-label="GitHub repository"
+                      value={githubRepoInput}
+                      placeholder="owner/name"
+                      autoComplete="off"
+                      onChange={(e) => {
+                        setGithubRepoInput(e.target.value);
+                        setRepoMsg(null);
+                      }}
+                    />
+                    <small>
+                      Leave empty when the Git remote is already on github.com; it is read from the
+                      remote automatically.
+                    </small>
+                  </label>
+                  <label>
+                    GitHub API address (optional)
+                    <input
+                      aria-label="GitHub API address"
+                      value={githubApiInput}
+                      placeholder="https://api.github.com"
+                      autoComplete="off"
+                      onChange={(e) => {
+                        setGithubApiInput(e.target.value);
+                        setRepoMsg(null);
+                      }}
+                    />
+                    <small>Only for GitHub Enterprise servers. Empty uses github.com.</small>
+                  </label>
+                  {repoMsg && (
+                    <p
+                      className={repoMsg.kind === "error" ? "error" : "secret-result"}
+                      role={repoMsg.kind === "error" ? "alert" : "status"}
+                    >
+                      {repoMsg.text}
+                    </p>
+                  )}
+                  <div className="actions">
+                    <button
+                      type="button"
+                      className="btn btn-small btn-ghost"
+                      disabled={repoBusy || repoLinkDirty}
+                      title={repoLinkDirty ? "Save the repository link before testing." : undefined}
+                      onClick={() => void testGithubLink()}
+                    >
+                      Test access
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-small"
+                      disabled={repoBusy || !repoLinkDirty}
+                      onClick={() => void saveGithubLink()}
+                    >
+                      Save link
+                    </button>
+                  </div>
+                </div>
+
                 <label className="check">
                   <input
                     type="checkbox"
@@ -747,23 +958,24 @@ export function ProjectSettingsModal({ cycleId, onClose, onSaved }: ProjectSetti
                 </label>
                 {github && (
                   <>
-                    <label>
-                      <span className="field-label-row">
-                        Folder for meeting reports
+                    <div className="field-block">
+                      <div className="field-label-row">
+                        <label htmlFor={reportFolderInputId}>Folder for meeting reports</label>
                         <HelpPopover
                           title="Report folder"
                           text="Relative folder inside the Git repository where Markdown reports are committed (use forward slashes)."
                           recommended="meetings"
                         />
-                      </span>
+                      </div>
                       <input
+                        id={reportFolderInputId}
                         value={github.path}
                         onChange={(e) =>
                           setTargets({ github: { ...github, path: e.target.value } })
                         }
                       />
                       <FieldProblems issues={issues} path="targets.github.path" />
-                    </label>
+                    </div>
                     <label className="check">
                       <input
                         type="checkbox"
@@ -798,7 +1010,10 @@ export function ProjectSettingsModal({ cycleId, onClose, onSaved }: ProjectSetti
                     onChange={(e) =>
                       setTargets({
                         discord: e.target.checked
-                          ? { webhook: "cred:", publish: DEFAULT_PUBLISH_RULE.discord }
+                          ? {
+                              webhook: `cred:discord/${cycle.id.toLowerCase()}`,
+                              publish: DEFAULT_PUBLISH_RULE.discord,
+                            }
                           : null,
                       })
                     }
@@ -807,16 +1022,17 @@ export function ProjectSettingsModal({ cycleId, onClose, onSaved }: ProjectSetti
                 </label>
                 {discordRef && (
                   <>
-                    <label>
-                      <span className="field-label-row">
-                        Webhook credential reference
+                    <div className="field-block">
+                      <div className="field-label-row">
+                        <label htmlFor={webhookRefInputId}>Webhook credential reference</label>
                         <HelpPopover
                           title="Credential reference"
                           text="Use cred:name to reference a Discord webhook stored safely in Windows Credential Manager. Never paste raw webhook URLs here."
                           recommended="cred:discord/project"
                         />
-                      </span>
+                      </div>
                       <input
+                        id={webhookRefInputId}
                         value={discordRef.webhook}
                         placeholder="cred:discord/nomad"
                         onChange={(e) =>
@@ -824,7 +1040,81 @@ export function ProjectSettingsModal({ cycleId, onClose, onSaved }: ProjectSetti
                         }
                       />
                       <FieldProblems issues={issues} path="targets.discord.webhook" />
-                    </label>
+                    </div>
+
+                    {validWebhookRef && (
+                      <div
+                        className="secret-form"
+                        role="group"
+                        aria-label={`Webhook for ${trimmedWebhookRef}`}
+                      >
+                        <p className="token-state">
+                          {isWebhookSet
+                            ? matchedSecret?.masked
+                              ? `Webhook stored: ${matchedSecret.masked}`
+                              : "Webhook stored"
+                            : "No webhook stored"}
+                        </p>
+                        <label htmlFor={webhookSecretInputId}>
+                          Discord webhook URL
+                          <input
+                            id={webhookSecretInputId}
+                            type="password"
+                            autoComplete="off"
+                            spellCheck={false}
+                            value={webhookInput}
+                            placeholder={
+                              isWebhookSet
+                                ? "Enter a new value to replace it"
+                                : "https://discord.com/api/webhooks/…"
+                            }
+                            onChange={(e) => {
+                              setWebhookInput(e.target.value);
+                              setWebhookMsg(null);
+                            }}
+                          />
+                          <small>
+                            Stored in Windows Credential Manager under {trimmedWebhookRef}; the URL
+                            is never written to Git or shown again.
+                          </small>
+                        </label>
+                        {webhookMsg && (
+                          <p
+                            className={webhookMsg.kind === "error" ? "error" : "secret-result"}
+                            role={webhookMsg.kind === "error" ? "alert" : "status"}
+                          >
+                            {webhookMsg.text}
+                          </p>
+                        )}
+                        <div className="actions">
+                          <button
+                            type="button"
+                            className="btn btn-small btn-ghost"
+                            disabled={!isWebhookSet || webhookBusy}
+                            onClick={() => void testDiscordSecret()}
+                          >
+                            Test webhook
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-small btn-ghost"
+                            disabled={!isWebhookSet || webhookBusy}
+                            onClick={() => void clearDiscordWebhook()}
+                          >
+                            Clear
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-small"
+                            disabled={webhookInput.trim() === "" || webhookBusy}
+                            onClick={() => void storeDiscordWebhook()}
+                          >
+                            Store
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
                     <label>
                       Message template
                       <select
@@ -873,15 +1163,16 @@ export function ProjectSettingsModal({ cycleId, onClose, onSaved }: ProjectSetti
                 </label>
                 {notion && (
                   <>
-                    <label>
-                      <span className="field-label-row">
-                        Database ID or cred: reference
+                    <div className="field-block">
+                      <div className="field-label-row">
+                        <label htmlFor={notionDbInputId}>Database ID or cred: reference</label>
                         <HelpPopover
                           title="Notion database"
                           text="Provide a Notion database ID or a cred: reference stored in Windows Credential Manager."
                         />
-                      </span>
+                      </div>
                       <input
+                        id={notionDbInputId}
                         value={notion.database}
                         placeholder="cred:notion/project-db"
                         onChange={(e) =>
@@ -889,7 +1180,7 @@ export function ProjectSettingsModal({ cycleId, onClose, onSaved }: ProjectSetti
                         }
                       />
                       <FieldProblems issues={issues} path="targets.notion.database" />
-                    </label>
+                    </div>
                     <label>
                       When to publish
                       <select

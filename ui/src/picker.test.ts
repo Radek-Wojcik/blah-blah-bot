@@ -151,7 +151,7 @@ describe("sourceStableKey and restorePersistedSelection", () => {
 describe("mock backend UX Wave 2B IPC commands", () => {
   it("persists lastSourceKeys and localSave settings", async () => {
     const b = createMockBackend({ clockRate: 0 });
-    expect((await b.getSettings()).lastSourceKeys).toEqual(["mic:default"]);
+    expect((await b.getSettings()).lastSourceKeys).toEqual([]);
     const keys = await b.saveLastSources(["mic:default", "app_name:discord"]);
     expect(keys).toEqual(["mic:default", "app_name:discord"]);
     expect((await b.getSettings()).lastSourceKeys).toEqual(["mic:default", "app_name:discord"]);

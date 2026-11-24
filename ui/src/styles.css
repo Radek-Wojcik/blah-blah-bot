@@ -85,15 +85,6 @@ body::after {
     background-position: 200% 0;
   }
 }
-@keyframes eq {
-  0%,
-  100% {
-    transform: scaleY(0.15);
-  }
-  50% {
-    transform: scaleY(1);
-  }
-}
 @keyframes flicker {
   0%,
   90%,
@@ -304,19 +295,9 @@ select {
   transform: scaleY(0.12);
   box-shadow: 0 0 8px var(--magenta);
 }
-.eq-live i {
-  animation: eq 2.4s ease-in-out infinite;
-}
-.eq-live i:nth-child(2n) {
-  animation-duration: 1.9s;
+.eq i:nth-child(2n) {
   background: var(--cyan);
   box-shadow: 0 0 8px var(--cyan);
-}
-.eq-live i:nth-child(3n) {
-  animation-duration: 3.1s;
-}
-.eq-live i:nth-child(4n + 1) {
-  animation-delay: -0.3s;
 }
 
 .source-list,
@@ -656,7 +637,8 @@ select {
   width: 100%;
   max-width: 100%;
 }
-.form label {
+.form label,
+.form .field-block {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -664,6 +646,10 @@ select {
   font-size: 0.78em;
   letter-spacing: 0.15em;
   text-transform: uppercase;
+}
+.form .field-block label {
+  display: inline;
+  font-size: 1em;
 }
 .form input {
   color: var(--text);

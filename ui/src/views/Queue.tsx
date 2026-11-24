@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { useBackend } from "../backend-context";
 import { HelpPopover } from "../components/HelpPopover";
 import { errorMessage, useQueue } from "../hooks";
@@ -138,6 +138,8 @@ function GpuOverridePanel(props: {
   const [status, setStatus] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const maxUtilInputId = useId();
+  const idleSecInputId = useId();
 
   const maxUtilValue =
     draft?.maxUtil ?? String(activeOverride?.gpuMaxUtilPercent ?? defaultMaxUtil);
@@ -150,8 +152,8 @@ function GpuOverridePanel(props: {
     setValidationError(null);
     const maxUtil = Number(maxUtilValue);
     const idleSec = Number(idleSecValue);
-    if (!Number.isFinite(maxUtil) || maxUtil < 0 || maxUtil > 100) {
-      setValidationError("Max GPU utilization must be between 0% and 100%.");
+    if (!Number.isFinite(maxUtil) || maxUtil < 1 || maxUtil > 100) {
+      setValidationError("Max GPU utilization must be between 1% and 100%.");
       return;
     }
     if (!Number.isFinite(idleSec) || idleSec < 0 || idleSec > 3600) {
@@ -208,18 +210,19 @@ function GpuOverridePanel(props: {
         </p>
 
         <form className="form" onSubmit={handleSubmit}>
-          <label>
-            <span className="field-label-row">
-              Max GPU utilization (%)
+          <div className="field-block">
+            <div className="field-label-row">
+              <label htmlFor={maxUtilInputId}>Max GPU utilization (%)</label>
               <HelpPopover
                 title="Max GPU utilization (%)"
                 text="Queued jobs wait if GPU usage stays above this percentage."
                 recommended="40% when gaming or doing 3D work; 80%+ to prioritize processing."
               />
-            </span>
+            </div>
             <input
+              id={maxUtilInputId}
               type="number"
-              min={0}
+              min={1}
               max={100}
               step={1}
               value={maxUtilValue}
@@ -230,17 +233,18 @@ function GpuOverridePanel(props: {
                 })
               }
             />
-          </label>
-          <label>
-            <span className="field-label-row">
-              Wait for idle (seconds)
+          </div>
+          <div className="field-block">
+            <div className="field-label-row">
+              <label htmlFor={idleSecInputId}>Wait for idle (seconds)</label>
               <HelpPopover
                 title="Wait for idle (seconds)"
                 text="How long the GPU must remain below the utilization limit before a job starts."
                 recommended="30s for normal use; 5s for fast turnaround."
               />
-            </span>
+            </div>
             <input
+              id={idleSecInputId}
               type="number"
               min={0}
               max={3600}
@@ -253,7 +257,7 @@ function GpuOverridePanel(props: {
                 })
               }
             />
-          </label>
+          </div>
 
           {validationError && (
             <p className="error" role="alert">

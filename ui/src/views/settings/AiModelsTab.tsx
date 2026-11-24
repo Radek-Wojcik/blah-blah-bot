@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { useBackend } from "../../backend-context";
 import { HelpPopover } from "../../components/HelpPopover";
 import { errorMessage } from "../../hooks";
@@ -7,28 +7,16 @@ import { backendDetail, validateLlmSettings } from "../../llm";
 import { percent } from "../../processing";
 import type { EditableTabProps } from "../Settings";
 
-interface VisionDraft {
-  visionModelPath: string;
-  skipScreenshotAnalysis: boolean;
-}
-
-const DEFAULT_VISION: VisionDraft = {
-  visionModelPath: "",
-  skipScreenshotAnalysis: false,
-};
-
 function isModelsDirty(
   saved: ProcessingSettings | null,
   draft: ProcessingSettings | null,
-  savedVision: VisionDraft,
-  draftVision: VisionDraft,
 ): boolean {
   if (!saved || !draft) return false;
   if (saved.llamaServerPath !== draft.llamaServerPath) return true;
   if (saved.modelsDir !== draft.modelsDir) return true;
   if (
-    savedVision.visionModelPath !== draftVision.visionModelPath ||
-    savedVision.skipScreenshotAnalysis !== draftVision.skipScreenshotAnalysis
+    (saved.visionModelPath ?? "") !== (draft.visionModelPath ?? "") ||
+    Boolean(saved.skipScreenshotAnalysis) !== Boolean(draft.skipScreenshotAnalysis)
   ) {
     return true;
   }
@@ -46,6 +34,14 @@ function isModelsDirty(
   );
 }
 
+function normalizeModelSettings(s: ProcessingSettings): ProcessingSettings {
+  return {
+    ...s,
+    visionModelPath: s.visionModelPath ?? "",
+    skipScreenshotAnalysis: Boolean(s.skipScreenshotAnalysis),
+  };
+}
+
 /**
  * AI Models settings tab: auto-detection of local binaries/GGUFs, default LLM backend,
  * vision model configuration, and model download/cache status.
@@ -54,8 +50,6 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
   const backend = useBackend();
   const [saved, setSaved] = useState<ProcessingSettings | null>(null);
   const [draft, setDraft] = useState<ProcessingSettings | null>(null);
-  const [savedVision, setSavedVision] = useState<VisionDraft>(DEFAULT_VISION);
-  const [vision, setVision] = useState<VisionDraft>(DEFAULT_VISION);
   const [detected, setDetected] = useState<DetectedModels | null>(null);
   const [detecting, setDetecting] = useState(false);
   const [detectMessage, setDetectMessage] = useState<string | null>(null);
@@ -67,10 +61,15 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
   );
   const [downloadError, setDownloadError] = useState<string | null>(null);
 
+  const defaultLlmId = useId();
+  const ctxSizeId = useId();
+  const visionPathId = useId();
+
   const loadSettings = useCallback(() => {
     void backend
       .getProcessingSettings()
-      .then((s) => {
+      .then((raw) => {
+        const s = normalizeModelSettings(raw);
         setSaved(structuredClone(s));
         setDraft(structuredClone(s));
       })
@@ -108,10 +107,7 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
     };
   }, [backend, loadSettings, loadModelStatus]);
 
-  const dirty = useMemo(
-    () => isModelsDirty(saved, draft, savedVision, vision),
-    [saved, draft, savedVision, vision],
-  );
+  const dirty = useMemo(() => isModelsDirty(saved, draft), [saved, draft]);
 
   useEffect(() => {
     onDirtyChange(dirty);
@@ -133,10 +129,12 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
     setMessage(null);
     try {
       const latest = await backend.getProcessingSettings();
-      const merged: ProcessingSettings = {
+      const merged: ProcessingSettings = normalizeModelSettings({
         ...latest,
         llamaServerPath: draft.llamaServerPath,
         modelsDir: draft.modelsDir,
+        visionModelPath: draft.visionModelPath ?? "",
+        skipScreenshotAnalysis: Boolean(draft.skipScreenshotAnalysis),
         llm: draft.llm
           ? {
               ...draft.llm,
@@ -144,24 +142,22 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
               cloudKeySet: latest.llm?.cloudKeySet ?? draft.llm.cloudKeySet,
             }
           : latest.llm,
-      };
+      });
       await backend.saveProcessingSettings(merged);
       setSaved(structuredClone(merged));
       setDraft(structuredClone(merged));
-      setSavedVision({ ...vision });
       setMessage({ text: "AI model settings saved.", kind: "status" });
       return true;
     } catch (err) {
       setMessage({ text: errorMessage(err), kind: "error" });
       return false;
     }
-  }, [backend, draft, vision]);
+  }, [backend, draft]);
 
   const discard = useCallback(() => {
     if (saved) setDraft(structuredClone(saved));
-    setVision({ ...savedVision });
     setMessage(null);
-  }, [saved, savedVision]);
+  }, [saved]);
 
   useEffect(() => {
     registerHandle({ save, discard });
@@ -189,12 +185,10 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
         return {
           ...cur,
           llamaServerPath: found.llamaServerPath ?? cur.llamaServerPath,
+          visionModelPath: found.visionModels[0] ?? cur.visionModelPath ?? "",
           llm: nextLlm,
         };
       });
-      if (found.visionModels[0]) {
-        setVision((cur) => ({ ...cur, visionModelPath: found.visionModels[0] }));
-      }
       const total = found.llmModels.length + found.visionModels.length;
       if (total > 0 || found.llamaServerPath) {
         setDetectMessage(
@@ -268,9 +262,9 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
           >
             {llm && (
               <>
-                <label>
-                  <span className="field-label-row">
-                    Default LLM backend
+                <div className="field-block">
+                  <div className="field-label-row">
+                    <label htmlFor={defaultLlmId}>Default LLM backend</label>
                     <HelpPopover
                       title="Managed vs External vs Cloud"
                       recommended="Managed local server for full privacy and zero per-meeting cost"
@@ -288,8 +282,9 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
                         default. You choose and confirm it per meeting when needed.
                       </p>
                     </HelpPopover>
-                  </span>
+                  </div>
                   <select
+                    id={defaultLlmId}
                     aria-label="Default LLM backend"
                     value={llm.defaultKind}
                     onChange={(e) =>
@@ -306,7 +301,7 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
                       Cloud per-meeting only (choose per meeting)
                     </option>
                   </select>
-                </label>
+                </div>
 
                 <fieldset className="llm-group">
                   <legend>Managed local server</legend>
@@ -342,9 +337,9 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
                       </span>
                     )}
                   </label>
-                  <label>
-                    <span className="field-label-row">
-                      Context size (tokens)
+                  <div className="field-block">
+                    <div className="field-label-row">
+                      <label htmlFor={ctxSizeId}>Context size (tokens)</label>
                       <HelpPopover
                         title="Context size"
                         recommended="16384 tokens for typical 1-hour meetings"
@@ -355,8 +350,9 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
                           VRAM.
                         </p>
                       </HelpPopover>
-                    </span>
+                    </div>
                     <input
+                      id={ctxSizeId}
                       type="number"
                       min={2048}
                       step={1024}
@@ -365,7 +361,7 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
                         setLlm({ managed: { ...llm.managed, ctx: num(e.target.value) } })
                       }
                     />
-                  </label>
+                  </div>
                   <label>
                     Models folder
                     <input
@@ -432,9 +428,9 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
 
             <fieldset className="llm-group">
               <legend>Vision & screenshots</legend>
-              <label>
-                <span className="field-label-row">
-                  Vision model path (GGUF)
+              <div className="field-block">
+                <div className="field-label-row">
+                  <label htmlFor={visionPathId}>Vision model path (GGUF)</label>
                   <HelpPopover
                     title="Vision GGUF"
                     recommended="Use a 4B–8B quantized vision GGUF inside your Models folder"
@@ -445,12 +441,13 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
                       GGUF files automatically.
                     </p>
                   </HelpPopover>
-                </span>
+                </div>
                 <input
-                  value={vision.visionModelPath}
+                  id={visionPathId}
+                  value={draft.visionModelPath ?? ""}
                   placeholder="D:\Models\Qwen3-VL-4B-Instruct-Q4_K_M.gguf"
-                  disabled={vision.skipScreenshotAnalysis}
-                  onChange={(e) => setVision({ ...vision, visionModelPath: e.target.value })}
+                  disabled={Boolean(draft.skipScreenshotAnalysis)}
+                  onChange={(e) => setDraft({ ...draft, visionModelPath: e.target.value })}
                 />
                 {detected && detected.visionModels.length > 0 && (
                   <span className="person-actions" style={{ marginTop: 6 }}>
@@ -460,8 +457,8 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
                         type="button"
                         className="btn btn-small btn-ghost"
                         onClick={() =>
-                          setVision({
-                            ...vision,
+                          setDraft({
+                            ...draft,
                             visionModelPath: path,
                             skipScreenshotAnalysis: false,
                           })
@@ -472,14 +469,12 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
                     ))}
                   </span>
                 )}
-              </label>
+              </div>
               <label className="check">
                 <input
                   type="checkbox"
-                  checked={vision.skipScreenshotAnalysis}
-                  onChange={(e) =>
-                    setVision({ ...vision, skipScreenshotAnalysis: e.target.checked })
-                  }
+                  checked={Boolean(draft.skipScreenshotAnalysis)}
+                  onChange={(e) => setDraft({ ...draft, skipScreenshotAnalysis: e.target.checked })}
                 />
                 Skip screenshot analysis
               </label>

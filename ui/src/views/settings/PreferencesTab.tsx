@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useBackend } from "../../backend-context";
 import { HelpPopover } from "../../components/HelpPopover";
+import { repoState } from "../../cycles";
 import { errorMessage, useCycles } from "../../hooks";
 import type {
   CycleListItem,
+  CycleRepoView,
   CycleTargets,
   PublishMode,
   PublishTargetName,
+  PullResult,
+  RepoKind,
   Settings,
 } from "../../ipc/types";
 import { DEFAULT_PUBLISH_RULE, STATUS_WRITE_BACK_NOTE } from "../../publish";
@@ -14,6 +18,13 @@ import { BrowserExtension } from "../BrowserExtension";
 import { DetectionSettingsView } from "../DetectionSettings";
 import { RuleChoice } from "../RuleChoice";
 import type { EditableTabProps } from "../Settings";
+
+const PULL_TEXT: Record<PullResult["outcome"], string> = {
+  updated: "Updated from the remote.",
+  upToDate: "Already up to date.",
+  noRemote: "This repository has no remote to pull from.",
+  failed: "Could not update.",
+};
 
 function normalizeSettings(s: Settings, fallbackSaveDir: string): Settings {
   const localSaveDir =
@@ -125,10 +136,17 @@ function ProjectPublishRules({ cycle, version }: { cycle: CycleListItem; version
  */
 export function PreferencesTab({ onDirtyChange, registerHandle }: EditableTabProps) {
   const backend = useBackend();
-  const { cycles } = useCycles();
+  const { cycles, repos, reload: reloadCycles } = useCycles();
   const [saved, setSaved] = useState<Settings | null>(null);
   const [draft, setDraft] = useState<Settings | null>(null);
   const [message, setMessage] = useState<{ text: string; kind: "status" | "error" } | null>(null);
+
+  const [repoKind, setRepoKind] = useState<RepoKind>("clone");
+  const [repoWhere, setRepoWhere] = useState("");
+  const [addingRepo, setAddingRepo] = useState(false);
+  const [pullingRepo, setPullingRepo] = useState<string | null>(null);
+  const [pulledInfo, setPulledInfo] = useState<Record<string, string>>({});
+  const [repoError, setRepoError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -185,6 +203,38 @@ export function PreferencesTab({ onDirtyChange, registerHandle }: EditableTabPro
   const setBridge = (patch: Partial<NonNullable<Settings["bridge"]>>) =>
     bridge && set({ bridge: { ...bridge, ...patch } });
   const validCycles = (cycles ?? []).filter((c) => c.valid);
+
+  const handlePullRepo = (repo: CycleRepoView) => {
+    setRepoError(null);
+    setPullingRepo(repo.id);
+    void backend
+      .pullCycleRepo(repo.id)
+      .then((r) => {
+        const detail = r.error ? ` ${r.error}` : "";
+        const warnings = r.warnings.map((w) => ` Warning: ${w}`).join("");
+        setPulledInfo((p) => ({ ...p, [repo.id]: `${PULL_TEXT[r.outcome]}${detail}${warnings}` }));
+        reloadCycles();
+      })
+      .catch((e) => setRepoError(errorMessage(e)))
+      .finally(() => setPullingRepo(null));
+  };
+
+  const handleAddRepo = () => {
+    setRepoError(null);
+    setAddingRepo(true);
+    void backend
+      .addCycleRepo(
+        repoKind === "clone"
+          ? { kind: repoKind, url: repoWhere.trim() }
+          : { kind: repoKind, path: repoWhere.trim() },
+      )
+      .then(() => {
+        setRepoWhere("");
+        reloadCycles();
+      })
+      .catch((e) => setRepoError(errorMessage(e)))
+      .finally(() => setAddingRepo(false));
+  };
 
   return (
     <div className="settings-pane">
@@ -349,7 +399,7 @@ export function PreferencesTab({ onDirtyChange, registerHandle }: EditableTabPro
           {STATUS_WRITE_BACK_NOTE}
         </p>
         {validCycles.length === 0 ? (
-          <p className="empty">No usable projects yet. Create one on the Cycles page.</p>
+          <p className="empty">No usable projects yet. Create one on the Projects page.</p>
         ) : (
           <div className="secret-list">
             {validCycles.map((c) => (
@@ -357,6 +407,114 @@ export function PreferencesTab({ onDirtyChange, registerHandle }: EditableTabPro
             ))}
           </div>
         )}
+      </section>
+
+      <section aria-labelledby="connected-repos-heading">
+        <h3 id="connected-repos-heading" className="sub-head">
+          Connected project repositories
+        </h3>
+        <p className="section-hint">
+          Git repositories linked to your projects. Pull to fetch remote changes or connect an
+          existing folder or clone URL.
+        </p>
+        {repoError && (
+          <p className="error" role="alert">
+            {repoError}
+          </p>
+        )}
+        {repos.length === 0 ? (
+          <p className="empty">No connected project repositories yet.</p>
+        ) : (
+          <ul className="repos" aria-label="Cycle repositories">
+            {repos.map((repo) => (
+              <li key={repo.id}>
+                <article className="panel quiet repo" aria-label={`Repository ${repo.id}`}>
+                  <div className="panel-body">
+                    <h4 className="card-title">
+                      {repo.id}{" "}
+                      <span className="badge badge-recovered">
+                        {repo.kind === "clone" ? "Clone" : "Local"}
+                      </span>
+                      {repo.offline && <span className="badge badge-job-failed">Offline</span>}
+                      {!repo.available && <span className="badge badge-job-failed">Missing</span>}
+                    </h4>
+                    <p className="card-when">{repo.remote ?? repo.path}</p>
+                    <p className="repo-state">
+                      {repoState(repo)}
+                      {repo.offline && " · showing the state of the last successful pull"}
+                    </p>
+                    {repo.lastError && <p className="error">{repo.lastError}</p>}
+                    {pulledInfo[repo.id] && (
+                      <p className="repo-state" role="status">
+                        {pulledInfo[repo.id]}
+                      </p>
+                    )}
+                    {repo.remote !== null && (
+                      <div className="card-actions">
+                        <button
+                          type="button"
+                          className="btn btn-small"
+                          aria-label={`Pull ${repo.id}`}
+                          disabled={pullingRepo === repo.id}
+                          onClick={() => handlePullRepo(repo)}
+                        >
+                          {pullingRepo === repo.id ? "Pulling…" : "Pull"}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </article>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <div className="panel quiet" style={{ marginTop: 12 }}>
+          <div className="panel-body">
+            <form
+              className="form"
+              aria-label="Add project repository"
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleAddRepo();
+              }}
+            >
+              <label>
+                Repository source
+                <select value={repoKind} onChange={(e) => setRepoKind(e.target.value as RepoKind)}>
+                  <option value="clone">Clone from an address</option>
+                  <option value="local">Use an existing folder</option>
+                </select>
+              </label>
+              <label>
+                {repoKind === "clone" ? "Repository address" : "Folder path"}
+                <input
+                  value={repoWhere}
+                  placeholder={
+                    repoKind === "clone"
+                      ? "https://example.org/team/cycles.git"
+                      : "C:\\Users\\me\\cycles"
+                  }
+                  onChange={(e) => setRepoWhere(e.target.value)}
+                />
+                <small>
+                  {repoKind === "clone"
+                    ? "Credentials come from the Git credential manager, never from this address."
+                    : "The folder must exist; its projects will appear on the Projects page."}
+                </small>
+              </label>
+              <div className="actions">
+                <button
+                  className="btn btn-small"
+                  type="submit"
+                  disabled={addingRepo || repoWhere.trim() === ""}
+                >
+                  {addingRepo ? (repoKind === "clone" ? "Cloning…" : "Adding…") : "Add repository"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       </section>
 
       <DetectionSettingsView />
