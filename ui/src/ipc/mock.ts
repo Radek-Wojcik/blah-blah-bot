@@ -356,6 +356,8 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
   if (opts.newDraft) drafts.leaveNewDraft("m5");
   /** The backend each job was started with; a job without an entry has none. */
   const plans = new Map<string, LlmPlan>();
+  /** Pre-schedule state and waiting reason per job so clearing a schedule restores them. */
+  const preSchedule = new Map<string, { state: JobView["state"]; waitingReason: string | null }>();
   /** Meetings the user confirmed sending to the cloud endpoint, with the host confirmed. */
   const confirmed = new Map<string, string>();
   // ----- speakers and voice profiles -----
@@ -854,6 +856,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       const j = jobs.find((x) => x.meetingId === id);
       if (!j) fail("internal", "Job not found");
       if (j.state === "running") fail("job_running", "A running job cannot be cancelled");
+      preSchedule.delete(id);
       jobs = jobs.filter((x) => x.meetingId !== id);
       const at = driven.indexOf(id);
       if (at >= 0) driven.splice(at, 1);
@@ -1094,6 +1097,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     forceProcess: async (meetingId: string) => {
       const m = meetings.find((x) => x.id === meetingId);
       if (!m) fail("not_found", "Meeting not found");
+      preSchedule.delete(meetingId);
       if (!plans.has(meetingId)) {
         plans.set(meetingId, planLlm(meetingId, undefined));
       }
@@ -1149,22 +1153,35 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
             etaSeconds: null,
           },
         ];
-      } else {
+      } else if (scheduledUnixMs !== null) {
+        if (!preSchedule.has(meetingId)) {
+          preSchedule.set(meetingId, {
+            state: existing.state,
+            waitingReason: existing.waitingReason,
+          });
+        }
         patchJob(meetingId, (j) => ({
           ...j,
           scheduledUnixMs,
-          state:
-            scheduledUnixMs !== null
-              ? "waiting"
-              : j.state === "waiting" && j.waitingReason?.startsWith("Scheduled")
-                ? "queued"
-                : j.state,
-          waitingReason:
-            scheduledUnixMs !== null
-              ? `Scheduled for ${new Date(scheduledUnixMs).toISOString()}`
-              : j.waitingReason?.startsWith("Scheduled")
-                ? null
-                : j.waitingReason,
+          state: "waiting",
+          waitingReason: `Scheduled for ${new Date(scheduledUnixMs).toISOString()}`,
+        }));
+      } else {
+        const prev = preSchedule.get(meetingId);
+        preSchedule.delete(meetingId);
+        patchJob(meetingId, (j) => ({
+          ...j,
+          scheduledUnixMs: null,
+          state: prev
+            ? prev.state
+            : j.state === "waiting" && j.waitingReason?.startsWith("Scheduled")
+              ? "queued"
+              : j.state,
+          waitingReason: prev
+            ? prev.waitingReason
+            : j.waitingReason?.startsWith("Scheduled")
+              ? null
+              : j.waitingReason,
         }));
       }
       if (scheduledUnixMs !== null) {

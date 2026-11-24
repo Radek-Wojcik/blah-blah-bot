@@ -166,6 +166,11 @@ describe("mock backend UX Wave 2B IPC commands", () => {
     expect(scheduled.scheduledUnixMs).toBeGreaterThan(0);
     expect(scheduled.state).toBe("waiting");
 
+    const cleared = await b.scheduleJob("m3", null);
+    expect(cleared.scheduledUnixMs).toBeNull();
+    expect(cleared.state).toBe("waiting");
+    expect(cleared.waitingReason).toContain("GPU is busy");
+
     const forced = await b.forceProcess("m3");
     expect(forced.scheduledUnixMs).toBeNull();
     expect(forced.state).toBe("running");
