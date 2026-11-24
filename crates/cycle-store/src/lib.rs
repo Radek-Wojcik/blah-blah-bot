@@ -6,16 +6,22 @@
 //!   Markdown files.
 //! * [`repo`]: the working tree, driven through the `git` command line.
 //! * [`issues`]: open issues with an offline cache.
+//! * [`briefing`]: open tasks by person and open topics, from issues and meeting files.
+//! * [`publish`]: the commit of a meeting folder, built off the index and pushed.
+//! * [`corrections`]: notes written after a meeting was published.
 //! * [`context`](mod@context): `work/context.json`.
 //! * [`draft`], [`mod@render`]: the meeting draft types and the template engine.
 
+pub mod briefing;
 pub mod context;
+pub mod corrections;
 pub mod cycle;
 pub mod draft;
 pub mod error;
 mod fsutil;
 mod git;
 pub mod issues;
+pub mod publish;
 pub mod render;
 pub mod repo;
 pub mod schema;
@@ -23,19 +29,36 @@ pub mod template;
 pub mod time;
 pub mod topics;
 
+pub use briefing::{
+    group_tasks, issue_number, meeting_tasks, merge_tasks, open_topics, GroupKind, MergedTasks,
+    TaskEntry, TaskGroup, TaskItem, TaskOrigin,
+};
 pub use context::{build_context, Context, ContextRequest, DEFAULT_MAX_PREVIOUS_ITEMS};
+pub use corrections::{Correction, CorrectionMarker, CorrectionsFile};
+pub use cycle::repo_path_problem;
 pub use cycle::{
     Cycle, DiscordRef, DiscordTarget, GithubTarget, GlossaryEntry, Languages, NotionTarget,
-    Participant, PublishMode, Report, Targets, DEFAULT_TEMPLATE_NAME,
+    Participant, PublishMode, Report, Targets, DEFAULT_DISCORD_PUBLISH, DEFAULT_GITHUB_PUBLISH,
+    DEFAULT_MEETINGS_PATH, DEFAULT_TEMPLATE_NAME,
 };
 pub use draft::{
-    Certainty, CertaintyLevel, Draft, Item, ItemType, Language, LanguageSetting, ReportMode,
-    Section, Source, Warning, WarningCode,
+    Certainty, CertaintyLevel, Decision, Draft, Item, ItemType, Language, LanguageSetting,
+    ProposedStatus, ReportMode, Section, Source, StatusProposal, Warning, WarningCode,
 };
 pub use error::{CycleError, Result, ValidationIssue};
 pub use git::git_available;
-pub use issues::{fetch_open_issues, IssueCache, IssueList, OpenIssue};
-pub use render::{item_line, neutralise_mentions, render, BuiltinSection, RenderOptions, Variant};
+pub use issues::{
+    apply_fetch, fetch_open_issues, parse_issue_record, IssueCache, IssueLink, IssueList,
+    IssueRecord, ItemMarker, OpenIssue, StatusMarker,
+};
+pub use publish::{
+    add_file, preview_topics, publish_meeting, AddFileRequest, FileAdded, LocalSync, PublishError,
+    PublishErrorKind, PublishFile, PublishRequest, Published, TopicsPreview,
+};
+pub use render::{
+    defuse_discord_mentions, is_discord_id, item_line, item_line_with, neutralise_mentions, render,
+    BuiltinSection, RenderOptions, Variant,
+};
 pub use repo::{
     check_remote_url, CycleEntry, PullOutcome, PullReport, Repo, RepoState, RepoStatus,
 };
@@ -43,6 +66,6 @@ pub use schema::Schema;
 pub use template::{
     create_default_template, list_templates, parse_template, read_template, validate_body,
     validate_template, write_template, Template, TemplateSection, DEFAULT_TEMPLATE_TEXT,
-    PLACEHOLDERS,
+    PLACEHOLDERS, SHORT_TEMPLATE_TEXT,
 };
 pub use topics::{parse_topics, topics_to_yaml, Topic, TopicStatus};

@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "kind": "synthetic",
+  "description": "Hand-made: the microphone test in the Discord voice settings, twelve seconds, with the voice played back; no call.",
+  "poll_ms": 1000,
+  "duration_ms": 300000,
+  "apps": {
+    "discord": {
+      "kind": "conferencing"
+    }
+  },
+  "events": [
+    {
+      "t_ms": 0,
+      "sessions": [
+        {
+          "app": "discord",
+          "pid": 1,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        }
+      ]
+    },
+    {
+      "t_ms": 60000,
+      "sessions": [
+        {
+          "app": "discord",
+          "pid": 1,
+          "flow": "capture",
+          "state": "active",
+          "peak": "high"
+        },
+        {
+          "app": "discord",
+          "pid": 1,
+          "flow": "render",
+          "state": "active",
+          "peak": "low"
+        }
+      ]
+    },
+    {
+      "t_ms": 72000,
+      "sessions": [
+        {
+          "app": "discord",
+          "pid": 1,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        }
+      ]
+    }
+  ],
+  "labels": [
+    {
+      "start_ms": 60000,
+      "end_ms": 72000,
+      "app": "discord",
+      "kind": "no_prompt",
+      "note": "microphone test, twelve seconds"
+    }
+  ],
+  "expect": {
+    "low": {
+      "prompts": 0
+    },
+    "balanced": {
+      "prompts": 1
+    },
+    "high": {
+      "prompts": 1
+    }
+  }
+}

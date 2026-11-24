@@ -1,0 +1,212 @@
+{
+  "how_measured": "Offline replay of session traces through recorder::detect (the rules the application runs), polling at the interval of the preset and applying each trace event at the first poll at or after its time. A trace lists audio sessions (playback and microphone, state, coarse peak none/low/high) and, where labelled, Meet events and the applications being recorded; it holds no audio. Prompts are never answered in a replay, so a call is prompted once and ends after the end-of-call time without a signal. A prompt inside a labelled call of the same application counts for that call (the first one is the prompt, later ones are duplicates); any other prompt is false; a call without a prompt is missed; delay is the time from the start of the call to its prompt.",
+  "name": "stage6-detection-low",
+  "not_yet_measured": [
+    "A working day (8 h) of real use: record one with record_session_trace --minutes 480 and add the anonymized file to the trace folder.",
+    "Real Discord, Teams (new and classic) and Zoom calls: the state of their microphone and playback sessions during a call, a mute and a device check.",
+    "Windows 11."
+  ],
+  "parameters": {
+    "end_of_call_s": 120,
+    "meet_audible_s": 30,
+    "playback_condition": "active_with_sound",
+    "poll_s": 2,
+    "rest_after_not_now_min": 30,
+    "sustain_s": 20
+  },
+  "preset": "low",
+  "real_trace_duration_s": 240,
+  "targets": {
+    "cpu_share_at_most_percent": 0.1,
+    "delay_s_at_most": 32.0,
+    "false_prompts_from_idle_applications": 0,
+    "prompts_per_labelled_call": 1
+  },
+  "totals": {
+    "all_trace_expectations_met": true,
+    "delay": {
+      "count": 5,
+      "max_s": 30.0,
+      "mean_s": 22.0
+    },
+    "duplicate_prompts": 0,
+    "false_prompts": 0,
+    "false_prompts_real_idle_traces": 0,
+    "false_prompts_synthetic_traces": 0,
+    "labelled_calls": 6,
+    "max_delay_within_target_for_calls_that_prompted": true,
+    "missed_calls": 1,
+    "prompts": 5,
+    "traces": 11
+  },
+  "traces": [
+    {
+      "delays_s": [],
+      "description": "Hand-made: a Discord call that starts while the application is being recorded.",
+      "duplicate_prompts": 0,
+      "duration_s": 700,
+      "expectation_met": true,
+      "expected_prompts": 0,
+      "false_prompts": 0,
+      "kind": "synthetic",
+      "labelled_calls": 0,
+      "missed_calls": 0,
+      "prompts": 0,
+      "trace": "already-recording"
+    },
+    {
+      "delays_s": [
+        20.0
+      ],
+      "description": "Hand-made: two Discord calls with 90 seconds between them.",
+      "duplicate_prompts": 0,
+      "duration_s": 1000,
+      "expectation_met": true,
+      "expected_prompts": 1,
+      "false_prompts": 0,
+      "kind": "synthetic",
+      "labelled_calls": 2,
+      "missed_calls": 1,
+      "prompts": 1,
+      "trace": "back-to-back-calls"
+    },
+    {
+      "delays_s": [],
+      "description": "Hand-made: a voice search in a browser tab (microphone for five seconds, spoken answer) while an idle Discord client runs; no call.",
+      "duplicate_prompts": 0,
+      "duration_s": 300,
+      "expectation_met": true,
+      "expected_prompts": 0,
+      "false_prompts": 0,
+      "kind": "synthetic",
+      "labelled_calls": 0,
+      "missed_calls": 0,
+      "prompts": 0,
+      "trace": "browser-voice-search"
+    },
+    {
+      "delays_s": [
+        20.0
+      ],
+      "description": "Hand-made: a Discord voice call of ten minutes after fifteen minutes of an idle client.",
+      "duplicate_prompts": 0,
+      "duration_s": 900,
+      "expectation_met": true,
+      "expected_prompts": 1,
+      "false_prompts": 0,
+      "kind": "synthetic",
+      "labelled_calls": 1,
+      "missed_calls": 0,
+      "prompts": 1,
+      "trace": "discord-call"
+    },
+    {
+      "delays_s": [],
+      "description": "Hand-made: the microphone test in the Discord voice settings, twelve seconds, with the voice played back; no call.",
+      "duplicate_prompts": 0,
+      "duration_s": 300,
+      "expectation_met": true,
+      "expected_prompts": 0,
+      "false_prompts": 0,
+      "kind": "synthetic",
+      "labelled_calls": 0,
+      "missed_calls": 0,
+      "prompts": 0,
+      "trace": "discord-mic-test"
+    },
+    {
+      "delays_s": [],
+      "description": "Idle audio sessions of a Windows 10 machine in normal desktop use, enumeration only",
+      "duplicate_prompts": 0,
+      "duration_s": 240,
+      "expectation_met": true,
+      "expected_prompts": 0,
+      "false_prompts": 0,
+      "kind": "real",
+      "labelled_calls": 0,
+      "missed_calls": 0,
+      "prompts": 0,
+      "trace": "idle-real"
+    },
+    {
+      "delays_s": [
+        30.0
+      ],
+      "description": "Hand-made: a Google Meet call reported by the extension (the browser audio sessions are ignored), then a tab that leaves its call after two seconds.",
+      "duplicate_prompts": 0,
+      "duration_s": 1000,
+      "expectation_met": true,
+      "expected_prompts": 1,
+      "false_prompts": 0,
+      "kind": "synthetic",
+      "labelled_calls": 1,
+      "missed_calls": 0,
+      "prompts": 1,
+      "trace": "meet-call"
+    },
+    {
+      "delays_s": [
+        20.0
+      ],
+      "description": "Hand-made: a Discord call joined with the microphone muted. The application keeps the microphone stream open and the peak stays at none.",
+      "duplicate_prompts": 0,
+      "duration_s": 900,
+      "expectation_met": true,
+      "expected_prompts": 1,
+      "false_prompts": 0,
+      "kind": "synthetic",
+      "labelled_calls": 1,
+      "missed_calls": 0,
+      "prompts": 1,
+      "trace": "muted-call"
+    },
+    {
+      "delays_s": [
+        20.0
+      ],
+      "description": "Hand-made: a call in the new Teams, whose audio sessions belong to a webview child process of ms-teams.exe; the session list already names the application (via keeps the process).",
+      "duplicate_prompts": 0,
+      "duration_s": 1500,
+      "expectation_met": true,
+      "expected_prompts": 1,
+      "false_prompts": 0,
+      "kind": "synthetic",
+      "labelled_calls": 1,
+      "missed_calls": 0,
+      "prompts": 1,
+      "trace": "teams-call-webview-child"
+    },
+    {
+      "delays_s": [],
+      "description": "Hand-made: Teams opens the microphone for six seconds while it starts and checks the devices; no call.",
+      "duplicate_prompts": 0,
+      "duration_s": 300,
+      "expectation_met": true,
+      "expected_prompts": 0,
+      "false_prompts": 0,
+      "kind": "synthetic",
+      "labelled_calls": 0,
+      "missed_calls": 0,
+      "prompts": 0,
+      "trace": "teams-startup-device-check"
+    },
+    {
+      "delays_s": [],
+      "description": "Hand-made: voice typing of the system (microphone for forty seconds) next to idle Discord and Teams clients; no call.",
+      "duplicate_prompts": 0,
+      "duration_s": 300,
+      "expectation_met": true,
+      "expected_prompts": 0,
+      "false_prompts": 0,
+      "kind": "synthetic",
+      "labelled_calls": 0,
+      "missed_calls": 0,
+      "prompts": 0,
+      "trace": "windows-dictation"
+    }
+  ],
+  "traces_are": {
+    "real": "enumeration of the audio sessions of the reference machine while it was idle (no call), anonymized: process ids replaced by their order, programs other than the known conferencing applications named app-N, no device or display names",
+    "synthetic": "made by hand to exercise one situation each (a call, a device check, a microphone test, voice search, dictation, muted call, back-to-back calls, an application that is being recorded, Meet). They are NOT recordings of real calls: the sequences of session states in them are assumptions about how Discord, Teams and a browser behave, which a measurement on real calls has to confirm"
+  }
+}

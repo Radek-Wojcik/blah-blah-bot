@@ -14,7 +14,7 @@ test.describe("recorder widget on the mock backend", () => {
     await expect(sources.getByRole("listitem")).toHaveCount(2);
 
     // Add a source while recording.
-    await page.getByLabel("Add source").selectOption({ label: "Google Chrome" });
+    await page.getByLabel("Add source").selectOption({ label: "Chrome (whole browser)" });
     await expect(sources.getByRole("listitem")).toHaveCount(3);
 
     // Screenshot counter.
@@ -39,6 +39,100 @@ test.describe("recorder widget on the mock backend", () => {
     await page.goto("/?view=widget&backend=mock&state=recording");
     await expect(page.getByText("Recording", { exact: true })).toBeVisible();
     await expect(page.getByLabel("Elapsed time")).toContainText("12:4");
+  });
+});
+
+test.describe("source picker on the mock backend", () => {
+  test("is grouped Microphone, Applications, Browser", async ({ page }) => {
+    await page.goto("/?view=widget&backend=mock");
+    const picker = page.getByRole("group", { name: "Sources" });
+    await expect(picker.getByRole("group")).toHaveCount(3);
+    await expect(picker.getByRole("group").nth(0)).toHaveAccessibleName("Microphone");
+    await expect(picker.getByRole("group").nth(1)).toHaveAccessibleName("Applications");
+    await expect(picker.getByRole("group").nth(2)).toHaveAccessibleName("Browser");
+  });
+
+  test("offers the whole browser as the fallback while the extension offers no tab", async ({
+    page,
+  }) => {
+    await page.goto("/?view=widget&backend=mock");
+    const browser = page.getByRole("group", { name: "Browser" });
+    await expect(browser.getByRole("checkbox")).toHaveCount(1);
+    const whole = browser.getByLabel("Chrome (whole browser)");
+    await expect(whole).not.toBeChecked();
+    await expect(whole).toHaveAccessibleDescription(/extension is not connected/);
+    await expect(browser.getByText("instead of single tabs")).toBeVisible();
+
+    // The fallback records: choose it together with the microphone.
+    await whole.check();
+    await recordFromGate(page);
+    const sources = page.getByRole("list", { name: "Recorded sources" });
+    await expect(sources.getByText("Chrome (whole browser)")).toBeVisible();
+    // Nothing is said about double recording: no tab is chosen.
+    await expect(page.getByRole("status")).toHaveCount(0);
+  });
+
+  test("ticks the captured tabs, groups them and records the ones that stay ticked", async ({
+    page,
+  }) => {
+    await page.goto("/?view=widget&backend=mock&tabs=1");
+    const browser = page.getByRole("group", { name: "Browser" });
+    await expect(browser.getByText("Group 1", { exact: true })).toBeVisible();
+    await expect(browser.getByText("Other tabs", { exact: true })).toBeVisible();
+    const sync = browser.getByLabel("Tab: ORBIT weekly sync (meet.example.org)");
+    const plan = browser.getByLabel("Tab: Thruster plan (docs.example.org)");
+    const sheet = browser.getByLabel("Tab: Budget sheet (sheets.example.org)");
+    await expect(sync).toBeChecked();
+    await expect(plan).toBeChecked();
+    await expect(sheet).toBeChecked();
+    await expect(browser.getByLabel("Chrome (whole browser)")).not.toBeChecked();
+    await expect(browser.getByLabel("Chrome (whole browser)")).toHaveAccessibleDescription(
+      /Choose tabs instead/,
+    );
+
+    await plan.uncheck();
+    await recordFromGate(page);
+    const sources = page.getByRole("list", { name: "Recorded sources" });
+    await expect(sources.getByRole("listitem")).toHaveCount(3);
+    await expect(sources.getByText("Tab: Thruster plan (docs.example.org)")).toHaveCount(0);
+    await expect(sources.getByText("Tab: Budget sheet (sheets.example.org)")).toBeVisible();
+  });
+
+  test("warns when a tab and the whole browser are both chosen", async ({ page }) => {
+    await page.goto("/?view=widget&backend=mock&tabs=1");
+    const warning = page.getByRole("status");
+    await expect(warning).toHaveCount(0);
+    await page.getByLabel("Chrome (whole browser)").check();
+    await expect(warning).toContainText("recorded twice");
+    // Leaving the tabs out removes the warning.
+    for (const name of [
+      "Tab: ORBIT weekly sync (meet.example.org)",
+      "Tab: Thruster plan (docs.example.org)",
+      "Tab: Budget sheet (sheets.example.org)",
+    ]) {
+      await page.getByLabel(name).uncheck();
+    }
+    await expect(warning).toHaveCount(0);
+  });
+
+  test("names a failed tab as the reason for the whole browser", async ({ page }) => {
+    await page.goto("/?view=widget&backend=mock&tabs=failed");
+    await expect(page.getByLabel("Chrome (whole browser)")).toHaveAccessibleDescription(
+      /A tab could not be captured/,
+    );
+  });
+
+  test("adds a captured tab to a recording in progress", async ({ page }) => {
+    await page.goto("/?view=widget&backend=mock&tabs=1&state=recording");
+    const sources = page.getByRole("list", { name: "Recorded sources" });
+    await expect(sources.getByRole("listitem")).toHaveCount(2);
+    await page
+      .getByLabel("Add source")
+      .selectOption({ label: "Tab: Budget sheet (sheets.example.org)" });
+    await expect(sources.getByRole("listitem")).toHaveCount(3);
+    // A tab and the whole browser together are called out while recording as well.
+    await page.getByLabel("Add source").selectOption({ label: "Chrome (whole browser)" });
+    await expect(page.getByRole("status")).toContainText("recorded twice");
   });
 });
 
@@ -566,5 +660,93 @@ test.describe("voice profiles on the mock backend", () => {
     await section.getByLabel(/Keep sample clips for/).fill("14");
     await section.getByRole("button", { name: "Save processing settings" }).click();
     await expect(section.getByRole("status")).toHaveText("Processing settings saved");
+  });
+});
+
+test.describe("browser extension settings on the mock backend", () => {
+  test("pair an extension with a code, see it connect, unpair it", async ({ page }) => {
+    await page.goto("/?view=main&backend=mock&pairms=500");
+    await page.getByRole("button", { name: "Settings" }).click();
+    const section = page.getByRole("region", { name: "Browser extension" });
+    await expect(section.getByTestId("bridge-state")).toHaveText("Listening on 127.0.0.1:17555.");
+    const list = section.getByRole("list", { name: "Paired extensions" });
+    await expect(list.getByRole("listitem")).toHaveCount(1);
+
+    await section.getByRole("button", { name: "Pair extension" }).click();
+    await expect(section.getByTestId("pairing-code")).toHaveText("7K3M-9QXD");
+    await expect(section.getByLabel("Time left")).toContainText(/^[45]:\d\d$/);
+    // The simulated extension enters the code: the code goes away, a second extension appears.
+    await expect(section.getByTestId("pairing-code")).toHaveCount(0);
+    await expect(list.getByRole("listitem")).toHaveCount(2);
+    await expect(list.getByRole("listitem").nth(1)).toContainText("connected");
+
+    await section.getByRole("button", { name: "Unpair Chrome 137" }).click();
+    await expect(list.getByRole("listitem")).toHaveCount(1);
+  });
+
+  test("turning the bridge off stops pairing", async ({ page }) => {
+    await page.goto("/?view=main&backend=mock");
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByLabel("Accept the Chrome extension on this computer").uncheck();
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("status")).toHaveText("Saved");
+    const section = page.getByRole("region", { name: "Browser extension" });
+    await expect(section.getByTestId("bridge-state")).toContainText("Off");
+    await expect(section.getByRole("button", { name: "Pair extension" })).toBeDisabled();
+  });
+});
+
+test.describe("meeting detection on the mock backend", () => {
+  test("a detected call asks once and Record starts a recording of the microphone and the app", async ({
+    page,
+  }) => {
+    await page.goto("/?view=widget&backend=mock&detectms=300");
+    const prompt = page.getByRole("alertdialog", { name: "Record this call?" });
+    await expect(prompt).toBeVisible();
+    await expect(prompt).toContainText("A Discord call seems to have started.");
+    await expect(prompt.getByRole("button", { name: "Never for Discord" })).toBeVisible();
+    await prompt.getByRole("button", { name: "Record" }).click();
+    await expect(prompt).toHaveCount(0);
+    await expect(page.getByText("Recording", { exact: true })).toBeVisible();
+    const sources = page.getByRole("list", { name: "Recorded sources" });
+    await expect(sources.getByRole("listitem")).toHaveCount(2);
+    await expect(sources).toContainText("Microphone (USB headset)");
+    await expect(sources).toContainText("Discord");
+  });
+
+  test("Not now closes the prompt and starts nothing", async ({ page }) => {
+    await page.goto("/?view=widget&backend=mock&detectms=300");
+    const prompt = page.getByRole("alertdialog", { name: "Record this call?" });
+    await prompt.getByRole("button", { name: "Not now" }).click();
+    await expect(prompt).toHaveCount(0);
+    await expect(page.getByText("Standby")).toBeVisible();
+  });
+
+  test("the settings choose the sensitivity and Ask again undoes Never", async ({ page }) => {
+    await page.goto("/?view=main&backend=mock");
+    await page.getByRole("button", { name: "Settings" }).click();
+    const section = page.getByRole("region", { name: "Detection" });
+    await expect(section.getByLabel(/^Balanced/)).toBeChecked();
+    await expect(section.getByTestId("detection-state")).toHaveText("On, watching 7 applications.");
+
+    await section.getByLabel(/^High/).check();
+    await expect(section.getByLabel(/^High/)).toBeChecked();
+
+    const list = section.getByRole("list", { name: "Watched applications" });
+    await expect(list.getByRole("listitem")).toHaveCount(6);
+    await section.getByRole("button", { name: "Never ask for Zoom" }).click();
+    await expect(list).toContainText("switched off with Never");
+    await expect(section.getByTestId("detection-state")).toHaveText("On, watching 6 applications.");
+    await section.getByRole("button", { name: "Ask again for Zoom" }).click();
+    await expect(list).not.toContainText("switched off with Never");
+
+    await section.getByLabel("Add a program").fill("Webex.exe");
+    await section.getByRole("button", { name: "Add", exact: true }).click();
+    await expect(list.getByRole("listitem")).toHaveCount(7);
+    await expect(list).toContainText("webex.exe");
+
+    await section.getByLabel("Ask whether to record when a call starts").uncheck();
+    await expect(section.getByTestId("detection-state")).toHaveText("Off: no prompt is raised.");
+    await expect(section.getByLabel(/^Low/)).toBeDisabled();
   });
 });

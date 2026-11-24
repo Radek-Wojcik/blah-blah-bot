@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "kind": "synthetic",
+  "description": "Hand-made: a Discord call joined with the microphone muted. The application keeps the microphone stream open and the peak stays at none.",
+  "poll_ms": 1000,
+  "duration_ms": 900000,
+  "apps": {
+    "discord": {
+      "kind": "conferencing"
+    }
+  },
+  "events": [
+    {
+      "t_ms": 0,
+      "sessions": [
+        {
+          "app": "discord",
+          "pid": 1,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        }
+      ]
+    },
+    {
+      "t_ms": 30000,
+      "sessions": [
+        {
+          "app": "discord",
+          "pid": 1,
+          "flow": "capture",
+          "state": "active",
+          "peak": "none"
+        },
+        {
+          "app": "discord",
+          "pid": 1,
+          "flow": "render",
+          "state": "active",
+          "peak": "high"
+        }
+      ]
+    },
+    {
+      "t_ms": 200000,
+      "sessions": [
+        {
+          "app": "discord",
+          "pid": 1,
+          "flow": "capture",
+          "state": "active",
+          "peak": "none"
+        },
+        {
+          "app": "discord",
+          "pid": 1,
+          "flow": "render",
+          "state": "active",
+          "peak": "low"
+        }
+      ]
+    },
+    {
+      "t_ms": 600000,
+      "sessions": [
+        {
+          "app": "discord",
+          "pid": 1,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        }
+      ]
+    }
+  ],
+  "labels": [
+    {
+      "start_ms": 30000,
+      "end_ms": 600000,
+      "app": "discord",
+      "kind": "call",
+      "note": "muted call"
+    }
+  ],
+  "expect": {
+    "low": {
+      "prompts": 1
+    },
+    "balanced": {
+      "prompts": 1
+    },
+    "high": {
+      "prompts": 1
+    }
+  }
+}

@@ -18,6 +18,7 @@ use serde::Serialize;
 use crate::capture::{run_track, CaptureContext, SharedState, Source, TrackState, TrackStatus};
 use crate::error::{RecorderError, Result};
 use crate::journal::{Entry, Journal, JOURNAL_FILE_NAME};
+use crate::push::{PushTrack, TabItem, TabSource};
 use crate::source_state::{CaptureStatus, EndReason, SourceMachine, SourcePhase, TransitionError};
 use crate::sysutil::{qpc_now_hns, unix_ms};
 use crate::timeline::{ms_to_samples, segment_samples, SAMPLE_RATE};
@@ -48,10 +49,13 @@ pub enum SourceSpec {
     Application { pid: u32 },
     /// A generated sine tone, for tests and demos.
     Tone { hz: u32 },
+    /// A browser tab streamed by the extension; `stream` is the stream id it chose.
+    BrowserTab { stream: String },
 }
 
 impl SourceSpec {
-    /// Parse an id as used by the UI: `mic:default`, `app:<pid>` or `tone:<hz>`.
+    /// Parse an id as used by the UI: `mic:default`, `app:<pid>`, `tone:<hz>` or
+    /// `tab:<stream id>`.
     pub fn parse(id: &str) -> Result<Self> {
         let bad = || RecorderError::InvalidArgument(format!("unknown source id `{id}`"));
         let (kind, rest) = id.split_once(':').ok_or_else(bad)?;
@@ -63,6 +67,9 @@ impl SourceSpec {
             "tone" => Ok(Self::Tone {
                 hz: rest.parse().map_err(|_| bad())?,
             }),
+            "tab" if valid_stream_id(rest) => Ok(Self::BrowserTab {
+                stream: rest.to_string(),
+            }),
             _ => Err(bad()),
         }
     }
@@ -73,6 +80,7 @@ impl SourceSpec {
             Self::Microphone => "mic:default".into(),
             Self::Application { pid } => format!("app:{pid}"),
             Self::Tone { hz } => format!("tone:{hz}"),
+            Self::BrowserTab { stream } => format!("tab:{stream}"),
         }
     }
 
@@ -81,6 +89,7 @@ impl SourceSpec {
             Self::Microphone => "mic".into(),
             Self::Application { pid } => format!("pid-{pid}"),
             Self::Tone { hz } => format!("tone-{hz}"),
+            Self::BrowserTab { .. } => "tab".into(),
         }
     }
 
@@ -89,13 +98,30 @@ impl SourceSpec {
             Self::Microphone => "mic",
             Self::Application { .. } => "process-loopback",
             Self::Tone { .. } => "tone",
+            Self::BrowserTab { .. } => crate::push::TAB_SOURCE_KIND,
         }
     }
+}
+
+/// Stream ids of tabs: 1 to 64 letters, digits, `_ - . :`.
+fn valid_stream_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b':'))
 }
 
 /// Runs the capture loop of one track on the calling thread until `ctx.stop` is set.
 pub trait CaptureBackend: Send + Sync + 'static {
     fn run(&self, spec: SourceSpec, track: String, ctx: Arc<CaptureContext>, state: SharedState);
+}
+
+fn fail(state: &SharedState, message: &str) {
+    if let Ok(mut s) = state.lock() {
+        s.status = TrackStatus::Failed;
+        s.error = Some(message.to_string());
+    }
 }
 
 /// Real capture through WASAPI.
@@ -106,11 +132,8 @@ impl CaptureBackend for WasapiBackend {
         let source = match spec {
             SourceSpec::Microphone => Source::Mic(None),
             SourceSpec::Application { pid } => Source::Process { pid, tree: true },
-            SourceSpec::Tone { .. } => {
-                if let Ok(mut s) = state.lock() {
-                    s.status = TrackStatus::Failed;
-                    s.error = Some("tone sources need the tone backend".into());
-                }
+            SourceSpec::Tone { .. } | SourceSpec::BrowserTab { .. } => {
+                fail(&state, "this source needs another capture backend");
                 return;
             }
         };
@@ -193,12 +216,106 @@ impl CaptureBackend for ToneBackend {
     fn run(&self, spec: SourceSpec, track: String, ctx: Arc<CaptureContext>, state: SharedState) {
         if let Err(e) = Self::run_inner(&spec, &track, &ctx, &state) {
             tracing::error!(track = %track, error = %e, "tone track failed");
+            fail(&state, &e.to_string());
+        }
+    }
+}
+
+/// Sends browser tabs to a [`TabSource`] and every other source to another backend.
+pub struct RoutingBackend {
+    other: Arc<dyn CaptureBackend>,
+    tabs: Arc<dyn TabSource>,
+}
+
+impl RoutingBackend {
+    pub fn new(other: Arc<dyn CaptureBackend>, tabs: Arc<dyn TabSource>) -> Self {
+        Self { other, tabs }
+    }
+}
+
+impl CaptureBackend for RoutingBackend {
+    fn run(&self, spec: SourceSpec, track: String, ctx: Arc<CaptureContext>, state: SharedState) {
+        match spec {
+            SourceSpec::BrowserTab { stream } => {
+                let result = run_tab_track(self.tabs.as_ref(), &stream, &track, &ctx, &state);
+                self.tabs.detach(&stream);
+                if let Err(e) = result {
+                    tracing::error!(track = %track, error = %e, "tab track failed");
+                    fail(&state, &e.to_string());
+                }
+            }
+            other => self.other.run(other, track, ctx, state),
+        }
+    }
+}
+
+/// Thread body of a tab track: reads the stream's frames until the session stops the track
+/// or the stream ends.
+fn run_tab_track(
+    tabs: &dyn TabSource,
+    stream: &str,
+    track: &str,
+    ctx: &Arc<CaptureContext>,
+    state: &SharedState,
+) -> Result<()> {
+    let mut feed = tabs
+        .attach(stream)
+        .map_err(|e| RecorderError::InvalidArgument(format!("tab stream not available: {e}")))?;
+    let offset_ms = ctx.now_ms();
+    let mut push = PushTrack::start(
+        track,
+        &ctx.out_dir,
+        ctx.journal.clone(),
+        offset_ms,
+        ctx.seg_samples,
+        ctx.drift_correction,
+    )?;
+    if let Ok(mut s) = state.lock() {
+        s.status = TrackStatus::Running;
+        s.offset_ms = offset_ms;
+        s.format = Some("pcm16 mono 16 kHz (pushed)".into());
+    }
+    let mut ended = None;
+    let mut last_publish = std::time::Instant::now();
+    while !ctx.stop.load(Ordering::Relaxed) {
+        match feed.next(Duration::from_millis(100)) {
+            TabItem::Frame(frame) => {
+                ctx.note_peak(&frame.samples);
+                push.push(&frame, ctx.now_ms())?;
+            }
+            TabItem::Idle => {}
+            TabItem::End(reason) => {
+                ended = Some(reason);
+                break;
+            }
+        }
+        if last_publish.elapsed().as_secs() >= 5 {
+            last_publish = std::time::Instant::now();
+            let (stats, stored) = (push.tracker_stats().clone(), push.written());
             if let Ok(mut s) = state.lock() {
-                s.status = TrackStatus::Failed;
-                s.error = Some(e.to_string());
+                s.stats = stats;
+                s.stored_samples = stored;
             }
         }
     }
+    if let Some(reason) = &ended {
+        tracing::info!(track, reason = %reason, "tab stream ended");
+    }
+    let (stats, pushed) = (push.tracker_stats().clone(), push.stats.clone());
+    let total = push.finish(ctx.now_ms())?;
+    tracing::info!(
+        track,
+        frames = pushed.frames,
+        missing_frames = pushed.missing_frames,
+        stale_frames = pushed.stale_frames,
+        "tab track finished"
+    );
+    if let Ok(mut s) = state.lock() {
+        s.stats = stats;
+        s.stored_samples = total;
+        s.status = TrackStatus::Stopped;
+    }
+    Ok(())
 }
 
 struct ActiveSource {

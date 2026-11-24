@@ -862,7 +862,7 @@ mod tests {
 
     #[test]
     fn the_preview_counts_what_would_be_sent_and_confirms_nothing() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("llm");
         let work = dir.path().join("work");
         std::fs::create_dir_all(&work).unwrap();
         std::fs::write(
@@ -919,7 +919,7 @@ mod tests {
 
     #[test]
     fn the_preview_counts_the_items_of_earlier_meetings_that_go_along() {
-        let root = tempfile::tempdir().unwrap();
+        let root = test_tmp::TestDir::new("llm");
         let s = store_with(Some("NOMAD"));
         let cfg = configured();
         let this = root.path().join("m1");
@@ -984,7 +984,7 @@ mod tests {
 
     #[test]
     fn the_preview_without_a_transcript_says_so() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("llm");
         let s = store_with(Some("NOMAD"));
         let p = cloud_preview(&s, &configured(), dir.path(), "m1", &[]).unwrap();
         assert!(!p.transcript_ready);

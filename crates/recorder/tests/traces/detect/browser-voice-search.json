@@ -1,0 +1,120 @@
+{
+  "version": 1,
+  "kind": "synthetic",
+  "description": "Hand-made: a voice search in a browser tab (microphone for five seconds, spoken answer) while an idle Discord client runs; no call.",
+  "poll_ms": 1000,
+  "duration_ms": 300000,
+  "apps": {
+    "browser-1": {
+      "kind": "browser"
+    },
+    "discord": {
+      "kind": "conferencing"
+    }
+  },
+  "events": [
+    {
+      "t_ms": 0,
+      "sessions": [
+        {
+          "app": "discord",
+          "pid": 1,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        },
+        {
+          "app": "browser-1",
+          "pid": 2,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        }
+      ]
+    },
+    {
+      "t_ms": 60000,
+      "sessions": [
+        {
+          "app": "discord",
+          "pid": 1,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        },
+        {
+          "app": "browser-1",
+          "pid": 2,
+          "flow": "capture",
+          "state": "active",
+          "peak": "high"
+        },
+        {
+          "app": "browser-1",
+          "pid": 2,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        }
+      ]
+    },
+    {
+      "t_ms": 65000,
+      "sessions": [
+        {
+          "app": "discord",
+          "pid": 1,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        },
+        {
+          "app": "browser-1",
+          "pid": 2,
+          "flow": "render",
+          "state": "active",
+          "peak": "high"
+        }
+      ]
+    },
+    {
+      "t_ms": 70000,
+      "sessions": [
+        {
+          "app": "discord",
+          "pid": 1,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        },
+        {
+          "app": "browser-1",
+          "pid": 2,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        }
+      ]
+    }
+  ],
+  "labels": [
+    {
+      "start_ms": 60000,
+      "end_ms": 70000,
+      "app": "browser-1",
+      "kind": "no_prompt",
+      "note": "voice search"
+    }
+  ],
+  "expect": {
+    "low": {
+      "prompts": 0
+    },
+    "balanced": {
+      "prompts": 0
+    },
+    "high": {
+      "prompts": 0
+    }
+  }
+}

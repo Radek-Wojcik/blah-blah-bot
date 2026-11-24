@@ -275,6 +275,7 @@ fn cycle_source(speakers: &BTreeSet<String>) -> Arc<dyn CycleSource> {
             topics: vec![],
             issues: vec![],
             closed_issue_ids: vec![],
+            issue_links: vec![],
             previous_dirs: vec![],
         }))
     })

@@ -114,6 +114,13 @@ impl Default for ReportDto {
 pub struct GithubTargetDto {
     pub path: String,
     pub publish: PublishMode,
+    /// Create issues for task items and write back status changes.
+    #[serde(default = "default_true")]
+    pub issues: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -199,6 +206,7 @@ impl From<&Cycle> for CycleDto {
                 github: c.targets.github.as_ref().map(|t| GithubTargetDto {
                     path: t.path.clone(),
                     publish: t.publish,
+                    issues: t.issues,
                 }),
                 discord: c.targets.discord.as_ref().map(|t| DiscordTargetDto {
                     webhook: t.webhook.clone(),
@@ -254,6 +262,7 @@ impl From<CycleDto> for Cycle {
                 github: d.targets.github.map(|t| GithubTarget {
                     path: t.path,
                     publish: t.publish,
+                    issues: t.issues,
                 }),
                 discord: d.targets.discord.map(|t| DiscordTarget {
                     webhook: t.webhook,
@@ -409,6 +418,9 @@ pub struct RepoDto {
     pub path: String,
     pub remote: Option<String>,
     pub kind: RepoKind,
+    /// `owner/name` set for GitHub, when it is not the remote's.
+    pub github_repo: Option<String>,
+    pub github_api: Option<String>,
     /// The folder exists.
     pub available: bool,
     pub state_as_of: Option<String>,
@@ -484,6 +496,8 @@ pub fn repo_dto(setting: &CycleRepoSetting) -> RepoDto {
         path: setting.path.clone(),
         remote: setting.remote.clone(),
         kind: setting.kind,
+        github_repo: setting.github_repo.clone(),
+        github_api: setting.github_api.clone(),
         available,
         state_as_of,
         offline,
@@ -662,6 +676,8 @@ pub fn resolve_target_repo(
         path: path.to_string_lossy().into_owned(),
         remote: None,
         kind: RepoKind::Local,
+        github_repo: None,
+        github_api: None,
     };
     settings.cycle_repos.push(setting.clone());
     Ok(setting)
@@ -818,6 +834,58 @@ pub fn save_cycle<S: ParticipantSync + ?Sized>(
     })
 }
 
+/// Sets the publish rule of one target of a cycle (`targets.<target>.publish` of
+/// `cycle.yaml`) and nothing else, and returns the targets as they are written. The rules
+/// are the ones of ADR 0019: `github` covers the report, the issues and the status
+/// write-back, but no mode lets a status change go out without the user's approval and an
+/// explicit publication; the public-repository check applies to every mode.
+///
+/// A cycle without `targets.github` gets one with the default folder and issues on. Discord
+/// needs a webhook reference, which only the cycle editor can add, so a cycle without a
+/// Discord target is refused (`no_target`). Nothing is written when the rule is already set.
+pub fn set_target_rule(
+    repos: &[CycleRepoSetting],
+    cycle_id: &str,
+    target: &str,
+    mode: PublishMode,
+) -> IpcResult<TargetsDto> {
+    let located = locate_or_err(repos, cycle_id)?;
+    let mut cycle = load_valid(&located)?;
+    let changed = match target {
+        "github" => {
+            let existed = cycle.targets.github.is_some();
+            let github = cycle
+                .targets
+                .github
+                .get_or_insert_with(GithubTarget::default);
+            let changed = !existed || github.publish != mode;
+            github.publish = mode;
+            changed
+        }
+        "discord" => {
+            let discord = cycle.targets.discord.as_mut().ok_or_else(|| {
+                IpcError::new(
+                    "no_target",
+                    "this cycle has no Discord target: add one in the cycle settings first",
+                )
+            })?;
+            let changed = discord.publish != mode;
+            discord.publish = mode;
+            changed
+        }
+        other => {
+            return Err(IpcError::new(
+                "invalid",
+                format!("{other} is not a target with a publishing rule (github or discord)"),
+            ))
+        }
+    };
+    if changed {
+        located.repo.save_cycle(&cycle)?;
+    }
+    Ok(CycleDto::from(&cycle).targets)
+}
+
 /// Brings the stored participants of a cycle in line with its `cycle.yaml`. A cycle that is
 /// not available or not valid is left alone.
 pub fn sync_cycle<S: ParticipantSync + ?Sized>(
@@ -867,14 +935,35 @@ pub fn sync_repo<S: ParticipantSync + ?Sized>(
     notes
 }
 
-/// The `meetings/<cycle>` folders of the registered repositories that exist: where earlier
+/// The folders of earlier meetings of a cycle inside one repository that exist: the folder
+/// the cycle publishes to (`targets.github.path`) and, when that is another one, the default
+/// `meetings/<cycle>` where meetings published before the change are.
+fn meeting_dirs_in(repo: &Repo, cycle: Option<&Cycle>, cycle_id: &str) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let configured = cycle.map(Cycle::meetings_path);
+    for base in configured
+        .into_iter()
+        .chain([cycle_store::DEFAULT_MEETINGS_PATH])
+    {
+        if let Ok(dir) = repo.meetings_dir_at(base, cycle_id) {
+            if dir.is_dir() && !dirs.contains(&dir) {
+                dirs.push(dir);
+            }
+        }
+    }
+    dirs
+}
+
+/// The meeting folders of a cycle in the registered repositories that exist: where earlier
 /// meetings of a cycle are kept besides the application's own drafts.
 pub fn previous_meeting_dirs(repos: &[CycleRepoSetting], cycle_id: &str) -> Vec<PathBuf> {
     repos
         .iter()
         .filter_map(|setting| Repo::open(&setting.path).ok())
-        .filter_map(|repo| repo.meetings_dir(cycle_id).ok())
-        .filter(|dir| dir.is_dir())
+        .flat_map(|repo| {
+            let cycle = repo.load_cycle(cycle_id).ok();
+            meeting_dirs_in(&repo, cycle.as_ref(), cycle_id)
+        })
         .collect()
 }
 
@@ -1149,22 +1238,21 @@ pub fn load_cycle_data(
         }
     }
     let topics = repo.load_topics(cycle_id).map_err(|e| err(&e))?;
-    let issues = repo
+    // The cache of the last fetch of the cycle's issues: open ones, closed numbers and the
+    // issues made from meeting items.
+    let cache = repo
         .issue_cache_path(cycle_id)
-        .map(|p| IssueCache::load(&p).issues)
+        .map(|p| IssueCache::load(&p))
         .unwrap_or_default();
-    let mut previous_dirs = Vec::new();
-    if let Ok(dir) = repo.meetings_dir(cycle_id) {
-        if dir.is_dir() {
-            previous_dirs.push(dir);
-        }
-    }
+    let closed_issue_ids = cache.closed.iter().map(u64::to_string).collect();
+    let previous_dirs = meeting_dirs_in(repo, Some(&cycle), cycle_id);
     Ok(Some(CycleData {
         cycle,
         templates,
         topics,
-        issues,
-        closed_issue_ids: Vec::new(),
+        issues: cache.issues,
+        closed_issue_ids,
+        issue_links: cache.links,
         previous_dirs,
     }))
 }
@@ -1283,6 +1371,8 @@ pub fn add_local_repo(settings: &mut Settings, path: &str) -> IpcResult<CycleRep
         path: canonical,
         remote: None,
         kind: RepoKind::Local,
+        github_repo: None,
+        github_api: None,
     };
     settings.cycle_repos.push(setting.clone());
     Ok(setting)
@@ -1300,6 +1390,8 @@ pub fn register_clone(
         path: dest.to_string_lossy().into_owned(),
         remote: Some(url.to_string()),
         kind: RepoKind::Clone,
+        github_repo: None,
+        github_api: None,
     };
     settings.cycle_repos.push(setting.clone());
     setting
@@ -1384,6 +1476,25 @@ pub fn pull_for_briefing(
     if let Ok(Some(found)) = locate(repos, cycle_id) {
         if found.setting.kind == RepoKind::Clone {
             log_pull(cycle_id, found.repo.pull_rebase());
+        }
+        // The state of the cycle's issues: what was closed since the last meeting is done.
+        if let Some(list) = crate::issue_sync::refresh_cycle_issues(
+            &crate::secrets::Credentials,
+            &found.setting,
+            &found.repo,
+            cycle_id,
+            crate::issue_sync::quick_client(),
+        ) {
+            match list.error {
+                Some(why) => {
+                    tracing::warn!(cycle = cycle_id, %why, "issues not refreshed, using the last known state");
+                }
+                None => tracing::info!(
+                    cycle = cycle_id,
+                    closed = list.closed.len(),
+                    "issues refreshed"
+                ),
+            }
         }
     }
 }
@@ -1539,14 +1650,15 @@ pub(crate) mod tests {
 
     /// A temporary data folder with a default repository and a store.
     pub struct Lab {
-        pub dir: tempfile::TempDir,
         pub settings: Settings,
         pub store: Store,
+        /// Last, so that it is removed after the store let go of its files.
+        pub dir: test_tmp::TestDir,
     }
 
     impl Lab {
         pub fn new() -> Self {
-            let dir = tempfile::tempdir().unwrap();
+            let dir = test_tmp::TestDir::new("cycles");
             let mut settings = Settings::default();
             resolve_target_repo(&mut settings, None, dir.path()).unwrap();
             Self {
@@ -1622,7 +1734,7 @@ pub(crate) mod tests {
 
     #[test]
     fn the_default_repository_is_created_lazily_and_once() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("cycles");
         let mut settings = Settings::default();
         assert!(!dir.path().join(DEFAULT_REPO_DIR).exists());
         let first = resolve_target_repo(&mut settings, None, dir.path()).unwrap();
@@ -1667,6 +1779,86 @@ pub(crate) mod tests {
         // A local repository has no pull state and is never "offline".
         assert_eq!(list[0].state_as_of, None);
         assert!(!list[0].offline);
+    }
+
+    #[test]
+    fn the_rule_of_a_target_is_set_in_cycle_yaml_and_nothing_else_changes() {
+        let lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        let repo = lab.repo();
+        let yaml = |repo: &Repo| {
+            std::fs::read_to_string(repo.cycle_dir("NOMAD").unwrap().join("cycle.yaml")).unwrap()
+        };
+        let before = yaml(&repo);
+        assert!(!before.contains("targets"), "a new cycle has no targets");
+
+        // GitHub: the target is created with the default folder, then only the rule changes.
+        let t = set_target_rule(lab.repos(), "NOMAD", "github", PublishMode::Auto).unwrap();
+        let github = t.github.unwrap();
+        assert_eq!(
+            (github.publish, github.path.as_str(), github.issues),
+            (PublishMode::Auto, "meetings", true)
+        );
+        let written = repo.load_cycle("NOMAD").unwrap();
+        assert_eq!(written.targets.github.unwrap().publish, PublishMode::Auto);
+        let t = set_target_rule(lab.repos(), "NOMAD", "github", PublishMode::Off).unwrap();
+        assert_eq!(t.github.unwrap().publish, PublishMode::Off);
+        // Setting the value it already has writes nothing.
+        let text = yaml(&repo);
+        set_target_rule(lab.repos(), "NOMAD", "github", PublishMode::Off).unwrap();
+        assert_eq!(yaml(&repo), text);
+
+        // Discord needs a target with a webhook reference.
+        let e = set_target_rule(lab.repos(), "NOMAD", "discord", PublishMode::Auto).unwrap_err();
+        assert_eq!(e.code, "no_target");
+        let mut cycle = repo.load_cycle("NOMAD").unwrap();
+        cycle.targets.discord = Some(DiscordTarget {
+            webhook: "cred:discord/nomad".into(),
+            publish: PublishMode::OnApproval,
+            template: Some("short".into()),
+        });
+        repo.save_cycle(&cycle).unwrap();
+        let t = set_target_rule(lab.repos(), "NOMAD", "discord", PublishMode::Auto).unwrap();
+        let discord = t.discord.unwrap();
+        assert_eq!(discord.publish, PublishMode::Auto);
+        assert_eq!(
+            discord.webhook, "cred:discord/nomad",
+            "the reference is kept"
+        );
+        assert_eq!(discord.template.as_deref(), Some("short"));
+
+        // The rest of the file is as it was, and the other target kept its rule.
+        let after = repo.load_cycle("NOMAD").unwrap();
+        assert_eq!(after.targets.github.unwrap().publish, PublishMode::Off);
+        assert_eq!(after.name, "Nomad rover");
+
+        // Other targets and unknown cycles are refused.
+        for bad in ["notion", "", "Github", "slack"] {
+            let e = set_target_rule(lab.repos(), "NOMAD", bad, PublishMode::Auto).unwrap_err();
+            assert_eq!(e.code, "invalid", "{bad:?}");
+        }
+        let e = set_target_rule(lab.repos(), "GHOST", "github", PublishMode::Auto).unwrap_err();
+        assert_eq!(e.code, "not_found");
+    }
+
+    #[test]
+    fn a_cycle_that_cannot_be_used_is_not_rewritten_by_a_rule_change() {
+        let lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        let path = lab.repo().cycle_dir("NOMAD").unwrap().join("cycle.yaml");
+        std::fs::write(
+            &path,
+            "id: NOMAD
+name: Nomad
+targets:
+  github: { path: \"../x\" }
+",
+        )
+        .unwrap();
+        let before = std::fs::read_to_string(&path).unwrap();
+        let e = set_target_rule(lab.repos(), "NOMAD", "github", PublishMode::Auto).unwrap_err();
+        assert_eq!(e.code, "cycle_invalid");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
     }
 
     #[test]
@@ -2300,6 +2492,7 @@ pub(crate) mod tests {
                 assignee: None,
                 url: None,
             }],
+            ..IssueCache::default()
         }
         .save(&repo.issue_cache_path("NOMAD").unwrap())
         .unwrap();
@@ -2325,11 +2518,79 @@ pub(crate) mod tests {
             vec![repo.meetings_dir("NOMAD").unwrap()]
         );
 
+        // A cycle that publishes to another folder reads the meetings from there as well as
+        // from the default one, where the meetings of before the change are.
+        let mut cycle = repo.load_cycle("NOMAD").unwrap();
+        cycle.targets.github = Some(GithubTarget {
+            path: "docs/notes".into(),
+            ..GithubTarget::default()
+        });
+        repo.save_cycle(&cycle).unwrap();
+        let other = repo.meetings_dir_at("docs/notes", "NOMAD").unwrap();
+        assert!(other.ends_with("docs/notes/NOMAD"));
+        assert_eq!(
+            load_cycle_data(lab.repos(), "NOMAD", false)
+                .unwrap()
+                .unwrap()
+                .previous_dirs,
+            vec![repo.meetings_dir("NOMAD").unwrap()],
+            "a folder that does not exist yet is left out"
+        );
+        std::fs::create_dir_all(&other).unwrap();
+        let expected = vec![other, repo.meetings_dir("NOMAD").unwrap()];
+        assert_eq!(
+            load_cycle_data(lab.repos(), "NOMAD", false)
+                .unwrap()
+                .unwrap()
+                .previous_dirs,
+            expected
+        );
+        assert_eq!(previous_meeting_dirs(lab.repos(), "NOMAD"), expected);
+
         // Through the trait, as the runner calls it (a local repository never pulls).
         let repos = lab.settings.cycle_repos.clone();
         let source = RepoCycleSource::new(move || repos.clone());
         assert!(source.load("NOMAD").unwrap().is_some());
         assert!(source.load("GHOST").unwrap().is_none());
+    }
+
+    #[test]
+    fn closed_issues_and_item_links_of_the_cache_reach_the_context_data() {
+        let lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        let repo = lab.repo();
+        // A cache written before closed issues were known loads with nothing closed.
+        std::fs::write(
+            repo.issue_cache_path("NOMAD").unwrap(),
+            r#"{"repo":"o/r","label":"cycle:NOMAD","fetched_unix_ms":1,"issues":[{"number":12,"title":"t"}]}"#,
+        )
+        .unwrap();
+        let data = load_cycle_data(lab.repos(), "NOMAD", false)
+            .unwrap()
+            .unwrap();
+        assert!(data.closed_issue_ids.is_empty() && data.issue_links.is_empty());
+
+        let link = cycle_store::IssueLink {
+            number: 41,
+            meeting: "20261113-140501".into(),
+            item: "i1".into(),
+            open: false,
+        };
+        IssueCache {
+            repo: "o/r".into(),
+            label: "cycle:NOMAD".into(),
+            fetched_unix_ms: Some(2),
+            closed: vec![40, 41],
+            links: vec![link.clone()],
+            ..IssueCache::default()
+        }
+        .save(&repo.issue_cache_path("NOMAD").unwrap())
+        .unwrap();
+        let data = load_cycle_data(lab.repos(), "NOMAD", false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(data.closed_issue_ids, ["40", "41"]);
+        assert_eq!(data.issue_links, vec![link]);
     }
 
     #[test]
@@ -2531,6 +2792,8 @@ pub(crate) mod tests {
             path: dest.to_string_lossy().into_owned(),
             remote: Some(origin.root().to_string_lossy().into_owned()),
             kind: RepoKind::Clone,
+            github_repo: None,
+            github_api: None,
         }];
         (origin, settings, clone)
     }
@@ -2558,7 +2821,7 @@ pub(crate) mod tests {
 
     #[test]
     fn the_briefing_pulls_once_per_attempt_not_every_time_the_queue_looks() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_tmp::TestDir::new("cycles");
         let (origin, repos, clone) = origin_and_clone(tmp.path());
         let ledger = PullLedger::default();
 
@@ -2580,7 +2843,7 @@ pub(crate) mod tests {
 
     #[test]
     fn the_briefing_leaves_a_repository_with_uncommitted_cycle_edits_alone() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_tmp::TestDir::new("cycles");
         let (origin, repos, clone) = origin_and_clone(tmp.path());
         // The user renamed the cycle in the app (never committed); a teammate renamed it too.
         let mut mine = clone.load_cycle("NOMAD").unwrap();
@@ -2612,7 +2875,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_manual_pull_with_uncommitted_edits_says_repo_dirty() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_tmp::TestDir::new("cycles");
         let (origin, repos, clone) = origin_and_clone(tmp.path());
         upstream_adds(&origin, "ROVER");
 
@@ -2637,7 +2900,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_pull_that_breaks_a_cycle_warns_and_the_warning_reaches_the_result() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_tmp::TestDir::new("cycles");
         let (origin, repos, clone) = origin_and_clone(tmp.path());
         std::fs::write(
             origin.cycle_dir("NOMAD").unwrap().join("cycle.yaml"),
@@ -2700,6 +2963,8 @@ pub(crate) mod tests {
             path: "Z:/does/not/exist".into(),
             remote: None,
             kind: RepoKind::Local,
+            github_repo: None,
+            github_api: None,
         }];
         assert!(list_cycles(&settings).is_empty());
         let r = list_repos(&settings);

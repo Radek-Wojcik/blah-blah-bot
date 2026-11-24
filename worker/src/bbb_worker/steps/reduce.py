@@ -1,12 +1,17 @@
 """Reduce step: one draft out of the window results.
 
-Reads `work/extract/windows.json`, `work/context.json` and the transcript (only to resolve the
-output language when `windows.json` does not say), writes `work/draft.json` (schema
+Reads `work/extract/windows.json`, `work/context.json` and the transcript (for the names of the
+speakers that have one, which the summary prompt keeps, and to resolve the output language when
+`windows.json` does not say), writes `work/draft.json` (schema
 `meeting`) or, when that file already holds user edits, `work/draft.new.json`.
 
 In order: deduplicate across windows, validate assignees, due dates and links against the
 context, number the items by time, write the hierarchical summary, and choose the sections.
 A failed summary or section call never fails the step; it falls back and says so.
+
+The status changes the model proposed for open issues and topics become `status_proposals`:
+only targets that exist in the context are kept, one proposal per target (see
+`build_status_proposals`), always with the decision `proposed`. Nothing here ever approves one.
 """
 
 from __future__ import annotations
@@ -15,11 +20,12 @@ import re
 from collections.abc import Callable, Sequence
 from contextlib import nullcontext
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Any, TypeVar
 
 from .. import dedup, draft, lang, llm_client, prompts, protocol, schema
 from ..manifest import Manifest
-from ..windows import format_clock
+from ..windows import format_clock, named_people
 from . import extract, read_json
 
 STEP = "reduce"
@@ -27,6 +33,7 @@ SUMMARY_TOKENS = 1024
 SECTIONS_TOKENS = 4096
 FIRST_SENTENCE = re.compile(r"^.*?[.!?](?=\s|$)", re.DOTALL)
 ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+ISSUE_NUMBER = re.compile(r"\d+")
 
 SUMMARY_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -145,6 +152,85 @@ def number_items(items: list[dict[str, Any]]) -> None:
         it["id"] = f"i{n:03d}"
 
 
+# Status proposals -----------------------------------------------------------------------
+
+
+def status_targets(context: dict[str, Any]) -> dict[str, str]:
+    """Targets a status change may name, by lower-case key: the open issues, the issues linked
+    to items of earlier meetings, and the open topics of the cycle."""
+    targets: dict[str, str] = {}
+    ids = [i["id"] for i in context["open_issues"]]
+    ids += [p["issue"] for p in context["previous_items"] if p.get("issue")]
+    ids += [t["id"] for t in context["open_topics"]]
+    for target in ids:
+        targets.setdefault(target.casefold(), target)
+    return targets
+
+
+def resolve_target(value: str, targets: dict[str, str]) -> str | None:
+    """The canonical id for what the model wrote (`#12`, `12` and a topic id in any case)."""
+    wanted = value.strip()
+    if ISSUE_NUMBER.fullmatch(wanted):
+        wanted = f"#{wanted}"
+    return targets.get(wanted.casefold())
+
+
+def build_status_proposals(
+    results: list[dict[str, Any]], context: dict[str, Any]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Proposals of the draft and the warnings about the ones whose quote is unverified.
+
+    A change whose target is not an open issue, a linked issue or an open topic of the
+    context is dropped, so the model cannot invent targets. Several changes of one target
+    become one: the latest in the meeting wins, but a change with a verified quote beats one
+    without. The proposals are ordered by time, numbered `s1`, `s2`, ... and never approved.
+    A window result written before status changes existed has none."""
+    targets = status_targets(context)
+    best: dict[str, dict[str, Any]] = {}
+    for window in results:
+        for change in window.get("status_changes", []):
+            target = resolve_target(change["target"], targets)
+            if target is None:
+                continue
+            rank = (change["source"]["verified"], change["source"]["t_start_ms"])
+            current = best.get(target)
+            if current is None or rank >= current["rank"]:
+                best[target] = {"rank": rank, "target": target, "change": change}
+    chosen = sorted(
+        best.values(),
+        key=lambda c: (c["change"]["source"]["t_start_ms"], c["target"]),
+    )
+    proposals: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    for n, entry in enumerate(chosen, 1):
+        change = entry["change"]
+        source = dict(change["source"])
+        proposals.append(
+            {
+                "id": f"s{n}",
+                "target": entry["target"],
+                "status": change["status"],
+                "reason": change["reason"],
+                "comment": None,
+                "source": source,
+                "decision": "proposed",
+                "edited": False,
+            }
+        )
+        if not source["verified"]:
+            warnings.append(
+                {
+                    "code": "quote_unverified",
+                    "message": f"The quote of the status change of {entry['target']} was not found "
+                    f"in the transcript (match {source['match']:.2f}, "
+                    f"at {format_clock(source['t_start_ms'])})",
+                    "t_start_ms": source["t_start_ms"],
+                    "t_end_ms": source["t_end_ms"],
+                }
+            )
+    return proposals, warnings
+
+
 # Summary --------------------------------------------------------------------------------
 
 
@@ -159,12 +245,16 @@ def fallback_summary(summaries: list[str]) -> str:
 
 
 def summarize_once(
-    backend: llm_client.Backend, parts: list[str], language: str, final: bool
+    backend: llm_client.Backend,
+    parts: list[str],
+    language: str,
+    final: bool,
+    people: Sequence[str] = (),
 ) -> str:
     done = llm_client.complete_json(
         backend,
         system=prompts.summary_system(language, final),
-        user=prompts.summary_user(parts),
+        user=prompts.summary_user(parts, people),
         schema=SUMMARY_SCHEMA,
         name="summary",
         max_tokens=SUMMARY_TOKENS,
@@ -177,19 +267,21 @@ def summarize(
     summaries: list[str],
     language: str,
     on_call: Callable[[], None] = lambda: None,
+    people: Sequence[str] = (),
 ) -> str:
-    """Window summaries to one meeting summary; many windows are reduced in groups first."""
+    """Window summaries to one meeting summary; many windows are reduced in groups first.
+    `people` are the names of the speakers that have one; the model is told to keep them."""
     level = [s for s in summaries if s.strip()]
     if len(level) <= 1:
         return level[0] if level else ""
     assert backend is not None
     while len(level) > prompts.SUMMARY_MAX_DIRECT:
         level = [
-            summarize_once(backend, group, language, final=False)
+            summarize_once(backend, group, language, final=False, people=people)
             for group in chunks(level, prompts.SUMMARY_GROUP)
         ]
         on_call()
-    result = summarize_once(backend, level, language, final=True)
+    result = summarize_once(backend, level, language, final=True, people=people)
     on_call()
     return result
 
@@ -322,6 +414,7 @@ def build_draft(
     backend: llm_client.Backend | None,
     windows_doc: dict[str, Any],
     on_call: Callable[[], None],
+    people: Sequence[str] = (),
 ) -> tuple[dict[str, Any], str]:
     results = windows_doc["windows"]
     raw_items = [it for w in results for it in w["items"]]
@@ -331,7 +424,7 @@ def build_draft(
     number_items(items)
 
     try:
-        summary = summarize(backend, [w["summary"] for w in results], language, on_call)
+        summary = summarize(backend, [w["summary"] for w in results], language, on_call, people)
     except llm_client.LlmError as e:
         summary = fallback_summary([w["summary"] for w in results])
         warnings.append(
@@ -339,7 +432,8 @@ def build_draft(
         )
     sections, note = layout(backend, items, context, language)
     final = [draft_item(it) for it in items]
-    warnings = [*unverified_warnings(items), *warnings]
+    proposals, proposal_warnings = build_status_proposals(results, context)
+    warnings = [*unverified_warnings(items), *proposal_warnings, *warnings]
     doc = {
         "version": 1,
         "meeting_id": manifest.meeting_id,
@@ -354,6 +448,12 @@ def build_draft(
         "items": final,
         "warnings": warnings,
     }
+    if proposals:
+        # Left out while empty: a draft without proposals is byte for byte what Stage 4 wrote.
+        # Placed before the warnings, the order of the draft type of the application.
+        doc = {**{k: v for k, v in doc.items() if k != "warnings"}}
+        doc["status_proposals"] = proposals
+        doc["warnings"] = warnings
     return doc, note
 
 
@@ -365,6 +465,14 @@ def output_language(
     transcript = extract.read_transcript(manifest.work_dir)
     texts = (s["text"] for s in transcript["segments"])
     return lang.resolve(context["output_language"], transcript["language"], texts)
+
+
+def speaker_names(work: Path) -> list[str]:
+    """Names of the speakers that have one, from the transcript the extraction read (the
+    named one when the application wrote it). None when there is no transcript file."""
+    if not (work / "transcript.named.json").exists() and not (work / "transcript.json").exists():
+        return []
+    return named_people(extract.read_transcript(work))
 
 
 def run(manifest: Manifest) -> None:
@@ -390,9 +498,12 @@ def run(manifest: Manifest) -> None:
     protocol.progress(STEP, 0.05, f"{len(windows_doc['windows'])} windows")
     backend_cm = llm_client.open_backend(cfg) if needs_model else nullcontext(None)
     with backend_cm as backend:
-        doc, note = build_draft(manifest, context, language, backend, windows_doc, on_call)
+        people = speaker_names(work) if backend is not None else []
+        doc, note = build_draft(manifest, context, language, backend, windows_doc, on_call, people)
     target = draft.write_draft(work, doc)
     if target.name == draft.DRAFT_NEW:
         protocol.progress(STEP, 1.0, f"{draft.DRAFT} has edits; wrote {draft.DRAFT_NEW} instead")
     else:
-        protocol.progress(STEP, 1.0, f"{len(doc['items'])} items, {note}")
+        proposed = len(doc.get("status_proposals", []))
+        extra = f", {proposed} status proposals" if proposed else ""
+        protocol.progress(STEP, 1.0, f"{len(doc['items'])} items, {note}{extra}")

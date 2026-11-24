@@ -4,18 +4,25 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use recorder::screenshot::Frame;
-use recorder::session::{CaptureBackend, ToneBackend, WasapiBackend};
+use recorder::session::{CaptureBackend, RoutingBackend, ToneBackend, WasapiBackend};
 use tauri::{AppHandle, Manager};
 
+use crate::briefing::{BriefingSource, PublishingSource};
+use crate::browser::{AppHost, Browser};
 use crate::cycles::ParticipantSync;
+use crate::detection::Detection;
 use crate::ipc::{IpcError, IpcResult};
+use crate::overlay::Preview;
 use crate::processing::Processing;
+use crate::publishing::{AppEnv, Publishing};
 use crate::recording::Recorder;
 use crate::settings::{CycleRepoSetting, Settings};
 
 /// A desktop capture waiting for the user to choose a region, with the moment it was taken.
 pub struct PendingShot {
-    pub frame: Frame,
+    pub frame: Arc<Frame>,
+    /// The PNG shown in the overlay, encoded while the overlay opens.
+    pub preview: Arc<Preview>,
     pub offset_ms: f64,
 }
 
@@ -27,7 +34,13 @@ pub struct AppState {
     default_recordings: PathBuf,
     pub recorder: Recorder,
     processing: Arc<Processing>,
+    publishing: Arc<Publishing>,
     pub pending_shot: Mutex<Option<PendingShot>>,
+    browser: Arc<Browser>,
+    browser_host: Arc<AppHost>,
+    detection: Arc<Detection>,
+    briefing: Arc<dyn BriefingSource>,
+    demo: bool,
 }
 
 /// Keeps the stored participants of a cycle in step with `cycle.yaml`, locking the database
@@ -69,14 +82,22 @@ impl AppState {
         // `BBB_DEMO=1` swaps real audio capture for generated tones: used by the demo mode,
         // the UI screenshots script and tests of the application itself.
         let demo = std::env::var_os("BBB_DEMO").is_some();
-        let backend: Arc<dyn CaptureBackend> = if demo {
+        let devices: Arc<dyn CaptureBackend> = if demo {
             Arc::new(ToneBackend)
         } else {
             Arc::new(WasapiBackend)
         };
-        let settings = Arc::new(Mutex::new(Settings::load(&settings_path)));
+        let loaded = Settings::load(&settings_path);
+        // Browser tabs come from the bridge, in demo mode as well.
+        let browser_host = Arc::new(AppHost::default());
+        let browser = Browser::new(&loaded.bridge, browser_host.clone());
+        let backend: Arc<dyn CaptureBackend> =
+            Arc::new(RoutingBackend::new(devices, browser.tab_source()));
+        let detection = Detection::new(&loaded.detection);
+        let settings = Arc::new(Mutex::new(loaded));
         let root_app = app.clone();
         let repos_settings = settings.clone();
+        let briefing_settings = settings.clone();
         let processing = Processing::new(
             app.clone(),
             store.clone(),
@@ -95,16 +116,85 @@ impl AppState {
                     .unwrap_or_default()
             },
         );
+        let env_settings = settings.clone();
+        let env_app = app.clone();
+        let publishing = Publishing::new(
+            store.clone(),
+            Arc::new(AppEnv::new(
+                move || {
+                    env_settings
+                        .lock()
+                        .map(|s| s.cycle_repos.clone())
+                        .unwrap_or_default()
+                },
+                move || {
+                    env_app
+                        .state::<AppState>()
+                        .recordings_root()
+                        .unwrap_or_default()
+                },
+                Arc::new(crate::secrets::Credentials),
+            )),
+        );
         Ok(Self {
             recorder: Recorder::new(store.clone(), backend, demo),
             processing,
+            publishing,
             store,
             settings,
             settings_path,
             data_dir,
             default_recordings,
             pending_shot: Mutex::new(None),
+            browser,
+            browser_host,
+            detection,
+            // The tasks come from the issues Stage 5 reads back from GitHub; a repository that
+            // is not linked or whose issues were never read falls back to the cycle files.
+            briefing: Arc::new(PublishingSource::new(
+                move || {
+                    briefing_settings
+                        .lock()
+                        .map(|s| s.cycle_repos.clone())
+                        .unwrap_or_default()
+                },
+                Arc::new(crate::secrets::Credentials),
+                crate::issue_sync::quick_client,
+            )),
+            demo,
         })
+    }
+
+    /// Where the briefing gets its tasks and topics from.
+    pub fn briefing(&self) -> &Arc<dyn BriefingSource> {
+        &self.briefing
+    }
+
+    /// The bridge to the Chrome extension.
+    pub fn browser(&self) -> &Arc<Browser> {
+        &self.browser
+    }
+
+    /// Start the bridge once the application is set up.
+    pub fn start_browser(&self, app: AppHandle) {
+        self.browser_host.bind(app);
+        match self.settings() {
+            Ok(s) => self.browser.apply(&s.bridge),
+            Err(e) => tracing::error!(error = %e, "bridge not started"),
+        }
+    }
+
+    /// Meeting detection.
+    pub fn detection(&self) -> &Arc<Detection> {
+        &self.detection
+    }
+
+    /// Start watching for calls once the application is set up (not in demo mode, which has
+    /// no real audio sessions).
+    pub fn start_detection(&self, app: AppHandle) {
+        if !self.demo {
+            self.detection.start(app);
+        }
     }
 
     /// Run `f` with the store locked.
@@ -142,6 +232,10 @@ impl AppState {
         &self.processing
     }
 
+    pub fn publishing(&self) -> &Arc<Publishing> {
+        &self.publishing
+    }
+
     pub fn mark_interrupted(&self) -> IpcResult<Vec<String>> {
         self.with_store(|s| s.mark_interrupted_recoverable())
     }
@@ -156,12 +250,18 @@ impl AppState {
     /// Save settings from the settings screen. The repository list and the last report are
     /// kept as they are: only the cycle commands change them.
     pub fn save_settings(&self, new: Settings) -> IpcResult<()> {
-        self.update_settings(|s| {
+        new.bridge
+            .validate()
+            .map_err(|m| IpcError::new("invalid", m))?;
+        let bridge = self.update_settings(|s| {
             new.check_new_locations(s)
                 .map_err(|p| IpcError::new("invalid", p.message))?;
             *s = new.keeping_managed_from(s);
-            Ok(())
-        })
+            Ok(s.bridge.clone())
+        })?;
+        // Outside the settings lock: the bridge may report back into the settings.
+        self.browser.apply(&bridge);
+        Ok(())
     }
 
     /// Change the settings under the lock and save them. Nothing is stored when `f` fails.

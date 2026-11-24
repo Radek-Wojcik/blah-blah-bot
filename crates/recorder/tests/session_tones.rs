@@ -15,23 +15,15 @@ use recorder::session::{Session, SessionError, SourceSpec, ToneBackend};
 use recorder::timeline::SAMPLE_RATE;
 use recorder::wav::read_samples;
 
-struct TempDir(PathBuf);
+/// A temporary folder under `target/test-tmp`, removed when dropped.
+struct TempDir(test_tmp::TestDir);
 
 impl TempDir {
     fn new(label: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!("bbb-it-{label}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        Self(dir)
+        Self(test_tmp::TestDir::new(&format!("recorder-it-{label}")))
     }
     fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        self.0.path()
     }
 }
 
@@ -213,6 +205,94 @@ fn snapshot_reports_levels_while_recording() {
         snap.sources[0].level
     );
     s.stop().unwrap();
+}
+
+#[test]
+fn a_browser_tab_is_recorded_next_to_a_tone() {
+    use recorder::journal::DiscKind;
+    use recorder::push::ToneTabSource;
+    use recorder::session::RoutingBackend;
+
+    let dir = TempDir::new("tab");
+    let tabs = Arc::new(ToneTabSource {
+        hz: 660,
+        end_after: None,
+    });
+    let backend = Arc::new(RoutingBackend::new(Arc::new(ToneBackend), tabs));
+    let mut s = Session::start(dir.path(), 1, backend).unwrap();
+    s.add_source(SourceSpec::Tone { hz: 440 }, "Mic").unwrap();
+    let track = s
+        .add_source(SourceSpec::parse("tab:t812-1").unwrap(), "Tab: example.org")
+        .unwrap();
+    assert_eq!(track, "tab");
+    ms(1_500);
+    let snap = s.snapshot();
+    let tab = snap.sources.iter().find(|x| x.id == "tab:t812-1").unwrap();
+    assert_eq!(tab.phase, "recording");
+    let duration = s.stop().unwrap();
+
+    let m = recover(dir.path()).unwrap();
+    let t = m.tracks.iter().find(|t| t.name == "tab").unwrap();
+    assert_eq!(t.source, "browser-tab");
+    assert!(t.ended && t.problems.is_empty(), "{:?}", t.problems);
+    let track_ms = t.total_samples as f64 * 1000.0 / f64::from(SAMPLE_RATE);
+    assert!(
+        (track_ms - (duration - t.offset_ms)).abs() < 150.0,
+        "{track_ms} ms vs session {duration} ms"
+    );
+    let est = estimate_hz(&track_samples(dir.path(), t));
+    assert!((est - 660.0).abs() < 660.0 * 0.03, "{est} Hz");
+    let journal =
+        recorder::journal::replay_file(&dir.path().join(recorder::journal::JOURNAL_FILE_NAME))
+            .unwrap();
+    assert!(!journal.tracks["tab"]
+        .discontinuities
+        .iter()
+        .any(|d| d.kind == DiscKind::StreamGap));
+}
+
+#[test]
+fn a_closed_tab_ends_its_track_only() {
+    use recorder::push::ToneTabSource;
+    use recorder::session::RoutingBackend;
+
+    let dir = TempDir::new("tab-closed");
+    let tabs = Arc::new(ToneTabSource {
+        hz: 660,
+        end_after: Some(Duration::from_millis(300)),
+    });
+    let backend = Arc::new(RoutingBackend::new(Arc::new(ToneBackend), tabs));
+    let mut s = Session::start(dir.path(), 1, backend).unwrap();
+    s.add_source(SourceSpec::Tone { hz: 440 }, "Mic").unwrap();
+    s.add_source(SourceSpec::parse("tab:s1").unwrap(), "Tab")
+        .unwrap();
+    ms(900);
+    let snap = s.snapshot();
+    let tab = snap.sources.iter().find(|x| x.id == "tab:s1").unwrap();
+    assert_eq!(tab.phase, "ended");
+    assert_eq!(tab.detail.as_deref(), Some("Source closed"));
+    let mic = snap.sources.iter().find(|x| x.id == "tone:440").unwrap();
+    assert_eq!(mic.phase, "recording");
+    // The same tab can stream again as a new track.
+    assert_eq!(
+        s.add_source(SourceSpec::parse("tab:s1").unwrap(), "Tab")
+            .unwrap(),
+        "tab-2"
+    );
+    s.stop().unwrap();
+}
+
+#[test]
+fn tab_ids_are_parsed_strictly() {
+    assert_eq!(
+        SourceSpec::parse("tab:t812-1").unwrap(),
+        SourceSpec::BrowserTab {
+            stream: "t812-1".into()
+        }
+    );
+    assert_eq!(SourceSpec::parse("tab:t812-1").unwrap().id(), "tab:t812-1");
+    assert!(SourceSpec::parse("tab:").is_err());
+    assert!(SourceSpec::parse("tab:../x").is_err());
 }
 
 /// Helper run in a child process by `killed_process_loses_at_most_one_segment`.

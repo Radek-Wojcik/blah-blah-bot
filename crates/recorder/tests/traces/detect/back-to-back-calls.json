@@ -1,0 +1,115 @@
+{
+  "version": 1,
+  "kind": "synthetic",
+  "description": "Hand-made: two Discord calls with 90 seconds between them.",
+  "poll_ms": 1000,
+  "duration_ms": 1000000,
+  "apps": {
+    "discord": {
+      "kind": "conferencing"
+    }
+  },
+  "events": [
+    {
+      "t_ms": 0,
+      "sessions": [
+        {
+          "app": "discord",
+          "pid": 1,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        }
+      ]
+    },
+    {
+      "t_ms": 60000,
+      "sessions": [
+        {
+          "app": "discord",
+          "pid": 1,
+          "flow": "capture",
+          "state": "active",
+          "peak": "low"
+        },
+        {
+          "app": "discord",
+          "pid": 1,
+          "flow": "render",
+          "state": "active",
+          "peak": "high"
+        }
+      ]
+    },
+    {
+      "t_ms": 400000,
+      "sessions": [
+        {
+          "app": "discord",
+          "pid": 1,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        }
+      ]
+    },
+    {
+      "t_ms": 490000,
+      "sessions": [
+        {
+          "app": "discord",
+          "pid": 1,
+          "flow": "capture",
+          "state": "active",
+          "peak": "low"
+        },
+        {
+          "app": "discord",
+          "pid": 1,
+          "flow": "render",
+          "state": "active",
+          "peak": "high"
+        }
+      ]
+    },
+    {
+      "t_ms": 900000,
+      "sessions": [
+        {
+          "app": "discord",
+          "pid": 1,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        }
+      ]
+    }
+  ],
+  "labels": [
+    {
+      "start_ms": 60000,
+      "end_ms": 400000,
+      "app": "discord",
+      "kind": "call",
+      "note": "first call"
+    },
+    {
+      "start_ms": 490000,
+      "end_ms": 900000,
+      "app": "discord",
+      "kind": "call",
+      "note": "second call, 90 s after the first"
+    }
+  ],
+  "expect": {
+    "low": {
+      "prompts": 1
+    },
+    "balanced": {
+      "prompts": 2
+    },
+    "high": {
+      "prompts": 2
+    }
+  }
+}

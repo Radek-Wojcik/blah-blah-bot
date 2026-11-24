@@ -250,6 +250,20 @@ impl Tracker {
         plan
     }
 
+    /// Frames a pushed stream lost on the way (missing sequence numbers): `frames` samples
+    /// of silence keep the following audio in place.
+    pub fn on_missing(&mut self, frames: u64) -> Plan {
+        let mut plan = Plan::default();
+        if frames > 0 {
+            plan.fill = frames;
+            plan.events.push((DiscKind::StreamGap, frames));
+            self.stats.silence_fill_events += 1;
+            self.stats.silence_filled_samples += frames;
+            self.written += frames;
+        }
+        plan
+    }
+
     /// Silence needed to bring the track up to `now_ms` when recording stops.
     pub fn on_stop(&mut self, now_ms: f64) -> Plan {
         let mut plan = Plan::default();

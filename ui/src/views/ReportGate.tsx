@@ -106,6 +106,17 @@ export function ReportGate(props: {
     });
   };
 
+  // The briefing opens in the main window; the gate stays as it is.
+  const briefingLink = (id: string) => (
+    <button
+      className="link-btn"
+      type="button"
+      onClick={() => backend.openBriefing(id).catch((e) => setError(errorMessage(e)))}
+    >
+      Open the briefing of {id}
+    </button>
+  );
+
   const createCycle = useCallback(() => {
     setError(null);
     backend
@@ -140,6 +151,7 @@ export function ReportGate(props: {
           <p className="modal-text">
             The same cycle and report mode as the last recording. Choose Change to pick others.
           </p>
+          {briefingLink(usable.cycleId)}
         </>
       )}
 
@@ -174,6 +186,7 @@ export function ReportGate(props: {
           )}
           {!noCycles && form.cycleId !== "" && (
             <>
+              {briefingLink(form.cycleId)}
               <label>
                 Report mode
                 <select

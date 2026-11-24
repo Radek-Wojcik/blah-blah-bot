@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use recorder::recovery::{recover, RecoveredMeeting};
 use recorder::session::{CaptureBackend, Session, SessionError, SessionSnapshot, SourceSpec};
+use recorder::source_list::AppKind;
 use store::{Meeting, MeetingState, ReportSettings, Screenshot, Segment, Store, Track};
 
 use crate::ipc::{IpcError, IpcResult};
@@ -143,6 +144,8 @@ fn to_dto(meeting_id: &str, screenshots: u32, snap: SessionSnapshot) -> Recordin
             .map(|s| ActiveSource {
                 kind: if s.id.starts_with("mic:") {
                     SourceKind::Microphone
+                } else if s.id.starts_with("tab:") {
+                    SourceKind::BrowserTab
                 } else {
                     SourceKind::Application
                 },
@@ -186,58 +189,38 @@ impl Recorder {
         Ok(f(&g)?)
     }
 
-    /// Sources that can be recorded now.
+    /// Sources that can be recorded now: the microphone, the applications with an audio
+    /// session and Chrome as a whole. The tabs of the extension are added by the caller.
     pub fn list_sources(&self) -> IpcResult<Vec<SourceInfo>> {
         if self.demo {
-            let tone = |hz: u32, label: &str, active| SourceInfo {
-                id: format!("tone:{hz}"),
-                kind: if hz == 220 {
-                    SourceKind::Microphone
-                } else {
-                    SourceKind::Application
-                },
-                label: label.into(),
-                active,
+            let tone = |hz: u32, label: &str, kind, active| {
+                SourceInfo::new(format!("tone:{hz}"), kind, label.into(), active)
             };
             return Ok(vec![
-                tone(220, "Microphone (demo tone)", true),
-                tone(440, "Discord (demo tone)", true),
-                tone(660, "Teams (demo tone)", false),
-                tone(880, "Chrome (demo tone)", true),
+                tone(220, "Microphone (demo tone)", SourceKind::Microphone, true),
+                tone(440, "Discord (demo tone)", SourceKind::Application, true),
+                tone(660, "Teams (demo tone)", SourceKind::Application, false),
+                tone(880, "Chrome (demo tone)", SourceKind::Browser, true),
             ]);
         }
-        let mut out = vec![SourceInfo {
-            id: "mic:default".into(),
-            kind: SourceKind::Microphone,
-            label: "Microphone (default)".into(),
-            active: true,
-        }];
-        let sessions =
-            recorder::sessions::list_sessions().map_err(|e| IpcError::new("io", e.to_string()))?;
-        let own = std::process::id();
-        let mut seen: Vec<String> = Vec::new();
-        for s in &sessions {
-            if s.pid == own || s.process.is_empty() || seen.contains(&s.process) {
-                continue;
-            }
-            seen.push(s.process.clone());
-            // Record the topmost process of the application so helper processes are included.
-            let group: Vec<_> = sessions.iter().filter(|x| x.process == s.process).collect();
-            let top = group
-                .iter()
-                .find(|x| !group.iter().any(|y| Some(y.pid) == x.parent_pid))
-                .unwrap_or(&group[0]);
-            let label = if s.display_name.trim().is_empty() {
-                s.process.trim_end_matches(".exe").to_string()
-            } else {
-                s.display_name.clone()
-            };
-            out.push(SourceInfo {
-                id: format!("app:{}", top.pid),
-                kind: SourceKind::Application,
-                label,
-                active: group.iter().any(|x| x.state.eq_ignore_ascii_case("active")),
-            });
+        let mut out = vec![SourceInfo::new(
+            "mic:default".into(),
+            SourceKind::Microphone,
+            "Microphone (default)".into(),
+            true,
+        )];
+        let apps =
+            recorder::source_list::list_apps().map_err(|e| IpcError::new("io", e.to_string()))?;
+        for app in apps {
+            out.push(SourceInfo::new(
+                format!("app:{}", app.pid),
+                match app.kind {
+                    AppKind::Chrome => SourceKind::Browser,
+                    AppKind::Application => SourceKind::Application,
+                },
+                app.label,
+                app.active,
+            ));
         }
         Ok(out)
     }
@@ -269,6 +252,9 @@ impl Recorder {
                 "Choose at least one source",
             ));
         }
+        // A tab chosen in the picker is waiting in the extension: it joins through the bridge
+        // once the recording runs, so it is not added here.
+        specs.retain(|s| !matches!(s, SourceSpec::BrowserTab { .. }));
         let labels = self.list_sources().unwrap_or_default();
         let label_of = |id: &str| {
             labels
@@ -343,6 +329,23 @@ impl Recorder {
             .add_source(spec, &label)
             .map(|_| ())
             .map_err(session_error)
+    }
+
+    /// Record a browser tab the extension streams. Returns the track name.
+    pub fn add_tab(&self, stream_id: &str, label: &str) -> IpcResult<String> {
+        let spec = SourceSpec::parse(&format!("tab:{stream_id}"))
+            .map_err(|e| IpcError::new("source_not_found", e.to_string()))?;
+        let mut guard = self.lock_active()?;
+        let a = guard
+            .as_mut()
+            .ok_or_else(|| IpcError::new("not_recording", "Not recording"))?;
+        a.session.add_source(spec, label).map_err(session_error)
+    }
+
+    /// Id of the meeting being recorded.
+    pub fn meeting_id(&self) -> Option<String> {
+        let g = self.active.lock().ok()?;
+        g.as_ref().map(|a| a.meeting_id.clone())
     }
 
     pub fn remove_source(&self, id: &str) -> IpcResult<()> {
@@ -437,7 +440,7 @@ mod tests {
         use recorder::session::ToneBackend;
         let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
         let recorder = Recorder::new(store.clone(), Arc::new(ToneBackend), true);
-        let root = tempfile::tempdir().unwrap();
+        let root = test_tmp::TestDir::new("recording");
         let report = ReportSettings {
             cycle_id: Some("NOMAD".into()),
             report_mode: Some("by-type".into()),
@@ -455,5 +458,53 @@ mod tests {
         let id = recorder.stop().unwrap();
         let guard = store.lock().unwrap();
         assert_eq!(guard.get_report_settings(&id).unwrap(), Some(report));
+    }
+
+    #[test]
+    fn a_tab_added_while_recording_is_stored_as_its_own_track() {
+        use recorder::push::ToneTabSource;
+        use recorder::session::{RoutingBackend, ToneBackend};
+        let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
+        let backend = Arc::new(RoutingBackend::new(
+            Arc::new(ToneBackend),
+            Arc::new(ToneTabSource {
+                hz: 660,
+                end_after: None,
+            }),
+        ));
+        let recorder = Recorder::new(store.clone(), backend, true);
+        let root = test_tmp::TestDir::new("app-tab");
+        // Not recording: a tab is refused.
+        assert_eq!(
+            recorder.add_tab("t1", "Tab: example.org").unwrap_err().code,
+            "not_recording"
+        );
+        let req = StartRecordingRequest {
+            title: None,
+            source_ids: vec!["tone:220".into()],
+            report: None,
+            use_last_report: false,
+        };
+        recorder
+            .start(root.path(), req, ReportSettings::default())
+            .unwrap();
+        assert!(recorder.meeting_id().is_some());
+        assert_eq!(recorder.add_tab("t1", "Tab: example.org").unwrap(), "tab");
+        assert_eq!(
+            recorder.add_tab("t1", "Tab: example.org").unwrap_err().code,
+            "source_already_added"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        let state = recorder.tick().unwrap();
+        let tab = state.sources.iter().find(|s| s.id == "tab:t1").unwrap();
+        assert_eq!(tab.label, "Tab: example.org");
+        let id = recorder.stop().unwrap();
+        assert!(recorder.meeting_id().is_none());
+        let guard = store.lock().unwrap();
+        let details = guard.get_meeting(&id).unwrap().unwrap();
+        let track = details.tracks.iter().find(|t| t.name == "tab").unwrap();
+        assert_eq!(track.source, "browser-tab");
+        assert!(track.ended);
+        assert!(track.total_samples.unwrap_or(0) > 16_000 * 4 / 10);
     }
 }

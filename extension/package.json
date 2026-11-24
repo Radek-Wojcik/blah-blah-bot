@@ -1,0 +1,30 @@
+{
+  "name": "blah-blah-bot-extension",
+  "private": true,
+  "version": "0.7.0",
+  "type": "module",
+  "description": "Chrome extension that streams tab audio to Blah Blah Bot",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "compile": "tsc -p tsconfig.build.json",
+    "build": "npm run compile && node scripts/build.mjs",
+    "build:test": "npm run compile && node scripts/build.mjs --test",
+    "pack": "npm run build && node scripts/pack.mjs",
+    "test:e2e": "npm run build:test && cargo build -p bridge --example test_receiver && playwright test --project=bridge",
+    "measure": "npm run build:test && cargo build -p bridge --example test_receiver && playwright test --project=measure"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.65.1",
+    "@types/chrome": "^0.1.40",
+    "@types/node": "^26.6.6",
+    "eslint": "^10.15.0",
+    "prettier": "^3.10.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.2",
+    "vitest": "^5.1.0"
+  }
+}

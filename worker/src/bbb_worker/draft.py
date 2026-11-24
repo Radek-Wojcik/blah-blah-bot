@@ -66,9 +66,9 @@ def sha256_hex(data: bytes) -> str:
 
 
 def has_user_edits(path: Path) -> bool:
-    """True when the draft at `path` was touched by the user: an item has `edited: true`, or
-    the file no longer has the bytes `reduce` wrote (the hash recorded next to it in
-    `draft.base.sha256`). Deleting items or changing sections and the report mode set no flag,
+    """True when the draft at `path` was touched by the user: an item or a status proposal has
+    `edited: true` (or a proposal was decided), or the file no longer has the bytes `reduce`
+    wrote (the hash recorded next to it in `draft.base.sha256`). Deleting items or changing sections and the report mode set no flag,
     so the hash is what catches them. Without a recorded hash only the flags count. A draft
     that cannot be read, or a recorded hash that is not a hash, is treated as edited, because
     the draft is not ours to overwrite blindly."""
@@ -78,6 +78,11 @@ def has_user_edits(path: Path) -> bool:
         raw = path.read_bytes()
         doc = json.loads(raw.decode("utf-8"))
         if any(it.get("edited") for it in doc.get("items", [])):
+            return True
+        if any(
+            p.get("edited") or p.get("decision", "proposed") != "proposed"
+            for p in doc.get("status_proposals", [])
+        ):
             return True
         recorded_file = path.with_name(BASE_HASH)
         if not recorded_file.exists():

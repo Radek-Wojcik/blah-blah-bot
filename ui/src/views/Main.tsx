@@ -6,19 +6,31 @@ import { type StepId, stepForError } from "../first-run";
 import { errorMessage, useCycles, useMeetings, useRecordingState } from "../hooks";
 import type { MeetingSummary, Settings } from "../ipc/types";
 import { canProcess, jobStateLabel } from "../processing";
+import { BriefingView } from "./Briefing";
+import { BrowserExtension } from "./BrowserExtension";
+import { DetectionSettingsView } from "./DetectionSettings";
 import { CycleEditor } from "./CycleEditor";
 import { CyclesView } from "./Cycles";
 import { DraftEditor } from "./DraftEditor";
 import { FirstRun } from "./FirstRun";
 import { ProcessPrompt } from "./ProcessPrompt";
 import { ProcessingSettingsView } from "./ProcessingSettings";
+import { PublishingSettingsView } from "./PublishingSettings";
 import { QueueView } from "./Queue";
 import { ReadinessBanner } from "./ReadinessBanner";
 import { SpeakersView } from "./Speakers";
 import { TranscriptView } from "./Transcript";
 
 type Page =
-  "meetings" | "queue" | "settings" | "transcript" | "speakers" | "draft" | "cycles" | "cycle";
+  | "meetings"
+  | "queue"
+  | "settings"
+  | "transcript"
+  | "speakers"
+  | "draft"
+  | "cycles"
+  | "cycle"
+  | "briefing";
 
 interface Route {
   page: Page;
@@ -30,7 +42,8 @@ interface Route {
 
 /**
  * `?page=queue`, `?page=transcript&meeting=m5&at=19000`, `?page=speakers&meeting=m5`,
- * `?page=draft&meeting=m5`, `?page=cycles` and `?page=cycle&cycle=NOMAD` open a page directly
+ * `?page=draft&meeting=m5`, `?page=cycles`, `?page=cycle&cycle=NOMAD` and
+ * `?page=briefing&cycle=NOMAD` open a page directly
  * (used by the screenshot script and the tests).
  */
 function initialRoute(): Route {
@@ -40,7 +53,7 @@ function initialRoute(): Route {
   const at = params.get("at");
   if ((page === "transcript" || page === "speakers" || page === "draft") && meetingId)
     return { page, meetingId, atMs: at === null ? null : Number(at) };
-  if (page === "cycle" && params.get("cycle"))
+  if ((page === "cycle" || page === "briefing") && params.get("cycle"))
     return { page, meetingId: null, cycleId: params.get("cycle") };
   if (page === "queue" || page === "settings" || page === "cycles")
     return { page, meetingId: null };
@@ -73,6 +86,18 @@ export function Main() {
   const inMeetings =
     page === "meetings" || page === "transcript" || page === "speakers" || page === "draft";
   const recording = useRecordingState();
+  // The recorder window asks for the briefing of a cycle (its report mode gate has a link).
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    let stopped = false;
+    void backend
+      .onOpenBriefing((cycleId) => setRoute({ page: "briefing", meetingId: null, cycleId }))
+      .then((u) => (stopped ? u() : (off = u)));
+    return () => {
+      stopped = true;
+      off?.();
+    };
+  }, [backend]);
   if (wizard === undefined) return null;
   if (wizard !== null)
     return (
@@ -97,7 +122,9 @@ export function Main() {
             Meetings
           </button>
           <button
-            className={page === "cycles" || page === "cycle" ? "nav nav-on" : "nav"}
+            className={
+              page === "cycles" || page === "cycle" || page === "briefing" ? "nav nav-on" : "nav"
+            }
             onClick={() => setPage("cycles")}
           >
             Cycles
@@ -146,6 +173,14 @@ export function Main() {
           {page === "cycles" && (
             <CyclesView
               onOpenCycle={(id) => setRoute({ page: "cycle", meetingId: null, cycleId: id })}
+              onOpenBriefing={(id) => setRoute({ page: "briefing", meetingId: null, cycleId: id })}
+            />
+          )}
+          {page === "briefing" && route.cycleId && (
+            <BriefingView
+              key={route.cycleId}
+              cycleId={route.cycleId}
+              onBack={() => setPage("cycles")}
             />
           )}
           {page === "cycle" && route.cycleId && (
@@ -338,6 +373,9 @@ function SettingsView(props: { onRunSetup: () => void }) {
 
   if (!settings) return null;
   const set = (patch: Partial<Settings>) => setSettings({ ...settings, ...patch });
+  const bridge = settings.bridge;
+  const setBridge = (patch: Partial<NonNullable<Settings["bridge"]>>) =>
+    bridge && set({ bridge: { ...bridge, ...patch } });
 
   return (
     <>
@@ -383,6 +421,38 @@ function SettingsView(props: { onRunSetup: () => void }) {
                 onChange={(e) => set({ screenshotHotkey: e.target.value })}
               />
             </label>
+            {bridge && (
+              <fieldset>
+                <legend>Browser extension</legend>
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={bridge.enabled}
+                    onChange={(e) => setBridge({ enabled: e.target.checked })}
+                  />
+                  Accept the Chrome extension on this computer
+                </label>
+                <label>
+                  Port
+                  <input
+                    type="number"
+                    min={1024}
+                    max={65535}
+                    value={bridge.port}
+                    onChange={(e) => setBridge({ port: Number(e.target.value) })}
+                  />
+                  <small>If it is taken, the next free port up to {bridge.port + 9} is used.</small>
+                </label>
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={bridge.autoAddTabs}
+                    onChange={(e) => setBridge({ autoAddTabs: e.target.checked })}
+                  />
+                  Record a tab as soon as the extension sends it during a recording
+                </label>
+              </fieldset>
+            )}
             <div className="actions">
               {message && <span role="status">{message}</span>}
               <button className="btn btn-record" type="submit">
@@ -392,7 +462,10 @@ function SettingsView(props: { onRunSetup: () => void }) {
           </form>
         </div>
       </div>
+      <DetectionSettingsView />
+      <BrowserExtension />
       <CycleRepos />
+      <PublishingSettingsView />
       <ProcessingSettingsView onRunSetup={props.onRunSetup} />
     </>
   );

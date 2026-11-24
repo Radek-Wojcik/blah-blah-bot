@@ -3,6 +3,8 @@ import { useBackend } from "../backend-context";
 import { formatDuration } from "../format";
 import { errorMessage, useRecordingState, useSources } from "../hooks";
 import type { ActiveSource, SourceInfo } from "../ipc/types";
+import { defaultSelection, doubleRecording, groupSources, kindLabel } from "../picker";
+import { DetectionPrompt } from "./DetectionPrompt";
 import { ProcessPrompt } from "./ProcessPrompt";
 import { ReportGate } from "./ReportGate";
 
@@ -19,12 +21,8 @@ export function Widget() {
   // Every recording starts through the report mode gate; Record only opens it.
   const [gate, setGate] = useState(false);
 
-  // Until the user chooses, the microphone (or the first source) is preselected.
-  const picked =
-    choice ??
-    new Set(
-      sources.length === 0 ? [] : [(sources.find((s) => s.kind === "microphone") ?? sources[0]).id],
-    );
+  // Until the user chooses, the microphone (or the first source) and the captured tabs are ticked.
+  const picked = choice ?? defaultSelection(sources);
 
   const run = (p: Promise<unknown>) => {
     setError(null);
@@ -33,6 +31,8 @@ export function Widget() {
 
   const live = state.sources.filter((s) => s.status === "recording" || s.status === "starting");
   const addable = sources.filter((s) => !live.some((l) => l.id === s.id));
+  // A tab and the whole browser together record the sound of the tab twice.
+  const doubled = doubleRecording(sources, recording ? live.map((l) => l.id) : picked);
 
   return (
     <div className="widget" role="region" aria-label="Recorder">
@@ -70,17 +70,35 @@ export function Widget() {
           ) : (
             <fieldset className="picker">
               <legend>Sources</legend>
-              {sources.map((s) => (
-                <PickRow
-                  key={s.id}
-                  source={s}
-                  checked={picked.has(s.id)}
-                  onToggle={() => {
-                    const next = new Set(picked);
-                    if (!next.delete(s.id)) next.add(s.id);
-                    setChoice(next);
-                  }}
-                />
+              {groupSources(sources).map((section) => (
+                <div
+                  key={section.id}
+                  className="pick-section"
+                  role="group"
+                  aria-label={section.title}
+                >
+                  <p className="pick-heading" aria-hidden="true">
+                    {section.title}
+                  </p>
+                  {section.rows.map((row) =>
+                    row.type === "heading" ? (
+                      <p key={`h-${row.text}`} className="pick-subheading">
+                        {row.text}
+                      </p>
+                    ) : (
+                      <PickRow
+                        key={row.source.id}
+                        source={row.source}
+                        checked={picked.has(row.source.id)}
+                        onToggle={() => {
+                          const next = new Set(picked);
+                          if (!next.delete(row.source.id)) next.add(row.source.id);
+                          setChoice(next);
+                        }}
+                      />
+                    ),
+                  )}
+                </div>
               ))}
             </fieldset>
           )}
@@ -105,6 +123,12 @@ export function Widget() {
         </div>
       )}
 
+      {doubled && (
+        <p className="pick-warning" role="status">
+          {doubled}
+        </p>
+      )}
+
       {error && (
         <p className="error" role="alert">
           {error}
@@ -112,6 +136,8 @@ export function Widget() {
       )}
 
       <ProcessPrompt />
+      {/* The demo mock raises its prompt here; the application shows it in its own window. */}
+      {new URLSearchParams(window.location.search).has("detectms") && <DetectionPrompt embedded />}
       {gate && (
         <ReportGate
           onCancel={() => setGate(false)}
@@ -151,14 +177,20 @@ export function Widget() {
 
 function PickRow(props: { source: SourceInfo; checked: boolean; onToggle: () => void }) {
   const { source, checked, onToggle } = props;
+  const hintId = source.hint ? `hint-${source.id}` : undefined;
   return (
-    <label className="pick-row">
-      <input type="checkbox" checked={checked} onChange={onToggle} />
-      <span className="pick-label">{source.label}</span>
-      <span className="pick-kind">
-        {source.kind === "microphone" ? "mic" : source.active ? "playing" : "idle"}
-      </span>
-    </label>
+    <div className="pick-item">
+      <label className="pick-row">
+        <input type="checkbox" checked={checked} onChange={onToggle} aria-describedby={hintId} />
+        <span className="pick-label">{source.label}</span>
+        <span className="pick-kind">{kindLabel(source)}</span>
+      </label>
+      {source.hint && (
+        <p id={hintId} className="pick-hint">
+          {source.hint}
+        </p>
+      )}
+    </div>
   );
 }
 

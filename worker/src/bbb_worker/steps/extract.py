@@ -6,7 +6,8 @@ optionally `work/edits.json` and `work/descriptions.json`. Writes `work/extract/
 
 Each model answer is validated against `schemas/extraction.schema.json`; every quote is then
 checked against the transcript (`quotes.verify`) and the item gets its position from the
-matched lines, not from the model.
+matched lines, not from the model. The `status_changes` the model proposes for open issues and
+topics get the same quote check; whether their target exists is decided by `reduce`.
 """
 
 from __future__ import annotations
@@ -98,6 +99,47 @@ def build_items(
     return items, warnings
 
 
+def build_status_changes(
+    data: dict[str, Any], window: windows.Window
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Raw status changes of one window with the same quote check as items, and the warnings
+    about the unverified ones. An answer without the field (older callers) gives none."""
+    corpus = quotes.Corpus.from_lines(window.speech)
+    changes: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    for raw in data.get("status_changes", []):
+        found = quotes.verify(raw["quote"], windows.parse_clock(raw["time"]), corpus)
+        changes.append(
+            {
+                "target": raw["target"].strip(),
+                "status": raw["status"],
+                "reason": raw["reason"].strip(),
+                "source": {
+                    "track": found.track,
+                    "speaker": found.speaker,
+                    "t_start_ms": found.t_start_ms,
+                    "t_end_ms": found.t_end_ms,
+                    "quote": raw["quote"],
+                    "verified": found.verified,
+                    "match": found.match,
+                },
+                "window": window.index,
+                "part": window.part,
+            }
+        )
+        if not found.verified:
+            warnings.append(
+                {
+                    "code": "quote_unverified",
+                    "message": f"The quote of the status change of {raw['target'].strip()[:40]} "
+                    f"was not found in the transcript (match {found.match:.2f})",
+                    "t_start_ms": found.t_start_ms,
+                    "t_end_ms": found.t_end_ms,
+                }
+            )
+    return changes, warnings
+
+
 def output_budget(prompt_chars: int, ctx: int | None) -> int:
     """Tokens the answer may use: what the context leaves after the prompt (estimated from
     its length), at most MAX_TOKENS, at least MIN_TOKENS."""
@@ -115,6 +157,7 @@ def _empty_result(window: windows.Window) -> dict[str, Any]:
         "skipped": False,
         "summary": "",
         "items": [],
+        "status_changes": [],
         "attempts": 0,
         "warnings": [],
         "usage": {"prompt_tokens": 0, "completion_tokens": 0},
@@ -147,6 +190,7 @@ def merge_results(
     merged["seconds"] = first["seconds"]
     for part in rest:
         merged["items"] += part["items"]
+        merged["status_changes"] += part["status_changes"]
         merged["warnings"] += part["warnings"]
         merged["attempts"] += part["attempts"]
         merged["seconds"] = round(merged["seconds"] + part["seconds"], 3)
@@ -169,7 +213,9 @@ def extract_window(
     again: the window is halved (at most MAX_SPLIT_DEPTH times) and the halves are merged
     into one record. A window that stays invalid is recorded as skipped."""
     system = prompts.extract_system(language)
-    user = prompts.extract_user(context, windows.render_window(window))
+    user = prompts.extract_user(
+        context, windows.render_window(window), windows.roster(window.lines)
+    )
     try:
         done = llm_client.complete_json(
             backend,
@@ -191,11 +237,13 @@ def extract_window(
         return _skip(window, e)
     result = _empty_result(window)
     items, warnings = build_items(done.data, window, context)
+    changes, change_warnings = build_status_changes(done.data, window)
     result.update(
         summary=done.data["summary"].strip(),
         items=items,
+        status_changes=changes,
         attempts=done.attempts,
-        warnings=warnings,
+        warnings=warnings + change_warnings,
         usage=done.usage,
         seconds=done.seconds,
     )

@@ -1,0 +1,26 @@
+{
+  "description": "Bridge protocol v2 binary audio frames shared by the Rust and the extension tests: the bytes as lowercase hex and what they decode to. Header: u32 stream_no | u32 seq | f64 sent_ms, little-endian; then signed 16-bit little-endian samples.",
+  "valid": [
+    {
+      "name": "four samples",
+      "hex": "01000000000000000000000000000000ffff00000100ff7f",
+      "stream_no": 1,
+      "seq": 0,
+      "sent_ms": 0.0,
+      "samples": [-1, 0, 1, 32767]
+    },
+    {
+      "name": "later frame with a wall clock time",
+      "hex": "0700000040420f000038acc2541d7a4200800180",
+      "stream_no": 7,
+      "seq": 1000000,
+      "sent_ms": 1794579901123.5,
+      "samples": [-32768, -32767]
+    }
+  ],
+  "invalid": [
+    { "name": "header only", "hex": "01000000000000000000000000000000" },
+    { "name": "odd payload", "hex": "0100000000000000000000000000000001" },
+    { "name": "sent_ms is NaN", "hex": "0100000000000000000000000000f87f0000" }
+  ]
+}

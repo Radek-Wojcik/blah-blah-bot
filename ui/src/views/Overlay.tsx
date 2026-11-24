@@ -27,6 +27,13 @@ export function toRegion(a: Point, b: Point, width: number, height: number): Reg
   };
 }
 
+/** Resolves once the browser has decoded the image, so showing it later costs no waiting. */
+export function decodeImage(url: string): Promise<void> {
+  const img = new Image();
+  img.src = url;
+  return "decode" in img ? img.decode() : Promise.resolve();
+}
+
 /**
  * True when RGBA pixel data shows nothing: every pixel is fully transparent or black. An empty
  * buffer is blank.
@@ -76,6 +83,10 @@ type Phase = "loading" | "ready" | "problem";
  * The overlay covers every monitor, so it must never stay on screen as an empty black sheet: a
  * capture that does not arrive, cannot be decoded or shows nothing is reported in a message
  * and the overlay closes itself. Escape and any click close it in every state.
+ *
+ * The window starts hidden. Once the image is decoded and in the page (or a problem is
+ * reported) the backend is told to show it, so the live desktop is never replaced by a black
+ * window.
  */
 export function Overlay() {
   const backend = useBackend();
@@ -95,21 +106,38 @@ export function Overlay() {
     document.body.classList.add("overlay-body");
     let url: string | null = null;
     let cancelled = false;
-    backend.overlayImage().then(
-      (u) => {
-        url = u;
-        if (!cancelled) setSrc(u);
-      },
-      (e: unknown) => {
-        if (!cancelled) fail(messageOf(e));
-      },
-    );
+    backend
+      .overlayImage()
+      .then(
+        async (u) => {
+          url = u;
+          try {
+            await decodeImage(u);
+          } catch {
+            if (!cancelled) {
+              fail("The screen capture could not be decoded. The screenshot was cancelled.");
+            }
+            return;
+          }
+          if (!cancelled) setSrc(u);
+        },
+        (e: unknown) => {
+          if (!cancelled) fail(messageOf(e));
+        },
+      )
+      .catch(() => undefined);
     return () => {
       cancelled = true;
       document.body.classList.remove("overlay-body");
       if (url?.startsWith("blob:")) URL.revokeObjectURL(url);
     };
   }, [backend, fail]);
+
+  // Show the window only once there is something to show: the decoded picture or the message.
+  const shown = src !== null || phase === "problem";
+  useEffect(() => {
+    if (shown) void backend.overlayReady().catch(() => undefined);
+  }, [shown, backend]);
 
   // A capture that never arrives must not leave an empty sheet over every monitor.
   useEffect(() => {

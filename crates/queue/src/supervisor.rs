@@ -344,7 +344,23 @@ impl Supervisor {
             stage,
         });
 
-        match self.runner.run(meeting_id, stage) {
+        tracing::info!(
+            meeting = meeting_id,
+            stage = stage.as_str(),
+            "stage started"
+        );
+        // A panic in the runner must not leave the stage `running` for good: it ends the
+        // stage as failed. Its text can hold anything the stage was handling, so only the
+        // fact is recorded (the panic hook logs where it happened).
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.runner.run(meeting_id, stage)
+        }))
+        .unwrap_or_else(|_| {
+            Err(RunError::new(
+                "an internal error stopped this stage; retry it, and report it if it keeps happening",
+            ))
+        });
+        match result {
             Ok(()) => {
                 self.store()?.set_stage_status(
                     meeting_id,
@@ -521,6 +537,33 @@ mod tests {
         let sup = Supervisor::new(Arc::new(Mutex::new(store)), runner.clone(), gate.clone(), 3);
         sup.enqueue("m1", "{}").unwrap();
         (sup, runner, gate)
+    }
+
+    struct Panicking;
+
+    impl StageRunner for Panicking {
+        fn run(&self, _meeting_id: &str, _stage: Stage) -> Result<(), RunError> {
+            panic!("secret-token-123 in the panic text");
+        }
+    }
+
+    #[test]
+    fn a_panic_in_the_runner_fails_the_stage_instead_of_leaving_it_running() {
+        let (sup, _, gate) = setup(true);
+        let sup = Supervisor::new(sup.store.clone(), Arc::new(Panicking), gate, 3);
+        let outcome = sup.step("m1").unwrap();
+        let StepOutcome::Failed { stage, error } = outcome else {
+            panic!("expected a failed stage, got {outcome:?}");
+        };
+        assert_eq!(stage, Stage::Asr);
+        assert!(!error.contains("secret-token"), "the panic text leaked");
+        let row = stage_row(&sup, Stage::Asr);
+        assert_eq!(row.status, StageStatus::Failed);
+        assert_eq!(row.error.as_deref(), Some(error.as_str()));
+        // The stage can be retried like any failed one, and the runner lock was released.
+        sup.retry("m1").unwrap();
+        assert_eq!(stage_row(&sup, Stage::Asr).status, StageStatus::Pending);
+        assert!(sup.running.try_lock().is_ok());
     }
 
     #[test]

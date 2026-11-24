@@ -58,6 +58,7 @@ fn on_record_hotkey(app: &AppHandle) {
     if state.recorder.is_recording() {
         match state.recorder.stop() {
             Ok(_) => {
+                state.browser().sync_recording(None);
                 overlay::cancel(app);
                 emit_state(app, &RecordingState::idle());
                 emit_meetings_changed(app);

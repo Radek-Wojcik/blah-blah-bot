@@ -29,6 +29,10 @@ use crate::schema::is_identifier;
 /// summary is empty. Cycles created earlier keep the file they have.
 pub const DEFAULT_TEMPLATE_TEXT: &str = "# {title}\n\n{date} · {participants}\n\n{summary_section}\n\n{sections}\n\n---\n[Full transcript](transcript.md)\n";
 
+/// The built-in short template of a chat target (`targets.discord.template` absent): title and
+/// date, the summary, the decisions and the tasks, and a link to the full report.
+pub const SHORT_TEMPLATE_TEXT: &str = "**{title}** · {date}\n\n{summary}\n\n## Decisions\n{decisions}\n\n## Tasks\n{tasks}\n\n[Full report]({report_link})\n";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TemplateSection {
@@ -232,6 +236,7 @@ pub const PLACEHOLDERS: &[&str] = &[
     "ideas",
     "budgets",
     "transcript_link",
+    "report_link",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -250,6 +255,7 @@ pub(crate) enum Placeholder {
     Ideas,
     Budgets,
     TranscriptLink,
+    ReportLink,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -273,6 +279,7 @@ fn parse_placeholder(name: &str) -> Option<Placeholder> {
         "ideas" => Placeholder::Ideas,
         "budgets" => Placeholder::Budgets,
         "transcript_link" => Placeholder::TranscriptLink,
+        "report_link" => Placeholder::ReportLink,
         other => {
             let id = other.strip_prefix("section:")?;
             if !is_section_id(id) {
@@ -446,7 +453,7 @@ mod tests {
         let t = parse_template("x", "{summary}\n\n{summary_section}\n").unwrap();
         assert!(validate_template(&t).is_empty());
         // A cycle created before `{summary_section}` keeps its own default.md.
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("template");
         let old = "# {title}\n\n## Summary\n{summary}\n\n{sections}\n";
         fs::write(dir.path().join("default.md"), old).unwrap();
         assert!(!create_default_template(dir.path()).unwrap());
@@ -546,7 +553,7 @@ mod tests {
 
     #[test]
     fn list_read_write_in_a_directory() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("template");
         let tdir = dir.path().join("templates");
         assert!(list_templates(&tdir).unwrap().is_empty());
         assert!(create_default_template(&tdir).unwrap());

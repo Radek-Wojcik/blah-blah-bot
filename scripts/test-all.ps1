@@ -10,11 +10,13 @@
   last; its result decides the exit code together with the suites.
 
   Suites: cargo fmt/clippy/test, worker pytest, benchmarks pytest, UI typecheck/lint/format/
-  unit tests/mock end-to-end tests. The end-to-end tests against the real application
-  (npm run test:real) and anything that needs a GPU or models are not part of this script.
+  unit tests/mock end-to-end tests, extension typecheck/lint/format/unit tests/build. The end-to-end
+  tests against the real application (npm run test:real), the scripted Chrome tests of the
+  extension (npm run test:e2e in extension/) and anything that needs a GPU or models are not part
+  of this script.
 
 .PARAMETER Skip
-  Suites to leave out: rust, worker, benchmarks, ui.
+  Suites to leave out: rust, worker, benchmarks, ui, extension.
 
 .PARAMETER Suite
   Run only these suites (same names as -Skip). Default: all of them.
@@ -42,11 +44,11 @@ $ErrorActionPreference = "Stop"
 $Skip = @($Skip | ForEach-Object { $_ -split "," } | Where-Object { $_ })
 $Suite = @($Suite | ForEach-Object { $_ -split "," } | Where-Object { $_ })
 foreach ($name in $Skip + $Suite) {
-    if ($name -notin "rust", "worker", "benchmarks", "ui") { throw "unknown suite '$name' (rust, worker, benchmarks, ui)" }
+    if ($name -notin "rust", "worker", "benchmarks", "ui", "extension") { throw "unknown suite '$name' (rust, worker, benchmarks, ui, extension)" }
 }
 # -Suite narrows the selection; -Skip removes from what is left.
 if ($Suite.Count -gt 0) {
-    $Skip = @("rust", "worker", "benchmarks", "ui" | Where-Object { $_ -notin $Suite -or $_ -in $Skip })
+    $Skip = @("rust", "worker", "benchmarks", "ui", "extension" | Where-Object { $_ -notin $Suite -or $_ -in $Skip })
 }
 $repo = Split-Path -Parent $PSScriptRoot
 $testTmp = Join-Path $repo "target\test-tmp"
@@ -136,6 +138,13 @@ try {
         Invoke-Step "ui" "ui format:check" "ui" { npm run format:check }
         Invoke-Step "ui" "ui unit tests" "ui" { npm test }
         Invoke-Step "ui" "ui mock end-to-end tests" "ui" { npm run test:e2e }
+    }
+    if ($Skip -notcontains "extension") {
+        Invoke-Step "extension" "extension typecheck" "extension" { npm run typecheck }
+        Invoke-Step "extension" "extension lint" "extension" { npm run lint }
+        Invoke-Step "extension" "extension format:check" "extension" { npm run format:check }
+        Invoke-Step "extension" "extension unit tests" "extension" { npm test }
+        Invoke-Step "extension" "extension build" "extension" { npm run build }
     }
     if ($List) { exit 0 }
 } finally {

@@ -1,13 +1,23 @@
 import type {
   AddRepoRequest,
+  AnswerOutcome,
+  Briefing,
+  BridgeStatus,
   CloudPreview,
+  Corrections,
   CycleDetails,
   CycleDto,
   CycleListItem,
+  CycleTargets,
+  CycleTasks,
   CycleRepoView,
+  DetectionAnswer,
+  DetectionPrompt,
+  DetectionSettings,
   DraftItemPatch,
   DraftSection,
   DraftView,
+  GithubAccess,
   MeetingDetails,
   MeetingSummary,
   ModelStatus,
@@ -15,6 +25,15 @@ import type {
   ProcessOptions,
   GgufFile,
   ProcessingSettings,
+  ProposedStatus,
+  PublicRepoConfirmation,
+  PublishMode,
+  PublishedCorrections,
+  PublishPlan,
+  PublishResult,
+  PublishTargetName,
+  PublishingSecrets,
+  OutboxState,
   PullResult,
   QueueState,
   Region,
@@ -31,6 +50,7 @@ import type {
   SetupStatus,
   SourceInfo,
   StartRecordingRequest,
+  StatusDecision,
   TemplateCheck,
   TemplateDto,
   TemplateSummary,
@@ -38,6 +58,7 @@ import type {
   NewDraftItem,
   ParticipantView,
   VoicesData,
+  WebhookCheck,
 } from "./types";
 
 export type Unsubscribe = () => void;
@@ -62,11 +83,37 @@ export interface Backend {
   takeScreenshot(): Promise<void>;
   /** The frozen desktop shown by the screenshot overlay, as a URL usable in an img tag. */
   overlayImage(): Promise<string>;
+  /**
+   * The overlay window is created hidden: call this once the image is decoded (or could not be)
+   * to show it, so the live desktop stays visible until the frozen one can take its place.
+   */
+  overlayReady(): Promise<void>;
   /** Save the chosen region, or only close the overlay when `region` is null. */
   overlayFinish(region: Region | null): Promise<void>;
 
   getSettings(): Promise<Settings>;
   saveSettings(settings: Settings): Promise<void>;
+
+  /** The bridge to the Chrome extension: server, pairing code, paired extensions, tab streams. */
+  bridgeStatus(): Promise<BridgeStatus>;
+  /** Offer a new pairing code (5 minutes, single use). Rejects with `bridge_off` when not listening. */
+  startPairing(): Promise<BridgeStatus>;
+  cancelPairing(): Promise<BridgeStatus>;
+  /** Forget a paired extension and close its connection. */
+  unpairClient(clientId: string): Promise<BridgeStatus>;
+
+  /** Meeting detection: which applications raise a prompt and how readily. */
+  getDetectionSettings(): Promise<DetectionSettings>;
+  /** Returns the settings as stored (names normalized). */
+  saveDetectionSettings(settings: DetectionSettings): Promise<DetectionSettings>;
+  /** The prompt on offer, for a window that opened after the event. */
+  detectionPrompt(): Promise<DetectionPrompt | null>;
+  /**
+   * Answer the prompt: `record` starts a recording of the microphone and the application with
+   * the last report choice (or opens the recorder window when there is none), `not_now` leaves
+   * this call alone, `never` stops prompts for the application.
+   */
+  answerDetection(key: string, answer: DetectionAnswer): Promise<AnswerOutcome>;
 
   /**
    * Create the processing job of a meeting if missing and start processing. With `options.llm`
@@ -161,6 +208,14 @@ export interface Backend {
   pullCycleRepo(repoId: string): Promise<PullResult>;
   /** The cycle's default mode, template, type and language, the allowed choices and the last choice. */
   reportDefaults(cycleId: string): Promise<ReportDefaults>;
+  /**
+   * The briefing of a cycle: open tasks by person and open topics. With `refresh` a cloned
+   * repository is pulled first (never over uncommitted cycle edits); offline or after a failed
+   * pull the answer is the state of the last successful pull, with its date.
+   */
+  getBriefing(cycleId: string, refresh: boolean): Promise<Briefing>;
+  /** Show the main window on the briefing of a cycle (for the recorder window). */
+  openBriefing(cycleId: string): Promise<void>;
 
   /** Rejects with `no_draft` until the reduce stage has written the draft. */
   getDraft(meetingId: string): Promise<DraftView>;
@@ -188,6 +243,99 @@ export interface Backend {
   /** Keep the edited draft and throw the newer one away. */
   discardNewDraft(meetingId: string): Promise<DraftView>;
   renderReport(meetingId: string, variant: RenderVariant): Promise<string>;
+  /**
+   * Decide a proposed status change. Nothing is written back before it is `approved`. `comment`
+   * absent keeps the text, an empty one clears it. Rejects with `published` while the draft is
+   * locked.
+   */
+  setStatusDecision(
+    meetingId: string,
+    proposalId: string,
+    decision: StatusDecision,
+    comment?: string,
+  ): Promise<DraftView>;
+  /** Add a status change by hand: `#12` for an issue, else the id of a topic. It waits for approval. */
+  addStatusProposal(
+    meetingId: string,
+    target: string,
+    status: ProposedStatus,
+    comment?: string,
+  ): Promise<DraftView>;
+
+  /**
+   * Which GitHub tokens and webhooks are set, never their values, with the GitHub hosts of the
+   * registered repositories and the `cred:` references of the cycles.
+   */
+  publishingSecrets(): Promise<PublishingSecrets>;
+  /** Write-only. `api` absent means github.com. A token with spaces or line breaks is refused. */
+  setGithubToken(token: string, api?: string): Promise<void>;
+  clearGithubToken(api?: string): Promise<void>;
+  /** Checks the stored token against the GitHub repository of the cycle. A failure is a result, not an error. */
+  testGithubAccess(cycleId: string): Promise<GithubAccess>;
+  /** Links a registered repository to a GitHub repository (`owner/name`); empty values clear the link. */
+  setGithubRepo(repoId: string, githubRepo?: string, githubApi?: string): Promise<CycleRepoView>;
+  /**
+   * Write-only value of a `cred:` reference. A Discord webhook is validated first and rejects with
+   * `invalid_webhook`; the message never repeats the value.
+   */
+  setTargetSecret(reference: string, value: string): Promise<void>;
+  clearTargetSecret(reference: string): Promise<void>;
+  /** Asks Discord whether the stored webhook exists. Nothing is posted. */
+  testDiscordWebhook(reference: string): Promise<WebhookCheck>;
+
+  /**
+   * Sets when a target of a cycle is published (`targets.<target>.publish` of `cycle.yaml`) and
+   * nothing else; returns the cycle's targets as saved. `github` covers the report, the issues
+   * and the write-back of approved status changes, `discord` needs a Discord target
+   * (`no_target`). No value writes a status change back without approval and an explicit
+   * publication, and the public-repository check applies to every value.
+   */
+  setTargetRule(
+    cycleId: string,
+    target: PublishTargetName,
+    mode: PublishMode,
+  ): Promise<CycleTargets>;
+  /** What publishing to `targets` (all of the cycle's when absent) would do. Changes nothing. */
+  publishPlan(meetingId: string, targets?: string[]): Promise<PublishPlan>;
+  /**
+   * Queue the publication. Rejects with `public_repo_unconfirmed` until `confirmPublicRepo`, with
+   * `new_draft_pending` while a newer draft waits, with `discord_webhook_missing` and
+   * `nothing_to_publish`. From then on the draft is read-only.
+   */
+  publishMeeting(meetingId: string, targets: string[]): Promise<PublishResult>;
+  /** The user accepts publishing to the repository of the cycle although it is (or may be) public. */
+  confirmPublicRepo(cycleId: string): Promise<PublicRepoConfirmation>;
+  outboxState(): Promise<OutboxState>;
+  /** Retries one operation now, or (without an id) everything that failed or waits for its backoff. */
+  retryOutboxOp(id?: number): Promise<OutboxState>;
+  /** Drops a queued or failed operation. Cancelling all operations of a meeting unlocks its draft. */
+  cancelOutboxOp(id: number): Promise<OutboxState>;
+  /** Open and done tasks of a cycle as the last read of its GitHub issues has them. */
+  cycleTasks(cycleId: string): Promise<CycleTasks>;
+
+  /** The corrections written for a meeting after it was published, and where each stands. */
+  listCorrections(meetingId: string): Promise<Corrections>;
+  /**
+   * Write a correction note for a published meeting: text, the item and/or issue it is about, and
+   * the day (today by default). Rejects with `not_published` for a meeting that is not locked.
+   * Under an Automatic rule of the `github` target it is queued at once.
+   */
+  addCorrection(
+    meetingId: string,
+    text: string,
+    item?: string,
+    issue?: string,
+    date?: string,
+  ): Promise<Corrections>;
+  /**
+   * Queue corrections (all that are not queued when `ids` is absent): a new file in the meeting's
+   * folder of the repository and a comment on the issue they are about. Same rule and checks as
+   * the meeting: rejects with `public_repo_unconfirmed`, `not_in_repository` and
+   * `nothing_to_publish` (Off).
+   */
+  publishCorrections(meetingId: string, ids?: string[]): Promise<PublishedCorrections>;
+  /** Deletes a correction that was never queued (`correction_queued` otherwise). */
+  deleteCorrection(meetingId: string, id: string): Promise<Corrections>;
 
   onRecordingState(cb: (state: RecordingState) => void): Promise<Unsubscribe>;
   onMeetingsChanged(cb: () => void): Promise<Unsubscribe>;
@@ -199,4 +347,12 @@ export interface Backend {
   onDraftChanged(cb: (meetingId: string) => void): Promise<Unsubscribe>;
   /** A cycle, template or repository changed. */
   onCyclesChanged(cb: () => void): Promise<Unsubscribe>;
+  /** Payload: the whole state of the outbox, after every change. */
+  onOutboxChanged(cb: (state: OutboxState) => void): Promise<Unsubscribe>;
+  /** Payload: the cycle whose briefing `openBriefing` asked to show. */
+  onOpenBriefing(cb: (cycleId: string) => void): Promise<Unsubscribe>;
+  onBridgeChanged(cb: (status: BridgeStatus) => void): Promise<Unsubscribe>;
+  onDetectionPrompt(cb: (prompt: DetectionPrompt) => void): Promise<Unsubscribe>;
+  /** Payload: the key of the call whose prompt was withdrawn. */
+  onDetectionCleared(cb: (key: string) => void): Promise<Unsubscribe>;
 }

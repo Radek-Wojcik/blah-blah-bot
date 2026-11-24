@@ -34,7 +34,8 @@ use std::path::{Path, PathBuf};
 
 use cycle_store::time::format_utc_date;
 use cycle_store::{
-    build_context, ContextRequest, Cycle, LanguageSetting, OpenIssue, ReportMode, Template, Topic,
+    build_context, ContextRequest, Cycle, IssueLink, LanguageSetting, OpenIssue, ReportMode,
+    Template, Topic,
 };
 use store::Store;
 
@@ -61,6 +62,8 @@ pub struct CycleData {
     pub issues: Vec<OpenIssue>,
     /// Numbers of issues known to be closed.
     pub closed_issue_ids: Vec<String>,
+    /// The issues created from items of earlier meetings (open and closed).
+    pub issue_links: Vec<IssueLink>,
     /// Directories that hold one `<folder>/meeting.json` per earlier meeting, for example
     /// `meetings/<ID>` of the repository. The application's local drafts are added
     /// separately.
@@ -207,6 +210,7 @@ pub fn prepare_context_with(
     req.topics = &data.topics;
     req.issues = &data.issues;
     req.closed_issue_ids = &data.closed_issue_ids;
+    req.issue_links = &data.issue_links;
     req.mode = mode;
     req.meeting_type = settings.meeting_type.as_deref();
     req.template = settings.report_template.as_deref();
@@ -236,7 +240,8 @@ fn parse<T: serde::de::DeserializeOwned>(value: &str, what: &str) -> Result<T, R
 /// Copies the finished drafts of the cycle's other meetings from this application's
 /// meetings folder into `target`, one `<meeting id>/meeting.json` each, which is the shape
 /// [`cycle_store::build_context`] reads. `target` is emptied first. Meetings without a
-/// `work/draft.json` are left out. Returns the number of drafts copied.
+/// `work/draft.json` are left out; a meeting's `work/corrections.json` goes along as
+/// `corrections.json`. Returns the number of drafts copied.
 pub fn stage_local_drafts(
     store: &Store,
     cycle_id: &str,
@@ -264,6 +269,18 @@ pub fn stage_local_drafts(
         let folder = target.join(&meeting.id);
         fs::create_dir_all(&folder).map_err(err)?;
         fs::copy(&draft, folder.join("meeting.json")).map_err(err)?;
+        // The corrections written after the meeting was published (published or not yet).
+        let corrections = meeting_root
+            .join(&meeting.dir)
+            .join("work")
+            .join(cycle_store::corrections::CORRECTIONS_FILE);
+        if corrections.is_file() {
+            fs::copy(
+                &corrections,
+                folder.join(cycle_store::corrections::CORRECTIONS_FILE),
+            )
+            .map_err(err)?;
+        }
         copied += 1;
     }
     Ok(copied)
@@ -381,6 +398,7 @@ mod tests {
             topics: vec![],
             issues: vec![],
             closed_issue_ids: vec![],
+            issue_links: vec![],
             previous_dirs: previous,
         }
     }
@@ -546,6 +564,49 @@ mod tests {
     }
 
     #[test]
+    fn the_corrections_of_an_earlier_meeting_reach_the_context() {
+        let lab = lab();
+        lab.meeting("old", NOON - 86_400_000, Some("TEAM"));
+        lab.meeting("now", NOON, Some("TEAM"));
+        let mut earlier = Draft::from_json_str(DRAFT).unwrap();
+        earlier.date = "2026-11-06".into();
+        fs::write(
+            lab.work("old").join("draft.json"),
+            serde_json::to_vec(&earlier.to_value()).unwrap(),
+        )
+        .unwrap();
+        let mut file = cycle_store::CorrectionsFile::new(&earlier.meeting_id);
+        file.corrections.push(cycle_store::Correction {
+            id: "c1".into(),
+            date: "2026-11-09".into(),
+            text: "The mount design moved to next week.".into(),
+            item: None,
+            issue: None,
+        });
+        file.write(
+            &lab.work("old")
+                .join(cycle_store::corrections::CORRECTIONS_FILE),
+        )
+        .unwrap();
+        let outcome = prepare_context(&lab.store, &source(), &lab.env(), "now").unwrap();
+        let ctx = read(&lab.work("now").join(CONTEXT_FILE));
+        assert_eq!(
+            ctx["corrections"][0]["text"], "The mount design moved to next week.",
+            "{outcome:?}"
+        );
+        assert_eq!(ctx["corrections"][0]["meeting"], "2026-11-06");
+        // Without the file the key is absent.
+        fs::remove_file(
+            lab.work("old")
+                .join(cycle_store::corrections::CORRECTIONS_FILE),
+        )
+        .unwrap();
+        prepare_context(&lab.store, &source(), &lab.env(), "now").unwrap();
+        let ctx = read(&lab.work("now").join(CONTEXT_FILE));
+        assert!(ctx.get("corrections").is_none());
+    }
+
+    #[test]
     fn the_named_transcript_carries_participant_names_and_unchanged_ids() {
         let lab = lab();
         lab.meeting("m1", NOON, Some("TEAM"));
@@ -599,6 +660,116 @@ mod tests {
             }
             assert_eq!((&a.kind, &a.track), (&b.kind, &b.track));
         }
+    }
+
+    /// A meeting of TEAM whose diarized voice is stored but not named yet; returns the voice id.
+    fn meeting_with_an_unnamed_voice(lab: &Lab) -> String {
+        lab.meeting("m1", NOON, Some("TEAM"));
+        fs::write(lab.work("m1").join("transcript.json"), TRANSCRIPT).unwrap();
+        let raw: RawTranscript = serde_json::from_str(TRANSCRIPT).unwrap();
+        let voice = raw
+            .speakers
+            .iter()
+            .find(|s| s.id.contains(':'))
+            .expect("the fixture has a diarized speaker")
+            .clone();
+        lab.store
+            .put_meeting_voices(
+                "m1",
+                &[VoiceRow {
+                    voice_id: voice.id.clone(),
+                    track: voice.track.clone().unwrap_or_default(),
+                    label: "SPEAKER_00".into(),
+                    embedding: vec![1.0],
+                    speech_ms: 9_000,
+                    decision: VoiceDecision::Unknown,
+                    score: None,
+                    matched_participant: None,
+                    assigned_participant: None,
+                    confirmed: false,
+                    merged_into: None,
+                }],
+            )
+            .unwrap();
+        voice.id
+    }
+
+    fn named_labels(lab: &Lab) -> Vec<(String, String)> {
+        let named: RawTranscript =
+            serde_json::from_slice(&fs::read(lab.work("m1").join(NAMED_TRANSCRIPT_FILE)).unwrap())
+                .unwrap();
+        named
+            .speakers
+            .into_iter()
+            .map(|s| (s.id, s.label))
+            .collect()
+    }
+
+    #[test]
+    fn a_voice_the_user_named_reaches_the_model_even_when_the_cycle_does_not_list_the_person() {
+        let lab = lab();
+        let voice = meeting_with_an_unnamed_voice(&lab);
+        // Created by the Voices screen: a participant of the store that cycle.yaml does not list.
+        lab.store
+            .create_participant("team:radek-wojcik", "Radek Wójcik", 1)
+            .unwrap();
+        lab.store
+            .set_voice_assignment("m1", &voice, Some("team:radek-wojcik"))
+            .unwrap();
+
+        let out = prepare_context(&lab.store, &source(), &lab.env(), "m1").unwrap();
+        assert!(matches!(
+            out,
+            ContextOutcome::Written {
+                named_transcript: true,
+                ..
+            }
+        ));
+        // The model reads the name on the lines; the participant list is the cycle's own.
+        let labels = named_labels(&lab);
+        assert!(
+            labels.contains(&(voice.clone(), "Radek Wójcik".into())),
+            "{labels:?}"
+        );
+        assert!(
+            labels.contains(&("user".into(), "You".into())),
+            "{labels:?}"
+        );
+        let ctx = read(&lab.work("m1").join(CONTEXT_FILE));
+        let ids: Vec<&str> = ctx["participants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["alex"]);
+    }
+
+    #[test]
+    fn an_unnamed_voice_stays_a_generic_label_and_naming_it_later_is_picked_up() {
+        let lab = lab();
+        let voice = meeting_with_an_unnamed_voice(&lab);
+        let dir = lab.root.path().join("m1");
+
+        // Before the user names it: the generic, language-neutral label, never a role.
+        assert!(write_named_transcript(&lab.store, "m1", &dir).unwrap());
+        let before = named_labels(&lab);
+        assert!(
+            before.contains(&(voice.clone(), "Speaker 1".into())),
+            "{before:?}"
+        );
+
+        // The Voices screen names the voice; the next run of the extraction writes the name.
+        lab.store
+            .create_participant("team:radek-wojcik", "Radek Wójcik", 2)
+            .unwrap();
+        lab.store
+            .set_voice_assignment("m1", &voice, Some("team:radek-wojcik"))
+            .unwrap();
+        assert!(write_named_transcript(&lab.store, "m1", &dir).unwrap());
+        let after = named_labels(&lab);
+        assert!(after.contains(&(voice, "Radek Wójcik".into())), "{after:?}");
+        assert_eq!(after.len(), before.len());
     }
 
     #[test]

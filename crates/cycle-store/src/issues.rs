@@ -48,6 +48,13 @@ pub struct IssueCache {
     pub fetched_unix_ms: Option<u64>,
     #[serde(default)]
     pub issues: Vec<OpenIssue>,
+    /// Numbers of the cycle's issues that are closed (among the most recently updated ones).
+    /// Old cache files have none.
+    #[serde(default)]
+    pub closed: Vec<u64>,
+    /// The issues created from meeting items, found by their marker, open or closed.
+    #[serde(default)]
+    pub links: Vec<IssueLink>,
 }
 
 impl IssueCache {
@@ -67,6 +74,268 @@ impl IssueCache {
     }
 }
 
+/// An issue created from an item of a meeting, found again through its hidden marker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IssueLink {
+    pub number: u64,
+    /// The meeting id (`20261113-140501`).
+    pub meeting: String,
+    /// The id of the item in that meeting's draft.
+    pub item: String,
+    #[serde(default)]
+    pub open: bool,
+}
+
+// ----- markers --------------------------------------------------------------------------------
+
+pub(crate) const MARKER_START: &str = "<!-- bbb:v1 ";
+pub(crate) const MARKER_END: &str = " -->";
+
+pub(crate) fn marker_value(v: &str) -> bool {
+    !v.is_empty()
+        && v.len() <= 64
+        && v.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+/// The hidden comment of an issue body that ties the issue to the item it was made from:
+/// `<!-- bbb:v1 cycle=NOMAD meeting=20261113-140501 item=i3 t=745000 -->`. It is how a retry
+/// finds an issue that was created but not acknowledged, and how the next briefing knows an
+/// item has an issue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemMarker {
+    pub cycle: String,
+    pub meeting: String,
+    pub item: String,
+    /// Where in the recording the item was said, in milliseconds.
+    pub t_ms: Option<u64>,
+}
+
+impl ItemMarker {
+    /// The comment, or `None` when a value could not be written safely.
+    pub fn to_comment(&self) -> Option<String> {
+        if !(marker_value(&self.cycle) && marker_value(&self.meeting) && marker_value(&self.item)) {
+            return None;
+        }
+        let mut out = format!(
+            "{MARKER_START}cycle={} meeting={} item={}",
+            self.cycle, self.meeting, self.item
+        );
+        if let Some(t) = self.t_ms {
+            out.push_str(&format!(" t={t}"));
+        }
+        out.push_str(MARKER_END);
+        Some(out)
+    }
+
+    /// The first item marker in `text`.
+    pub fn parse(text: &str) -> Option<ItemMarker> {
+        markers(text).find_map(|tokens| {
+            let get = |k: &str| {
+                tokens
+                    .iter()
+                    .find_map(|t| t.strip_prefix(k).and_then(|v| v.strip_prefix('=')))
+            };
+            let (cycle, meeting, item) = (get("cycle")?, get("meeting")?, get("item")?);
+            if ![cycle, meeting, item].iter().all(|v| marker_value(v)) {
+                return None;
+            }
+            Some(ItemMarker {
+                cycle: cycle.to_string(),
+                meeting: meeting.to_string(),
+                item: item.to_string(),
+                t_ms: get("t").and_then(|t| t.parse().ok()),
+            })
+        })
+    }
+}
+
+/// The hidden comment of a status comment: `<!-- bbb:v1 status meeting=.. proposal=s2 -->`.
+/// A retry looks for it before commenting again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatusMarker {
+    pub meeting: String,
+    pub proposal: String,
+}
+
+impl StatusMarker {
+    pub fn to_comment(&self) -> Option<String> {
+        if !(marker_value(&self.meeting) && marker_value(&self.proposal)) {
+            return None;
+        }
+        Some(format!(
+            "{MARKER_START}status meeting={} proposal={}{MARKER_END}",
+            self.meeting, self.proposal
+        ))
+    }
+
+    pub fn parse(text: &str) -> Option<StatusMarker> {
+        markers(text).find_map(|tokens| {
+            if tokens.first() != Some(&"status") {
+                return None;
+            }
+            let get = |k: &str| {
+                tokens
+                    .iter()
+                    .find_map(|t| t.strip_prefix(k).and_then(|v| v.strip_prefix('=')))
+            };
+            let (meeting, proposal) = (get("meeting")?, get("proposal")?);
+            (marker_value(meeting) && marker_value(proposal)).then(|| StatusMarker {
+                meeting: meeting.to_string(),
+                proposal: proposal.to_string(),
+            })
+        })
+    }
+}
+
+/// The tokens of every `<!-- bbb:v1 ... -->` comment in `text`.
+pub(crate) fn markers(text: &str) -> impl Iterator<Item = Vec<&str>> {
+    let mut rest = text;
+    std::iter::from_fn(move || {
+        let start = rest.find(MARKER_START)?;
+        let after = &rest[start + MARKER_START.len()..];
+        match after.find(MARKER_END) {
+            Some(end) => {
+                rest = &after[end + MARKER_END.len()..];
+                Some(after[..end].split_whitespace().collect())
+            }
+            None => {
+                rest = "";
+                None
+            }
+        }
+    })
+}
+
+// ----- records ----------------------------------------------------------------------------------
+
+/// An issue as the list endpoint returns it, reduced to what the cycle needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueRecord {
+    pub number: u64,
+    pub title: String,
+    pub assignee: Option<String>,
+    pub url: Option<String>,
+    pub open: bool,
+    /// The marker of the body, when the issue was made from a meeting item.
+    pub marker: Option<ItemMarker>,
+}
+
+/// Reads one entry of the list of issues; pull requests and malformed entries give `None`.
+pub fn parse_issue_record(entry: &Value) -> Option<IssueRecord> {
+    if entry.get("pull_request").is_some() {
+        return None;
+    }
+    let issue = parse_issue(entry)?;
+    Some(IssueRecord {
+        number: issue.number,
+        title: issue.title,
+        assignee: issue.assignee,
+        url: issue.url,
+        open: entry.get("state").and_then(Value::as_str) != Some("closed"),
+        marker: entry
+            .get("body")
+            .and_then(Value::as_str)
+            .and_then(ItemMarker::parse),
+    })
+}
+
+impl IssueCache {
+    /// The cache for a fetch of all states: open issues, closed numbers and the links of the
+    /// issues that carry a marker of `cycle_id`.
+    pub fn from_records(
+        repo: &str,
+        label: &str,
+        cycle_id: &str,
+        fetched_unix_ms: u64,
+        records: &[IssueRecord],
+    ) -> IssueCache {
+        let mut cache = IssueCache {
+            repo: repo.to_string(),
+            label: label.to_string(),
+            fetched_unix_ms: Some(fetched_unix_ms),
+            ..IssueCache::default()
+        };
+        for r in records {
+            if r.open {
+                cache.issues.push(OpenIssue {
+                    number: r.number,
+                    title: r.title.clone(),
+                    assignee: r.assignee.clone(),
+                    url: r.url.clone(),
+                });
+            } else {
+                cache.closed.push(r.number);
+            }
+            if let Some(m) = r.marker.as_ref().filter(|m| m.cycle == cycle_id) {
+                cache.links.push(IssueLink {
+                    number: r.number,
+                    meeting: m.meeting.clone(),
+                    item: m.item.clone(),
+                    open: r.open,
+                });
+            }
+        }
+        cache
+    }
+}
+
+/// Stores the outcome of a fetch of all issues of a cycle (`fetched`, from
+/// `publishers::github::Github::list_cycle_issues`) in the cache at `cache_path`. A failure
+/// returns the cached state for the same repository and label with its date and the reason,
+/// and leaves the cache untouched.
+pub fn apply_fetch(
+    fetched: std::result::Result<Vec<IssueRecord>, String>,
+    repo: &str,
+    label: &str,
+    cycle_id: &str,
+    cache_path: &Path,
+) -> IssueList {
+    match fetched {
+        Ok(records) => {
+            let now = now_unix_ms();
+            let cache = IssueCache::from_records(repo, label, cycle_id, now, &records);
+            let error = cache
+                .save(cache_path)
+                .err()
+                .map(|e| format!("cannot write the issue cache: {e}"));
+            IssueList {
+                issues: cache.issues,
+                as_of_unix_ms: Some(now),
+                from_cache: false,
+                error,
+                closed: cache.closed,
+                links: cache.links,
+            }
+        }
+        Err(message) => cached_list(cache_path, repo, label, message),
+    }
+}
+
+/// The cached list for `repo` and `label`, marked as such, with the reason it is used.
+fn cached_list(cache_path: &Path, repo: &str, label: &str, message: String) -> IssueList {
+    let cache = IssueCache::load(cache_path);
+    if cache.repo == repo && cache.label == label {
+        IssueList {
+            issues: cache.issues,
+            as_of_unix_ms: cache.fetched_unix_ms,
+            from_cache: true,
+            error: Some(message),
+            closed: cache.closed,
+            links: cache.links,
+        }
+    } else {
+        IssueList {
+            issues: Vec::new(),
+            as_of_unix_ms: None,
+            from_cache: true,
+            error: Some(message),
+            closed: Vec::new(),
+            links: Vec::new(),
+        }
+    }
+}
+
 /// The result of asking for the open issues.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IssueList {
@@ -78,6 +347,10 @@ pub struct IssueList {
     pub from_cache: bool,
     /// Why the request failed.
     pub error: Option<String>,
+    /// Numbers of closed issues (only a fetch of all states knows them).
+    pub closed: Vec<u64>,
+    /// Issues created from meeting items.
+    pub links: Vec<IssueLink>,
 }
 
 impl IssueList {
@@ -106,6 +379,7 @@ pub fn fetch_open_issues(
                 label: label.to_string(),
                 fetched_unix_ms: Some(now),
                 issues: issues.clone(),
+                ..IssueCache::default()
             };
             let error = cache
                 .save(cache_path)
@@ -116,26 +390,11 @@ pub fn fetch_open_issues(
                 as_of_unix_ms: Some(now),
                 from_cache: false,
                 error,
+                closed: Vec::new(),
+                links: Vec::new(),
             }
         }
-        Err(message) => {
-            let cache = IssueCache::load(cache_path);
-            if cache.repo == repo && cache.label == label {
-                IssueList {
-                    issues: cache.issues,
-                    as_of_unix_ms: cache.fetched_unix_ms,
-                    from_cache: true,
-                    error: Some(message),
-                }
-            } else {
-                IssueList {
-                    issues: Vec::new(),
-                    as_of_unix_ms: None,
-                    from_cache: true,
-                    error: Some(message),
-                }
-            }
-        }
+        Err(message) => cached_list(cache_path, repo, label, message),
     }
 }
 
@@ -168,6 +427,8 @@ fn agent() -> ureq::Agent {
         .tls_config(
             ureq::tls::TlsConfig::builder()
                 .provider(ureq::tls::TlsProvider::NativeTls)
+                // Without roots ureq's native-tls connector panics on the first https request.
+                .root_certs(ureq::tls::RootCerts::PlatformVerifier)
                 .build(),
         )
         .build()
@@ -333,6 +594,26 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn agent_uses_the_platform_verifier() {
+        let agent = agent();
+        let tls = agent.config().tls_config();
+        assert_eq!(tls.provider(), ureq::tls::TlsProvider::NativeTls);
+        assert!(matches!(
+            tls.root_certs(),
+            ureq::tls::RootCerts::PlatformVerifier
+        ));
+    }
+
+    /// A real TLS handshake with this agent (an unauthenticated HEAD of a public page);
+    /// reaches the Internet, so it is not run in CI (docs/TESTING.md, section 14).
+    #[test]
+    #[ignore = "reaches the Internet: cargo test -p cycle-store https_handshake -- --ignored"]
+    fn https_handshake_with_the_issues_agent() {
+        let response = agent().head("https://github.com").call().expect("https");
+        assert!(response.status().as_u16() < 500);
+    }
+
     fn issue_json(n: u64, title: &str, assignee: Option<&str>, pr: bool) -> Value {
         let mut v = json!({
             "number": n,
@@ -352,7 +633,7 @@ mod tests {
 
     #[test]
     fn fetches_filters_pull_requests_and_caches() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("issues");
         let cache_path = dir.path().join("issues.json");
         let server = MockServer::start(vec![page(vec![
             issue_json(12, "Order the battery", Some("alex-example"), false),
@@ -401,7 +682,7 @@ mod tests {
 
     #[test]
     fn no_token_means_no_authorization_header() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("issues");
         let server = MockServer::start(vec![page(vec![])]);
         let list = fetch_open_issues(
             &server.base,
@@ -417,7 +698,7 @@ mod tests {
 
     #[test]
     fn follows_pages_up_to_the_limit() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("issues");
         let full = |start: u64| {
             page(
                 (start..start + 100)
@@ -458,7 +739,7 @@ mod tests {
 
     #[test]
     fn failures_return_the_cache_with_its_date() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("issues");
         let cache_path = dir.path().join("issues.json");
         let cached = IssueCache {
             repo: "owner/rover".into(),
@@ -470,6 +751,7 @@ mod tests {
                 assignee: None,
                 url: None,
             }],
+            ..IssueCache::default()
         };
         cached.save(&cache_path).unwrap();
 
@@ -526,7 +808,7 @@ mod tests {
 
     #[test]
     fn cache_for_another_label_is_not_used() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("issues");
         let cache_path = dir.path().join("issues.json");
         IssueCache {
             repo: "owner/rover".into(),
@@ -538,6 +820,7 @@ mod tests {
                 assignee: None,
                 url: None,
             }],
+            ..IssueCache::default()
         }
         .save(&cache_path)
         .unwrap();
@@ -549,9 +832,207 @@ mod tests {
         assert!(list.issues.is_empty() && list.as_of_unix_ms.is_none() && list.error.is_some());
     }
 
+    fn marker() -> ItemMarker {
+        ItemMarker {
+            cycle: "NOMAD".into(),
+            meeting: "20261113-140501".into(),
+            item: "i3".into(),
+            t_ms: Some(745_000),
+        }
+    }
+
+    #[test]
+    fn the_item_marker_round_trips_inside_a_body() {
+        let comment = marker().to_comment().unwrap();
+        assert_eq!(
+            comment,
+            "<!-- bbb:v1 cycle=NOMAD meeting=20261113-140501 item=i3 t=745000 -->"
+        );
+        let body = format!("Order the battery\n\nFrom meeting.\n\n{comment}\n");
+        assert_eq!(ItemMarker::parse(&body), Some(marker()));
+        // Without a time.
+        let mut m = marker();
+        m.t_ms = None;
+        assert_eq!(ItemMarker::parse(&m.to_comment().unwrap()), Some(m));
+        // Not a marker: plain text, another version, a status marker, a missing key.
+        for text in [
+            "no marker here",
+            "<!-- bbb:v2 cycle=A meeting=B item=c -->",
+            "<!-- bbb:v1 status meeting=20261113-140501 proposal=s2 -->",
+            "<!-- bbb:v1 cycle=A meeting=B -->",
+            "<!-- bbb:v1 cycle=A meeting=B item=c",
+            "<!-- other cycle=A meeting=B item=c -->",
+            "",
+        ] {
+            assert_eq!(ItemMarker::parse(text), None, "{text}");
+        }
+        // Values that could break the comment are refused when writing and reading.
+        let mut bad = marker();
+        bad.item = "i3 -->".into();
+        assert_eq!(bad.to_comment(), None);
+        assert_eq!(
+            ItemMarker::parse("<!-- bbb:v1 cycle=A meeting=B item=c<d -->"),
+            None
+        );
+    }
+
+    #[test]
+    fn the_first_marker_wins_and_a_quoted_marker_still_counts_once() {
+        let body =
+            "<!-- bbb:v1 cycle=A meeting=M1 item=x -->\n<!-- bbb:v1 cycle=A meeting=M2 item=y -->";
+        assert_eq!(ItemMarker::parse(body).unwrap().meeting, "M1");
+    }
+
+    #[test]
+    fn the_status_marker_round_trips_and_is_not_an_item_marker() {
+        let m = StatusMarker {
+            meeting: "20261113-140501".into(),
+            proposal: "s2".into(),
+        };
+        let comment = m.to_comment().unwrap();
+        assert_eq!(
+            comment,
+            "<!-- bbb:v1 status meeting=20261113-140501 proposal=s2 -->"
+        );
+        assert_eq!(StatusMarker::parse(&format!("Done.\n{comment}")), Some(m));
+        assert_eq!(StatusMarker::parse(&marker().to_comment().unwrap()), None);
+        assert_eq!(ItemMarker::parse(&comment), None);
+    }
+
+    fn entry(n: u64, state: &str, body: &str, pr: bool) -> Value {
+        let mut v = json!({
+            "number": n,
+            "title": format!("Issue {n}"),
+            "state": state,
+            "body": body,
+            "html_url": format!("https://example.invalid/issues/{n}"),
+            "assignee": {"login": "alex-example"},
+        });
+        if pr {
+            v["pull_request"] = json!({"url": "x"});
+        }
+        v
+    }
+
+    #[test]
+    fn records_split_into_open_closed_and_links() {
+        let marked = |item: &str| {
+            ItemMarker {
+                item: item.into(),
+                ..marker()
+            }
+            .to_comment()
+            .unwrap()
+        };
+        let other_cycle = ItemMarker {
+            cycle: "ROVER".into(),
+            ..marker()
+        }
+        .to_comment()
+        .unwrap();
+        let entries = [
+            entry(1, "open", &format!("text\n{}", marked("i1")), false),
+            entry(2, "closed", &marked("i2"), false),
+            entry(3, "open", "made by hand", false),
+            entry(4, "closed", "", false),
+            entry(5, "open", &marked("i5"), true),
+            entry(6, "open", &other_cycle, false),
+        ];
+        let records: Vec<IssueRecord> = entries.iter().filter_map(parse_issue_record).collect();
+        assert_eq!(records.len(), 5, "pull requests are skipped");
+        let cache = IssueCache::from_records("o/r", "cycle:NOMAD", "NOMAD", 7, &records);
+        assert_eq!(
+            cache.issues.iter().map(|i| i.number).collect::<Vec<_>>(),
+            [1, 3, 6]
+        );
+        assert_eq!(cache.closed, [2, 4]);
+        assert_eq!(
+            cache.links,
+            [
+                IssueLink {
+                    number: 1,
+                    meeting: "20261113-140501".into(),
+                    item: "i1".into(),
+                    open: true
+                },
+                IssueLink {
+                    number: 2,
+                    meeting: "20261113-140501".into(),
+                    item: "i2".into(),
+                    open: false
+                },
+            ],
+            "only issues with a marker of this cycle are linked"
+        );
+        assert_eq!(cache.fetched_unix_ms, Some(7));
+    }
+
+    #[test]
+    fn an_old_cache_file_still_loads() {
+        let dir = test_tmp::TestDir::new("issues");
+        let path = dir.path().join("issues.json");
+        fs::write(
+            &path,
+            r#"{"repo":"o/r","label":"cycle:A","fetched_unix_ms":5,"issues":[{"number":1,"title":"t"}]}"#,
+        )
+        .unwrap();
+        let cache = IssueCache::load(&path);
+        assert_eq!(cache.issues.len(), 1);
+        assert!(cache.closed.is_empty() && cache.links.is_empty());
+        // And a new one round-trips.
+        let full = IssueCache::from_records(
+            "o/r",
+            "cycle:A",
+            "A",
+            9,
+            &[IssueRecord {
+                number: 2,
+                title: "x".into(),
+                assignee: None,
+                url: None,
+                open: false,
+                marker: Some(ItemMarker {
+                    cycle: "A".into(),
+                    meeting: "M".into(),
+                    item: "i".into(),
+                    t_ms: None,
+                }),
+            }],
+        );
+        full.save(&path).unwrap();
+        assert_eq!(IssueCache::load(&path), full);
+    }
+
+    #[test]
+    fn apply_fetch_stores_a_success_and_falls_back_to_the_cache_on_failure() {
+        let dir = test_tmp::TestDir::new("issues");
+        let path = dir.path().join("issues.json");
+        let record = IssueRecord {
+            number: 3,
+            title: "Closed one".into(),
+            assignee: None,
+            url: None,
+            open: false,
+            marker: None,
+        };
+        let list = apply_fetch(Ok(vec![record]), "o/r", "cycle:A", "A", &path);
+        assert!(!list.from_cache && list.error.is_none());
+        assert_eq!(list.closed, [3]);
+        assert!(list.as_of_unix_ms.is_some());
+
+        let failed = apply_fetch(Err("offline".into()), "o/r", "cycle:A", "A", &path);
+        assert!(failed.from_cache);
+        assert_eq!(failed.error.as_deref(), Some("offline"));
+        assert_eq!(failed.closed, [3], "the closed issues come from the cache");
+        assert_eq!(failed.as_of_unix_ms, list.as_of_unix_ms);
+
+        let other = apply_fetch(Err("offline".into()), "o/r", "cycle:B", "B", &path);
+        assert!(other.closed.is_empty() && other.as_of_unix_ms.is_none());
+    }
+
     #[test]
     fn invalid_repo_names_never_reach_the_network() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tmp::TestDir::new("issues");
         for bad in ["rover", "a/b/c", "../x", "owner/na me", "/x", "owner/"] {
             let list = fetch_open_issues(
                 "http://127.0.0.1:1",

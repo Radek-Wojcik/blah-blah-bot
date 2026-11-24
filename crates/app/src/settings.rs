@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use recorder::detect::Sensitivity;
 use serde::{Deserialize, Serialize};
 
 /// How a cycle repository came to be registered.
@@ -24,6 +25,13 @@ pub struct CycleRepoSetting {
     #[serde(default)]
     pub remote: Option<String>,
     pub kind: RepoKind,
+    /// `owner/name` on GitHub, when it cannot be read from `remote` (a GitHub Enterprise
+    /// server, or a local repository that issues are published to).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_repo: Option<String>,
+    /// Base address of the GitHub API of that repository; the public GitHub when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_api: Option<String>,
 }
 
 /// The report choice of the last recording that started, offered again next time.
@@ -38,6 +46,188 @@ pub struct LastReport {
     pub meeting_type: Option<String>,
 }
 
+/// The local bridge to the Chrome extension.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BridgeSettings {
+    /// Listen for the extension at all.
+    pub enabled: bool,
+    /// Port tried first on `127.0.0.1`.
+    pub port: u16,
+    /// Ports tried in order when `port` is taken.
+    pub port_fallbacks: Vec<u16>,
+    /// Extension ids accepted as `Origin`; by default the id of the extension of this
+    /// release (it follows from the key in its manifest). Empty accepts any extension
+    /// (pairing still decides who may stream).
+    pub allowed_extension_ids: Vec<String>,
+    /// Paired extensions. Changed only through pairing and unpairing: a settings save from
+    /// the UI keeps the stored list.
+    pub clients: Vec<bridge::pairing::PairedClient>,
+    /// Record a tab the extension starts while a recording runs, without asking.
+    pub auto_add_tabs: bool,
+}
+
+impl Default for BridgeSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            port: bridge::server::DEFAULT_PORT,
+            port_fallbacks: bridge::server::FALLBACK_PORTS.collect(),
+            allowed_extension_ids: vec![bridge::server::EXTENSION_ID.to_string()],
+            clients: Vec::new(),
+            auto_add_tabs: true,
+        }
+    }
+}
+
+impl BridgeSettings {
+    /// Ports in the order they are tried.
+    pub fn ports(&self) -> Vec<u16> {
+        let mut out = vec![self.port];
+        out.extend(
+            self.port_fallbacks
+                .iter()
+                .copied()
+                .filter(|p| *p != self.port),
+        );
+        out
+    }
+
+    /// The settings as the UI may see them: no secret hashes.
+    pub fn redacted(mut self) -> Self {
+        for c in &mut self.clients {
+            c.secret_sha256.clear();
+        }
+        self
+    }
+
+    /// Check values entered in the settings screen.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.port < 1024 || self.port_fallbacks.iter().any(|p| *p < 1024) {
+            return Err("Bridge ports must be between 1024 and 65535".into());
+        }
+        if self.port_fallbacks.len() > 32 {
+            return Err("At most 32 fallback ports".into());
+        }
+        let id_ok = |id: &String| id.len() == 32 && id.bytes().all(|b| (b'a'..=b'p').contains(&b));
+        if let Some(bad) = self.allowed_extension_ids.iter().find(|id| !id_ok(id)) {
+            return Err(format!(
+                "`{bad}` is not a Chrome extension id (32 letters a to p)"
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Meeting detection: which applications raise a "start recording?" prompt and how readily.
+/// The numbers behind each sensitivity live in `recorder::detect::Presets`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DetectionSettings {
+    /// Watch for calls at all.
+    pub enabled: bool,
+    /// `low`, `balanced` or `high`.
+    pub sensitivity: Sensitivity,
+    /// Conferencing applications whose use of the microphone counts as a call (executable
+    /// names without `.exe`, lowercase). Browsers are never detected this way.
+    pub known_apps: Vec<String>,
+    /// Applications the user chose "Never" for.
+    pub opted_out: Vec<String>,
+    /// Use the Google Meet reports of the browser extension.
+    pub meet: bool,
+}
+
+impl Default for DetectionSettings {
+    fn default() -> Self {
+        let d = recorder::detect::DetectConfig::default();
+        Self {
+            enabled: d.enabled,
+            sensitivity: d.sensitivity,
+            known_apps: d.known_apps,
+            opted_out: d.opted_out,
+            meet: d.meet,
+        }
+    }
+}
+
+impl DetectionSettings {
+    /// The detector's configuration.
+    pub fn to_config(&self) -> recorder::detect::DetectConfig {
+        recorder::detect::DetectConfig {
+            enabled: self.enabled,
+            sensitivity: self.sensitivity,
+            known_apps: self.known_apps.clone(),
+            opted_out: self.opted_out.clone(),
+            meet: self.meet,
+            ..recorder::detect::DetectConfig::default()
+        }
+    }
+
+    /// Opt out of prompts for `app` ("Never for ..."). Google Meet has its own toggle, so
+    /// opting out of it switches `meet` off instead of trapping `"meet"` in `opted_out`.
+    pub fn opt_out(&mut self, app: &str) {
+        let stem = recorder::detect::app_stem(app);
+        if stem == recorder::detect::MEET_APP {
+            self.meet = false;
+            self.opted_out.retain(|a| a != recorder::detect::MEET_APP);
+        } else if !stem.is_empty() && !self.opted_out.contains(&stem) {
+            self.opted_out.push(stem);
+        }
+    }
+
+    /// Migrate legacy settings where `"meet"` was stored in `opted_out` (instead of switching
+    /// `meet` off) or hand-edited into `known_apps`.
+    pub fn migrate_legacy_meet(&mut self) {
+        if self
+            .opted_out
+            .iter()
+            .any(|a| recorder::detect::app_stem(a) == recorder::detect::MEET_APP)
+        {
+            self.meet = false;
+            self.opted_out
+                .retain(|a| recorder::detect::app_stem(a) != recorder::detect::MEET_APP);
+        }
+        self.known_apps
+            .retain(|a| recorder::detect::app_stem(a) != recorder::detect::MEET_APP);
+    }
+
+    /// Normalize the lists (stems, lowercase, no duplicates) and check them.
+    pub fn normalized(mut self) -> Result<Self, String> {
+        let clean = |list: &mut Vec<String>| {
+            let mut out: Vec<String> = Vec::new();
+            for a in list.iter() {
+                let stem = recorder::detect::app_stem(a);
+                if !stem.is_empty() && !out.contains(&stem) {
+                    out.push(stem);
+                }
+            }
+            *list = out;
+        };
+        clean(&mut self.known_apps);
+        clean(&mut self.opted_out);
+        if self
+            .known_apps
+            .iter()
+            .any(|a| a == recorder::detect::MEET_APP)
+        {
+            return Err("Google Meet has its own toggle".into());
+        }
+        self.migrate_legacy_meet();
+        if self.known_apps.len() > 64 || self.opted_out.len() > 64 {
+            return Err("At most 64 applications in a list".into());
+        }
+        if let Some(bad) = self
+            .known_apps
+            .iter()
+            .chain(&self.opted_out)
+            .find(|a| a.len() > 64 || a.contains(['\\', '/', ':']))
+        {
+            return Err(format!("`{bad}` is not an executable name"));
+        }
+        Ok(self)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -50,6 +240,11 @@ pub struct Settings {
     pub cycle_repos: Vec<CycleRepoSetting>,
     /// What the last recording used; filled by the application when a recording starts.
     pub last_report: Option<LastReport>,
+    /// The bridge to the Chrome extension.
+    pub bridge: BridgeSettings,
+    /// Meeting detection. Changed through the detection commands: a settings save from the
+    /// settings screen keeps the stored value.
+    pub detection: DetectionSettings,
 }
 
 impl Default for Settings {
@@ -60,6 +255,8 @@ impl Default for Settings {
             screenshot_hotkey: "Ctrl+Alt+S".into(),
             cycle_repos: Vec::new(),
             last_report: None,
+            bridge: BridgeSettings::default(),
+            detection: DetectionSettings::default(),
         }
     }
 }
@@ -67,10 +264,12 @@ impl Default for Settings {
 impl Settings {
     /// Load settings; a missing or unreadable file yields the defaults.
     pub fn load(path: &Path) -> Self {
-        std::fs::read_to_string(path)
+        let mut settings: Self = std::fs::read_to_string(path)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        settings.detection.migrate_legacy_meet();
+        settings
     }
 
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
@@ -84,12 +283,20 @@ impl Settings {
         std::fs::rename(&tmp, path)
     }
 
-    /// These settings with the values only the application changes (the repository list and
-    /// the last report) taken from `current`, so a settings screen that does not know them
-    /// cannot wipe them.
+    /// These settings with the values only the application changes (the repository list,
+    /// the last report and the paired extensions) taken from `current`, so a settings screen
+    /// that does not know them cannot wipe them.
     pub fn keeping_managed_from(mut self, current: &Settings) -> Self {
         self.cycle_repos = current.cycle_repos.clone();
         self.last_report = current.last_report.clone();
+        self.bridge.clients = current.bridge.clients.clone();
+        self.detection = current.detection.clone();
+        self
+    }
+
+    /// The settings as the UI may see them: secret hashes removed.
+    pub fn redacted(mut self) -> Self {
+        self.bridge = self.bridge.redacted();
         self
     }
 
@@ -118,32 +325,11 @@ impl Settings {
 mod tests {
     use super::*;
 
-    /// Path of a settings file inside a scratch folder that is removed when this is dropped.
-    struct TempFile {
-        _dir: tempfile::TempDir,
-        path: PathBuf,
-    }
-
-    impl std::ops::Deref for TempFile {
-        type Target = std::path::Path;
-        fn deref(&self) -> &std::path::Path {
-            &self.path
-        }
-    }
-
-    impl AsRef<std::path::Path> for TempFile {
-        fn as_ref(&self) -> &std::path::Path {
-            &self.path
-        }
-    }
-
-    fn temp(name: &str) -> TempFile {
-        let dir = tempfile::Builder::new()
-            .prefix(&format!("bbb-settings-{name}-"))
-            .tempdir()
-            .unwrap();
+    /// A settings path in a fresh folder under `target/tmp`; the folder goes with the guard.
+    fn temp(name: &str) -> (test_tmp::TestDir, PathBuf) {
+        let dir = test_tmp::TestDir::new(&format!("app-settings-{name}"));
         let path = dir.path().join("settings.json");
-        TempFile { _dir: dir, path }
+        (dir, path)
     }
 
     #[test]
@@ -165,12 +351,13 @@ mod tests {
 
     #[test]
     fn missing_file_gives_defaults() {
-        assert_eq!(Settings::load(&temp("missing")), Settings::default());
+        let (_dir, path) = temp("missing");
+        assert_eq!(Settings::load(&path), Settings::default());
     }
 
     #[test]
     fn round_trip() {
-        let path = temp("round");
+        let (_dir, path) = temp("round");
         let s = Settings {
             recordings_dir: "D:\\Rec".into(),
             record_hotkey: "Ctrl+F9".into(),
@@ -180,6 +367,8 @@ mod tests {
                 path: "D:/Cycles".into(),
                 remote: None,
                 kind: RepoKind::Local,
+                github_repo: None,
+                github_api: None,
             }],
             last_report: Some(LastReport {
                 cycle_id: "NOMAD".into(),
@@ -187,6 +376,16 @@ mod tests {
                 template: None,
                 meeting_type: Some("budget".into()),
             }),
+            bridge: BridgeSettings {
+                port: 18000,
+                clients: vec![client("c-1")],
+                ..BridgeSettings::default()
+            },
+            detection: DetectionSettings {
+                sensitivity: Sensitivity::High,
+                opted_out: vec!["zoom".into()],
+                ..DetectionSettings::default()
+            },
         };
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), s);
@@ -194,7 +393,7 @@ mod tests {
 
     #[test]
     fn partial_file_fills_defaults() {
-        let path = temp("partial");
+        let (_dir, path) = temp("partial");
         std::fs::write(&path, r#"{"recordHotkey":"Ctrl+F1"}"#).unwrap();
         let s = Settings::load(&path);
         assert_eq!(s.record_hotkey, "Ctrl+F1");
@@ -203,7 +402,7 @@ mod tests {
 
     #[test]
     fn corrupt_file_gives_defaults() {
-        let path = temp("corrupt");
+        let (_dir, path) = temp("corrupt");
         std::fs::write(&path, "{not json").unwrap();
         assert_eq!(Settings::load(&path), Settings::default());
     }
@@ -216,7 +415,7 @@ mod tests {
 
     #[test]
     fn a_file_from_before_cycles_still_loads() {
-        let path = temp("old");
+        let (_dir, path) = temp("old");
         std::fs::write(
             &path,
             r#"{"recordingsDir":"D:/Rec","recordHotkey":"Ctrl+F1","screenshotHotkey":"Ctrl+F2"}"#,
@@ -253,6 +452,8 @@ mod tests {
             path: "X".into(),
             remote: None,
             kind: RepoKind::Local,
+            github_repo: None,
+            github_api: None,
         });
         current.last_report = Some(LastReport {
             cycle_id: "A".into(),
@@ -268,5 +469,166 @@ mod tests {
         assert_eq!(merged.record_hotkey, "Ctrl+F5");
         assert_eq!(merged.cycle_repos, current.cycle_repos);
         assert_eq!(merged.last_report, current.last_report);
+    }
+
+    fn client(id: &str) -> bridge::pairing::PairedClient {
+        bridge::pairing::PairedClient {
+            id: id.into(),
+            name: "Chrome 136".into(),
+            ext_version: "0.6.0".into(),
+            secret_sha256: "ab".repeat(32),
+            paired_unix_ms: 1,
+        }
+    }
+
+    #[test]
+    fn a_settings_save_keeps_the_paired_extensions_but_takes_the_bridge_options() {
+        let mut current = Settings::default();
+        current.bridge.clients.push(client("c-1"));
+        let mut from_ui = Settings::default().redacted();
+        from_ui.bridge.enabled = false;
+        from_ui.bridge.auto_add_tabs = false;
+        let merged = from_ui.keeping_managed_from(&current);
+        assert_eq!(merged.bridge.clients, current.bridge.clients);
+        assert!(!merged.bridge.enabled && !merged.bridge.auto_add_tabs);
+    }
+
+    #[test]
+    fn the_ui_never_sees_secret_hashes() {
+        let mut s = Settings::default();
+        s.bridge.clients.push(client("c-1"));
+        let shown = s.redacted();
+        assert_eq!(shown.bridge.clients[0].id, "c-1");
+        assert!(shown.bridge.clients[0].secret_sha256.is_empty());
+    }
+
+    #[test]
+    fn bridge_defaults_and_validation() {
+        let b = BridgeSettings::default();
+        assert!(b.enabled && b.auto_add_tabs);
+        assert_eq!(b.ports().first(), Some(&17_555));
+        assert_eq!(b.ports().len(), 10);
+        assert_eq!(b.allowed_extension_ids, [bridge::server::EXTENSION_ID]);
+        assert!(b.validate().is_ok());
+        let low = BridgeSettings {
+            port: 80,
+            ..BridgeSettings::default()
+        };
+        assert!(low.validate().is_err());
+        let bad_id = BridgeSettings {
+            allowed_extension_ids: vec!["not-an-id".into()],
+            ..BridgeSettings::default()
+        };
+        assert!(bad_id.validate().is_err());
+        let good_id = BridgeSettings {
+            allowed_extension_ids: vec!["mddhpjgdobfbknicbomoojpbpkgfpima".into()],
+            ..BridgeSettings::default()
+        };
+        assert!(good_id.validate().is_ok());
+        // A file from before the bridge existed gets the defaults.
+        let s: Settings = serde_json::from_str(r#"{"recordHotkey":"Ctrl+F1"}"#).unwrap();
+        assert_eq!(s.bridge, BridgeSettings::default());
+    }
+
+    #[test]
+    fn detection_defaults_to_balanced_with_the_known_apps() {
+        let d = DetectionSettings::default();
+        assert!(d.enabled && d.meet);
+        assert_eq!(d.sensitivity, Sensitivity::Balanced);
+        assert_eq!(d.known_apps, recorder::detect::KNOWN_APPS);
+        assert!(d.opted_out.is_empty());
+        // A file from before detection existed gets the defaults; the camelCase names hold.
+        let s: Settings = serde_json::from_str(r#"{"recordHotkey":"Ctrl+F1"}"#).unwrap();
+        assert_eq!(s.detection, d);
+        let s: Settings = serde_json::from_str(
+            r#"{"detection":{"sensitivity":"low","knownApps":["zoom"],"optedOut":["slack"]}}"#,
+        )
+        .unwrap();
+        assert_eq!(s.detection.sensitivity, Sensitivity::Low);
+        assert_eq!(s.detection.known_apps, ["zoom"]);
+        assert_eq!(s.detection.opted_out, ["slack"]);
+        assert!(s.detection.enabled);
+    }
+
+    #[test]
+    fn detection_lists_are_normalized_and_checked() {
+        let d = DetectionSettings {
+            known_apps: vec![
+                " Zoom.EXE ".into(),
+                "zoom".into(),
+                "".into(),
+                "Slack".into(),
+            ],
+            ..DetectionSettings::default()
+        };
+        assert_eq!(d.normalized().unwrap().known_apps, ["zoom", "slack"]);
+        let bad = DetectionSettings {
+            known_apps: vec!["C:\\x\\app".into()],
+            ..DetectionSettings::default()
+        };
+        assert!(bad.normalized().is_err());
+    }
+
+    #[test]
+    fn a_settings_save_keeps_the_detection_settings() {
+        let mut current = Settings::default();
+        current.detection.opted_out.push("discord".into());
+        let merged = Settings::default().keeping_managed_from(&current);
+        assert_eq!(merged.detection, current.detection);
+    }
+
+    #[test]
+    fn opting_out_of_meet_toggles_meet_and_migrates_legacy_opt_out() {
+        let mut d = DetectionSettings::default();
+        d.opt_out("meet");
+        assert!(!d.meet);
+        assert!(d.opted_out.is_empty());
+
+        d.opt_out("Discord.EXE");
+        assert_eq!(d.opted_out, ["discord"]);
+
+        // Saving an unrelated setting on legacy `{ meet: true, optedOut: ["meet"] }` must keep
+        // Meet off instead of silently re-enabling it.
+        let legacy = DetectionSettings {
+            sensitivity: Sensitivity::High,
+            meet: true,
+            opted_out: vec!["meet".into(), "zoom".into()],
+            ..DetectionSettings::default()
+        };
+        let migrated = legacy.normalized().unwrap();
+        assert!(!migrated.meet);
+        assert_eq!(migrated.opted_out, ["zoom"]);
+
+        // Explicitly re-enabling Meet once `"meet"` is gone keeps Meet on.
+        let reenabled = DetectionSettings {
+            meet: true,
+            ..migrated
+        }
+        .normalized()
+        .unwrap();
+        assert!(reenabled.meet);
+        assert_eq!(reenabled.opted_out, ["zoom"]);
+
+        // Reject `"meet"` / `"Meet.exe"` in `known_apps` on save (Google Meet has its own toggle).
+        for candidate in ["meet", "Meet.exe"] {
+            let with_meet = DetectionSettings {
+                known_apps: vec!["zoom".into(), candidate.into()],
+                ..DetectionSettings::default()
+            };
+            assert!(with_meet.normalized().is_err());
+        }
+
+        // Loading a legacy settings file migrates `"meet"` out of `opted_out` and strips a
+        // hand-edited `"meet"` entry from `known_apps`.
+        let (_dir, path) = temp("legacy-meet");
+        std::fs::write(
+            &path,
+            r#"{"detection":{"meet":true,"knownApps":["zoom","Meet.exe"],"optedOut":["meet","zoom"]}}"#,
+        )
+        .unwrap();
+        let loaded = Settings::load(&path);
+        assert!(!loaded.detection.meet);
+        assert_eq!(loaded.detection.known_apps, ["zoom"]);
+        assert_eq!(loaded.detection.opted_out, ["zoom"]);
     }
 }

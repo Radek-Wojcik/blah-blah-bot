@@ -1,0 +1,42 @@
+{
+  "summary": "The team discussed the monitor mount and agreed on the next steps.",
+  "items": [
+    {
+      "type": "task",
+      "text": "Prepare the monitor mount design",
+      "assignee": "alex",
+      "due": "2026-11-20",
+      "certainty": {
+        "assignee": "stated",
+        "due": "inferred"
+      },
+      "section": "hardware",
+      "relates_to": "#12",
+      "time": "00:12:34",
+      "quote": "Alex, can you have the mount ready by next Friday?"
+    },
+    {
+      "type": "note",
+      "text": "Zephyr is the code name of the mount",
+      "assignee": null,
+      "due": null,
+      "certainty": {
+        "assignee": "unknown",
+        "due": "unknown"
+      },
+      "section": null,
+      "relates_to": null,
+      "time": "00:03:10",
+      "quote": "we call the mount Zephyr internally"
+    }
+  ],
+  "status_changes": [
+    {
+      "target": "#12",
+      "status": "done",
+      "reason": "Alex says the prototype is finished.",
+      "time": "00:13:32",
+      "quote": "The prototype of the mount is done, I tested it yesterday."
+    }
+  ]
+}

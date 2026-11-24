@@ -13,8 +13,11 @@ const PULL_TEXT: Record<PullResult["outcome"], string> = {
 };
 
 /** The cycles of every registered repository, with the repositories, and the form for a new cycle. */
-export function CyclesView(props: { onOpenCycle: (cycleId: string) => void }) {
-  const { onOpenCycle } = props;
+export function CyclesView(props: {
+  onOpenCycle: (cycleId: string) => void;
+  onOpenBriefing: (cycleId: string) => void;
+}) {
+  const { onOpenCycle, onOpenBriefing } = props;
   const backend = useBackend();
   const { cycles, repos, reload } = useCycles();
   const [error, setError] = useState<string | null>(null);
@@ -147,6 +150,13 @@ export function CyclesView(props: { onOpenCycle: (cycleId: string) => void }) {
                         >
                           {c.valid ? "Valid" : "Needs fixing"}
                         </span>
+                        <button
+                          className="btn btn-small"
+                          aria-label={`Briefing ${c.id}`}
+                          onClick={() => onOpenBriefing(c.id)}
+                        >
+                          Briefing
+                        </button>
                         <button
                           className="btn btn-small"
                           aria-label={`Edit ${c.id}`}

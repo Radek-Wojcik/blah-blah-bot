@@ -13,7 +13,11 @@ import {
   toneWav,
 } from "./mock-demo";
 import { createCycleStore, type RecordingReport } from "./mock-cycles";
+import { createMockBridge } from "./mock-bridge";
+import { createMockBriefing } from "./mock-briefing";
+import { createMockDetection } from "./mock-detection";
 import { createMockDrafts } from "./mock-drafts";
+import { createMockPublishing, type MockHooks } from "./mock-publish";
 import { mockCheckSetupPath, mockGgufModels, mockSetupStatus } from "./mock-readiness";
 import { applySetupScenario, type SetupScenario } from "./mock-setup";
 import { fail } from "./mock-util";
@@ -60,7 +64,38 @@ const demoSources: SourceInfo[] = [
   { id: "mic:default", kind: "microphone", label: "Microphone (USB headset)", active: true },
   { id: "app:discord", kind: "application", label: "Discord", active: true },
   { id: "app:teams", kind: "application", label: "Microsoft Teams", active: false },
-  { id: "app:chrome", kind: "application", label: "Google Chrome", active: true },
+  { id: "app:chrome", kind: "browser", label: "Chrome (whole browser)", active: true },
+];
+
+/** The hints of the whole browser, as the application words them. */
+const HINT_NOT_CONNECTED =
+  "The browser extension is not connected. This records all sound from Chrome instead of single tabs.";
+const HINT_TAB_FAILED =
+  "A tab could not be captured. This records all sound from Chrome, including that tab.";
+const HINT_TABS_OK = "Records all sound from Chrome. Choose tabs instead to leave the others out.";
+
+/** Fictional tabs the extension has captured (`tabs=1` in the address). */
+const demoTabs: SourceInfo[] = [
+  {
+    id: "tab:s1",
+    kind: "browser_tab",
+    label: "Tab: ORBIT weekly sync (meet.example.org)",
+    active: true,
+    group: "Group 1",
+  },
+  {
+    id: "tab:s2",
+    kind: "browser_tab",
+    label: "Tab: Thruster plan (docs.example.org)",
+    active: true,
+    group: "Group 1",
+  },
+  {
+    id: "tab:s3",
+    kind: "browser_tab",
+    label: "Tab: Budget sheet (sheets.example.org)",
+    active: true,
+  },
 ];
 
 function meeting(
@@ -92,6 +127,8 @@ export interface MockOptions {
   jobStepMs?: number;
   /** Start with a newer draft next to the edited one of the demo meeting (the banner). */
   newDraft?: boolean;
+  /** Start with the network off: publishing waits until it is back. */
+  offline?: boolean;
   /**
    * Make the screenshot overlay fail the way a bad capture would: `blank` refuses the image
    * like the real backend does, `black` serves an all-black picture, `broken` serves bytes that
@@ -103,17 +140,34 @@ export interface MockOptions {
    * reports a finished setup and does not check it before processing.
    */
   setup?: SetupScenario;
+  /** Simulate an extension entering the pairing code this many milliseconds after pairing starts. */
+  bridgePairMs?: number;
+  /** Raise a prompt for a fictional Discord call this many milliseconds after start. */
+  detectMs?: number;
+  /**
+   * The extension has captured tabs: `ok`, or `failed` when a tab of the group could not be
+   * captured. Without it the extension is not connected and only the whole browser is offered.
+   */
+  browserTabs?: "ok" | "failed";
 }
 
 /** In-memory backend that serves the fictional demo cycle. No audio devices, files or network. */
 export function createMockBackend(opts: MockOptions = {}): Backend {
+  const startedAt = Date.now();
   const settings: Settings = {
     recordingsDir: "Documents\\BlahBlahBot\\recordings",
     recordHotkey: "Ctrl+Alt+R",
     screenshotHotkey: "Ctrl+Alt+S",
   };
+  // ----- the bridge to the Chrome extension -----
+  const bridge = createMockBridge({
+    now: () => Date.now(),
+    demoPairedUnixMs: DEMO_NOW - 3 * 24 * 3600_000,
+    ...(opts.bridgePairMs === undefined ? {} : { pairAfterMs: opts.bridgePairMs }),
+  });
   // ----- cycles, report settings and drafts -----
   const cycles = createCycleStore();
+  const briefing = createMockBriefing(cycles);
   /** What each meeting was recorded with; a meeting without an entry has no cycle. */
   const reports = new Map<string, RecordingReport>([
     [
@@ -156,7 +210,23 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     );
   let jobs: JobView[] = demoJobs();
   const transcripts = new Map<string, TranscriptData>([["m5", demoTranscript("m5")]]);
-  const drafts = createMockDrafts(cycles, (id) => transcripts.has(id));
+  const lock: { is: (meetingId: string) => boolean } = { is: () => false };
+  const drafts = createMockDrafts(
+    cycles,
+    (id) => transcripts.has(id),
+    (id) => lock.is(id),
+  );
+  const publishing = createMockPublishing({
+    cycles,
+    drafts,
+    stepMs,
+    now: () => DEMO_NOW + (Date.now() - startedAt),
+    screenshotCount: (id) => meetings.find((m) => m.id === id)?.screenshotCount ?? 0,
+    onUnlocked: (id) => drafts.touch(id),
+  });
+  lock.is = publishing.isLocked;
+  if (opts.offline) publishing.hooks.setOffline(true);
+  (globalThis as { __bbbMock?: MockHooks }).__bbbMock = publishing.hooks;
   drafts.create("m5", reports.get("m5")!);
   if (opts.newDraft) drafts.leaveNewDraft("m5");
   /** The backend each job was started with; a job without an entry has none. */
@@ -333,8 +403,22 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     emitQueue();
   }
 
+  /** The sources the picker offers, with the hint of the whole browser. */
+  function sourceList(): SourceInfo[] {
+    const hint =
+      opts.browserTabs === "ok"
+        ? HINT_TABS_OK
+        : opts.browserTabs === "failed"
+          ? HINT_TAB_FAILED
+          : HINT_NOT_CONNECTED;
+    return [
+      ...demoSources.map((s) => (s.kind === "browser" ? { ...s, hint } : { ...s })),
+      ...(opts.browserTabs ? demoTabs.map((s) => ({ ...s })) : []),
+    ];
+  }
+
   function active(id: string, offsetMs: number): ActiveSource {
-    const src = demoSources.find((s) => s.id === id);
+    const src = sourceList().find((s) => s.id === id);
     if (!src) fail("source_not_found", `Unknown source ${id}`);
     return { id, label: src.label, kind: src.kind, status: "recording", offsetMs, level: 0.3 };
   }
@@ -364,6 +448,29 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
   }
 
   if (opts.recording) begin(["mic:default", "app:discord"], 12 * MIN + 41_000);
+
+  // ----- meeting detection -----
+  const detection = createMockDetection({
+    ...(opts.detectMs === undefined ? {} : { promptAfterMs: opts.detectMs }),
+    recording: () => state.status === "recording",
+    // The same gate as `startRecording` with the last report; a recording that runs already
+    // gets the sources added.
+    record: async (sourceIds) => {
+      const report = cycles.resolveChoice(undefined, true);
+      if (state.status === "recording") {
+        sourceIds
+          .filter((id) => !state.sources.some((s) => s.id === id))
+          .forEach(
+            (id) =>
+              (state = { ...state, sources: [...state.sources, active(id, state.elapsedMs)] }),
+          );
+        emit();
+        return;
+      }
+      begin(sourceIds);
+      if (state.meetingId !== null) reports.set(state.meetingId, report);
+    },
+  });
 
   // Every subscription is its own entry, even when the same callback is registered twice
   // (React StrictMode does that): removing one must not remove the other.
@@ -459,7 +566,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       meetings = meetings.map((x) => (x.id === id ? { ...x, state: "recovered" } : x));
       emitMeetings();
     },
-    listSources: async () => demoSources.map((s) => ({ ...s })),
+    listSources: async () => sourceList(),
     recordingState: async () => structuredClone(state),
     startRecording: async (req) => {
       // The gate comes first, like in `start_recording`: no cycle and mode, no recording.
@@ -529,6 +636,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#101a33"/><stop offset="1" stop-color="#3a1030"/></linearGradient></defs><rect width="1600" height="900" fill="url(#g)"/><g fill="#00f0ff" opacity=".5"><rect x="120" y="120" width="560" height="320"/><rect x="760" y="200" width="680" height="480"/></g></svg>';
       return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
     },
+    overlayReady: async () => {},
     overlayFinish: async (region) => {
       if (region && state.status === "recording") {
         state = { ...state, screenshotCount: state.screenshotCount + 1 };
@@ -842,16 +950,25 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         path: r.path,
         remote: r.remote,
         kind: r.kind,
+        githubRepo: r.githubRepo ?? null,
+        githubApi: r.githubApi ?? null,
       })),
       lastReport: cycles.lastReport(),
+      bridge: bridge.settings(),
+      detection: detection.settings(),
     }),
-    // The repository list and the last report are not saved from the settings screen.
-    saveSettings: async (s) =>
-      void Object.assign(settings, {
+    // The repository list, the last report and the paired extensions are not saved from the
+    // settings screen.
+    saveSettings: async (s) => {
+      bridge.save(s.bridge);
+      Object.assign(settings, {
         recordingsDir: s.recordingsDir,
         recordHotkey: s.recordHotkey,
         screenshotHotkey: s.screenshotHotkey,
-      }),
+      });
+    },
+    ...bridge.methods,
+    ...detection.methods,
     onRecordingState: (cb) => subscribe(stateListeners, cb),
     onMeetingsChanged: (cb) => subscribe(meetingListeners, cb),
     onQueueChanged: (cb) => subscribe(queueListeners, cb),
@@ -929,6 +1046,11 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       if (result.saved) emitCycles();
       return result;
     },
+    setTargetRule: async (cycleId, target, mode) => {
+      const targets = cycles.setTargetRule(cycleId, target, mode);
+      emitCycles();
+      return targets;
+    },
     listTemplates: async (cycleId) => cycles.listTemplates(cycleId),
     getTemplate: async (cycleId, name) => cycles.getTemplate(cycleId, name),
     saveTemplate: async (cycleId, template) => {
@@ -944,13 +1066,19 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     },
     pullCycleRepo: async (repoId) => {
       const result = cycles.pullRepo(repoId);
+      // A pull also reads the state of the issues again.
+      publishing.refreshIssues(repoId);
       emitCycles();
       return result;
     },
     reportDefaults: async (cycleId) => cycles.reportDefaults(cycleId),
     onCyclesChanged: (cb) => subscribe(cycleListeners, cb),
+    ...briefing,
 
     // ----- drafts -----
     ...drafts.methods,
+
+    // ----- publishing -----
+    ...publishing.methods,
   };
 }

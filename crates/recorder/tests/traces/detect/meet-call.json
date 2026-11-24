@@ -1,0 +1,114 @@
+{
+  "version": 1,
+  "kind": "synthetic",
+  "description": "Hand-made: a Google Meet call reported by the extension (the browser audio sessions are ignored), then a tab that leaves its call after two seconds.",
+  "poll_ms": 1000,
+  "duration_ms": 1000000,
+  "apps": {
+    "browser-1": {
+      "kind": "browser"
+    }
+  },
+  "events": [
+    {
+      "t_ms": 0,
+      "sessions": [
+        {
+          "app": "browser-1",
+          "pid": 5,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        }
+      ]
+    },
+    {
+      "t_ms": 40000,
+      "sessions": [
+        {
+          "app": "browser-1",
+          "pid": 5,
+          "flow": "capture",
+          "state": "active",
+          "peak": "low"
+        },
+        {
+          "app": "browser-1",
+          "pid": 5,
+          "flow": "render",
+          "state": "active",
+          "peak": "high"
+        }
+      ],
+      "meet": [
+        {
+          "tab": 1,
+          "state": "joined"
+        }
+      ]
+    },
+    {
+      "t_ms": 700000,
+      "sessions": [
+        {
+          "app": "browser-1",
+          "pid": 5,
+          "flow": "render",
+          "state": "inactive",
+          "peak": "none"
+        }
+      ],
+      "meet": [
+        {
+          "tab": 1,
+          "state": "left"
+        }
+      ]
+    },
+    {
+      "t_ms": 800000,
+      "meet": [
+        {
+          "tab": 2,
+          "state": "joined"
+        }
+      ]
+    },
+    {
+      "t_ms": 802000,
+      "meet": [
+        {
+          "tab": 2,
+          "state": "left"
+        }
+      ]
+    }
+  ],
+  "labels": [
+    {
+      "start_ms": 40000,
+      "end_ms": 700000,
+      "app": "meet",
+      "kind": "call",
+      "note": "Meet call"
+    },
+    {
+      "start_ms": 800000,
+      "end_ms": 802000,
+      "app": "meet",
+      "kind": "no_prompt",
+      "note": "tab left its call after two seconds"
+    }
+  ],
+  "expect": {
+    "low": {
+      "prompts": 1
+    },
+    "balanced": {
+      "prompts": 1
+    },
+    "high": {
+      "prompts": 1
+    }
+  }
+}

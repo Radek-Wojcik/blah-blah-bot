@@ -10,7 +10,7 @@ Probability and impact: L low, M medium, H high.
 | R2 | Mixed Polish and English speech is translated or mistranscribed | M | H | Language setting per cycle; glossary prompt; alternative ASR model; translation rate tracked as a metric | P2 |
 | R3 | Extraction quality in Polish is too low at a model size that fits 12 GB | M | H | Schema-constrained output; quote verification; uncertainty markers; mandatory draft review; model comparison set; cloud model as a per-meeting choice | P5 |
 | R4 | Voice recognition assigns the wrong person | M | H | Conservative threshold; suggestions instead of automatic assignment for weak matches; unknown voices stay unknown; every assignment is editable | P4 |
-| R5 | Chrome restricts tab capture to tabs where the extension was invoked | H (confirmed) | M | Guided per-tab activation for groups; whole-browser capture as fallback | P7 |
+| R5 | Chrome restricts tab capture to tabs where the extension was invoked | H (confirmed) | M | Guided per-tab activation for groups, built in Stage 6 (popup list with a status per tab, Next tab, one action per tab); whole-browser capture as fallback in the source picker. Open: a real tab for 30 minutes | P7 |
 | R6 | Per-process capture misses audio from child or helper processes | M | M | Capture with the process tree; per-application test matrix; whole-system capture as a last resort | P1 |
 | R7 | Processing a 10-hour meeting takes too long | M | M | Resumable stages; batching; faster ASR alternative; progress and time estimate in the queue | P9 |
 | R8 | Python environment with GPU libraries is large and fragile | M | M | Environment created on first use with pinned versions; preflight check of driver and CUDA; clear error messages | P8 |
@@ -19,10 +19,11 @@ Probability and impact: L low, M medium, H high.
 | R11 | Gated or relicensed model becomes unavailable | L | H | Models are replaceable behind step interfaces; licenses reviewed at every release; alternatives recorded in the ADRs | — |
 | R12 | Personal data is published by mistake | L | H | Warning before the first publication to a public repository; excluded passages; per-target approval rules | — |
 | R13 | Tokens leak through logs or files | L | H | Credential Manager only; log redaction; secret scanning in CI | — |
-| R14 | Meeting detection produces false prompts | M | L | Require an active audio session together with microphone use; per-application opt-out | — |
+| R14 | Meeting detection produces false prompts | M | L | Built in Stage 6: known applications only, microphone in use for a sustain time, one prompt per call, browsers left to the Meet report, opt-out per application, three sensitivities. Measured on traces only (0 false prompts on a 4 minute real idle trace; 1 on a synthetic non-call trace with balanced); a working day of real use is still to be measured | — |
 | R15 | Unsigned installer triggers Windows warnings | H | L | Documented in the README; checksums published; code signing evaluated for 1.0 | — |
 | R16 | External API changes (GitHub issue fields, Discord, Notion) | M | M | Thin adapters; mock servers in tests; release checks against live test targets | — |
 | R17 | Scope: all requirements in 1.0 for one developer | H | M | Staged releases, each usable on its own; decision gates; optional integrations last | — |
+| R18 | The extension is not in the Chrome Web Store: developer mode warning, Chrome may switch it off, no automatic update, scripted loading with `--load-extension` ignored by Chrome 137 or newer | H | L | Unpacked install from the release zip with a guide and troubleshooting table (ADR 0021); a fixed extension id and a protocol version check so an old extension is refused with a message | — |
 
 ## 2. Prototypes and success criteria
 

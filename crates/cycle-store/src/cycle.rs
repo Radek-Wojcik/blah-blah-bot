@@ -80,6 +80,21 @@ impl Default for Report {
     }
 }
 
+/// What `targets.github.publish` is when the cycle does not set it: the report, the transcript
+/// and the issues wait for the user to press Publish. The one place that decides it; the
+/// parser and the publishing rules both read it.
+pub const DEFAULT_GITHUB_PUBLISH: PublishMode = PublishMode::OnApproval;
+/// What `targets.discord.publish` is when the cycle does not set it.
+pub const DEFAULT_DISCORD_PUBLISH: PublishMode = PublishMode::OnApproval;
+
+fn default_github_publish() -> PublishMode {
+    DEFAULT_GITHUB_PUBLISH
+}
+
+fn default_discord_publish() -> PublishMode {
+    DEFAULT_DISCORD_PUBLISH
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PublishMode {
@@ -94,19 +109,78 @@ pub enum PublishMode {
 pub struct GithubTarget {
     #[serde(default = "default_github_path")]
     pub path: String,
-    #[serde(default)]
+    #[serde(default = "default_github_publish")]
     pub publish: PublishMode,
+    /// Create GitHub issues for task items and write back status changes. Left out of the
+    /// file while true, so existing files keep their bytes.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub issues: bool,
 }
 
+/// Where meeting folders go when `targets.github.path` is not set.
+pub const DEFAULT_MEETINGS_PATH: &str = "meetings";
+
 fn default_github_path() -> String {
-    "meetings".to_string()
+    DEFAULT_MEETINGS_PATH.to_string()
+}
+
+/// Why `path` cannot be the folder of the meetings in the repository (`targets.github.path`),
+/// or `None` when it can. It must stay inside the repository on every system the clone is
+/// used on: relative, with `/` between names, no `.` or `..` name, no drive letter or
+/// backslash, no `.git` folder and no name that ends in a dot (Windows drops it).
+pub fn repo_path_problem(path: &str) -> Option<String> {
+    if path.is_empty() {
+        return Some("the folder is empty".into());
+    }
+    if path.starts_with('/') || path.starts_with('\\') {
+        return Some("the folder must be relative to the repository, not absolute".into());
+    }
+    let bytes = path.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        return Some("the folder must not start with a drive letter".into());
+    }
+    if path.contains('\\') {
+        return Some("use / between folder names, not \\".into());
+    }
+    for name in path.split('/') {
+        if name.is_empty() {
+            return Some("the folder has an empty name (a doubled or trailing /)".into());
+        }
+        if name == "." || name == ".." {
+            return Some("the folder must not contain . or .. names".into());
+        }
+        if name.eq_ignore_ascii_case(".git") {
+            return Some("the folder must not be inside .git".into());
+        }
+        if name.ends_with('.') {
+            return Some("a folder name must not end with a dot".into());
+        }
+        if !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        {
+            return Some(
+                "folder names may only have letters, digits, dots, hyphens and underscores".into(),
+            );
+        }
+    }
+    None
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 impl Default for GithubTarget {
     fn default() -> Self {
         Self {
             path: default_github_path(),
-            publish: PublishMode::OnApproval,
+            publish: DEFAULT_GITHUB_PUBLISH,
+            issues: true,
         }
     }
 }
@@ -116,7 +190,7 @@ impl Default for GithubTarget {
 pub struct DiscordTarget {
     /// A `cred:` reference to the webhook URL in the Credential Manager, never the URL.
     pub webhook: String,
-    #[serde(default)]
+    #[serde(default = "default_discord_publish")]
     pub publish: PublishMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template: Option<String>,
@@ -225,7 +299,21 @@ impl Cycle {
                 ));
             }
         }
+        if let Some(github) = &self.targets.github {
+            if let Some(problem) = repo_path_problem(&github.path) {
+                issues.push(ValidationIssue::new("targets.github.path", problem));
+            }
+        }
         issues
+    }
+
+    /// The folder of the meetings in the repository: `targets.github.path`, or `meetings`
+    /// when it is not set. A value that is not valid gives the default; validation reports it.
+    pub fn meetings_path(&self) -> &str {
+        match &self.targets.github {
+            Some(g) if repo_path_problem(&g.path).is_none() => &g.path,
+            _ => DEFAULT_MEETINGS_PATH,
+        }
     }
 
     /// Checks against the templates that exist: every `by_type` template, and the default
@@ -365,6 +453,67 @@ targets:
             cycle.targets.notion.as_ref().unwrap().publish,
             PublishMode::Off
         );
+    }
+
+    #[test]
+    fn the_github_path_must_stay_inside_the_repository() {
+        for bad in [
+            "..", "../x", "a/../b", "./a", "/abs", "C:/x", "a//b", ".git/x",
+        ] {
+            let text = FULL.replace(
+                "github: { path: meetings, publish: auto }",
+                &format!("github: {{ path: \"{bad}\", publish: auto }}"),
+            );
+            let issues = Cycle::parse(&text).1;
+            assert!(
+                has_path(&issues, "targets.github.path"),
+                "{bad}: {issues:?}"
+            );
+        }
+        let good = FULL.replace(
+            "github: { path: meetings, publish: auto }",
+            "github: { path: docs/meetings, publish: auto }",
+        );
+        let cycle = Cycle::from_yaml_str(&good).unwrap();
+        assert_eq!(cycle.meetings_path(), "docs/meetings");
+        assert_eq!(Cycle::new("X", "x").meetings_path(), DEFAULT_MEETINGS_PATH);
+        // A value that was built by hand and is not safe falls back to the default folder;
+        // `validate` reports it and the publisher refuses it.
+        let mut hand = cycle;
+        hand.targets.github.as_mut().unwrap().path = "../x".into();
+        assert_eq!(hand.meetings_path(), DEFAULT_MEETINGS_PATH);
+        assert!(has_path(&hand.validate(&[]), "targets.github.path"));
+        assert!(hand.to_yaml().is_err(), "an unsafe path is never written");
+    }
+
+    #[test]
+    fn github_issues_default_to_true_and_are_read_when_given() {
+        let cycle = Cycle::from_yaml_str(FULL).unwrap();
+        assert!(cycle.targets.github.as_ref().unwrap().issues);
+        let off = FULL.replace(
+            "github: { path: meetings, publish: auto }",
+            "github: { path: meetings, publish: auto, issues: false }",
+        );
+        let cycle = Cycle::from_yaml_str(&off).unwrap();
+        assert!(!cycle.targets.github.as_ref().unwrap().issues);
+        // A value that is not a boolean is refused with its path.
+        let bad = FULL.replace(
+            "github: { path: meetings, publish: auto }",
+            "github: { path: meetings, issues: sometimes }",
+        );
+        assert!(!issues_of(&bad).is_empty());
+    }
+
+    #[test]
+    fn the_issues_flag_is_written_only_when_it_is_off() {
+        let mut target = GithubTarget::default();
+        let on = serde_json::to_value(&target).unwrap();
+        assert!(on.get("issues").is_none(), "{on}");
+        target.issues = false;
+        let off = serde_json::to_value(&target).unwrap();
+        assert_eq!(off["issues"], false);
+        let back: GithubTarget = serde_json::from_value(on).unwrap();
+        assert!(back.issues);
     }
 
     #[test]

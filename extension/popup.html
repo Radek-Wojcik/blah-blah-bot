@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Blah Blah Bot</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      body {
+        font:
+          13px system-ui,
+          sans-serif;
+        width: 300px;
+        margin: 12px;
+      }
+      h1 {
+        font-size: 14px;
+        margin: 0 0 8px;
+      }
+      label {
+        display: block;
+        margin: 6px 0 2px;
+      }
+      input[type="text"] {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 6px;
+        font:
+          15px ui-monospace,
+          monospace;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+      button {
+        margin-top: 8px;
+        padding: 6px 10px;
+        width: 100%;
+      }
+      button.link {
+        background: none;
+        border: none;
+        width: auto;
+        padding: 0;
+        color: inherit;
+        text-decoration: underline;
+        cursor: pointer;
+        font-size: 12px;
+      }
+      #line {
+        margin: 6px 0;
+        min-height: 2.4em;
+      }
+      .err {
+        color: #b71c1c;
+      }
+      .ok {
+        color: #1b5e20;
+      }
+      @media (prefers-color-scheme: dark) {
+        .err {
+          color: #ff8a80;
+        }
+        .ok {
+          color: #81c784;
+        }
+      }
+      small {
+        opacity: 0.75;
+      }
+      #group h2 {
+        font-size: 13px;
+        margin: 12px 0 4px;
+      }
+      #groupTabs {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      #groupTabs li {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 2px 0;
+      }
+      #groupTabs .name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #groupTabs .status {
+        flex: none;
+      }
+      #groupTabs li.active .name {
+        font-weight: 600;
+      }
+      .st-captured .status {
+        color: #1b5e20;
+      }
+      .st-failed .status {
+        color: #b71c1c;
+      }
+      .st-waiting .status,
+      .st-not_audible .status {
+        color: #8a6d00;
+      }
+      @media (prefers-color-scheme: dark) {
+        .st-captured .status {
+          color: #81c784;
+        }
+        .st-failed .status {
+          color: #ff8a80;
+        }
+        .st-waiting .status,
+        .st-not_audible .status {
+          color: #ffd54f;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Blah Blah Bot</h1>
+    <div id="line" role="status"></div>
+    <section id="pair" hidden>
+      <label for="code">Pairing code from the application (Settings, Browser extension)</label>
+      <input id="code" type="text" autocomplete="off" spellcheck="false" maxlength="12" />
+      <button id="pairBtn">Pair</button>
+    </section>
+    <section id="capture" hidden>
+      <button id="captureBtn">Capture this tab</button>
+      <label><input id="auto" type="checkbox" checked /> Capture when this popup opens</label>
+      <section id="group" hidden>
+        <h2 id="groupTitle"></h2>
+        <ul id="groupTabs"></ul>
+        <button id="groupBtn">Capture this group</button>
+        <button id="nextBtn">Next tab</button>
+        <p>
+          <small
+            >Chrome allows one tab per click: capture this tab, press Next tab, then click again
+            (Alt+Shift+R does both).</small
+          >
+        </p>
+      </section>
+      <p>
+        <small>Shortcut: Alt+Shift+R. Streams: <span id="count">0</span>.</small>
+      </p>
+      <button id="unpairBtn" class="link">Forget this pairing</button>
+    </section>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

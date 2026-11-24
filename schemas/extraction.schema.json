@@ -4,7 +4,7 @@
   "title": "Extraction response",
   "description": "What the language model returns for one transcript window (map step).",
   "type": "object",
-  "required": ["summary", "items"],
+  "required": ["summary", "items", "status_changes"],
   "additionalProperties": false,
   "properties": {
     "summary": { "type": "string", "description": "Two to four sentences about this window" },
@@ -31,6 +31,22 @@
           "section": { "type": ["string", "null"], "description": "Section id from the prompt, or null" },
           "relates_to": { "type": ["string", "null"], "description": "Id of an open topic or issue from the prompt, or null" },
           "time": { "type": "string", "pattern": "^\\d{2}:\\d{2}:\\d{2}$", "description": "hh:mm:ss of the line where the item is stated" },
+          "quote": { "type": "string", "minLength": 1, "description": "Copied verbatim from that line" }
+        }
+      }
+    },
+    "status_changes": {
+      "type": "array",
+      "description": "Open issues or topics of the prompt that were reported finished in this window. Required in the model answer (an empty array when there are none); the worker still reads windows.json files written before the field existed.",
+      "items": {
+        "type": "object",
+        "required": ["target", "status", "reason", "time", "quote"],
+        "additionalProperties": false,
+        "properties": {
+          "target": { "type": "string", "minLength": 1, "description": "Id of an open issue or topic from the prompt" },
+          "status": { "enum": ["done"] },
+          "reason": { "type": "string", "minLength": 1, "description": "One sentence on why it counts as done" },
+          "time": { "type": "string", "pattern": "^\\d{2}:\\d{2}:\\d{2}$", "description": "hh:mm:ss of the line where it is stated" },
           "quote": { "type": "string", "minLength": 1, "description": "Copied verbatim from that line" }
         }
       }

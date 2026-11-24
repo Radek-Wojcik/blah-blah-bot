@@ -287,17 +287,21 @@ flowchart LR
 - *Resilience:* publish without network, then recover; push rejected by a concurrent commit.
 
 **Definition of done**
-- [ ] Report, transcript and screenshots committed under the cycle and date folder
-- [ ] Tasks created as issues with assignee and due date
-- [ ] Approved status changes written to GitHub; closed issues read back as done
-- [ ] Discord summary posted with role and user mentions and screenshots
-- [ ] Each target follows its own rule and template
-- [ ] No token appears in files, logs or the database
-- [ ] Release v0.6.0 published
+- [x] Report, transcript and screenshots committed under the cycle and date folder (tested against local bare remotes)
+- [x] Tasks created as issues with assignee and due date (tested against a fake GitHub; the issue field "Target date" is unverified, the `Due:` line is the tested path)
+- [x] Approved status changes written to GitHub; closed issues read back as done (tested against a fake GitHub)
+- [x] Discord summary posted with role and user mentions and screenshots (tested against a fake webhook)
+- [x] Each target follows its own rule and template (rules `auto`, `on-approval`, `off`; defaults proposed in [ADR 0019](decisions/0019-default-publish-rule-per-target.md))
+- [x] No token appears in files, logs or the database (scan of the database, outbox rows, snapshots, both repositories and the log in the resilience tests)
+- [x] Release check passed once against a real test repository and a real test webhook
+- [ ] The organization issue field "Target date" verified on a real organization
+- [x] Release v0.6.0 published
 
-**Demo and visuals.** GIF: approve statuses and publish. Screenshots: publishing panel, example report rendered on GitHub, example Discord message (demo data).
+**Status.** Done and released as v0.6.0. Tasks 1 to 8 are covered by tests against fakes (TESTING section 14, [ADR 0018](decisions/0018-publishing.md)) and were run once against a real test repository and webhook, including a publish from the application window. Open: the "Target date" field on a real organization.
 
-**Docs and release.** README: publishing setup guides. CHANGELOG. Tag `v0.6.0`.
+**Demo and visuals.** GIF: approve statuses and publish. Screenshots: publishing panel, example report rendered on GitHub, example Discord message (demo data). Done: taken on the mock backend with fake services (`docs/img`), not from real GitHub or Discord.
+
+**Docs and release.** README: publishing setup guides and CHANGELOG are written; the tag `v0.6.0` is set.
 
 **Risks.** Token scopes and rate limits; issue fields available only for organizations; attachment size limits.
 
@@ -331,15 +335,17 @@ flowchart LR
 - *Measurements:* continuity of a 30-minute tab capture; detection false prompts over a working day.
 
 **Definition of done**
-- [ ] Briefing shows open tasks and topics from the repository
+- [x] Briefing shows open tasks and topics from the repository (tested against local Git repositories and the mock backend: `crates/app/src/briefing.rs`, `ui/tests/briefing.spec.ts`)
 - [ ] Starting a call in Discord, Teams or Meet raises one prompt, and idle applications raise none
 - [ ] A captured tab stays audible and is recorded as its own track
-- [ ] A tab group can be captured with one action per tab
-- [ ] Release v0.7.0 published
+- [x] A tab group can be captured with one action per tab (tested in scripted Chrome and unit tests: `extension/e2e/bridge.spec.ts`, `extension/test/groups.test.ts`)
+- [x] Release v0.7.0 published
+
+**Status.** Released as v0.7.0. Tasks 1 to 6 are implemented and covered by unit, mock and scripted-Chrome tests ([ADR 0020](decisions/0020-bridge-protocol-and-pairing.md), [ADR 0021](decisions/0021-extension-distribution.md), [ADR 0022](decisions/0022-meeting-detection.md)). Open: 30-minute real-tab capture (only the 2-minute synthetic run is recorded), 8-hour working-day detection trace, real Teams, Discord and Meet calls, Windows 11, and unpacked extension loading on Chrome 137 or newer.
 
 **Demo and visuals.** GIF: detection prompt to recording; briefing screen. Screenshots: briefing, extension popup.
 
-**Docs and release.** README: extension installation, briefing. CHANGELOG. Tag `v0.7.0`.
+**Docs and release.** README: extension installation, briefing. CHANGELOG. Tag `v0.7.0` is set.
 
 **Risks.** Chrome capture restrictions and stream release timing; false detections; extension distribution outside the Web Store.
 

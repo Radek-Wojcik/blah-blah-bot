@@ -9,6 +9,10 @@ use crate::cycles::ReportChoice;
 pub enum SourceKind {
     Microphone,
     Application,
+    /// One browser tab, streamed by the extension.
+    BrowserTab,
+    /// The whole browser (Chrome): the fallback when single tabs cannot be captured.
+    Browser,
 }
 
 /// A source that can be recorded.
@@ -19,6 +23,26 @@ pub struct SourceInfo {
     pub kind: SourceKind,
     pub label: String,
     pub active: bool,
+    /// A short explanation shown with the source, for example why the whole browser is on
+    /// offer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+    /// The browser tab group of a tab (`Group 1`, ...).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+}
+
+impl SourceInfo {
+    pub fn new(id: String, kind: SourceKind, label: String, active: bool) -> Self {
+        Self {
+            id,
+            kind,
+            label,
+            active,
+            hint: None,
+            group: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

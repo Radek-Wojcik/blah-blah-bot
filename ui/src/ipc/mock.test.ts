@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Backend } from "./backend";
 import { demoCycle, validateCycle } from "./mock-cycles";
 import { addItem, demoDraft, moveItem, setSections, updateItem } from "./mock-draft";
@@ -219,7 +219,7 @@ describe("templates", () => {
 
   it("accepts literal braces and every documented placeholder", () => {
     const body =
-      "{title} {date} {participants} {summary} {summary_section} {sections} {tasks} {decisions} {topics} {notes} {ideas} {budgets} {transcript_link} {{literal}}";
+      "{title} {date} {participants} {summary} {summary_section} {sections} {tasks} {decisions} {topics} {notes} {ideas} {budgets} {transcript_link} {report_link} {{literal}}";
     expect(validateTemplateDto(template(body))).toEqual([]);
     expect(tokenize("a {{ b }} c").tokens).toEqual([{ text: "a { b } c" }]);
   });
@@ -399,6 +399,23 @@ describe("report rendering", () => {
     expect(renderReport(d, people, body, "en", "markdown")).toBe("# T\n\n## Next\n\ntext\n");
     expect(() => renderReport(d, people, "{nope}", "en", "markdown")).toThrow(
       /unknown placeholder/,
+    );
+  });
+
+  it("drops a heading whose list is empty even when a link follows it", () => {
+    const d = parityDraft("en");
+    d.items = d.items.filter((i) => i.type === "decision");
+    const body =
+      "{summary}\n\n## Decisions\n{decisions}\n\n## Tasks\n{tasks}\n\n[Full report]({report_link})\n";
+    expect(renderReport(d, parityPeople, body, "en", "chat")).toBe(
+      "We agreed on the mount.\n\n## Decisions\n\n- Use aluminium\n\n[Full report](report.md)\n",
+    );
+    d.items = [];
+    expect(renderReport(d, parityPeople, body, "en", "chat")).toBe(
+      "We agreed on the mount.\n\n[Full report](report.md)\n",
+    );
+    expect(renderReport(d, parityPeople, "## Mixed\n{tasks}\n{summary}\n", "en", "chat")).toBe(
+      "## Mixed\n\nWe agreed on the mount.\n",
     );
   });
 });
@@ -865,5 +882,141 @@ describe("participants of a cycle", () => {
     // The same name again names the existing person.
     const again = await b.assignVoiceNew("m5", "v3", "mira example");
     expect(again.participants.filter((p) => p.name === "Mira Example")).toHaveLength(1);
+  });
+});
+
+describe("browser extension bridge", () => {
+  it("pairs with a code, then an extension appears and can be unpaired", async () => {
+    vi.useFakeTimers();
+    try {
+      const b = createMockBackend({ clockRate: 0, bridgePairMs: 200 });
+      const seen: number[] = [];
+      await b.onBridgeChanged((s) => seen.push(s.clients.length));
+      const before = await b.bridgeStatus();
+      expect(before.listening).toBe(true);
+      expect(before.clients).toHaveLength(1);
+      const pairing = (await b.startPairing()).pairing;
+      expect(pairing?.code).toMatch(/^[0-9A-Z]{4}-[0-9A-Z]{4}$/);
+      await vi.advanceTimersByTimeAsync(250);
+      const after = await b.bridgeStatus();
+      expect(after.pairing).toBeNull();
+      expect(after.clients).toHaveLength(2);
+      expect(seen.at(-1)).toBe(2);
+      const gone = await b.unpairClient(after.clients[1].id);
+      expect(gone.clients).toHaveLength(1);
+      await expect(b.unpairClient("c-none")).rejects.toMatchObject({ code: "not_found" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the paired extensions on a settings save and refuses pairing when off", async () => {
+    const b = createMockBackend({ clockRate: 0 });
+    const s = await b.getSettings();
+    expect(s.bridge?.clients).toHaveLength(1);
+    expect(s.bridge?.clients[0].secretSha256).toBe("");
+    await b.saveSettings({ ...s, bridge: { ...s.bridge!, enabled: false, clients: [] } });
+    const saved = await b.getSettings();
+    expect(saved.bridge?.enabled).toBe(false);
+    expect(saved.bridge?.clients).toHaveLength(1);
+    expect((await b.bridgeStatus()).listening).toBe(false);
+    await expect(b.startPairing()).rejects.toMatchObject({ code: "bridge_off" });
+    await expect(
+      b.saveSettings({ ...saved, bridge: { ...saved.bridge!, port: 80 } }),
+    ).rejects.toMatchObject({ code: "invalid" });
+  });
+
+  it("cancelling hides the code", async () => {
+    const b = createMockBackend({ clockRate: 0 });
+    await b.startPairing();
+    expect((await b.cancelPairing()).pairing).toBeNull();
+  });
+});
+
+describe("meeting detection", () => {
+  it("defaults to balanced with the known applications and keeps the settings on a save", async () => {
+    const b = createMockBackend({ clockRate: 0 });
+    const d = await b.getDetectionSettings();
+    expect(d.enabled).toBe(true);
+    expect(d.sensitivity).toBe("balanced");
+    expect(d.knownApps).toEqual(["discord", "discordptb", "ms-teams", "teams", "zoom", "slack"]);
+    const saved = await b.saveDetectionSettings({
+      ...d,
+      sensitivity: "high",
+      knownApps: [...d.knownApps, " Webex.EXE", "zoom"],
+    });
+    expect(saved.sensitivity).toBe("high");
+    expect(saved.knownApps.at(-1)).toBe("webex");
+    expect(saved.knownApps.filter((a) => a === "zoom")).toHaveLength(1);
+    // A save of the general settings does not touch detection.
+    const s = await b.getSettings();
+    expect(s.detection?.sensitivity).toBe("high");
+    await b.saveSettings({ ...s, detection: { ...s.detection!, sensitivity: "low" } });
+    expect((await b.getDetectionSettings()).sensitivity).toBe("high");
+    await expect(
+      b.saveDetectionSettings({ ...saved, knownApps: ["C:\\x\\app.exe"] }),
+    ).rejects.toMatchObject({ code: "invalid" });
+  });
+
+  it("raises one prompt, and Record starts a recording of the microphone and the application", async () => {
+    vi.useFakeTimers();
+    try {
+      const b = createMockBackend({ clockRate: 0, detectMs: 100 });
+      const seen: string[] = [];
+      await b.onDetectionPrompt((p) => seen.push(p.key));
+      expect(await b.detectionPrompt()).toBeNull();
+      await vi.advanceTimersByTimeAsync(150);
+      expect(seen).toEqual(["discord"]);
+      const prompt = await b.detectionPrompt();
+      expect(prompt).toMatchObject({ app: "discord", display: "Discord", source: "audio" });
+      const outcome = await b.answerDetection(prompt!.key, "record");
+      expect(outcome).toEqual({ started: true, needsReport: false });
+      const state = await b.recordingState();
+      expect(state.status).toBe("recording");
+      expect(state.sources.map((x) => x.id)).toEqual(["mic:default", "app:discord"]);
+      expect(await b.detectionPrompt()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("Not now leaves the call alone, Never switches the application off and clears the prompt", async () => {
+    vi.useFakeTimers();
+    try {
+      const b = createMockBackend({ clockRate: 0, detectMs: 50 });
+      const cleared: string[] = [];
+      await b.onDetectionCleared((k) => cleared.push(k));
+      await vi.advanceTimersByTimeAsync(80);
+      expect(await b.answerDetection("discord", "not_now")).toEqual({
+        started: false,
+        needsReport: false,
+      });
+      expect((await b.recordingState()).status).toBe("idle");
+      expect(cleared).toEqual(["discord"]);
+      expect((await b.getDetectionSettings()).optedOut).toEqual([]);
+
+      const c = createMockBackend({ clockRate: 0, detectMs: 50 });
+      await vi.advanceTimersByTimeAsync(80);
+      await c.answerDetection("discord", "never");
+      expect((await c.getDetectionSettings()).optedOut).toEqual(["discord"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("switching detection off or opting the application out withdraws a prompt on offer", async () => {
+    vi.useFakeTimers();
+    try {
+      const b = createMockBackend({ clockRate: 0, detectMs: 50 });
+      const cleared: string[] = [];
+      await b.onDetectionCleared((k) => cleared.push(k));
+      await vi.advanceTimersByTimeAsync(80);
+      const d = await b.getDetectionSettings();
+      await b.saveDetectionSettings({ ...d, optedOut: ["discord"] });
+      expect(cleared).toEqual(["discord"]);
+      expect(await b.detectionPrompt()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

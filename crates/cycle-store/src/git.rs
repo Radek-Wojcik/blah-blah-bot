@@ -54,11 +54,22 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    run_env(dir, args, &[])
+}
+
+/// Like [`run`], with extra environment variables for this one command (an index file,
+/// an identity, credentials: anything that must not appear on the command line).
+pub(crate) fn run_env<I, S>(dir: Option<&Path>, args: I, env: &[(String, String)]) -> Result<Output>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
     let mut cmd = Command::new("git");
     cmd.args(hardening_args());
     if let Some(dir) = dir {
         cmd.arg("-C").arg(dir);
     }
+    cmd.envs(env.iter().map(|(k, v)| (k, v)));
     cmd.args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "never")
@@ -86,6 +97,19 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    run_ok_env(dir, args, &[])
+}
+
+/// [`run_ok`] with extra environment variables.
+pub(crate) fn run_ok_env<I, S>(
+    dir: Option<&Path>,
+    args: I,
+    env: &[(String, String)],
+) -> Result<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
     let args: Vec<_> = args.into_iter().collect();
     let command = args
         .iter()
@@ -93,7 +117,7 @@ where
         .map(|a| a.as_ref().to_string_lossy().into_owned())
         .collect::<Vec<_>>()
         .join(" ");
-    let out = run(dir, &args)?;
+    let out = run_env(dir, &args, env)?;
     if out.ok {
         Ok(out.stdout.trim().to_string())
     } else {
@@ -127,7 +151,7 @@ mod tests {
 
     #[test]
     fn a_hook_and_a_filesystem_monitor_of_the_repository_do_not_run() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = test_tmp::TestDir::new("cycle-git");
         let repo = tmp.path().join("repo");
         fs::create_dir(&repo).unwrap();
         let marker = tmp.path().join("ran.txt");
