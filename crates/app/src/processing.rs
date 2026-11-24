@@ -93,6 +93,10 @@ pub struct ProcessingSettings {
     pub worker_dir: String,
     pub llama_server_path: String,
     pub models_dir: String,
+    /// Optional path to a local vision GGUF file or folder.
+    pub vision_model_path: String,
+    /// Skip screenshot vision analysis during processing.
+    pub skip_screenshot_analysis: bool,
     /// Voice matching: a match at or above this similarity names a voice automatically.
     pub voice_accept: f32,
     /// A match at or above this similarity is offered as a suggestion.
@@ -121,6 +125,8 @@ impl Default for ProcessingSettings {
             worker_dir: String::new(),
             llama_server_path: String::new(),
             models_dir: String::new(),
+            vision_model_path: String::new(),
+            skip_screenshot_analysis: false,
             voice_accept: voice.thresholds.accept,
             voice_suggest: voice.thresholds.suggest,
             voice_margin: voice.thresholds.margin,
@@ -489,7 +495,10 @@ impl Processing {
         };
         let supervisor = Arc::new(Supervisor::new(
             store.clone(),
-            Arc::new(runner),
+            Arc::new(AppStageRunner {
+                inner: runner,
+                settings: settings.clone(),
+            }),
             Arc::new(gate),
             MAX_CRASHES,
         ));
@@ -868,6 +877,27 @@ impl Processing {
         let Some(job) = job else {
             return;
         };
+        if matches!(
+            queue::next_step(&job),
+            Next::Run {
+                stage: Stage::Vision
+            }
+        ) && self
+            .settings
+            .lock()
+            .map(|s| s.skip_screenshot_analysis)
+            .unwrap_or(false)
+        {
+            if let Ok(store) = self.store.lock() {
+                let _ = store.mark_stage_skipped(
+                    meeting_id,
+                    Stage::Vision.as_str(),
+                    "screenshot analysis disabled in settings",
+                    queue::now_ms(),
+                );
+            }
+            return;
+        }
         let briefing = matches!(
             queue::next_step(&job),
             Next::Run {
@@ -1432,6 +1462,57 @@ fn apply_llm_to_job(store: &Store, meeting_id: &str, options: &JobOptions) -> Ip
     Ok(())
 }
 
+struct AppStageRunner {
+    inner: PipelineRunner,
+    settings: Arc<Mutex<ProcessingSettings>>,
+}
+
+fn vision_dir_override(path_str: &str) -> Option<PathBuf> {
+    let trimmed = path_str.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let p = Path::new(trimmed);
+    if p.is_dir() {
+        Some(p.to_path_buf())
+    } else if p.is_file() || p.extension().is_some() {
+        p.parent().map(Path::to_path_buf)
+    } else {
+        Some(p.to_path_buf())
+    }
+}
+
+impl queue::StageRunner for AppStageRunner {
+    fn run(&self, meeting_id: &str, stage: Stage) -> Result<(), queue::RunError> {
+        if stage == Stage::Vision {
+            let (skip, vision_path) = self
+                .settings
+                .lock()
+                .map(|s| (s.skip_screenshot_analysis, s.vision_model_path.clone()))
+                .unwrap_or((false, String::new()));
+            if skip {
+                return Ok(());
+            }
+            if let Some(dir) = vision_dir_override(&vision_path) {
+                struct EnvGuard(Option<std::ffi::OsString>);
+                impl Drop for EnvGuard {
+                    fn drop(&mut self) {
+                        match &self.0 {
+                            Some(prev) => std::env::set_var("BBB_VISION_DIR", prev),
+                            None => std::env::remove_var("BBB_VISION_DIR"),
+                        }
+                    }
+                }
+                let prev = std::env::var_os("BBB_VISION_DIR");
+                std::env::set_var("BBB_VISION_DIR", &dir);
+                let _guard = EnvGuard(prev);
+                return self.inner.run(meeting_id, stage);
+            }
+        }
+        self.inner.run(meeting_id, stage)
+    }
+}
+
 fn poisoned<T>(_: std::sync::PoisonError<T>) -> IpcError {
     IpcError::new("internal", "lock poisoned")
 }
@@ -1494,15 +1575,19 @@ mod tests {
         let json = serde_json::to_value(ProcessingSettings::default()).unwrap();
         assert_eq!(json["processAfterRecording"], "ask");
         assert_eq!(json["audioRetention"]["mode"], "delete");
+        assert_eq!(json["visionModelPath"], "");
+        assert_eq!(json["skipScreenshotAnalysis"], false);
         assert!(json.get("gpuIdleSeconds").is_some());
         let parsed: ProcessingSettings = serde_json::from_str(
-            r#"{"audioRetention":{"mode":"keepDays","days":3},"hfTokenSet":true}"#,
+            r#"{"audioRetention":{"mode":"keepDays","days":3},"visionModelPath":"C:/models/qwen-vl.gguf","skipScreenshotAnalysis":true,"hfTokenSet":true}"#,
         )
         .unwrap();
         assert_eq!(
             AudioRetention::from(parsed.audio_retention),
             AudioRetention::KeepDays { days: 3 }
         );
+        assert_eq!(parsed.vision_model_path, "C:/models/qwen-vl.gguf");
+        assert!(parsed.skip_screenshot_analysis);
         // The stored flag is never read back from a saved file.
         assert!(!parsed.hf_token_set);
     }
@@ -1763,5 +1848,53 @@ mod tests {
             estimate_eta_seconds(&job, JobState::Done, 1.0, Some(600_000), 11_000),
             None
         );
+    }
+
+    #[test]
+    fn vision_settings_persist_and_skip_screenshot_analysis_skips_vision_stage() {
+        let dir = test_tmp::TestDir::new("proc-vision");
+        let store = Arc::new(Mutex::new(job_store()));
+        {
+            let s = store.lock().unwrap();
+            for st in [
+                Stage::Asr,
+                Stage::Diarize,
+                Stage::Merge,
+                Stage::SpeakerId,
+                Stage::Clips,
+                Stage::AudioCleanup,
+            ] {
+                s.set_stage_status("m1", st.as_str(), StageStatus::Done, None, 1)
+                    .unwrap();
+            }
+        }
+        let proc = Processing::new_for_test(
+            store.clone(),
+            dir.path(),
+            Arc::new(FastRunner),
+            Arc::new(AlwaysBusyGate),
+        );
+        let mut s = proc.settings().unwrap();
+        s.vision_model_path = dir
+            .path()
+            .join("qwen-vl.gguf")
+            .to_string_lossy()
+            .into_owned();
+        s.skip_screenshot_analysis = true;
+        proc.save_settings(s).unwrap();
+
+        let reloaded = ProcessingSettings::load(&dir.path().join("processing.json"));
+        assert!(reloaded.skip_screenshot_analysis);
+        assert!(reloaded.vision_model_path.ends_with("qwen-vl.gguf"));
+        assert_eq!(
+            vision_dir_override(&reloaded.vision_model_path).as_deref(),
+            Some(dir.path())
+        );
+
+        proc.prepare_step("m1");
+        let job = store.lock().unwrap().get_job("m1").unwrap().unwrap();
+        let vision_row = job.stages.iter().find(|r| r.stage == "vision").unwrap();
+        assert_eq!(vision_row.status, StageStatus::Done);
+        assert!(vision_row.note.is_some());
     }
 }

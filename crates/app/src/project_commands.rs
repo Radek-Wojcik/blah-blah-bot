@@ -635,6 +635,12 @@ pub fn auto_detect_models_with(
             llm_models.insert(p.to_string_lossy().into_owned());
         }
     }
+    if !proc_settings.vision_model_path.trim().is_empty() {
+        let p = Path::new(proc_settings.vision_model_path.trim());
+        if p.is_file() {
+            vision_models.insert(p.to_string_lossy().into_owned());
+        }
+    }
 
     let mut search_dirs = Vec::new();
     if !proc_settings.models_dir.trim().is_empty() {

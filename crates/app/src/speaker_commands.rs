@@ -272,20 +272,116 @@ fn rename_participant_in(
     }
 }
 
+fn sample_clip_shared_by_other(
+    store: &Store,
+    participant_id: &str,
+    rel_path: &str,
+) -> IpcResult<bool> {
+    let target = rel_path.trim();
+    if target.is_empty() {
+        return Ok(false);
+    }
+    let target_norm = target.replace('\\', "/");
+    let all = store.list_all_participants_with_profiles()?;
+    Ok(all.into_iter().any(|p| {
+        p.id != participant_id
+            && p.sample_clip_file
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|other| other.replace('\\', "/") == target_norm)
+    }))
+}
+
+/// Remove a participant's retained biometric sample clip from disk unless another participant
+/// still points to the same file. Returns `true` when both the participant's own clip and default
+/// clip path are unshared (so `queue::voices` reset/delete helpers can remove them safely).
+fn cleanup_participant_sample_clip(
+    store: &Store,
+    recordings_root: &Path,
+    participant_id: &str,
+) -> IpcResult<bool> {
+    let own_rel = store
+        .get_participant(participant_id)?
+        .and_then(|p| p.sample_clip_file)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let default_rel = voices::participant_sample_clip_rel(participant_id);
+    let shared_own = own_rel
+        .as_deref()
+        .is_some_and(|rel| sample_clip_shared_by_other(store, participant_id, rel).unwrap_or(true));
+    let shared_default =
+        sample_clip_shared_by_other(store, participant_id, &default_rel).unwrap_or(true);
+
+    if !shared_own && !shared_default {
+        return Ok(true);
+    }
+
+    if let Some(rel) = own_rel {
+        if !shared_own {
+            voices::remove_files(recordings_root, &[rel]);
+        }
+    }
+    if !shared_default {
+        voices::remove_files(recordings_root, &[default_rel]);
+    }
+    store.set_participant_sample_clip(participant_id, None)?;
+    store.reset_profile(participant_id)?;
+    Ok(false)
+}
+
 fn delete_participant_in(
     repos: &[CycleRepoSetting],
     store: &Store,
+    recordings_root: &Path,
     participant_id: &str,
 ) -> IpcResult<()> {
-    match cycles::find_participant(store, participant_id)? {
-        Some(info) if info.cycle_id.is_some() => {
-            cycles::delete_cycle_participant(repos, store, &info)
+    let info = cycles::find_participant(store, participant_id)?;
+    let unshared = cleanup_participant_sample_clip(store, recordings_root, participant_id)?;
+    match info {
+        Some(p) if p.cycle_id.is_some() => {
+            if unshared {
+                voices::reset_profile(store, participant_id, recordings_root)?;
+            }
+            cycles::delete_cycle_participant(repos, store, &p)
         }
         _ => {
-            store.delete_participant(participant_id)?;
+            if unshared {
+                voices::delete_participant_profile(store, participant_id, recordings_root)?;
+            } else {
+                store.delete_participant(participant_id)?;
+            }
             Ok(())
         }
     }
+}
+
+pub fn reset_profile_in(
+    store: &Store,
+    recordings_root: &Path,
+    participant_id: &str,
+) -> IpcResult<()> {
+    if cleanup_participant_sample_clip(store, recordings_root, participant_id)? {
+        voices::reset_profile(store, participant_id, recordings_root)?;
+    }
+    Ok(())
+}
+
+pub fn delete_voice_data_in(store: &Store, recordings_root: &Path) -> IpcResult<()> {
+    let files = store.delete_all_voice_data()?;
+    voices::remove_files(recordings_root, &files);
+    let samples_dir = recordings_root.join(voices::VOICE_SAMPLES_DIR);
+    if let Ok(entries) = std::fs::read_dir(&samples_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let _ = std::fs::remove_dir_all(&path);
+            } else {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+        let _ = std::fs::remove_dir(&samples_dir);
+    }
+    Ok(())
 }
 
 fn clean_name(name: &str) -> IpcResult<String> {
@@ -433,22 +529,22 @@ pub fn rename_participant(
 #[tauri::command]
 pub fn delete_participant(state: State<'_, AppState>, participant_id: String) -> IpcResult<()> {
     let repos = state.cycle_repos();
-    state.with_store_ipc(|s| delete_participant_in(&repos, s, &participant_id))
+    let root = state.recordings_root()?;
+    state.with_store_ipc(|s| delete_participant_in(&repos, s, &root, &participant_id))
 }
 
 /// Forget the voice of a participant but keep the name.
 #[tauri::command]
 pub fn reset_profile(state: State<'_, AppState>, participant_id: String) -> IpcResult<()> {
-    state.with_store(|s| s.reset_profile(&participant_id).map(|_| ()))
+    let root = state.recordings_root()?;
+    state.with_store_ipc(|s| reset_profile_in(s, &root, &participant_id))
 }
 
 /// Delete every voice profile, stored voice embedding and sample clip.
 #[tauri::command]
 pub fn delete_voice_data(state: State<'_, AppState>) -> IpcResult<()> {
     let root = state.recordings_root()?;
-    let files = state.with_store(|s| s.delete_all_voice_data())?;
-    voices::remove_files(&root, &files);
-    Ok(())
+    state.with_store_ipc(|s| delete_voice_data_in(s, &root))
 }
 
 /// Generate a valid 2-second 16 kHz mono WAV sine tone in memory.
@@ -542,15 +638,12 @@ pub fn list_all_voice_profiles_in(
         let updated_unix_ms = store
             .get_participant(&p.id)?
             .map_or(0, |row| row.created_unix_ms);
-        let clip_on_disk = p
+        let has_sample_clip = p
             .sample_clip_file
             .as_deref()
-            .is_some_and(|rel| !rel.trim().is_empty() && recordings_root.join(rel).is_file())
-            || voices::participant_sample_clip_path(recordings_root, &p.id).is_file();
-        let has_sample_clip = clip_on_disk
-            || p.sample_clip_file
-                .as_deref()
-                .is_some_and(|rel| !rel.trim().is_empty());
+            .map(str::trim)
+            .filter(|rel| !rel.is_empty())
+            .is_some_and(|rel| recordings_root.join(rel).is_file());
 
         out.push(GlobalVoiceProfileDto {
             id: p.id,
@@ -569,20 +662,28 @@ pub fn voice_profile_sample_clip_in(
     store: &Store,
     recordings_root: &Path,
     participant_id: &str,
+    demo: bool,
 ) -> IpcResult<Vec<u8>> {
     if let Some(p) = store.get_participant(participant_id)? {
-        if let Some(rel) = p.sample_clip_file.as_deref() {
+        if let Some(rel) = p
+            .sample_clip_file
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             let candidate = recordings_root.join(rel);
             if candidate.is_file() {
                 return Ok(std::fs::read(candidate)?);
             }
         }
     }
-    let path = voices::participant_sample_clip_path(recordings_root, participant_id);
-    if path.is_file() {
-        return Ok(std::fs::read(path)?);
+    if demo {
+        return Ok(generate_demo_wav_bytes(440.0));
     }
-    Ok(generate_demo_wav_bytes(440.0))
+    Err(IpcError::new(
+        "not_found",
+        "no sample clip available for this participant",
+    ))
 }
 
 pub enum EnrollMode<'a> {
@@ -717,7 +818,8 @@ pub fn voice_profile_sample_clip(
     participant_id: String,
 ) -> IpcResult<Vec<u8>> {
     let root = state.recordings_root()?;
-    state.with_store_ipc(|s| voice_profile_sample_clip_in(s, &root, &participant_id))
+    let demo = state.is_demo() || std::env::var_os("BBB_DEMO").is_some();
+    state.with_store_ipc(|s| voice_profile_sample_clip_in(s, &root, &participant_id, demo))
 }
 
 #[tauri::command]
@@ -934,7 +1036,7 @@ mod tests {
                 .code,
             "not_found"
         );
-        delete_participant_in(lab.repos(), &lab.store, &a.id).unwrap();
+        delete_participant_in(lab.repos(), &lab.store, lab.dir.path(), &a.id).unwrap();
         assert!(cycles::get_cycle(lab.repos(), "NOMAD")
             .unwrap()
             .cycle
@@ -956,7 +1058,7 @@ mod tests {
             "duplicate"
         );
         rename_participant_in(lab.repos(), &lab.store, &old.id, "Ola K").unwrap();
-        delete_participant_in(lab.repos(), &lab.store, &old.id).unwrap();
+        delete_participant_in(lab.repos(), &lab.store, lab.dir.path(), &old.id).unwrap();
         assert!(lab.store.list_participants_for(None).unwrap().is_empty());
     }
 
@@ -996,8 +1098,143 @@ mod tests {
         );
 
         let clip_bytes =
-            voice_profile_sample_clip_in(&lab.store, rec_root.path(), &enrolled.id).unwrap();
+            voice_profile_sample_clip_in(&lab.store, rec_root.path(), &enrolled.id, false).unwrap();
         assert!(clip_bytes.starts_with(b"RIFF"));
         assert!(clip_bytes.len() > 44);
+    }
+
+    #[test]
+    fn reset_and_delete_remove_wav_and_return_not_found_when_not_demo() {
+        let lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        let rec_root = test_tmp::TestDir::new("voice-reset-del");
+        let sample_wav = rec_root.path().join("sample.wav");
+        crate::project_commands::write_demo_wav(&sample_wav, 330.0, 2).unwrap();
+
+        let p1 = enroll_voice_profile_in(
+            lab.repos(),
+            &lab.store,
+            rec_root.path(),
+            EnrollMode::Demo,
+            "Ewa",
+            Some("NOMAD"),
+            &sample_wav.to_string_lossy(),
+        )
+        .unwrap();
+        let p1_clip = voices::participant_sample_clip_path(rec_root.path(), &p1.id);
+        assert!(p1_clip.is_file());
+
+        // Reset removes the WAV on disk and clears sample_clip_file.
+        reset_profile_in(&lab.store, rec_root.path(), &p1.id).unwrap();
+        assert!(!p1_clip.exists());
+
+        let all = list_all_voice_profiles_in(lab.repos(), &lab.store, rec_root.path()).unwrap();
+        let p1_after = all.iter().find(|p| p.id == p1.id).unwrap();
+        assert!(!p1_after.has_sample_clip);
+        assert_eq!(p1_after.sample_count, 0);
+
+        let err =
+            voice_profile_sample_clip_in(&lab.store, rec_root.path(), &p1.id, false).unwrap_err();
+        assert_eq!(err.code, "not_found");
+
+        // Demo mode falls back to synthetic 440 Hz tone.
+        let demo_bytes =
+            voice_profile_sample_clip_in(&lab.store, rec_root.path(), &p1.id, true).unwrap();
+        assert!(demo_bytes.starts_with(b"RIFF"));
+
+        // Even if an orphaned WAV sits at the legacy path, reset profile reports false & not_found.
+        std::fs::create_dir_all(p1_clip.parent().unwrap()).unwrap();
+        std::fs::write(&p1_clip, b"RIFForphan").unwrap();
+        let all_orphan =
+            list_all_voice_profiles_in(lab.repos(), &lab.store, rec_root.path()).unwrap();
+        assert!(
+            !all_orphan
+                .iter()
+                .find(|p| p.id == p1.id)
+                .unwrap()
+                .has_sample_clip
+        );
+        assert_eq!(
+            voice_profile_sample_clip_in(&lab.store, rec_root.path(), &p1.id, false)
+                .unwrap_err()
+                .code,
+            "not_found"
+        );
+
+        // Delete participant also removes its WAV file on disk.
+        let p2 = enroll_voice_profile_in(
+            lab.repos(),
+            &lab.store,
+            rec_root.path(),
+            EnrollMode::Demo,
+            "Jan",
+            Some("NOMAD"),
+            &sample_wav.to_string_lossy(),
+        )
+        .unwrap();
+        let p2_clip = voices::participant_sample_clip_path(rec_root.path(), &p2.id);
+        assert!(p2_clip.is_file());
+        delete_participant_in(lab.repos(), &lab.store, rec_root.path(), &p2.id).unwrap();
+        assert!(!p2_clip.exists());
+        assert_eq!(
+            voice_profile_sample_clip_in(&lab.store, rec_root.path(), &p2.id, false)
+                .unwrap_err()
+                .code,
+            "not_found"
+        );
+    }
+
+    #[test]
+    fn reset_keeps_shared_clip_until_last_owner_is_reset_and_delete_all_sweeps_dir() {
+        let lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        let rec_root = test_tmp::TestDir::new("voice-shared-sweep");
+        let sample_wav = rec_root.path().join("sample.wav");
+        crate::project_commands::write_demo_wav(&sample_wav, 330.0, 2).unwrap();
+
+        let global_p = enroll_voice_profile_in(
+            lab.repos(),
+            &lab.store,
+            rec_root.path(),
+            EnrollMode::Demo,
+            "Marek",
+            None,
+            &sample_wav.to_string_lossy(),
+        )
+        .unwrap();
+        let shared_rel = voices::participant_sample_clip_rel(&global_p.id);
+        let shared_path = rec_root.path().join(&shared_rel);
+        assert!(shared_path.is_file());
+
+        let cycle_p =
+            create_participant_in(lab.repos(), &lab.store, Some("NOMAD"), "Marek").unwrap();
+        lab.store
+            .set_participant_sample_clip(&cycle_p.id, Some(&shared_rel))
+            .unwrap();
+
+        // Resetting the cycle participant must NOT delete the global participant's WAV file.
+        reset_profile_in(&lab.store, rec_root.path(), &cycle_p.id).unwrap();
+        assert!(shared_path.is_file());
+        assert_eq!(
+            voice_profile_sample_clip_in(&lab.store, rec_root.path(), &cycle_p.id, false)
+                .unwrap_err()
+                .code,
+            "not_found"
+        );
+        assert!(
+            voice_profile_sample_clip_in(&lab.store, rec_root.path(), &global_p.id, false).is_ok()
+        );
+
+        // Resetting the remaining owner deletes the WAV file.
+        reset_profile_in(&lab.store, rec_root.path(), &global_p.id).unwrap();
+        assert!(!shared_path.exists());
+
+        // delete_voice_data_in sweeps all orphaned files in .voice-samples even with NULL DB columns.
+        let samples_dir = rec_root.path().join(voices::VOICE_SAMPLES_DIR);
+        std::fs::create_dir_all(&samples_dir).unwrap();
+        let orphan = samples_dir.join("stale-orphan.wav");
+        std::fs::write(&orphan, b"RIFFstale").unwrap();
+        delete_voice_data_in(&lab.store, rec_root.path()).unwrap();
+        assert!(!orphan.exists());
     }
 }

@@ -110,6 +110,8 @@ pub struct MeetingSummary {
     /// State of the processing job, when the meeting has one.
     pub job: Option<crate::processing::JobState>,
     #[serde(default)]
+    pub cycle_id: Option<String>,
+    #[serde(default)]
     pub short_title: Option<String>,
     #[serde(default)]
     pub report_url: Option<String>,
@@ -126,6 +128,7 @@ impl From<store::MeetingSummary> for MeetingSummary {
             track_count: s.track_count,
             screenshot_count: s.screenshot_count,
             job: None,
+            cycle_id: None,
             short_title: None,
             report_url: None,
         }
@@ -167,19 +170,28 @@ pub fn read_draft_short_title(meeting_dir: &std::path::Path) -> Option<String> {
         .and_then(derive_short_title)
 }
 
-/// Populate `short_title` and `report_url` on a [`MeetingSummary`].
+/// Populate `cycle_id`, `short_title` and `report_url` on a [`MeetingSummary`].
 pub fn enrich_meeting_summary(
     store: &store::Store,
     recordings_root: &std::path::Path,
     dir: &str,
     summary: &mut MeetingSummary,
 ) {
-    summary.short_title = read_draft_short_title(&recordings_root.join(dir));
-    summary.report_url = store
-        .get_publication(&summary.id)
+    let publication = store.get_publication(&summary.id).ok().flatten();
+    summary.cycle_id = store
+        .get_report_settings(&summary.id)
         .ok()
         .flatten()
-        .and_then(|p| p.report_url);
+        .and_then(|r| r.cycle_id)
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            publication
+                .as_ref()
+                .map(|p| p.cycle_id.clone())
+                .filter(|s| !s.trim().is_empty())
+        });
+    summary.short_title = read_draft_short_title(&recordings_root.join(dir));
+    summary.report_url = publication.and_then(|p| p.report_url);
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -287,10 +299,47 @@ mod background_error_tests {
 
         let mut summary: MeetingSummary = store.list_summaries().unwrap().remove(0).into();
         enrich_meeting_summary(&store, dir.path(), "m1", &mut summary);
+        assert_eq!(summary.cycle_id.as_deref(), Some("C1"));
         assert_eq!(summary.short_title.as_deref(), Some("Sprint Launch Plan"));
         assert_eq!(
             summary.report_url.as_deref(),
             Some("https://github.com/o/r/blob/main/report.md")
         );
+    }
+
+    #[test]
+    fn enrich_meeting_summary_populates_cycle_id_for_unprocessed_zero_participant_meeting() {
+        let dir = test_tmp::TestDir::new("ipc-cycle-id");
+        let store = store::Store::open_in_memory().unwrap();
+        store
+            .create_meeting(&store::Meeting {
+                id: "m-imported".into(),
+                title: "Imported Sync".into(),
+                started_unix_ms: 2000,
+                duration_ms: None,
+                state: store::MeetingState::Stopped,
+                dir: "m-imported".into(),
+            })
+            .unwrap();
+        store
+            .set_report_settings(
+                "m-imported",
+                &store::ReportSettings {
+                    cycle_id: Some("ZERO-PROJ".into()),
+                    report_mode: Some("fixed".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(store
+            .participants_for_cycle("ZERO-PROJ")
+            .unwrap()
+            .is_empty());
+
+        let mut summary: MeetingSummary = store.list_summaries().unwrap().remove(0).into();
+        enrich_meeting_summary(&store, dir.path(), "m-imported", &mut summary);
+        assert_eq!(summary.cycle_id.as_deref(), Some("ZERO-PROJ"));
+        let json = serde_json::to_value(&summary).unwrap();
+        assert_eq!(json["cycleId"], "ZERO-PROJ");
     }
 }
