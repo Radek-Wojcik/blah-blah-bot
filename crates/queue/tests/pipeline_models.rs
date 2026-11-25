@@ -213,7 +213,8 @@ fn meeting_is_processed_end_to_end_and_audio_is_removed_afterwards() {
     let work = fx.root.join("m1/work");
     assert!(work.join("transcript.json").exists());
     assert!(work.join("descriptions.json").exists());
-    // Audio is gone only because every audio stage succeeded; screenshots and results stay.
+    // Audio is gone only because every stage succeeded, the draft included; screenshots and
+    // results stay.
     assert!(!fx.root.join("m1/mic").exists());
     assert!(!fx.root.join("m1/meet").exists());
     assert!(fx.root.join("m1/screenshots/0001.png").exists());

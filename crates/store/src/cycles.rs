@@ -114,6 +114,9 @@ pub struct ProjectPrefs {
     pub local_save_dir: String,
     pub llm_kind_override: Option<String>,
     pub llm_model_override: Option<String>,
+    /// What happens to the audio of this project's meetings after processing: `keep` or
+    /// `delete`. `None` follows the global setting.
+    pub audio_retention: Option<String>,
 }
 
 fn unix_ms() -> i64 {
@@ -287,7 +290,8 @@ impl Store {
         let row = self
             .conn
             .query_row(
-                "SELECT local_save_enabled, local_save_dir, llm_kind_override, llm_model_override
+                "SELECT local_save_enabled, local_save_dir, llm_kind_override, llm_model_override,
+                        audio_retention
                  FROM project_prefs WHERE cycle_id = ?1",
                 params![cycle_id],
                 |r| {
@@ -297,6 +301,7 @@ impl Store {
                         local_save_dir: r.get(1)?,
                         llm_kind_override: r.get(2)?,
                         llm_model_override: r.get(3)?,
+                        audio_retention: r.get(4)?,
                     })
                 },
             )
@@ -315,21 +320,31 @@ impl Store {
         if let Some(kind) = &prefs.llm_kind_override {
             LlmKind::parse(kind)?;
         }
+        if let Some(value) = &prefs.audio_retention {
+            if !matches!(value.as_str(), "keep" | "delete") {
+                return Err(StoreError::Invalid(format!(
+                    "audio_retention must be \"keep\" or \"delete\", not {value:?}"
+                )));
+            }
+        }
         self.conn.execute(
             "INSERT INTO project_prefs
-               (cycle_id, local_save_enabled, local_save_dir, llm_kind_override, llm_model_override)
-             VALUES (?1, ?2, ?3, ?4, ?5)
+               (cycle_id, local_save_enabled, local_save_dir, llm_kind_override, llm_model_override,
+                audio_retention)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(cycle_id) DO UPDATE SET
                local_save_enabled = excluded.local_save_enabled,
                local_save_dir = excluded.local_save_dir,
                llm_kind_override = excluded.llm_kind_override,
-               llm_model_override = excluded.llm_model_override",
+               llm_model_override = excluded.llm_model_override,
+               audio_retention = excluded.audio_retention",
             params![
                 prefs.cycle_id,
                 i64::from(prefs.local_save_enabled),
                 prefs.local_save_dir,
                 prefs.llm_kind_override,
                 prefs.llm_model_override,
+                prefs.audio_retention,
             ],
         )?;
         Ok(())
@@ -935,6 +950,7 @@ mod tests {
                 local_save_dir: String::new(),
                 llm_kind_override: None,
                 llm_model_override: None,
+                audio_retention: None,
             }
         );
 
@@ -944,6 +960,7 @@ mod tests {
             local_save_dir: "C:/Meetings/NOMAD".into(),
             llm_kind_override: Some("external".into()),
             llm_model_override: Some("gemma-4".into()),
+            audio_retention: Some("keep".into()),
         };
         s.set_project_prefs(&updated).unwrap();
         assert_eq!(s.get_project_prefs("NOMAD").unwrap(), updated);
@@ -954,8 +971,25 @@ mod tests {
             local_save_dir: String::new(),
             llm_kind_override: None,
             llm_model_override: None,
+            audio_retention: None,
         };
         s.set_project_prefs(&cleared).unwrap();
         assert_eq!(s.get_project_prefs("NOMAD").unwrap(), cleared);
+
+        // Only `keep` and `delete` are valid overrides.
+        let bad = ProjectPrefs {
+            audio_retention: Some("forever".into()),
+            ..cleared.clone()
+        };
+        assert!(matches!(
+            s.set_project_prefs(&bad),
+            Err(StoreError::Invalid(_))
+        ));
+        let deleting = ProjectPrefs {
+            audio_retention: Some("delete".into()),
+            ..cleared
+        };
+        s.set_project_prefs(&deleting).unwrap();
+        assert_eq!(s.get_project_prefs("NOMAD").unwrap(), deleting);
     }
 }

@@ -61,6 +61,8 @@ test.describe("wave 3 UX overhaul flows on the mock backend", () => {
     await settingsModal
       .getByLabel("Model override value")
       .fill("D:\\Models\\gemma-4-12b-q4_k_m.gguf");
+    // The project keeps its audio although the global setting deletes it.
+    await settingsModal.getByLabel("Audio retention override").selectOption("keep");
     await settingsModal.getByRole("button", { name: "Save local preferences" }).click();
     await expect(settingsModal.getByRole("status")).toHaveText("Local preferences saved.");
   });

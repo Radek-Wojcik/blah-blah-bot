@@ -419,8 +419,13 @@ test.describe("processing settings on the mock backend", () => {
   test("changes are saved", async ({ page }) => {
     await page.goto("/?view=main&backend=mock&page=settings&tab=processing");
     const form = page.getByRole("form", { name: "Processing policy" });
-    await form.getByLabel("Audio files after processing").selectOption("delete");
-    await expect(form.getByText(/corrections can only be made by editing/)).toBeVisible();
+    const keepAudio = form.getByLabel("Keep audio after processing");
+    await expect(keepAudio).not.toBeChecked();
+    await expect(
+      form.getByText(/The audio is deleted once the meeting is processed/),
+    ).toBeVisible();
+    await keepAudio.check();
+    await expect(form.getByText(/A 10 hour meeting takes several GB/)).toBeVisible();
     await form.getByLabel("Max GPU utilization (%)").fill("55");
     await form.getByRole("button", { name: "Save processing policy" }).click();
     await expect(form.getByRole("status")).toHaveText("Processing policy saved.");

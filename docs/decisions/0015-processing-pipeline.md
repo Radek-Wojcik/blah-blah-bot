@@ -22,7 +22,7 @@ Stage 2 turns a recording into a transcript with speakers and described screensh
 
 **Edits.** Corrections and excluded passages are stored in `edits.json`, separate from the worker's `transcript.json`, so running a stage again never loses them. Excluded passages are omitted from every text that leaves the transcript view.
 
-**Audio retention.** The full audio is deleted only when every stage that reads audio has succeeded (`asr` and `diarize` now; Stage 3 adds `speaker_id` and `clips`). The setting is *delete after processing* (default), *keep* or *keep for N days*. Deletion became the default at the user's decision after Stage 2, once processing had been verified end to end; the settings screen says that afterwards the transcript is the only place to correct what was said.
+**Audio retention.** The full audio is deleted only when every stage that reads audio has succeeded (`asr` and `diarize` now; Stage 3 adds `speaker_id` and `clips`). The setting is *delete after processing* (default), *keep* or *keep for N days*. Deletion became the default at the user's decision after Stage 2, once processing had been verified end to end; the settings screen says that afterwards the transcript is the only place to correct what was said. Later revision: the `audio_cleanup` stage moved to the end of the pipeline and deletes only once every other stage, the draft included, succeeded; the "keep for N days" option was dropped in favor of one *Keep audio after processing* setting with a per-project override (see section 7.3 of the architecture).
 
 ## Consequences
 

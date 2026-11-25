@@ -372,11 +372,11 @@ stateDiagram-v2
     diarize --> merge
     merge --> speaker_id
     speaker_id --> clips
-    clips --> audio_cleanup
-    audio_cleanup --> vision
+    clips --> vision
     vision --> extract
     extract --> reduce
-    reduce --> draft_ready
+    reduce --> audio_cleanup
+    audio_cleanup --> draft_ready
     draft_ready --> published: review and publish
     asr --> failed
     diarize --> failed
@@ -384,14 +384,17 @@ stateDiagram-v2
     failed --> queued: retry from failed stage
 ```
 
-Publishing is not a job stage: it runs from the outbox after the draft is ready (section 4.10), and the draft of a published meeting is read-only. Each stage writes its output to the meeting's working folder and records completion in the database. Stages are idempotent and resumable. Stage 3 adds `speaker_id` and `clips`, Stage 4 adds `extract` and `reduce`, so the pipeline runs `asr`, `diarize`, `merge`, `speaker_id`, `clips`, `audio_cleanup`, `vision`, `extract` and `reduce`. `extract` and `reduce` take their backend from `options.llm` of the job (`managed`, `external` or `cloud`); a managed backend passes the GPU gate, the others do not, and a cloud backend runs only when the store holds the user's confirmation for that endpoint (the supervisor refuses otherwise, and the worker too). A job whose meeting has no cycle, or whose options name no backend, marks both stages done with a note instead of failing, so older jobs and cycle-less meetings still finish. Before `extract` the application writes `work/context.json` and `work/transcript.named.json` (participant names instead of generic speaker labels). The extraction prompt lists the speakers of each window as named, unnamed (`Speaker 2`, a source) or the person who recorded the meeting (`You`) and tells the model to call named people by their names and never by a general word such as "participant"; unnamed speakers keep their generic label, so no name is invented. The reduce prompt that writes the meeting summary is given the same names. A voice named in the Voices screen after the draft was written changes the next run of `extract`, not the draft that exists. `speaker_id` and `clips` run in the application process (crates `speakers` and `queue`), not in the worker: the embeddings are part of the diarization output, so no model is loaded and no GPU is needed. Only `clips` reads the audio and therefore counts as audio-dependent.
+Publishing is not a job stage: it runs from the outbox after the draft is ready (section 4.10), and the draft of a published meeting is read-only. Each stage writes its output to the meeting's working folder and records completion in the database. Stages are idempotent and resumable. Stage 3 adds `speaker_id` and `clips`, Stage 4 adds `extract` and `reduce`, so the pipeline runs `asr`, `diarize`, `merge`, `speaker_id`, `clips`, `vision`, `extract`, `reduce` and `audio_cleanup`. The cleanup runs last on purpose (section 7.3); the draft is complete, and its publishing hook has run, when `reduce` finishes. `extract` and `reduce` take their backend from `options.llm` of the job (`managed`, `external` or `cloud`); a managed backend passes the GPU gate, the others do not, and a cloud backend runs only when the store holds the user's confirmation for that endpoint (the supervisor refuses otherwise, and the worker too). A job whose meeting has no cycle, or whose options name no backend, marks both stages done with a note instead of failing, so older jobs and cycle-less meetings still finish. Before `extract` the application writes `work/context.json` and `work/transcript.named.json` (participant names instead of generic speaker labels). The extraction prompt lists the speakers of each window as named, unnamed (`Speaker 2`, a source) or the person who recorded the meeting (`You`) and tells the model to call named people by their names and never by a general word such as "participant"; unnamed speakers keep their generic label, so no name is invented. The reduce prompt that writes the meeting summary is given the same names. A voice named in the Voices screen after the draft was written changes the next run of `extract`, not the draft that exists. `speaker_id` and `clips` run in the application process (crates `speakers` and `queue`), not in the worker: the embeddings are part of the diarization output, so no model is loaded and no GPU is needed. Of the stages after `diarize`, only `clips` reads the audio.
 
 ### 7.3 Audio retention
 
-- Full audio is deleted once transcription, diarization, voice embedding and clip extraction have all succeeded, and never before. The setting is *delete after processing* (the default), *keep* or *keep for N days*.
+- **Default: delete after processing.** The source audio of a meeting is deleted by the last stage of its job, `audio_cleanup`, which runs after `reduce`. By then the transcript, the sample clips, the screenshot descriptions and the draft exist, so nothing that reads the audio can be missing it. A meeting whose language-model stages were skipped (no cycle, no backend) is cleaned after its other stages, since there is no draft to wait for.
+- **Never early.** The stage deletes only when every other stage of the job is `done`. A failed, pending or running stage keeps the audio, and a retry that succeeds is followed by the cleanup. The stage is idempotent: a second run, or a run after a crash, finds nothing to delete and succeeds.
+- **What goes and what stays.** Deleted: the segment files of every track (and the folders they leave empty) and any media file lying directly in the meeting folder, such as a source file of an import. Kept: the transcript and its edits, the draft, the journal, the key screenshots (`img/`, `screenshots/`) and the sample clips (`clips/`, which follow their own rule below). The original file that an import was made from is read in place and never touched.
+- **Safety.** Only paths that are plain relative paths below the meeting folder are removed. A stored path with `..`, a drive or a root, a meeting folder that resolves outside the recordings folder, and a file that resolves outside the meeting folder through a link are skipped. The log has the number and the names of the removed files, no content.
+- **Settings.** *Keep audio after processing* is off by default. It is set globally in **Settings > Processing** (stored as `audioRetention.mode`, `keep` or `delete`; the retired value `keepDays` is read as `keep`) and can be overridden per project in the project settings (`project_prefs.audio_retention`: none = follow the global setting, `keep` or `delete`). The runner resolves the effective policy from the meeting's cycle each time the stage runs, so a change applies to every meeting that has not been cleaned yet.
 - A few short sample clips per detected voice are kept until the speakers of that meeting are confirmed, then deleted. An upper retention limit applies if labeling is never completed.
-- An optional setting keeps full audio for a number of days. It is off by default.
-- After deletion the only correction path is editing the transcript.
+- After deletion the only correction path is editing the transcript. Keeping audio costs disk space: a 10 hour meeting takes several GB.
 
 ### 7.4 Speakers and voice profiles
 

@@ -329,6 +329,64 @@ describe("ProjectDetailView, ProjectSettingsModal, and ImportMeetingModal", () =
     );
   });
 
+  it("lets a project override the global audio retention and saves the choice", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    const savePrefsSpy = vi.spyOn(backend, "saveProjectPrefs");
+
+    await act(async () => {
+      root.render(
+        <BackendProvider value={backend}>
+          <ProjectDetailView cycleId="NOMAD" onBack={vi.fn()} onOpenMeeting={vi.fn()} />
+        </BackendProvider>,
+      );
+    });
+    await flush();
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('button[aria-label="Project settings"]')!.click();
+    });
+    await flush();
+
+    const select = host.querySelector<HTMLSelectElement>(
+      'select[aria-label="Audio retention override"]',
+    )!;
+    // A project follows the global setting until it chooses otherwise; the global default is
+    // to delete.
+    expect(select.value).toBe("");
+    expect(select.options[0].textContent).toContain("Use the global setting");
+    expect(select.options[0].textContent).toContain("currently: delete audio");
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(["", "keep", "delete"]);
+
+    // The popover explains it in the same words as the global setting.
+    const help = host.querySelector<HTMLButtonElement>(
+      'button[aria-label="Help: Keep audio after processing"]',
+    )!;
+    await act(async () => {
+      help.click();
+    });
+    expect(host.querySelector(".help-popover-card")!.textContent).toContain("several GB");
+
+    await setSelectValue(select, "keep");
+    await act(async () => {
+      findButton("Save local preferences").click();
+    });
+    await flush();
+    expect(savePrefsSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ cycleId: "NOMAD", audioRetention: "keep" }),
+    );
+    expect((await backend.getProjectPrefs("NOMAD")).audioRetention).toBe("keep");
+
+    // Back to "use the global setting" clears the override.
+    await setSelectValue(select, "");
+    await act(async () => {
+      findButton("Save local preferences").click();
+    });
+    await flush();
+    expect(savePrefsSpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ cycleId: "NOMAD", audioRetention: null }),
+    );
+    expect((await backend.getProjectPrefs("NOMAD")).audioRetention).toBeNull();
+  });
+
   it("detects video extension in ImportMeetingModal and imports with audio_and_slides", async () => {
     const backend = createMockBackend({ clockRate: 0, jobStepMs: 5000 });
     const importSpy = vi.spyOn(backend, "importMeeting");

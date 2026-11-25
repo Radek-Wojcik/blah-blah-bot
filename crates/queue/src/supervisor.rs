@@ -613,6 +613,11 @@ mod tests {
             .unwrap()
     }
 
+    /// Every stage a job runs when the language-model stages are skipped.
+    fn without_llm_stages() -> Vec<Stage> {
+        STAGES.iter().copied().filter(|s| !s.uses_llm()).collect()
+    }
+
     fn setup(gpu_free: bool) -> (Supervisor, Arc<Recording>, Arc<Gate>) {
         let store = Store::open_in_memory().unwrap();
         store
@@ -672,7 +677,7 @@ mod tests {
         // The shape of every job made before cycles existed.
         let (sup, runner, _) = setup(true);
         assert_eq!(sup.drive("m1").unwrap(), StepOutcome::Finished);
-        assert_eq!(*runner.calls.lock().unwrap(), STAGES[..7].to_vec());
+        assert_eq!(*runner.calls.lock().unwrap(), without_llm_stages());
         for stage in [Stage::Extract, Stage::Reduce] {
             let row = stage_row(&sup, stage);
             assert_eq!(row.status, StageStatus::Done);
@@ -696,9 +701,8 @@ mod tests {
         // Every other stage before the language-model ones still ran.
         assert_eq!(
             ran,
-            STAGES[..7]
-                .iter()
-                .copied()
+            without_llm_stages()
+                .into_iter()
                 .filter(|s| *s != Stage::Vision)
                 .collect::<Vec<_>>()
         );
@@ -734,7 +738,7 @@ mod tests {
     fn a_meeting_without_a_cycle_skips_the_language_model_stages() {
         let (sup, runner, gate) = setup_with(&llm_options(LlmKind::Managed), None);
         assert_eq!(sup.drive("m1").unwrap(), StepOutcome::Finished);
-        assert_eq!(*runner.calls.lock().unwrap(), STAGES[..7].to_vec());
+        assert_eq!(*runner.calls.lock().unwrap(), without_llm_stages());
         assert_eq!(
             stage_row(&sup, Stage::Reduce).note.as_deref(),
             Some("the meeting has no cycle")
@@ -783,7 +787,7 @@ mod tests {
         let gate = Arc::new(Gate(AtomicBool::new(false)));
         let sup = Supervisor::new(Arc::new(Mutex::new(store)), runner.clone(), gate, 3);
         sup.enqueue("m1", &llm_options(LlmKind::External)).unwrap();
-        for stage in &STAGES[..7] {
+        for stage in &STAGES[..6] {
             sup.store()
                 .unwrap()
                 .set_stage_status("m1", stage.as_str(), StageStatus::Done, None, 1)
@@ -792,14 +796,14 @@ mod tests {
         assert_eq!(sup.drive("m1").unwrap(), StepOutcome::Finished);
         assert_eq!(
             *runner.calls.lock().unwrap(),
-            vec![Stage::Extract, Stage::Reduce]
+            vec![Stage::Extract, Stage::Reduce, Stage::AudioCleanup]
         );
     }
 
     #[test]
     fn the_cloud_runs_only_after_the_store_holds_a_confirmation() {
         let (sup, runner, _) = setup_with(&llm_options(LlmKind::Cloud), Some("TEAM"));
-        for stage in &STAGES[..7] {
+        for stage in &STAGES[..6] {
             sup.store()
                 .unwrap()
                 .set_stage_status("m1", stage.as_str(), StageStatus::Done, None, 1)
@@ -848,7 +852,7 @@ mod tests {
         assert_eq!(sup.drive("m1").unwrap(), StepOutcome::Finished);
         assert_eq!(
             *runner.calls.lock().unwrap(),
-            vec![Stage::Extract, Stage::Reduce]
+            vec![Stage::Extract, Stage::Reduce, Stage::AudioCleanup]
         );
     }
 
@@ -1008,7 +1012,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(out, StepOutcome::Finished);
-        assert_eq!(*runner.calls.lock().unwrap(), STAGES[..7].to_vec());
+        assert_eq!(*runner.calls.lock().unwrap(), without_llm_stages());
     }
 
     #[test]
@@ -1055,6 +1059,6 @@ mod tests {
         assert!(sup.is_forced("m1"));
         assert_eq!(sup.drive("m1").unwrap(), StepOutcome::Finished);
         assert!(!sup.is_forced("m1"));
-        assert_eq!(*runner.calls.lock().unwrap(), STAGES[..7].to_vec());
+        assert_eq!(*runner.calls.lock().unwrap(), without_llm_stages());
     }
 }

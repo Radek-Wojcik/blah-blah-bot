@@ -1,4 +1,5 @@
-//! The production [`StageRunner`]: worker steps through `uv`, audio cleanup in Rust.
+//! The production [`StageRunner`]: worker steps through `uv`; speaker matching, clips and the
+//! audio cleanup run in Rust.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -19,6 +20,7 @@ use crate::worker::{
 pub struct RunnerSettings {
     pub worker: WorkerConfig,
     pub meeting_root: PathBuf,
+    /// The global policy; a project's own choice is applied over it by the runner.
     pub retention: AudioRetention,
     pub voice: VoiceSettings,
 }
@@ -254,15 +256,16 @@ impl StageRunner for PipelineRunner {
                         now_ms(),
                     )
                     .map(|_| ()),
-                    _ => cleanup::apply(
-                        &store,
-                        &job,
-                        &settings.meeting_root,
-                        settings.retention,
-                        now_ms(),
-                    )
-                    .map(|_| ())
-                    .map_err(|e| RunError::new(e.to_string())),
+                    _ => {
+                        // The project's own choice beats the global setting. A stored
+                        // choice that cannot be read fails the stage: the audio stays.
+                        let retention =
+                            cleanup::effective_retention(&store, meeting_id, settings.retention)
+                                .map_err(|e| RunError::new(e.to_string()))?;
+                        cleanup::apply(&store, &job, &settings.meeting_root, retention)
+                            .map(|_| ())
+                            .map_err(|e| RunError::new(e.to_string()))
+                    }
                 }
             }
         }

@@ -313,10 +313,10 @@ export type StageName =
   | "merge"
   | "speaker_id"
   | "clips"
-  | "audio_cleanup"
   | "vision"
   | "extract"
-  | "reduce";
+  | "reduce"
+  | "audio_cleanup";
 export type StageStatus = "pending" | "running" | "done" | "failed";
 export type JobState = "queued" | "waiting" | "running" | "failed" | "done";
 
@@ -414,11 +414,15 @@ export interface SegmentEdit {
 }
 
 export type ProcessAfterRecording = "ask" | "now" | "later";
+/**
+ * What happens to the source audio after a meeting was processed. `keepDays` is only read from
+ * settings that an older version saved; the backend treats it as `keep` and it is never written.
+ */
 export type RetentionMode = "keep" | "delete" | "keepDays";
 
 export interface ProcessingSettings {
   processAfterRecording: ProcessAfterRecording;
-  audioRetention: { mode: RetentionMode; days: number };
+  audioRetention: { mode: RetentionMode };
   gpuIdleSeconds: number;
   gpuMaxUtilPercent: number;
   uvPath: string;
@@ -1341,6 +1345,11 @@ export interface ProjectPrefs {
   localSaveDir: string;
   llmKindOverride?: string | null;
   llmModelOverride?: string | null;
+  /**
+   * What happens to the audio of this project's meetings after processing. Absent or null
+   * follows the global "Keep audio after processing" setting.
+   */
+  audioRetention?: "keep" | "delete" | null;
 }
 
 export interface WizardCreateProjectInput {

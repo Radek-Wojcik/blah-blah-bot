@@ -41,6 +41,9 @@ pub struct ProjectPrefsDto {
     pub llm_kind_override: Option<String>,
     #[serde(default)]
     pub llm_model_override: Option<String>,
+    /// `keep` or `delete`; absent follows the global "keep audio after processing" setting.
+    #[serde(default)]
+    pub audio_retention: Option<String>,
 }
 
 impl From<ProjectPrefs> for ProjectPrefsDto {
@@ -51,6 +54,7 @@ impl From<ProjectPrefs> for ProjectPrefsDto {
             local_save_dir: p.local_save_dir,
             llm_kind_override: p.llm_kind_override,
             llm_model_override: p.llm_model_override,
+            audio_retention: p.audio_retention,
         }
     }
 }
@@ -67,6 +71,10 @@ impl From<ProjectPrefsDto> for ProjectPrefs {
                 .filter(|s| !s.is_empty()),
             llm_model_override: d
                 .llm_model_override
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+            audio_retention: d
+                .audio_retention
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty()),
         }
@@ -384,6 +392,7 @@ where
             }),
         llm_kind_override: None,
         llm_model_override: None,
+        audio_retention: None,
     };
     store.set_project_prefs(&prefs)?;
 
@@ -929,6 +938,7 @@ mod tests {
                 local_save_dir: "D:/Notes".into(),
                 llm_kind_override: Some("external".into()),
                 llm_model_override: Some("gemma3".into()),
+                audio_retention: Some("keep".into()),
             },
         )
         .unwrap();
@@ -936,6 +946,31 @@ mod tests {
         assert_eq!(saved.local_save_dir, "D:/Notes");
         assert_eq!(saved.llm_kind_override.as_deref(), Some("external"));
         assert_eq!(saved.llm_model_override.as_deref(), Some("gemma3"));
+        assert_eq!(saved.audio_retention.as_deref(), Some("keep"));
+        // A new project follows the global setting; a bad value is refused.
+        assert_eq!(prefs.audio_retention, None);
+        let bad = save_project_prefs_in(
+            &store,
+            ProjectPrefsDto {
+                cycle_id: "ALPHA".into(),
+                local_save_enabled: false,
+                local_save_dir: String::new(),
+                llm_kind_override: None,
+                llm_model_override: None,
+                audio_retention: Some("forever".into()),
+            },
+        );
+        assert!(bad.is_err());
+        // The frontend contract is camelCase and old payloads without the field still parse.
+        let old: ProjectPrefsDto = serde_json::from_str(
+            r#"{"cycleId":"ALPHA","localSaveEnabled":false,"localSaveDir":""}"#,
+        )
+        .unwrap();
+        assert_eq!(old.audio_retention, None);
+        assert_eq!(
+            serde_json::to_value(&saved).unwrap()["audioRetention"],
+            "keep"
+        );
     }
 
     #[test]

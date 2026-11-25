@@ -57,6 +57,7 @@
             "kind": { "enum": ["managed", "external", "cloud"] },
             "model_path": { "type": "string", "description": "managed: path to the GGUF file" },
             "ctx": { "type": "integer", "minimum": 2048, "default": 16384 },
+            "parallel": { "type": "integer", "minimum": 1, "maximum": 16, "default": 1, "description": "extract: windows processed at the same time (server slots of the managed backend, each with the full ctx; for external and cloud only the number of requests in flight)" },
             "base_url": { "type": "string", "description": "external and cloud: OpenAI-compatible base URL, for example http://127.0.0.1:11434/v1" },
             "model": { "type": "string", "description": "external and cloud: model name sent in the request" },
             "cloud_confirmed": { "type": "boolean", "default": false, "description": "Cloud runs only when true (set after the per-meeting confirmation)" }

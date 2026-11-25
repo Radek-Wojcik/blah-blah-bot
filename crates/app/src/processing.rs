@@ -50,6 +50,11 @@ pub enum ProcessAfter {
     Later,
 }
 
+/// What happens to the source audio once a meeting was processed successfully.
+///
+/// `KeepDays` is what older versions stored for "keep for N days". That option no longer
+/// exists; the value is still read and counts as `Keep`, so audio that someone asked to keep
+/// is never deleted by an upgrade. The next save writes `keep` or `delete`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RetentionMode {
@@ -58,19 +63,19 @@ pub enum RetentionMode {
     KeepDays,
 }
 
+/// The global "keep audio after processing" setting. Stored as `audioRetention.mode`; the
+/// `days` field older versions wrote next to it is ignored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RetentionSetting {
     pub mode: RetentionMode,
-    pub days: u32,
 }
 
 impl Default for RetentionSetting {
     fn default() -> Self {
-        // Deleting the audio once processing succeeded is the default; the user chose this.
+        // Deleting the audio once processing succeeded is the default; the owner chose this.
         Self {
             mode: RetentionMode::Delete,
-            days: 7,
         }
     }
 }
@@ -78,9 +83,8 @@ impl Default for RetentionSetting {
 impl From<RetentionSetting> for AudioRetention {
     fn from(r: RetentionSetting) -> Self {
         match r.mode {
-            RetentionMode::Keep => Self::Keep,
             RetentionMode::Delete => Self::Delete,
-            RetentionMode::KeepDays => Self::KeepDays { days: r.days },
+            RetentionMode::Keep | RetentionMode::KeepDays => Self::Keep,
         }
     }
 }
@@ -674,23 +678,6 @@ impl Processing {
         new.save(&self.settings_path)?;
         *current = new;
         Ok(())
-    }
-
-    /// Delete the audio whose "keep for N days" period has passed. Run at start.
-    pub fn sweep_expired_audio(&self, meeting_root: &Path) {
-        let retention: AudioRetention = self
-            .settings
-            .lock()
-            .map(|s| s.audio_retention.into())
-            .unwrap_or_default();
-        let Ok(store) = self.store.lock() else {
-            return;
-        };
-        match queue::cleanup::sweep_expired(&store, meeting_root, retention, queue::now_ms()) {
-            Ok(0) => {}
-            Ok(files) => tracing::info!(files, "deleted audio past its retention period"),
-            Err(e) => tracing::warn!(error = %e, "audio sweep failed"),
-        }
     }
 
     /// Delete sample clips of confirmed meetings and of meetings past the clip limit.
@@ -1723,14 +1710,39 @@ mod tests {
             r#"{"audioRetention":{"mode":"keepDays","days":3},"visionModelPath":"C:/models/qwen-vl.gguf","skipScreenshotAnalysis":true,"hfTokenSet":true}"#,
         )
         .unwrap();
+        // The retired "keep for N days" choice is read as "keep".
         assert_eq!(
             AudioRetention::from(parsed.audio_retention),
-            AudioRetention::KeepDays { days: 3 }
+            AudioRetention::Keep
         );
         assert_eq!(parsed.vision_model_path, "C:/models/qwen-vl.gguf");
         assert!(parsed.skip_screenshot_analysis);
         // The stored flag is never read back from a saved file.
         assert!(!parsed.hf_token_set);
+    }
+
+    #[test]
+    fn stored_audio_retention_settings_stay_readable() {
+        let parse = |json: &str| -> AudioRetention {
+            serde_json::from_str::<ProcessingSettings>(json)
+                .unwrap()
+                .audio_retention
+                .into()
+        };
+        // Files written before the setting existed, or with the old shape, still load.
+        assert_eq!(parse("{}"), AudioRetention::Delete);
+        assert_eq!(
+            parse(r#"{"audioRetention":{"mode":"delete","days":30}}"#),
+            AudioRetention::Delete
+        );
+        assert_eq!(
+            parse(r#"{"audioRetention":{"mode":"keep","days":7}}"#),
+            AudioRetention::Keep
+        );
+        assert_eq!(parse(r#"{"audioRetention":{}}"#), AudioRetention::Delete);
+        // The new shape has no `days`.
+        let json = serde_json::to_value(ProcessingSettings::default()).unwrap();
+        assert!(json["audioRetention"].get("days").is_none());
     }
 
     #[test]
@@ -2007,6 +2019,7 @@ mod tests {
             local_save_dir: String::new(),
             llm_kind_override: Some("external".into()),
             llm_model_override: Some("qwen3:14b".into()),
+            audio_retention: None,
         })
         .unwrap();
 
@@ -2053,7 +2066,6 @@ mod tests {
                 Stage::Merge,
                 Stage::SpeakerId,
                 Stage::Clips,
-                Stage::AudioCleanup,
             ] {
                 s.set_stage_status("m1", st.as_str(), StageStatus::Done, None, 1)
                     .unwrap();

@@ -111,7 +111,7 @@ describe("SettingsView", () => {
 
     await clickTab("Processing");
     expect(host.textContent).toContain("GPU guard thresholds");
-    expect(host.textContent).toContain("Audio retention policy");
+    expect(host.textContent).toContain("Keep audio after processing");
     expect(host.textContent).toContain("Worker Python environment");
 
     await clickTab("Voice Profiles");
@@ -471,5 +471,95 @@ describe("SettingsView", () => {
     await expect(backend.voiceProfileSampleClip("NOMAD:alex")).rejects.toMatchObject({
       code: "not_found",
     });
+  });
+});
+
+describe("Keep audio after processing (global setting)", () => {
+  function keepCheckbox(): HTMLInputElement {
+    const box = host.querySelector<HTMLInputElement>(
+      'input[type="checkbox"][aria-label="Keep audio after processing"]',
+    );
+    if (!box) throw new Error("the checkbox is missing");
+    return box;
+  }
+
+  it("is off by default, so the audio is deleted, and explains itself in a help popover", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    await mount(backend, "processing");
+
+    expect(keepCheckbox().checked).toBe(false);
+    expect(host.textContent).toContain("The audio is deleted once the meeting is processed");
+    expect(host.textContent).not.toContain("Keep for N days");
+
+    const help = host.querySelector<HTMLButtonElement>(
+      'button[aria-label="Help: Keep audio after processing"]',
+    )!;
+    expect(help).not.toBeNull();
+    await act(async () => {
+      help.click();
+    });
+    const text = host.querySelector(".help-popover-card")!.textContent!;
+    expect(text).toContain("transcript");
+    expect(text).toContain("voice sample clips");
+    expect(text).toContain("report is ready");
+    expect(text).toContain("several GB");
+  });
+
+  it("saves the choice as keep or delete", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    const saveSpy = vi.spyOn(backend, "saveProcessingSettings");
+    await mount(backend, "processing");
+
+    await act(async () => {
+      keepCheckbox().click();
+    });
+    await flush();
+    expect(keepCheckbox().checked).toBe(true);
+    expect(host.textContent).toContain("A 10 hour meeting takes several GB");
+    await act(async () => {
+      buttonByText("Save processing policy").click();
+    });
+    await flush();
+    expect(saveSpy).toHaveBeenCalledTimes(1);
+    expect(saveSpy.mock.calls[0][0].audioRetention).toEqual({ mode: "keep" });
+    expect((await backend.getProcessingSettings()).audioRetention.mode).toBe("keep");
+
+    await act(async () => {
+      keepCheckbox().click();
+    });
+    await flush();
+    await act(async () => {
+      buttonByText("Save processing policy").click();
+    });
+    await flush();
+    expect(saveSpy.mock.calls[1][0].audioRetention).toEqual({ mode: "delete" });
+  });
+
+  it("shows a value saved by an older version (keep for N days) as keeping the audio", async () => {
+    const base = createMockBackend({ clockRate: 0 });
+    const backend: Backend = {
+      ...base,
+      getProcessingSettings: async () => ({
+        ...(await base.getProcessingSettings()),
+        audioRetention: { mode: "keepDays" as const },
+      }),
+    };
+    const saveSpy = vi.spyOn(backend, "saveProcessingSettings");
+    await mount(backend, "processing");
+
+    expect(keepCheckbox().checked).toBe(true);
+    // Nothing changed, so nothing is offered for saving.
+    expect(host.querySelector(".unsaved-bar")).toBeNull();
+
+    // Another change saves the retired value as a plain "keep".
+    await act(async () => {
+      setInputValue(inputByLabel("Max GPU utilization (%)"), "55");
+    });
+    await flush();
+    await act(async () => {
+      buttonByText("Save processing policy").click();
+    });
+    await flush();
+    expect(saveSpy.mock.calls[0][0].audioRetention).toEqual({ mode: "keep" });
   });
 });

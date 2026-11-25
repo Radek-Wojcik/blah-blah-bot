@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useBackend } from "../../backend-context";
+import { AudioRetentionHelp } from "../../components/AudioRetentionHelp";
 import { HelpPopover } from "../../components/HelpPopover";
 import { errorMessage } from "../../hooks";
-import type { ProcessingSettings, RetentionMode } from "../../ipc/types";
+import type { ProcessingSettings } from "../../ipc/types";
 import { validateVoiceSettings } from "../../speakers";
 import type { EditableTabProps } from "../Settings";
 
@@ -17,13 +18,15 @@ function validateProcessingPolicy(s: ProcessingSettings): string | null {
   if (!Number.isInteger(s.gpuIdleSeconds) || s.gpuIdleSeconds < 0) {
     return "GPU idle wait time must be 0 seconds or more.";
   }
-  if (
-    s.audioRetention.mode === "keepDays" &&
-    (!Number.isInteger(s.audioRetention.days) || s.audioRetention.days < 1)
-  ) {
-    return "Keep audio days must be a whole number, at least 1.";
-  }
   return validateVoiceSettings(s);
+}
+
+/**
+ * Whether the settings keep the audio after processing. A `keepDays` value saved by an older
+ * version counts as keeping it, which is what the backend does with it.
+ */
+function keepsAudio(s: ProcessingSettings): boolean {
+  return s.audioRetention.mode !== "delete";
 }
 
 function isProcessingDirty(
@@ -33,8 +36,7 @@ function isProcessingDirty(
   if (!saved || !draft) return false;
   return (
     saved.processAfterRecording !== draft.processAfterRecording ||
-    saved.audioRetention.mode !== draft.audioRetention.mode ||
-    saved.audioRetention.days !== draft.audioRetention.days ||
+    keepsAudio(saved) !== keepsAudio(draft) ||
     saved.gpuIdleSeconds !== draft.gpuIdleSeconds ||
     saved.gpuMaxUtilPercent !== draft.gpuMaxUtilPercent ||
     saved.voiceAccept !== draft.voiceAccept ||
@@ -98,7 +100,7 @@ export function ProcessingTab({ onDirtyChange, registerHandle, onRunSetup }: Pro
       const merged: ProcessingSettings = {
         ...latest,
         processAfterRecording: draft.processAfterRecording,
-        audioRetention: draft.audioRetention,
+        audioRetention: { mode: keepsAudio(draft) ? "keep" : "delete" },
         gpuIdleSeconds: draft.gpuIdleSeconds,
         gpuMaxUtilPercent: draft.gpuMaxUtilPercent,
         voiceAccept: draft.voiceAccept,
@@ -218,57 +220,26 @@ export function ProcessingTab({ onDirtyChange, registerHandle, onRunSetup }: Pro
             <fieldset className="llm-group">
               <legend>
                 <span className="field-label-row">
-                  Audio retention policy
-                  <HelpPopover
-                    title="Audio Retention"
-                    recommended="Keep for 14–30 days if disk space is limited"
-                  >
-                    <p>
-                      Controls what happens to raw meeting audio files after processing finishes.
-                      Keeping audio allows you to re-run speaker recognition or re-transcribe later;
-                      deleting frees disk space immediately.
-                    </p>
-                  </HelpPopover>
+                  Audio after processing
+                  <AudioRetentionHelp />
                 </span>
               </legend>
-              <label>
-                Audio files after processing
-                <select
-                  value={draft.audioRetention.mode}
+              <label className="check">
+                <input
+                  type="checkbox"
+                  aria-label="Keep audio after processing"
+                  checked={keepsAudio(draft)}
                   onChange={(e) =>
-                    set({
-                      audioRetention: {
-                        ...draft.audioRetention,
-                        mode: e.target.value as RetentionMode,
-                      },
-                    })
+                    set({ audioRetention: { mode: e.target.checked ? "keep" : "delete" } })
                   }
-                >
-                  <option value="keep">Keep</option>
-                  <option value="delete">Delete after processing</option>
-                  <option value="keepDays">Keep for N days</option>
-                </select>
-                {draft.audioRetention.mode !== "keep" && (
-                  <small>
-                    Once audio is deleted, corrections can only be made by editing the transcript.
-                  </small>
-                )}
+                />
+                Keep audio after processing
               </label>
-              {draft.audioRetention.mode === "keepDays" && (
-                <label>
-                  Keep audio for (days)
-                  <input
-                    type="number"
-                    min={1}
-                    value={draft.audioRetention.days}
-                    onChange={(e) =>
-                      set({
-                        audioRetention: { ...draft.audioRetention, days: num(e.target.value) },
-                      })
-                    }
-                  />
-                </label>
-              )}
+              <small>
+                {keepsAudio(draft)
+                  ? "The audio stays on this computer until you delete the meeting. A 10 hour meeting takes several GB."
+                  : "The audio is deleted once the meeting is processed and its report is ready. The transcript, the report, key screenshots and voice sample clips are kept. A project can override this in its settings."}
+              </small>
             </fieldset>
 
             <fieldset className="llm-group">

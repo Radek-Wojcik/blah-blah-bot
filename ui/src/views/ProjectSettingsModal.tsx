@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { useBackend } from "../backend-context";
+import { AudioRetentionHelp } from "../components/AudioRetentionHelp";
 import { HelpPopover } from "../components/HelpPopover";
 import {
   type TypeRow,
@@ -71,6 +72,8 @@ export function ProjectSettingsModal({ cycleId, onClose, onSaved }: ProjectSetti
   const [prefs, setPrefs] = useState<ProjectPrefs | null>(null);
   const [savedPrefs, setSavedPrefs] = useState<ProjectPrefs | null>(null);
   const [detected, setDetected] = useState<DetectedModels | null>(null);
+  /** Whether the global setting keeps the audio; shown next to "use the global setting". */
+  const [globalKeepsAudio, setGlobalKeepsAudio] = useState<boolean | null>(null);
 
   const [details, setDetails] = useState<CycleDetails | null>(null);
   const [cycle, setCycle] = useState<CycleDto | null>(null);
@@ -150,6 +153,10 @@ export function ProjectSettingsModal({ cycleId, onClose, onSaved }: ProjectSetti
       .autoDetectModels()
       .then((d) => !cancelled && setDetected(d))
       .catch(() => undefined);
+    void backend
+      .getProcessingSettings()
+      .then((p) => !cancelled && setGlobalKeepsAudio(p.audioRetention.mode !== "delete"))
+      .catch(() => undefined);
     return () => {
       cancelled = true;
     };
@@ -172,6 +179,7 @@ export function ProjectSettingsModal({ cycleId, onClose, onSaved }: ProjectSetti
         ...prefs,
         llmKindOverride: prefs.llmKindOverride || null,
         llmModelOverride: prefs.llmKindOverride ? prefs.llmModelOverride?.trim() || null : null,
+        audioRetention: prefs.audioRetention || null,
       });
       setPrefs(next);
       setSavedPrefs(structuredClone(next));
@@ -485,6 +493,42 @@ export function ProjectSettingsModal({ cycleId, onClose, onSaved }: ProjectSetti
                 )}
               </label>
             )}
+          </fieldset>
+
+          <fieldset>
+            <legend>
+              Audio after processing <AudioRetentionHelp />
+            </legend>
+            <label>
+              Keep audio of this project&apos;s meetings
+              <select
+                aria-label="Audio retention override"
+                value={prefs.audioRetention ?? ""}
+                onChange={(e) =>
+                  setPrefs({
+                    ...prefs,
+                    audioRetention:
+                      e.target.value === "" ? null : (e.target.value as "keep" | "delete"),
+                  })
+                }
+              >
+                <option value="">
+                  Use the global setting
+                  {globalKeepsAudio === null
+                    ? ""
+                    : globalKeepsAudio
+                      ? " (currently: keep audio)"
+                      : " (currently: delete audio)"}
+                </option>
+                <option value="keep">Keep the audio</option>
+                <option value="delete">Delete the audio after processing</option>
+              </select>
+              <small>
+                Deleting happens only after a meeting was processed successfully and its report is
+                ready. The transcript, report, key screenshots and voice sample clips are always
+                kept.
+              </small>
+            </label>
           </fieldset>
 
           <div className="actions">

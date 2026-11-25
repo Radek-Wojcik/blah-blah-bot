@@ -295,6 +295,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         localSaveDir: "Documents\\BlahBlahBot\\notes",
         llmKindOverride: null,
         llmModelOverride: null,
+        audioRetention: null,
       },
     ],
   ]);
@@ -1288,6 +1289,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         localSaveDir: "",
         llmKindOverride: null,
         llmModelOverride: null,
+        audioRetention: null,
       };
       return structuredClone(prefs);
     },
@@ -1298,6 +1300,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         localSaveDir: prefs.localSaveDir ?? "",
         llmKindOverride: prefs.llmKindOverride ?? null,
         llmModelOverride: prefs.llmModelOverride ?? null,
+        audioRetention: prefs.audioRetention ?? null,
       };
       projectPrefs.set(saved.cycleId, structuredClone(saved));
       return structuredClone(saved);
@@ -1377,6 +1380,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         localSaveDir: req.localSaveDir ?? "",
         llmKindOverride: null,
         llmModelOverride: null,
+        audioRetention: null,
       });
       emitCycles();
       return structuredClone(saved.details!.cycle);

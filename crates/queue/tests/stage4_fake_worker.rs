@@ -19,7 +19,7 @@ use queue::voices::VoiceSettings;
 use queue::worker::{JobOptions, Launcher, LlmOptions, Secret, WorkerConfig};
 use queue::{GateDecision, GpuGate, RunError, Stage, StageRunner, StepOutcome, Supervisor, STAGES};
 use serde_json::Value;
-use store::{LlmKind, Meeting, MeetingState, ReportSettings, StageStatus, Store};
+use store::{LlmKind, Meeting, MeetingState, ReportSettings, Segment, StageStatus, Store, Track};
 
 const TRANSCRIPT: &str = include_str!("../../../worker/tests/fixtures/transcript.json");
 const DRAFT: &str = include_str!("../../../worker/tests/fixtures/meeting.valid.json");
@@ -172,15 +172,28 @@ fn cycle_source() -> Arc<dyn CycleSource> {
     })
 }
 
-/// A meeting with a finished transcript whose first seven stages are already done, so a
-/// run goes straight to `extract` and `reduce`.
+/// A meeting with a finished transcript whose first six stages are already done, so a run
+/// goes straight to `extract`, `reduce` and the audio cleanup. The global retention policy is
+/// "keep", so the audio of these labs stays unless a test says otherwise.
 fn lab(
     options: &JobOptions,
     cycle: Option<&str>,
     gate: Arc<dyn GpuGate>,
     key: Option<&str>,
 ) -> Lab {
-    lab_inner(options, cycle, gate, key, None)
+    lab_inner(options, cycle, gate, key, None, AudioRetention::Keep)
+}
+
+/// A lab with the given global retention policy, for a meeting of the cycle `TEAM`.
+fn lab_with_retention(retention: AudioRetention) -> Lab {
+    lab_inner(
+        &llm(LlmKind::External),
+        Some("TEAM"),
+        Arc::new(Allow),
+        None,
+        None,
+        retention,
+    )
 }
 
 /// A lab for an external backend whose key comes from `resolver`; the settings hold a key
@@ -195,6 +208,7 @@ fn lab_with_resolver(
         Arc::new(Allow),
         Some("key-from-the-settings"),
         Some(Box::new(resolver)),
+        AudioRetention::Keep,
     )
 }
 
@@ -206,12 +220,18 @@ fn lab_inner(
     gate: Arc<dyn GpuGate>,
     key: Option<&str>,
     resolver: Option<Resolver>,
+    retention: AudioRetention,
 ) -> Lab {
     let root = tempfile::tempdir().unwrap();
     fs::write(root.path().join("fake_worker.py"), FAKE_WORKER).unwrap();
     fs::write(root.path().join("draft.fixture.json"), DRAFT).unwrap();
     fs::create_dir_all(root.path().join("m1/work")).unwrap();
     fs::write(root.path().join("m1/work/transcript.json"), TRANSCRIPT).unwrap();
+    // The recorded audio, a sample clip and a key screenshot.
+    for file in ["m1/mic/000000.wav", "m1/clips/a.wav", "m1/img/slide.png"] {
+        fs::create_dir_all(root.path().join(file).parent().unwrap()).unwrap();
+        fs::write(root.path().join(file), b"x").unwrap();
+    }
 
     let store = Store::open_in_memory().unwrap();
     store
@@ -223,6 +243,32 @@ fn lab_inner(
             state: MeetingState::Stopped,
             dir: "m1".into(),
         })
+        .unwrap();
+    store
+        .upsert_track(
+            "m1",
+            &Track {
+                name: "mic".into(),
+                source: "microphone".into(),
+                pid: None,
+                offset_ms: 0.0,
+                ended: true,
+                end_offset_ms: None,
+                total_samples: None,
+            },
+        )
+        .unwrap();
+    store
+        .add_segment(
+            "m1",
+            &Segment {
+                track: "mic".into(),
+                segment: 0,
+                file: "mic/000000.wav".into(),
+                offset_ms: 0.0,
+                samples: 1,
+            },
+        )
         .unwrap();
     store
         .set_report_settings(
@@ -251,7 +297,7 @@ fn lab_inner(
                 llm_api_key: key.clone(),
             },
             meeting_root: meeting_root.clone(),
-            retention: AudioRetention::Keep,
+            retention,
             voice: VoiceSettings::default(),
         },
         |_, _, _, _| {},
@@ -280,7 +326,7 @@ fn lab_inner(
         .unwrap();
     {
         let s = store.lock().unwrap();
-        for stage in &STAGES[..7] {
+        for stage in &STAGES[..6] {
             s.set_stage_status("m1", stage.as_str(), StageStatus::Done, None, 1)
                 .unwrap();
         }
@@ -549,4 +595,96 @@ fn the_key_is_chosen_from_the_options_of_the_job_that_runs() {
     let lab = lab_with_resolver(&llm(LlmKind::External), |_: &LlmOptions| None);
     assert_eq!(lab.sup.drive("m1").unwrap(), StepOutcome::Finished);
     assert!(lab.calls().iter().all(|c| c["key"] == Value::Null));
+}
+
+/// What is left of the meeting's files, as `(audio, clip, screenshot, draft)`.
+fn files_left(lab: &Lab) -> (bool, bool, bool, bool) {
+    let dir = lab.dir();
+    (
+        dir.join("mic/000000.wav").exists(),
+        dir.join("clips/a.wav").exists(),
+        dir.join("img/slide.png").exists(),
+        dir.join("work/draft.json").exists(),
+    )
+}
+
+fn set_project_override(lab: &Lab, value: Option<&str>) {
+    lab.with_store(|s| {
+        let mut prefs = s.get_project_prefs("TEAM").unwrap();
+        prefs.audio_retention = value.map(str::to_string);
+        s.set_project_prefs(&prefs).unwrap();
+    });
+}
+
+#[test]
+fn the_audio_goes_after_the_draft_exists_and_the_clips_and_screenshots_stay() {
+    let lab = lab_with_retention(AudioRetention::Delete);
+    // Run up to and including the draft: the audio is still there.
+    for expected in [Stage::Extract, Stage::Reduce] {
+        assert_eq!(
+            lab.sup.step("m1").unwrap(),
+            StepOutcome::Ran { stage: expected }
+        );
+        assert!(
+            files_left(&lab).0,
+            "the audio went before the draft: {expected:?}"
+        );
+    }
+    assert!(files_left(&lab).3);
+    assert_eq!(
+        lab.sup.step("m1").unwrap(),
+        StepOutcome::Ran {
+            stage: Stage::AudioCleanup
+        }
+    );
+    assert_eq!(files_left(&lab), (false, true, true, true));
+    assert_eq!(lab.sup.drive("m1").unwrap(), StepOutcome::Finished);
+}
+
+#[test]
+fn a_failed_job_keeps_its_audio_until_a_retry_succeeds() {
+    let lab = lab_with_retention(AudioRetention::Delete);
+    fs::write(lab.dir().join("all-windows-skipped"), "").unwrap();
+    assert!(matches!(
+        lab.sup.drive("m1").unwrap(),
+        StepOutcome::Failed {
+            stage: Stage::Extract,
+            ..
+        }
+    ));
+    assert!(files_left(&lab).0, "a failed job lost its audio");
+    assert_eq!(lab.stage(Stage::AudioCleanup).status, StageStatus::Pending);
+
+    fs::remove_file(lab.dir().join("all-windows-skipped")).unwrap();
+    lab.sup.retry("m1").unwrap();
+    assert_eq!(lab.sup.drive("m1").unwrap(), StepOutcome::Finished);
+    assert_eq!(files_left(&lab), (false, true, true, true));
+}
+
+#[test]
+fn the_global_keep_setting_keeps_the_audio() {
+    let lab = lab_with_retention(AudioRetention::Keep);
+    assert_eq!(lab.sup.drive("m1").unwrap(), StepOutcome::Finished);
+    assert_eq!(files_left(&lab), (true, true, true, true));
+}
+
+#[test]
+fn a_project_override_beats_the_global_setting_in_both_directions() {
+    // The project keeps although the global setting deletes.
+    let lab = lab_with_retention(AudioRetention::Delete);
+    set_project_override(&lab, Some("keep"));
+    assert_eq!(lab.sup.drive("m1").unwrap(), StepOutcome::Finished);
+    assert!(files_left(&lab).0);
+
+    // The project deletes although the global setting keeps.
+    let lab = lab_with_retention(AudioRetention::Keep);
+    set_project_override(&lab, Some("delete"));
+    assert_eq!(lab.sup.drive("m1").unwrap(), StepOutcome::Finished);
+    assert_eq!(files_left(&lab), (false, true, true, true));
+
+    // No override: the global setting decides.
+    let lab = lab_with_retention(AudioRetention::Delete);
+    set_project_override(&lab, None);
+    assert_eq!(lab.sup.drive("m1").unwrap(), StepOutcome::Finished);
+    assert!(!files_left(&lab).0);
 }

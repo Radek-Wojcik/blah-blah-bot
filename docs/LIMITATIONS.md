@@ -38,6 +38,7 @@ These targets are missed in the Stage 8 regression run ([stage8-regression.md](.
 - Voice recognition was measured with synthetic voices: 100% of enrolled speech named correctly and no false accept among 16 new voices. On band-limited, noisy audio some different voices come close to the range of the same voice, so a suggestion should be checked (G1).
 - The speaker count cannot be bound from the cycle's participant list; it is not applied (G9).
 - A meeting processed after its audio was deleted has no sample clips, so voices are named from the transcript.
+- The audio of a meeting is deleted after processing by default (turn on **Keep audio after processing** globally or per project to keep it). Once it is deleted, only the transcript can be corrected afterwards: the meeting cannot be transcribed, separated or matched against voices again from the audio, and no new sample clips can be cut. Audio is never deleted while a job is unfinished or failed.
 
 ## Reports
 

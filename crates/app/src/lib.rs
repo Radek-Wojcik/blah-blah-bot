@@ -183,10 +183,6 @@ pub fn run() {
                 publishing.start();
             }
             if let Ok(root) = handle.state::<AppState>().recordings_root() {
-                handle
-                    .state::<AppState>()
-                    .processing()
-                    .sweep_expired_audio(&root);
                 handle.state::<AppState>().processing().sweep_clips(&root);
             }
 

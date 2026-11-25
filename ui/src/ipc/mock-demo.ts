@@ -19,10 +19,10 @@ export const STAGE_ORDER: StageName[] = [
   "merge",
   "speaker_id",
   "clips",
-  "audio_cleanup",
   "vision",
   "extract",
   "reduce",
+  "audio_cleanup",
 ];
 
 /** Message shown next to the running stage in the mock. */
@@ -32,7 +32,7 @@ export const STAGE_MESSAGES: Record<StageName, string> = {
   merge: "Merging tracks",
   speaker_id: "Matching voices against the profiles",
   clips: "Cutting sample clips",
-  audio_cleanup: "Applying the audio retention rule",
+  audio_cleanup: "Removing the audio",
   vision: "Describing screenshots",
   extract: "Finding tasks and decisions",
   reduce: "Writing the draft report",
@@ -112,10 +112,10 @@ export function demoJobs(): JobView[] {
         merge: done(),
         speaker_id: done(),
         clips: done(),
-        audio_cleanup: done(),
         vision: done(),
         extract: done(),
         reduce: done(),
+        audio_cleanup: done(),
       }),
     ),
   ];
@@ -245,7 +245,7 @@ export function demoTranscript(meetingId: string): TranscriptData {
 export function demoProcessingSettings(): ProcessingSettings {
   return {
     processAfterRecording: "ask",
-    audioRetention: { mode: "delete", days: 30 },
+    audioRetention: { mode: "delete" },
     gpuIdleSeconds: 30,
     gpuMaxUtilPercent: 40,
     uvPath: "uv",

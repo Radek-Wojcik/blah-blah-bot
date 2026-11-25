@@ -50,7 +50,7 @@ The **Projects** view is the home screen of the application. Each project repres
   - **Audio only:** Extracts and chunks audio into 60-second 16 kHz mono WAV segments.
   - **Audio + Visual Slides:** Extracts audio and detects key slide changes from the video track into timestamped screenshots.
   - Choose the report mode, output language, and whether to start processing immediately or add the job to the queue.
-- **Project settings (`⚙ Settings`):** Modal with tabs for **People & Glossary**, **Report & Templates**, **Integrations** (GitHub repository link, Discord webhook secret Store/Clear/Test, per-target publishing rules), and **Local Preferences** (local `.md` auto-save folder and per-project AI backend/model override).
+- **Project settings (`⚙ Settings`):** Modal with tabs for **People & Glossary**, **Report & Templates**, **Integrations** (GitHub repository link, Discord webhook secret Store/Clear/Test, per-target publishing rules), and **Local Preferences** (local `.md` auto-save folder, per-project AI backend/model override, and **Audio after processing**: use the global setting, keep the audio of this project's meetings, or delete it after processing).
 
 ## Recording
 
@@ -69,7 +69,7 @@ The unpacked Chrome extension captures individual browser tabs and reports Googl
 
 ## Processing queue
 
-Open the **Queue** page to monitor and control background processing jobs (`Transcription`, `Speaker separation`, `Merge`, `Speaker recognition`, `Clips`, `Audio cleanup`, `Screenshot description`, `Extraction`, `Draft`).
+Open the **Queue** page to monitor and control background processing jobs (`Transcription`, `Speaker separation`, `Merge`, `Speaker recognition`, `Clips`, `Screenshot description`, `Extraction`, `Draft`, `Audio cleanup`).
 
 - **Progress & ETA:** Each job shows weighted stage progress, per-stage status/messages, and an estimated time remaining.
 - **GPU guard & temporary Queue overrides:** By default, jobs pause if another app (such as a game) uses the GPU above the configured threshold or if free VRAM is below the stage budget. On the right side of the Queue page, **Queue GPU overrides (temporary)** lets you raise or lower the utilization limit and idle wait just for the current queue; it automatically reverts to global Settings once the queue finishes.
@@ -97,7 +97,7 @@ Settings uses left-hand section navigation and prompts via `UnsavedDialog` if yo
 1. **AI Models:** Click **Auto-detect models on disk** to locate `llama-server.exe`, local LLM `.gguf` files, and vision `.gguf` models. Configure the default backend (`Managed local server` or `External local server`; `Cloud` is per-meeting only), context size (default `16384`), models folder, vision model path / **Skip screenshot analysis**, and download or check cached speech/vision models.
 2. **Connectors:** Store and test write-only credentials in the Windows Credential Manager: **GitHub Token** (per host), **Hugging Face Token** (for gated diarization weights), and **External / Cloud LLM API Keys**. Per-project Discord webhooks are configured in **Project Settings > Integrations**.
 3. **Preferences:** Configure **Automatically save meeting notes & transcripts to a local folder**, default recordings directory, global hotkeys, connected project Git repositories (add/pull), **Call detection** sensitivity (`low`, `balanced`, `high`) and watched apps, and **Browser extension** pairing.
-4. **Processing:** Configure post-recording prompt behavior (`Ask me`, `Process immediately`, `Do nothing`), global **GPU guard thresholds**, **Audio retention policy** (`Keep`, `Delete after processing`, `Keep for N days`), **Voice recognition thresholds** (`0.75` automatic, `0.60` suggestion, `0.10` margin, `30` days clip retention), worker Python environment (`uv` and `worker/` paths), and **Run setup again**.
+4. **Processing:** Configure post-recording prompt behavior (`Ask me`, `Process immediately`, `Do nothing`), global **GPU guard thresholds**, **Keep audio after processing** (off by default: the audio of a meeting is deleted once it was processed successfully and its report is ready; the transcript, the report, key screenshots and voice sample clips stay; keeping audio uses a lot of disk space, a 10 hour meeting takes several GB; use the **?** next to it for details), **Voice recognition thresholds** (`0.75` automatic, `0.60` suggestion, `0.10` margin, `30` days clip retention), worker Python environment (`uv` and `worker/` paths), and **Run setup again**.
 5. **Voice Profiles:** View all enrolled profiles across projects with project badges, sample counts, and sample clip playback. Use **Add voice profile manually** to enroll a speaker ahead of time from a 15–30 s audio/video sample, or rename, reset, and delete individual profiles or all biometric voice data.
 
 ## Configuration & environment reference

@@ -292,9 +292,18 @@ fn ensure_ux_schema(conn: &Connection) -> Result<()> {
             local_save_enabled INTEGER NOT NULL DEFAULT 0,
             local_save_dir TEXT NOT NULL DEFAULT '',
             llm_kind_override TEXT,
-            llm_model_override TEXT
+            llm_model_override TEXT,
+            audio_retention TEXT
         );",
     )?;
+    // The per-project audio retention override (`keep`, `delete` or none = follow the global
+    // setting) was added to a table that existing databases already have.
+    if !has_column(conn, "project_prefs", "audio_retention")? {
+        conn.execute(
+            "ALTER TABLE project_prefs ADD COLUMN audio_retention TEXT",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -543,5 +552,33 @@ mod tests {
                 .as_deref(),
             Some(".voice-samples/p1.wav")
         );
+    }
+
+    #[test]
+    fn a_version_7_database_without_the_audio_retention_column_gets_it() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        for sql in &MIGRATIONS[..7] {
+            conn.execute_batch(sql).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 7).unwrap();
+        // A project saved before the override existed.
+        conn.execute_batch(
+            "INSERT INTO project_prefs (cycle_id, local_save_enabled, local_save_dir)
+               VALUES ('NOMAD', 1, 'C:/Notes');",
+        )
+        .unwrap();
+        let s = Store::init(conn).unwrap();
+        let old = s.get_project_prefs("NOMAD").unwrap();
+        assert!(old.local_save_enabled);
+        assert_eq!(old.audio_retention, None);
+        let saved = crate::ProjectPrefs {
+            audio_retention: Some("keep".into()),
+            ..old
+        };
+        s.set_project_prefs(&saved).unwrap();
+        assert_eq!(s.get_project_prefs("NOMAD").unwrap(), saved);
+        // Opening again is harmless.
+        ensure_ux_schema(&s.conn).unwrap();
     }
 }

@@ -19,8 +19,6 @@ pub enum Stage {
     SpeakerId,
     /// Cuts short sample clips of every detected voice for naming.
     Clips,
-    /// Removes the full audio once every audio-dependent stage succeeded.
-    AudioCleanup,
     /// Describes each screenshot with the transcript around it as context.
     Vision,
     /// Finds tasks, decisions and other items in windows of the transcript (language model).
@@ -28,6 +26,10 @@ pub enum Stage {
     /// Deduplicates the items, links them to topics and issues, writes the summary and the
     /// draft report (language model).
     Reduce,
+    /// Removes the source audio once every other stage succeeded and the draft exists, unless
+    /// the retention policy keeps it. It runs last so that nothing that reads the audio can
+    /// be missing it and a failed job never loses its audio.
+    AudioCleanup,
 }
 
 /// Every stage in execution order.
@@ -37,14 +39,16 @@ pub const STAGES: [Stage; 9] = [
     Stage::Merge,
     Stage::SpeakerId,
     Stage::Clips,
-    Stage::AudioCleanup,
     Stage::Vision,
     Stage::Extract,
     Stage::Reduce,
+    Stage::AudioCleanup,
 ];
 
-/// Stages that read the full audio. Audio may be deleted only after all of them are done.
-/// Voice embeddings come from the diarization output, so only the clips are added.
+/// Stages that read the full audio. They are all done long before the audio is deleted: the
+/// cleanup waits for every stage of the job (see [`audio_is_expendable`]), this list only names
+/// the ones that need it. Voice embeddings come from the diarization output, so only the
+/// clips are added.
 pub const AUDIO_DEPENDENT: [Stage; 3] = [Stage::Asr, Stage::Diarize, Stage::Clips];
 
 impl Stage {
@@ -133,13 +137,18 @@ pub fn next_step(job: &JobRow) -> Next {
     Next::Finished
 }
 
-/// Whether the full audio of this job may be deleted: every audio-dependent stage is done.
+/// Whether the source audio of this job may be deleted: every stage except the cleanup
+/// itself is done, so the transcript, the clips, the screenshot descriptions and the draft
+/// exist. A skipped stage counts as done. A failed, pending or running stage keeps the audio.
 pub fn audio_is_expendable(job: &JobRow) -> bool {
-    AUDIO_DEPENDENT.iter().all(|stage| {
-        job.stages
-            .iter()
-            .any(|s| s.stage == stage.as_str() && s.status == StageStatus::Done)
-    })
+    STAGES
+        .iter()
+        .filter(|st| **st != Stage::AudioCleanup)
+        .all(|stage| {
+            job.stages
+                .iter()
+                .any(|s| s.stage == stage.as_str() && s.status == StageStatus::Done)
+        })
 }
 
 /// Whether a stage row represents a skipped stage (`done` with an explanatory `note`).
@@ -252,19 +261,35 @@ mod tests {
     #[test]
     fn the_language_model_stages_come_last_in_order() {
         assert_eq!(
-            STAGES[STAGES.len() - 3..],
-            [Stage::Vision, Stage::Extract, Stage::Reduce]
+            STAGES[STAGES.len() - 4..],
+            [
+                Stage::Vision,
+                Stage::Extract,
+                Stage::Reduce,
+                Stage::AudioCleanup
+            ]
         );
         assert_eq!(
-            next_step(&job(&[Done; 7])),
+            next_step(&job(&[Done; 6])),
             Next::Run {
                 stage: Stage::Extract
             }
         );
         assert_eq!(
-            next_step(&job(&[Done; 8])),
+            next_step(&job(&[Done; 7])),
             Next::Run {
                 stage: Stage::Reduce
+            }
+        );
+    }
+
+    #[test]
+    fn the_audio_cleanup_is_the_last_stage() {
+        assert_eq!(STAGES[STAGES.len() - 1], Stage::AudioCleanup);
+        assert_eq!(
+            next_step(&job(&[Done; 8])),
+            Next::Run {
+                stage: Stage::AudioCleanup
             }
         );
     }
@@ -296,8 +321,8 @@ mod tests {
         assert_eq!(next_step(&job(&[Done; 9])), Next::Finished);
         // A job made before the language-model stages existed has no rows for them: they
         // count as pending, so the job runs (or skips) them.
-        let mut old = job(&[Done; 7]);
-        old.stages.truncate(7);
+        let mut old = job(&[Done; 6]);
+        old.stages.truncate(6);
         assert_eq!(
             next_step(&old),
             Next::Run {
@@ -307,12 +332,20 @@ mod tests {
     }
 
     #[test]
-    fn audio_is_expendable_only_after_every_audio_stage() {
+    fn audio_is_expendable_only_after_every_other_stage() {
         assert!(!audio_is_expendable(&job(&[Done])));
         assert!(!audio_is_expendable(&job(&[Done, Failed])));
-        // The clips are cut from the audio, so they must be done too.
-        assert!(!audio_is_expendable(&job(&[Done, Done, Done, Done])));
-        assert!(audio_is_expendable(&job(&[Done, Done, Done, Done, Done])));
+        // The clips are cut from the audio and the draft is the last thing written, so
+        // neither may be missing.
+        assert!(!audio_is_expendable(&job(&[Done; 5])));
+        assert!(!audio_is_expendable(&job(&[Done; 7])));
+        assert!(audio_is_expendable(&job(&[Done; 8])));
+        // A failed language-model stage keeps the audio even when everything else is done.
+        let mut statuses = [Done; 8];
+        statuses[7] = Failed;
+        assert!(!audio_is_expendable(&job(&statuses)));
+        // The cleanup row itself does not matter.
+        assert!(audio_is_expendable(&job(&[Done; 9])));
     }
 
     #[test]

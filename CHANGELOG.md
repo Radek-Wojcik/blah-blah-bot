@@ -26,6 +26,8 @@ Draft notes for 1.0.0. Nothing here is released yet.
 - Missing `llama-server` and missing or incomplete models now produce messages that say what is missing and how to fix it.
 - Screenshot GIFs are assembled with Pillow from a `uv` environment instead of the system Python.
 - Release notes of a version are extracted from this changelog by the release workflow, and a check keeps the version numbers consistent.
+- Audio after processing: the source audio of a meeting is deleted only once the whole job succeeded and the draft exists (the `audio_cleanup` stage now runs last, after `reduce`), never while a job is unfinished or failed. Transcript, draft, key screenshots and voice sample clips are kept; a media file that an import left in the meeting folder is deleted too. Paths are checked to lie inside the meeting folder, the removed file names are logged, and the cleanup can be repeated safely.
+- Settings: **Keep audio after processing** (off by default, with a help popover) in Settings > Processing replaces the three-way audio retention choice. A value saved by an older version as `keepDays` is read as keep. A project can override the global setting in its project settings (use the global setting, keep, or delete).
 
 ### Fixed
 
