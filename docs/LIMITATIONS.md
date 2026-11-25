@@ -17,6 +17,13 @@ What this build does not do, and what has not been measured. Numbers come from t
 - Per-application capture was measured with test processes. Real Teams and Discord calls are not captured by hand, and the behavior of the new Teams client is unknown (G3).
 - Region screenshots on several monitors with mixed scaling are tested with synthetic frames only (G7).
 
+## Accepted for 1.0, to be improved later
+
+These targets are missed in the Stage 8 regression run ([stage8-regression.md](../benchmarks/results/stage8-regression.md)). The project owner accepted them for 1.0; the plan to improve them is in the "Post-1.0 improvements" section of the [roadmap](ROADMAP.md).
+
+- **Term recall is 35.1% (target 85%)** on the mixed set with the default settings: English technical terms spoken inside Polish sentences are often written phonetically or in Polish spelling. Correct terms in a cycle glossary help the report, but they do not reach transcription (G1, G9).
+- **Speaker separation error is 29.4% in the worst 2 to 4 speaker meeting (target 15%)**. Short turns and overlapping speech are the main source. Treat speaker labels as suggestions and use the voice samples to confirm them (G1).
+
 ## Languages
 
 - Polish and English, including mixed speech. Other languages are not supported.

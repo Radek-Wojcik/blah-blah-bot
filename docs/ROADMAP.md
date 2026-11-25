@@ -433,3 +433,20 @@ flowchart LR
 
 **Stop and ask**
 - go or no-go for 1.0 with the regression report.
+
+## Post-1.0 improvements
+
+Ideas for the metrics that 1.0 ships below target ([LIMITATIONS.md](LIMITATIONS.md)). None of this is planned work for a release yet; each item needs a measurement on the benchmark sets before it is adopted.
+
+**Term recall (35.1%, target 85%)**
+- Custom vocabulary: pass the cycle glossary and the project's terms to the speech model as an initial prompt, and measure the effect with and without it.
+- A larger speech model (large-v3 instead of turbo) for meetings where accuracy matters more than time, or a fine-tuned model for Polish speech with English technical terms.
+- A post-correction pass that matches near-miss words against the glossary by phonetic similarity before the transcript is used.
+- Re-run the term set with a bigger and more realistic list of terms, so the target reflects real meetings.
+
+**Speaker separation (DER 29.4% on 2 to 4 speakers, target 15%)**
+- Evaluate other diarization models and versions beside pyannote community-1 and keep the best one per speaker count.
+- Tune clustering thresholds and the minimum segment length; use the participant list as the expected number of speakers where it is known.
+- Better handling of overlapping speech and very short turns, for example a separate overlap detector.
+- Use the separate source tracks (microphone against application audio) as a hint, so that the local speaker is known without clustering.
+- Measure on real meeting audio, not only synthetic voices.
