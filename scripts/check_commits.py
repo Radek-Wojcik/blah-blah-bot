@@ -17,7 +17,7 @@ ALLOWED_TRAILERS = ("Signed-off-by", "BREAKING CHANGE", "Closes", "Refs")
 
 def messages(rev_range: str) -> list[tuple[str, str]]:
     out = subprocess.run(
-        ["git", "log", "--format=%H%x1f%B%x1e", rev_range],
+        ["git", "log", "--no-merges", "--format=%H%x1f%B%x1e", rev_range],
         check=True,
         capture_output=True,
         text=True,
