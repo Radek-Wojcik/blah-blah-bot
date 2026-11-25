@@ -75,13 +75,16 @@ def translation_rate(spoken_langs: Sequence[str], output_langs: Sequence[str]) -
 
     Both sequences hold one language code per segment. Segment language ids
     come from a detector chosen by the harness; the metric only compares them.
+    Segments whose output language is "unknown" (a detector tie) are left out of
+    both the numerator and the denominator.
     """
     if len(spoken_langs) != len(output_langs):
         raise ValueError("spoken_langs and output_langs must have equal length")
-    if not spoken_langs:
+    pairs = [(a, b) for a, b in zip(spoken_langs, output_langs, strict=True) if b != "unknown"]
+    if not pairs:
         return {"translation_rate": 0.0}
-    wrong = sum(1 for a, b in zip(spoken_langs, output_langs, strict=True) if a != b)
-    return {"translation_rate": wrong / len(spoken_langs)}
+    wrong = sum(1 for a, b in pairs if a != b)
+    return {"translation_rate": wrong / len(pairs)}
 
 
 def rtfx(audio_seconds: float, processing_seconds: float) -> float:

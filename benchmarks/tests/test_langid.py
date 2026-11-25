@@ -15,3 +15,12 @@ def test_english():
 
 def test_mixed_polish_sentence_with_english_terms_is_polish():
     assert langid.detect("Firmware jest już wgrany na dwie płytki.") == "pl"
+
+
+def test_tie_without_evidence_is_unknown_not_english():
+    assert langid.detect("Kubernetes 42") == "unknown"
+    assert langid.detect("") == "unknown"
+
+
+def test_equal_nonzero_scores_are_unknown():
+    assert langid.detect("the nie") == "unknown"

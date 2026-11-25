@@ -61,6 +61,15 @@ def test_translation_rate():
     assert result["translation_rate"] == pytest.approx(0.25)
 
 
+def test_translation_rate_ignores_unknown_output():
+    result = translation_rate(["pl", "pl", "pl", "pl"], ["pl", "unknown", "unknown", "en"])
+    assert result["translation_rate"] == pytest.approx(0.5)
+
+
+def test_translation_rate_all_unknown_is_zero():
+    assert translation_rate(["pl"], ["unknown"])["translation_rate"] == 0.0
+
+
 def test_translation_rate_length_mismatch():
     with pytest.raises(ValueError):
         translation_rate(["pl"], [])
