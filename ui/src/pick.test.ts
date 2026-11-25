@@ -89,6 +89,34 @@ describe("mock dialogs", () => {
     expect(await b.pickFile({ kind: "media" })).toBe("D:\\hook.mp3");
   });
 
+  it("lets the hook cancel a dialog that an option answered, and falls back per dialog", async () => {
+    const b = createMockBackend({
+      clockRate: 0,
+      pick: { file: "D:\\opt.mp3", folder: "D:\\opt-folder" },
+    });
+    window.__bbbPick = { file: null };
+    expect(await b.pickFile({ kind: "media" })).toBeNull();
+    // A dialog the hook does not mention keeps the option's answer.
+    expect(await b.pickFolder()).toBe("D:\\opt-folder");
+  });
+
+  it("offers the audio default for a voice sample and a Save as path with the proposed name", async () => {
+    const b = createMockBackend({ clockRate: 0 });
+    expect(await b.pickFile({ kind: "audio", title: "Choose a voice sample" })).toBe(
+      MOCK_PICK_DEFAULTS.audio,
+    );
+    expect(await b.saveFileAs({ defaultName: "kickoff-2026-11-13.md", extension: "md" })).toBe(
+      "Documents\\BlahBlahBot\\notes\\kickoff-2026-11-13.md",
+    );
+  });
+
+  it("refuses a note path that is only an extension", async () => {
+    const b = createMockBackend({ clockRate: 0 });
+    await expect(b.saveMeetingNoteAs("m5", "C:\\Notes\\.md")).rejects.toMatchObject({
+      code: "invalid",
+    });
+  });
+
   it("saves a note only to a .md path", async () => {
     const b = createMockBackend({ clockRate: 0 });
     expect(await b.saveMeetingNoteAs("m5", "C:\\Notes\\a.md")).toBe("C:\\Notes\\a.md");
