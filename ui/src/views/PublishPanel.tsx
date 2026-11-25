@@ -317,8 +317,7 @@ function TargetRow(props: {
       </label>
       {view.mode === null ? (
         <p className="target-rule-help">
-          The cycle has no Discord target. Add one in the cycle settings, then store its webhook in
-          the publishing settings.
+          The project has no Discord target. Add one in the project settings, under Integrations.
         </p>
       ) : (
         <>

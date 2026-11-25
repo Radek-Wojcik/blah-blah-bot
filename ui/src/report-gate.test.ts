@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { CycleListItem, ReportDefaults } from "./ipc/types";
 import {
   EMPTY_FORM,
-  describeChoice,
   formFromDefaults,
   gateMessage,
   initialCycleId,
@@ -64,9 +63,9 @@ describe("validateGate", () => {
   const form = formFromDefaults(defaults());
 
   it("needs a cycle, loaded defaults and a mode", () => {
-    expect(validateGate(EMPTY_FORM, null)).toBe("Choose a cycle.");
-    expect(validateGate(form, null)).toBe("Loading the cycle…");
-    expect(validateGate(form, defaults({ cycleId: "OTHER" }))).toBe("Loading the cycle…");
+    expect(validateGate(EMPTY_FORM, null)).toBe("Choose a project.");
+    expect(validateGate(form, null)).toBe("Loading the project…");
+    expect(validateGate(form, defaults({ cycleId: "OTHER" }))).toBe("Loading the project…");
     expect(validateGate({ ...form, mode: "" }, defaults())).toBe("Choose a report mode.");
   });
 
@@ -133,16 +132,6 @@ describe("toReportChoice", () => {
 });
 
 describe("the last choice", () => {
-  it("is described as cycle and mode", () => {
-    expect(describeChoice({ cycleId: "NOMAD", mode: "fixed" })).toBe("NOMAD · fixed");
-    expect(describeChoice({ cycleId: "NOMAD", mode: "template", template: "budget-review" })).toBe(
-      "NOMAD · template (budget-review)",
-    );
-    expect(describeChoice({ cycleId: "NOMAD", mode: "by-type", meetingType: "budget" })).toBe(
-      "NOMAD · by-type (budget)",
-    );
-  });
-
   it("is only usable while its cycle exists and is valid", () => {
     const last = { cycleId: "NOMAD", mode: "fixed" as const };
     expect(usableLast(last, [cycle("NOMAD")])).toBe(last);

@@ -322,7 +322,7 @@ export function DraftEditor(props: {
                 void apply(backend.setReportMode(meetingId, "template", e.target.value))
               }
             >
-              {draft.template === null && <option value="">Cycle default</option>}
+              {draft.template === null && <option value="">Project default</option>}
               {(defaults?.templates ?? []).map((t) => (
                 <option key={t.name} value={t.name}>
                   {t.name}

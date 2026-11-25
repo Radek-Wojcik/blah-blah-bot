@@ -258,7 +258,7 @@ describe("ProjectDetailView, ProjectSettingsModal, and ImportMeetingModal", () =
     expect(onOpenMeeting).toHaveBeenCalled();
   });
 
-  it("opens ProjectSettingsModal and saves machine-local preferences and cycle settings", async () => {
+  it("opens ProjectSettingsModal and saves machine-local preferences and project settings", async () => {
     const backend = createMockBackend({ clockRate: 0 });
     const savePrefsSpy = vi.spyOn(backend, "saveProjectPrefs");
     const saveCycleSpy = vi.spyOn(backend, "saveCycle");

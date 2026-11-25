@@ -151,8 +151,8 @@ test.describe("static screenshots", () => {
     await page.screenshot({ path: path.join(OUT, "speakers-profiles.png") });
   });
 
-  // Stage 4. Run only these with: npx playwright test --project=screenshots -g "cycle settings|source popover|report mode gate"
-  test("cycle settings", async ({ page }) => {
+  // Stage 4. Run only these with: npx playwright test --project=screenshots -g "project settings|source popover|report mode gate"
+  test("project settings", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 1100 });
     await page.goto("/?view=main&backend=mock&rate=0&page=project&cycle=NOMAD");
     await page.getByRole("button", { name: "Project settings" }).click();

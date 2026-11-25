@@ -391,7 +391,7 @@ describe("SettingsView", () => {
     await mount(backend, "preferences");
 
     expect(host.textContent).toContain("Connected project repositories");
-    const repoList = host.querySelector('ul[aria-label="Cycle repositories"]')!;
+    const repoList = host.querySelector('ul[aria-label="Project repositories"]')!;
     expect(repoList).not.toBeNull();
     expect(repoList.querySelectorAll("li").length).toBe(2);
     expect(repoList.textContent).toContain("State as of 2026-11-12");

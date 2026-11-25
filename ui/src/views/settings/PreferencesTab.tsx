@@ -444,7 +444,7 @@ export function PreferencesTab({ onDirtyChange, registerHandle }: EditableTabPro
         {repos.length === 0 ? (
           <p className="empty">No connected project repositories yet.</p>
         ) : (
-          <ul className="repos" aria-label="Cycle repositories">
+          <ul className="repos" aria-label="Project repositories">
             {repos.map((repo) => (
               <li key={repo.id}>
                 <article className="panel quiet repo" aria-label={`Repository ${repo.id}`}>
@@ -511,8 +511,8 @@ export function PreferencesTab({ onDirtyChange, registerHandle }: EditableTabPro
                   value={repoWhere}
                   placeholder={
                     repoKind === "clone"
-                      ? "https://example.org/team/cycles.git"
-                      : "C:\\Users\\me\\cycles"
+                      ? "https://example.org/team/projects.git"
+                      : "C:\\Users\\me\\projects"
                   }
                   onChange={(e) => setRepoWhere(e.target.value)}
                 />

@@ -1,5 +1,5 @@
 /** View-model logic of the briefing screen: wording and small calculations, no React. */
-import type { Briefing, BriefingGroup, BriefingTask } from "./ipc/types";
+import type { Briefing, BriefingTask } from "./ipc/types";
 
 export function plural(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`;
@@ -31,12 +31,6 @@ export function sourceLabel(task: Pick<BriefingTask, "source" | "issue" | "meeti
   return task.issue === null ? meeting : `${meeting} · issue #${task.issue}`;
 }
 
-/** The heading of a group: the name, with the GitHub login of a person who has one. */
-export function groupHeading(group: Pick<BriefingGroup, "kind" | "name" | "github">): string {
-  if (group.kind === "participant" && group.github) return `${group.name} (@${group.github})`;
-  return group.name;
-}
-
 /** `7 open tasks, 2 overdue · 3 open topics` */
 export function summaryLine(b: Pick<Briefing, "openCount" | "overdueCount" | "topics">): string {
   const tasks = plural(b.openCount, "open task", "open tasks");
@@ -66,7 +60,7 @@ export function statusLine(
   }
   if (b.pull === "skippedDirty") {
     return {
-      text: `${asOf}. Not updated: cycle files have changes that are not committed.`,
+      text: `${asOf}. Not updated: project files have changes that are not committed.`,
       tone: "stale",
     };
   }
@@ -74,9 +68,4 @@ export function statusLine(
   if (b.stateAsOf === null) return { text: "Not pulled yet.", tone: "stale" };
   const result = b.pull === "updated" ? " Updated just now." : "";
   return { text: `${asOf}.${result}`, tone: "ok" };
-}
-
-/** Nothing to prepare: no open task and no open topic. */
-export function isEmptyBriefing(b: Pick<Briefing, "openCount" | "topics">): boolean {
-  return b.openCount === 0 && b.topics.length === 0;
 }

@@ -39,7 +39,7 @@ export function DetectionPrompt(props: { embedded?: boolean }) {
     backend
       .answerDetection(prompt.key, a)
       .then((outcome) => {
-        if (outcome.needsReport) setNote("Choose the cycle and report in the recorder window.");
+        if (outcome.needsReport) setNote("Choose the project and report in the recorder window.");
         setPrompt(null);
       })
       .catch((e) => setNote(errorMessage(e)))

@@ -1703,21 +1703,12 @@ textarea {
   color: var(--cyan);
   overflow-wrap: anywhere;
 }
-.gate-summary {
-  margin: 0 0 8px;
-  font-family: var(--font-mono);
-}
-.gate-summary strong {
-  color: var(--cyan);
-}
-.gate-form,
 .gate-new {
   display: flex;
   flex-direction: column;
   gap: 12px;
   margin: 0 0 14px;
 }
-.gate-form label,
 .gate-new label,
 .inline-field {
   display: flex;
@@ -1728,13 +1719,10 @@ textarea {
   letter-spacing: 0.15em;
   text-transform: uppercase;
 }
-.gate-form small,
 .gate-new small {
   letter-spacing: normal;
   text-transform: none;
 }
-.gate-form select,
-.gate-form input,
 .gate-new input,
 .inline-field select,
 .add-form select,
@@ -1753,8 +1741,6 @@ textarea {
   letter-spacing: normal;
   min-width: 0;
 }
-.gate-form select:hover,
-.gate-form input:hover,
 .inline-field select:hover,
 .item-fields select:hover,
 .move-select:hover {
@@ -1769,11 +1755,6 @@ textarea {
   font-size: 0.75em;
   letter-spacing: 0.15em;
   text-transform: uppercase;
-}
-.gate-problem {
-  margin: 0;
-  color: var(--yellow);
-  font-size: 0.85em;
 }
 .backend-choice {
   border: 1px dashed var(--line);
@@ -1843,11 +1824,7 @@ textarea {
   font-size: 0.8em;
 }
 
-/* Cycle editor */
-.editor-section {
-  width: 100%;
-  max-width: 100%;
-}
+/* Project settings */
 .section-hint {
   margin: 0 0 10px;
   color: var(--muted);
@@ -1955,9 +1932,6 @@ textarea {
 }
 .llm-group {
   max-width: 100%;
-}
-.key-panel {
-  margin-top: var(--gap);
 }
 .template-list {
   list-style: none;
@@ -2927,10 +2901,7 @@ textarea {
   margin: 0 0 10px;
 }
 
-/* Briefing: open tasks by person and open topics. */
-.brief-actions {
-  margin: 0 0 var(--gap);
-}
+/* Briefing: open tasks and open topics. */
 .brief-status {
   margin: 0 0 6px;
   color: var(--muted);
@@ -2940,18 +2911,11 @@ textarea {
 .brief-stale {
   color: var(--yellow);
 }
-.brief-summary {
-  margin: 0 0 var(--gap);
-}
 .brief-warnings {
   margin: 0 0 var(--gap);
   padding-left: 1.2em;
   color: var(--yellow);
   font-size: 0.85em;
-}
-.brief-groups {
-  list-style: none;
-  padding: 0;
 }
 .brief-overdue {
   border-left-color: var(--magenta);
