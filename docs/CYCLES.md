@@ -123,7 +123,7 @@ Before anything is published the panel shows `topics.yaml` before and after, top
 
 ### What is written to the repository
 
-Only new files go into the meeting folder `meetings/<ID>/<folder>`: `report.md`, `transcript.md`, `meeting.json` (the draft with its decisions on status changes) and `img/` with the screenshots that are not inside an excluded passage. The folder is the date of the meeting, with a suffix `-2`, `-3` if another meeting of the cycle took the date (chosen against the remote at publishing time). `transcript.md` has one line per segment with an anchor `t-hh-mm-ss` and the speaker's name, and leaves out passages you excluded. `topics.yaml` is the only existing file that changes (below). Other edits to the cycle (`cycle.yaml`, templates) are not committed by the application; commit them yourself.
+Only new files go into the meeting folder `meetings/<ID>/<folder>`: `report.md`, `transcript.md`, `meeting.json` (the draft with its decisions on status changes) and `img/` with the screenshots that are not inside an excluded passage. When the draft lists `key_screenshots`, only those go out (a screenshot in an excluded passage stays out even if it is a key one); without key screenshots all of them go out. Discord attaches the same set. The folder is the date of the meeting, with a suffix `-2`, `-3` if another meeting of the cycle took the date (chosen against the remote at publishing time). `transcript.md` has one line per segment with an anchor `t-hh-mm-ss` and the speaker's name, and leaves out passages you excluded. `topics.yaml` is the only existing file that changes (below). Other edits to the cycle (`cycle.yaml`, templates) are not committed by the application; commit them yourself.
 
 ### Issues
 
