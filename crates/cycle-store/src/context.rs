@@ -341,6 +341,9 @@ fn collect_previous_items(
                 "assignee": item.assignee,
                 "due": item.due,
             });
+            if let Some(name) = &item.assignee_name {
+                value["assignee_name"] = json!(name);
+            }
             if let Some(l) = link {
                 value["issue"] = json!(format!("#{}", l.number));
             }

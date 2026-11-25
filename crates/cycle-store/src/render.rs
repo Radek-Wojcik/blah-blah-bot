@@ -203,21 +203,29 @@ fn discord_mention(person: &Participant) -> Option<String> {
 }
 
 fn assignee_label(item: &Item, participants: &[Participant], discord: bool) -> String {
-    match &item.assignee {
-        None => "@?".to_string(),
-        Some(id) => {
+    let mark = if item.certainty.assignee == CertaintyLevel::Stated {
+        ""
+    } else {
+        "?"
+    };
+    match (&item.assignee, &item.assignee_name) {
+        (Some(id), _) => {
             let person = participants.iter().find(|p| &p.id == id);
-            let mark = if item.certainty.assignee == CertaintyLevel::Stated {
-                ""
-            } else {
-                "?"
-            };
             if let Some(mention) = person.filter(|_| discord).and_then(discord_mention) {
                 return format!("{mention}{mark}");
             }
             let name = person.map_or(id.as_str(), |p| p.name.as_str());
             format!("@{name}{mark}")
         }
+        (None, Some(name)) => {
+            let safe_name = if discord {
+                defuse_discord_mentions(name)
+            } else {
+                name.clone()
+            };
+            format!("@{safe_name}{mark}")
+        }
+        (None, None) => "@?".to_string(),
     }
 }
 

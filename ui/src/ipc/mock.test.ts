@@ -316,6 +316,7 @@ describe("report rendering", () => {
       type,
       text,
       assignee: null,
+      assigneeName: null,
       due: null,
       certainty: { assignee: "unknown", due: "unknown" },
       section: null,

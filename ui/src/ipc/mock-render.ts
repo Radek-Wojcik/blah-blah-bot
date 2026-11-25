@@ -197,9 +197,15 @@ export function itemLine(item: DraftItem, people: Person[], variant: RenderVaria
 }
 
 function assigneeLabel(item: DraftItem, people: Person[]): string {
-  if (item.assignee === null) return "@?";
-  const name = people.find((p) => p.id === item.assignee)?.name ?? item.assignee;
-  return `@${name}${item.certainty.assignee === "stated" ? "" : "?"}`;
+  const mark = item.certainty.assignee === "stated" ? "" : "?";
+  if (item.assignee !== null) {
+    const name = people.find((p) => p.id === item.assignee)?.name ?? item.assignee;
+    return `@${name}${mark}`;
+  }
+  if (item.assigneeName) {
+    return `@${item.assigneeName}${mark}`;
+  }
+  return "@?";
 }
 
 function dueLabel(item: DraftItem): string {

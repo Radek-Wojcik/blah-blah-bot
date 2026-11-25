@@ -171,6 +171,23 @@ def _warning(code: str, message: str, item: dict[str, Any] | None = None) -> dic
     }
 
 
+_GENERIC_ASSIGNEE_RE = re.compile(
+    r"^(?:speaker|mówca|participant|uczestnik)(?:\s+\d+)?$", re.IGNORECASE
+)
+_GENERIC_ASSIGNEE_LABELS = frozenset({"you", "unknown", "ty", "ja", "none", "null", "n/a"})
+
+
+def _clean_assignee_name(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = " ".join(value.split())
+    if not cleaned:
+        return None
+    if cleaned.casefold() in _GENERIC_ASSIGNEE_LABELS or _GENERIC_ASSIGNEE_RE.fullmatch(cleaned):
+        return None
+    return cleaned
+
+
 def resolve_assignee(value: str | None, participants: list[dict[str, str]]) -> str | None:
     """A participant id; a model that wrote the name or another case still gets the id."""
     if value is None:
@@ -197,18 +214,28 @@ def validate_items(items: list[dict[str, Any]], context: dict[str, Any]) -> list
     links = {t["id"] for t in context["open_topics"]} | {i["id"] for i in context["open_issues"]}
     for it in items:
         asked = it["assignee"]
+        asked_name = _clean_assignee_name(it.get("assignee_name"))
         it["assignee"] = resolve_assignee(asked, context["participants"])
-        if it["assignee"] is None:
-            it["certainty"]["assignee"] = "unknown"
-            if asked is not None:
-                warnings.append(
-                    _warning(
-                        "assignee_unknown",
-                        f"The assignee '{asked}' is not a participant of the cycle: "
-                        f"{it['text'][:80]}",
-                        it,
+        if it["assignee"] is None and asked_name is not None:
+            it["assignee"] = resolve_assignee(asked_name, context["participants"])
+        if it["assignee"] is not None:
+            it["assignee_name"] = None
+        else:
+            it["assignee_name"] = asked_name
+            if it["assignee_name"] is not None:
+                if it["certainty"]["assignee"] not in ("stated", "inferred"):
+                    it["certainty"]["assignee"] = "inferred"
+            else:
+                it["certainty"]["assignee"] = "unknown"
+                if asked is not None:
+                    warnings.append(
+                        _warning(
+                            "assignee_unknown",
+                            f"The assignee '{asked}' is not a participant of the cycle: "
+                            f"{it['text'][:80]}",
+                            it,
+                        )
                     )
-                )
         if it["due"] is not None and not valid_due(it["due"], context["meeting_date"]):
             it["due"] = None
         if it["due"] is None:
@@ -596,7 +623,7 @@ def layout(
 
 
 def draft_item(raw: dict[str, Any]) -> dict[str, Any]:
-    return {
+    item = {
         "id": raw["id"],
         "type": raw["type"],
         "text": raw["text"],
@@ -608,6 +635,9 @@ def draft_item(raw: dict[str, Any]) -> dict[str, Any]:
         "source": dict(raw["source"]),
         "edited": False,
     }
+    if raw.get("assignee_name") is not None:
+        item["assignee_name"] = raw["assignee_name"]
+    return item
 
 
 def unverified_warnings(items: list[dict[str, Any]]) -> list[dict[str, Any]]:

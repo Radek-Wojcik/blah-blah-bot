@@ -37,17 +37,26 @@ Item types:
 
 Rules:
 - Include an item only if it was actually agreed or committed to in this window. Skip \
-proposals that were rejected or dropped, hypotheticals and small talk. If a task is handed \
+proposals that were rejected, declined, or dropped, unaccepted wishes or proposals, \
+hypotheticals and small talk. Also capture third-party assignments to a named person \
+("X has to do...", "X ma do zrobienia...") with or without a due date. If a task is handed \
 over, the assignee is the person who finally accepts it.
-- `assignee` is the id of a participant from the participant list, or null when the owner is \
-not clear. Never invent an id. Lines are written with participant names; map them to ids.
+- `assignee` is the id of a participant from `Participants (id: name)` when the owner \
+matches a participant, or null otherwise. Never invent an id. Lines are written with \
+participant names; map them to ids.
 - `due` is an ISO date (YYYY-MM-DD) or null. Resolve relative dates ("next Friday", "by the \
 end of the week", "jutro") against the meeting date with the calendar below. A weekday name alone ("do czwartku", \
 "by Thursday") is the first such day after the meeting date, and the due date is that day itself, not the \
 day after it ("do wtorku" is the Tuesday in the calendar): copy its date from the calendar, \
 do not count days yourself.
+- `assignee_name` is the spoken name of a named person who is NOT in `Participants (id: name)` \
+(e.g. `assignee = null, assignee_name = "Marek"`), or null when `assignee` is set or no named \
+person owns the item. Never put generic labels ("Speaker 2", "You", "Unknown", "participant", \
+"uczestnik", "speaker", "mówca") in `assignee_name`.
 - `certainty.assignee` and `certainty.due`: "stated" only if it was said literally in the \
-line, "inferred" if you deduced it from context, "unknown" when the value is null.
+line, "inferred" if you deduced it from context, "unknown" when the value is null (for \
+`certainty.assignee`, "stated" or "inferred" when either `assignee` or `assignee_name` is set, \
+and "unknown" only when both are null).
 - `section` is one of the allowed section ids, or null when there are none or none fits.
 - `relates_to` is the id of an open topic or issue from the lists when the item continues \
 it, otherwise null.
@@ -145,7 +154,8 @@ def _clip(text: str, limit: int) -> str:
 def _previous(items: list[dict[str, Any]]) -> list[str]:
     out = []
     for it in items[:MAX_PREVIOUS_ITEMS]:
-        extra = [f"assignee: {it['assignee']}"] if it.get("assignee") else []
+        owner = it.get("assignee") or it.get("assignee_name")
+        extra = [f"assignee: {owner}"] if owner else []
         if it.get("due"):
             extra.append(f"due: {it['due']}")
         if it.get("issue"):

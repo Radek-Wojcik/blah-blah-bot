@@ -618,12 +618,43 @@ function ItemCard(props: {
   onError: (message: string | null) => void;
 }) {
   const { item, draft, people, movable, locked, sourceOpen } = props;
+  const backend = useBackend();
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(item.text);
+  const [addingPerson, setAddingPerson] = useState(false);
   // Set when Escape or a save already ended the edit, so the blur that follows does nothing.
   const finished = useRef(false);
   const targets = moveTargets(draft, item);
   const unverified = isUnverified(item);
+
+  const addToProjectPeople = async (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const target = trimmed.toLowerCase();
+    const existing = people.find((p) => p.name.trim().toLowerCase() === target);
+    if (existing) {
+      await props.onUpdate({ assignee: existing.id });
+      return;
+    }
+    setAddingPerson(true);
+    try {
+      const created = await backend.createParticipant(trimmed, draft.cycle);
+      await props.onUpdate({ assignee: created.cycleParticipantId ?? created.id });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.toLowerCase().includes("duplicate")) {
+        const listed = await backend.listParticipants(draft.cycle);
+        const match = listed.find((p) => p.name.trim().toLowerCase() === target);
+        if (match) {
+          await props.onUpdate({ assignee: match.cycleParticipantId ?? match.id });
+          return;
+        }
+      }
+      props.onError(msg);
+    } finally {
+      setAddingPerson(false);
+    }
+  };
 
   const begin = () => {
     finished.current = false;
@@ -746,6 +777,19 @@ function ItemCard(props: {
               </select>
               <Mark level={item.certainty.assignee} />
             </span>
+            {item.assignee === null && item.assigneeName && (
+              <span className="assignee-unlisted">
+                <span>{item.assigneeName} (not in project people)</span>
+                <button
+                  type="button"
+                  className="btn btn-small btn-ghost"
+                  disabled={locked || addingPerson}
+                  onClick={() => void addToProjectPeople(item.assigneeName!)}
+                >
+                  Add to project people
+                </button>
+              </span>
+            )}
           </label>
           <label>
             Due

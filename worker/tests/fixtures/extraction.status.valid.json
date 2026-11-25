@@ -5,6 +5,7 @@
       "type": "task",
       "text": "Prepare the monitor mount design",
       "assignee": "alex",
+      "assignee_name": null,
       "due": "2026-11-20",
       "certainty": {
         "assignee": "stated",
@@ -19,6 +20,7 @@
       "type": "note",
       "text": "Zephyr is the code name of the mount",
       "assignee": null,
+      "assignee_name": null,
       "due": null,
       "certainty": {
         "assignee": "unknown",

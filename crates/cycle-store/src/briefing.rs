@@ -46,6 +46,8 @@ pub struct TaskItem {
     pub github: Option<String>,
     /// Participant id of the assignee of a meeting item.
     pub participant: Option<String>,
+    /// Spoken name of a named person not in `cycle.yaml`.
+    pub assignee_name: Option<String>,
     /// `YYYY-MM-DD`; anything else is treated as no due date.
     pub due: Option<String>,
     /// The issue number: of an issue, or the one a meeting item points to.
@@ -65,6 +67,7 @@ impl TaskItem {
             origin: TaskOrigin::Issue,
             github: issue.assignee.clone(),
             participant: None,
+            assignee_name: None,
             due: None,
             issue: Some(issue.number),
             relates_to: None,
@@ -143,6 +146,7 @@ pub fn meeting_tasks(dir: &Path) -> (Vec<TaskItem>, Vec<String>) {
                 origin: TaskOrigin::Meeting,
                 github: None,
                 participant: item.assignee.clone(),
+                assignee_name: item.assignee_name.clone(),
                 due: item.due.clone().filter(|d| is_iso_date(d)),
                 issue: item.relates_to.as_deref().and_then(issue_number),
                 relates_to: item.relates_to.clone(),
@@ -297,9 +301,14 @@ fn owner_of(task: &TaskItem, people: &[Participant]) -> Owner {
             return Owner::Person(at);
         }
     }
-    match (task.github.as_deref(), task.participant.as_deref()) {
-        (Some(login), _) if !login.is_empty() => Owner::Other(format!("@{login}")),
-        (_, Some(id)) if !id.is_empty() => Owner::Other(id.to_string()),
+    match (
+        task.github.as_deref(),
+        task.participant.as_deref(),
+        task.assignee_name.as_deref(),
+    ) {
+        (Some(login), _, _) if !login.is_empty() => Owner::Other(format!("@{login}")),
+        (_, Some(id), _) if !id.is_empty() => Owner::Other(id.to_string()),
+        (_, _, Some(name)) if !name.is_empty() => Owner::Other(name.to_string()),
         _ => Owner::Nobody,
     }
 }
@@ -432,6 +441,7 @@ mod tests {
             origin: TaskOrigin::Meeting,
             github: None,
             participant: who.map(String::from),
+            assignee_name: None,
             due: due.map(String::from),
             issue: None,
             relates_to: None,

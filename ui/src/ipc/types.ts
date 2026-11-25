@@ -853,6 +853,8 @@ export interface DraftItem {
   text: string;
   /** A participant id of the cycle. */
   assignee: string | null;
+  /** Spoken name of a named person not in the cycle's participants. */
+  assigneeName: string | null;
   /** `YYYY-MM-DD`. */
   due: string | null;
   certainty: { assignee: CertaintyLevel; due: CertaintyLevel };

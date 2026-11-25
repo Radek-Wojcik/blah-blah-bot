@@ -97,6 +97,9 @@ pub struct Item {
     pub text: String,
     /// Participant id.
     pub assignee: Option<String>,
+    /// Spoken name of a named person not in `cycle.yaml`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignee_name: Option<String>,
     /// `YYYY-MM-DD`.
     pub due: Option<String>,
     pub certainty: Certainty,
@@ -228,6 +231,7 @@ pub(crate) mod fixtures {
             item_type: t,
             text: text.into(),
             assignee: None,
+            assignee_name: None,
             due: None,
             certainty: Certainty {
                 assignee: CertaintyLevel::Unknown,
