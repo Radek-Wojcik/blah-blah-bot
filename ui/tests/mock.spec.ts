@@ -419,7 +419,7 @@ test.describe("processing settings on the mock backend", () => {
   test("changes are saved", async ({ page }) => {
     await page.goto("/?view=main&backend=mock&page=settings&tab=processing");
     const form = page.getByRole("form", { name: "Processing policy" });
-    const keepAudio = form.getByLabel("Keep audio after processing");
+    const keepAudio = form.getByRole("checkbox", { name: "Keep audio after processing" });
     await expect(keepAudio).not.toBeChecked();
     await expect(
       form.getByText(/The audio is deleted once the meeting is processed/),
