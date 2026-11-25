@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- The project wizard can create a private GitHub repository for a new project (`POST /user/repos`, or `/orgs/{org}/repos` for an organization owner) when a GitHub token is saved: it shows what will be created (name, private, owner), asks for confirmation before any request, links the repository as the project's `origin`, and falls back to a local-only Git folder with a clear message when there is no token or GitHub refuses. Discord stays a manual optional webhook field.
+
+### Changed
+
+- The interface says "project" everywhere it said "cycle" (recorder panel, Preferences, speaker header, report mode help, publishing messages); the old Cycles, Cycle editor, Briefing, Publishing, Processing and report gate screens, which nothing opened any more, are removed. Every option they offered lives in Project settings, the project page and the Settings tabs.
+
 ### Fixed
 
 - Publishing sends only the draft's key screenshots to GitHub and Discord when the draft has any (excluded passages still win); without key screenshots nothing changes.

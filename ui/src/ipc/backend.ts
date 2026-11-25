@@ -64,7 +64,10 @@ import type {
   ParticipantView,
   VoicesData,
   WebhookCheck,
+  GithubRepoRequest,
+  GithubRepoStatus,
   WizardCreateProjectInput,
+  WizardCreateResult,
 } from "./types";
 
 export type Unsubscribe = () => void;
@@ -344,6 +347,17 @@ export interface Backend {
   saveProjectPrefs(prefs: ProjectPrefs): Promise<ProjectPrefs>;
   /** Guided project creation wizard (auto-managed local repo or existing folder/remote). */
   wizardCreateProject(req: WizardCreateProjectInput): Promise<CycleDto>;
+  /** Whether a GitHub token is saved (a boolean only): decides if the wizard offers repository creation. */
+  githubRepoStatus(): Promise<GithubRepoStatus>;
+  /**
+   * Create a new project folder and, when `github.confirmed` and a token is saved, a PRIVATE GitHub
+   * repository that becomes its remote. No token, a refused request or no connection is not an
+   * error: the local project is created and `github` carries the reason and a message.
+   */
+  wizardCreateProjectWithGithub(
+    req: WizardCreateProjectInput,
+    github: GithubRepoRequest,
+  ): Promise<WizardCreateResult>;
   /** Import an external audio or video recording into a project and enqueue processing. */
   importMeeting(req: ImportMeetingInput): Promise<MeetingDetail>;
   /** Export a standalone Markdown report note to disk and return the written path. */

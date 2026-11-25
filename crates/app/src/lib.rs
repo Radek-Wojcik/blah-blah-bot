@@ -17,6 +17,7 @@ mod overlay;
 mod processing;
 mod processing_commands;
 mod project_commands;
+mod project_github;
 mod publish_commands;
 mod publish_secrets;
 mod publishing;
@@ -252,6 +253,8 @@ pub fn run() {
             project_commands::get_project_prefs,
             project_commands::save_project_prefs,
             project_commands::wizard_create_project,
+            project_github::github_repo_status,
+            project_github::wizard_create_project_with_github,
             project_commands::import_meeting,
             project_commands::export_meeting_markdown,
             project_commands::save_meeting_note_as,

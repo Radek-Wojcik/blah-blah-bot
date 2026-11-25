@@ -26,7 +26,7 @@ meetings/                 # `targets.github.path`; `meetings` unless the cycle s
 * The directory name under `cycles/` is the cycle id and must equal `id` in `cycle.yaml`.
 * A directory under `cycles/` without a `cycle.yaml` is ignored.
 * A second meeting on the same day is stored in a folder with a suffix: `2026-11-13-2`.
-* The application creates a repository itself (a local repository without a remote) or clones an existing one. Text encodings are UTF-8; a byte order mark and Windows line endings are accepted when reading.
+* The application creates a repository itself (a local repository without a remote; with a saved GitHub token and the person's confirmation in the project wizard, also an empty private repository on GitHub that becomes its `origin`, falling back to the local-only repository with a message when GitHub cannot be used) or clones an existing one. Text encodings are UTF-8; a byte order mark and Windows line endings are accepted when reading.
 
 ## `cycles/<ID>/cycle.yaml`
 

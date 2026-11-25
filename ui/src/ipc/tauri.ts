@@ -128,6 +128,9 @@ export function createTauriBackend(): Backend {
     getProjectPrefs: (cycleId) => invoke("get_project_prefs", { cycleId }),
     saveProjectPrefs: (prefs) => invoke("save_project_prefs", { prefs }),
     wizardCreateProject: (req) => invoke("wizard_create_project", { req }),
+    githubRepoStatus: () => invoke("github_repo_status"),
+    wizardCreateProjectWithGithub: (req, github) =>
+      invoke("wizard_create_project_with_github", { req, github }),
     importMeeting: (req) => invoke("import_meeting", { req }),
     exportMeetingMarkdown: (meetingId, destPath) =>
       invoke("export_meeting_markdown", { meetingId, destPath: destPath ?? null }),

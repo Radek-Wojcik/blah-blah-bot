@@ -243,19 +243,10 @@ fn register_or_update_repo(
     setting
 }
 
-/// Pure implementation of `wizard_create_project` for unit testing and IPC command use.
-pub fn wizard_create_project_in<S>(
-    settings: &mut Settings,
-    store: &Store,
-    sync: &S,
-    data_dir: &Path,
-    req: WizardCreateProjectDto,
-) -> IpcResult<CycleDto>
-where
-    S: ParticipantSync + ?Sized,
-{
-    let id = req.id.trim();
-    let name = req.name.trim();
+/// The checks of the project id and name that every wizard path makes before anything is
+/// created (here or on GitHub).
+pub(crate) fn validate_wizard_basics(id: &str, name: &str) -> IpcResult<()> {
+    let (id, name) = (id.trim(), name.trim());
     if !is_identifier(id) {
         return Err(IpcError::new(
             "invalid",
@@ -268,6 +259,23 @@ where
             "enter a project name of 1 to 120 characters",
         ));
     }
+    Ok(())
+}
+
+/// Pure implementation of `wizard_create_project` for unit testing and IPC command use.
+pub fn wizard_create_project_in<S>(
+    settings: &mut Settings,
+    store: &Store,
+    sync: &S,
+    data_dir: &Path,
+    req: WizardCreateProjectDto,
+) -> IpcResult<CycleDto>
+where
+    S: ParticipantSync + ?Sized,
+{
+    validate_wizard_basics(&req.id, &req.name)?;
+    let id = req.id.trim();
+    let name = req.name.trim();
 
     let mode = req.mode.trim();
     let github_repo = req
