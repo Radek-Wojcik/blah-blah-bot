@@ -521,8 +521,10 @@ select {
   animation: rise 1s ease-out;
 }
 .content-inner {
-  max-width: 1800px;
+  /* Fluid up to a very wide window, then centered so the content never leaves a hole on one side. */
+  max-width: 2800px;
   width: 100%;
+  margin-inline: auto;
 }
 .page-head {
   display: flex;
@@ -551,7 +553,7 @@ select {
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 420px));
   gap: var(--gap);
 }
 .cards > li {
@@ -610,6 +612,7 @@ select {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  margin-top: 10px;
   justify-content: flex-end;
 }
 .badge {
@@ -2944,7 +2947,7 @@ textarea {
 
 .queue-layout-grid {
   display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr);
+  grid-template-columns: minmax(0, 1fr) clamp(300px, 24vw, 480px);
   gap: var(--gap);
   align-items: start;
 }
@@ -3188,6 +3191,59 @@ textarea {
   border-color: var(--cyan);
   border-left-color: var(--cyan);
   background: rgba(0, 240, 255, 0.07);
+}
+
+/* ---------- Wide windows (1500px and up) ---------- */
+
+/* Meeting rows flow into several columns instead of one very long line. */
+.cycle-rows-wide {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 640px), 1fr));
+  gap: 6px var(--gap);
+  align-items: start;
+}
+
+/* The Tasks panel sits under the two top panels on a medium window. */
+.project-top-grid > :nth-child(3) {
+  grid-column: 1 / -1;
+}
+
+@media (min-width: 1900px) {
+  /* Three panels side by side; the Tasks panel joins the row. */
+  .project-top-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 480px), 1fr));
+  }
+  .project-top-grid > :nth-child(3) {
+    grid-column: auto;
+  }
+}
+
+@media (min-width: 1500px) {
+  /* Recorder: the timer spans the top, setup and sources sit side by side. */
+  .recorder-panel-full {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+  .recorder-panel-full > :first-child,
+  .recorder-panel-full > :last-child,
+  .recorder-panel-full > .error {
+    grid-column: 1 / -1;
+  }
+  .recorder-panel-full:not(:has(> .panel.quiet:not(.grow))) > .grow {
+    grid-column: 1 / -1;
+  }
+
+  /* Settings forms: the groups of a form flow into two columns. */
+  .settings-pane form.form {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 560px), 1fr));
+    align-items: start;
+    column-gap: var(--gap);
+  }
+  .settings-pane form.form > :not(.llm-group) {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (max-width: 1100px) {
