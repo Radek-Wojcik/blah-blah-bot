@@ -5,6 +5,7 @@ The microphone track is never diarized: it is the user.
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Callable
 from typing import Any
@@ -114,6 +115,16 @@ def run(manifest: Manifest) -> None:
     path = models.local_path("diarization")
     pipeline = Pipeline.from_pretrained(str(path))
     pipeline.to(torch.device("cuda"))
+    # BBB_DIARIZE_SEG_BATCH and BBB_DIARIZE_EMB_BATCH (default unset = the model's own
+    # settings): batch sizes of the segmentation and the speaker embedding passes. Larger
+    # batches are faster and use more GPU memory; the result does not change.
+    for variable, attribute in (
+        ("BBB_DIARIZE_SEG_BATCH", "segmentation_batch_size"),
+        ("BBB_DIARIZE_EMB_BATCH", "embedding_batch_size"),
+    ):
+        size = os.environ.get(variable, "")
+        if size.isdigit() and 1 <= int(size) <= 256:
+            setattr(pipeline, attribute, int(size))
 
     max_speakers = manifest.options.get("max_speakers")
     bounds: dict[str, Any] = {"max_speakers": max_speakers} if max_speakers else {}

@@ -38,6 +38,10 @@ MAX_RETRIES = 2
 DEFAULT_CTX = 16384
 REQUEST_TIMEOUT_S = 600.0
 KEY_VARIABLE = "BBB_LLM_API_KEY"
+PARALLEL_VARIABLE = "BBB_LLAMA_PARALLEL"
+KV_VARIABLE = "BBB_LLAMA_KV"
+FLASH_VARIABLE = "BBB_LLAMA_FA"
+MAX_SLOTS = 16
 _LOOPBACK = ("localhost", "127.0.0.1", "::1")
 _PREVIOUS_ANSWER_CHARS = 4000
 # Pauses before the retries of a transient failure (timeout, 429, 5xx), in seconds, each
@@ -104,6 +108,7 @@ class LlmConfig:
     base_url: str | None = None
     model: str | None = None
     cloud_confirmed: bool = False
+    parallel: int | None = None  # requests in flight; None: not configured (1)
 
     def ensure_allowed(self) -> None:
         """Refuse a cloud backend that the user did not confirm for this meeting."""
@@ -126,7 +131,28 @@ def config_from(options: dict[str, Any]) -> LlmConfig:
         base_url=raw.get("base_url"),
         model=raw.get("model"),
         cloud_confirmed=bool(raw.get("cloud_confirmed", False)),
+        parallel=_clamp_slots(raw.get("parallel")),
     )
+
+
+def _clamp_slots(value: Any) -> int | None:
+    """A number of slots from 1 to MAX_SLOTS; None for a missing or unusable value."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return max(1, min(MAX_SLOTS, n)) if n >= 1 else None
+
+
+def slots_for(cfg: LlmConfig) -> int:
+    """How many requests the stage may have in flight. For the managed backend
+    `BBB_LLAMA_PARALLEL` overrides the configured `parallel`; the other backends use only the
+    configuration (the server behind them decides what it can serve). Default 1."""
+    if cfg.kind == "managed":
+        from_env = _clamp_slots(os.environ.get(PARALLEL_VARIABLE))
+        if from_env is not None:
+            return from_env
+    return cfg.parallel or 1
 
 
 @dataclass(frozen=True)
@@ -137,7 +163,8 @@ class Backend:
     model: str | None = None
     api_key: str | None = field(default=None, repr=False)
     kind: str = "external"
-    ctx: int | None = None  # context size in tokens when known
+    ctx: int | None = None  # context size in tokens of one request when known
+    slots: int = 1  # requests that may be in flight at once
 
     def post(self, payload: dict[str, Any], timeout: float = REQUEST_TIMEOUT_S) -> dict[str, Any]:
         headers = {"Content-Type": "application/json"}
@@ -194,14 +221,27 @@ def check_base_url(kind: str, url: str) -> None:
 
 
 @contextmanager
-def open_backend(cfg: LlmConfig) -> Iterator[Backend]:
+def open_backend(cfg: LlmConfig, *, parallel: int = 1) -> Iterator[Backend]:
+    """Open the backend of `cfg`. `parallel` is the number of requests the caller will send
+    at once (`slots_for(cfg)` for a stage that can do so); the managed server gets that many
+    slots, each with the full `ctx`. Callers that work sequentially keep the default of 1."""
     cfg.ensure_allowed()
     if cfg.kind == "managed":
         if not cfg.model_path:
             raise LlmError("options.llm.model_path is required for the managed backend")
         ctx = cfg.ctx or DEFAULT_CTX
-        with llama.running(Path(cfg.model_path), ctx=ctx) as base:
-            yield Backend(f"{base}/v1", None, None, "managed", ctx)
+        slots = max(1, parallel)
+        flash = os.environ.get(FLASH_VARIABLE) or ("on" if slots > 1 else None)
+        if flash is not None and flash not in llama.FLASH_ATTN_VALUES:
+            raise LlmError(f"{FLASH_VARIABLE} must be one of {llama.FLASH_ATTN_VALUES}")
+        with llama.running(
+            Path(cfg.model_path),
+            ctx=ctx,
+            parallel=slots,
+            kv_cache_type=os.environ.get(KV_VARIABLE) or None,
+            flash_attn=flash,
+        ) as base:
+            yield Backend(f"{base}/v1", None, None, "managed", ctx, slots)
         return
     if not cfg.base_url:
         raise LlmError("options.llm.base_url is required for the external and cloud backends")
@@ -209,7 +249,7 @@ def open_backend(cfg: LlmConfig) -> Iterator[Backend]:
     key = os.environ.get(KEY_VARIABLE) or None
     if cfg.kind == "cloud" and not key:
         raise LlmError(f"cloud backend needs the key in the environment variable {KEY_VARIABLE}")
-    yield Backend(cfg.base_url, cfg.model, key, cfg.kind, cfg.ctx)
+    yield Backend(cfg.base_url, cfg.model, key, cfg.kind, cfg.ctx, max(1, parallel))
 
 
 @dataclass(frozen=True)

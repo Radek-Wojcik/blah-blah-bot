@@ -12,7 +12,9 @@ topics get the same quote check; whether their target exists is decided by `redu
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
+from concurrent.futures import FIRST_EXCEPTION, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any
 
@@ -266,6 +268,82 @@ def prepare(manifest: Manifest) -> tuple[dict[str, Any], str, list[windows.Windo
     return context, language, windows.split_windows(speech, shots)
 
 
+class _Progress:
+    """Progress of the windows. Fractions come from the number of finished windows, so they
+    never go back, whatever order the windows finish in; a lock keeps the lines whole."""
+
+    def __init__(self, total: int) -> None:
+        self.total = total
+        self.finished = 0
+        self._lock = threading.Lock()
+
+    def _fraction(self) -> float:
+        return 0.10 + 0.85 * (self.finished / self.total)
+
+    def note(self, message: str) -> None:
+        with self._lock:
+            protocol.progress(STEP, self._fraction(), message)
+
+    def finish(self) -> None:
+        with self._lock:
+            self.finished += 1
+            protocol.progress(STEP, self._fraction(), f"window {self.finished}/{self.total}")
+
+
+def _run_sequential(
+    backend: llm_client.Backend,
+    parts: list[windows.Window],
+    context: dict[str, Any],
+    language: str,
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    total = len(parts)
+    for i, window in enumerate(parts):
+        start_frac = 0.10 + 0.85 * (i / total)
+        end_frac = 0.10 + 0.85 * ((i + 1) / total)
+        protocol.progress(STEP, start_frac, f"window {i + 1}/{total}")
+        results.append(
+            extract_window(
+                backend,
+                window,
+                context,
+                language,
+                lambda message, f=start_frac: protocol.progress(STEP, f, message),
+            )
+        )
+        protocol.progress(STEP, end_frac, f"window {i + 1}/{total}")
+    return results
+
+
+def _run_parallel(
+    backend: llm_client.Backend,
+    parts: list[windows.Window],
+    context: dict[str, Any],
+    language: str,
+) -> list[dict[str, Any]]:
+    """The windows on `backend.slots` threads; results in window order. An error in any
+    window (the lowest-numbered one when several fail) aborts the step as it does in the
+    sequential run: the windows not started yet are dropped."""
+    progress = _Progress(len(parts))
+    progress.note(f"window 0/{len(parts)} ({backend.slots} at a time)")
+
+    def work(window: windows.Window) -> dict[str, Any]:
+        result = extract_window(backend, window, context, language, progress.note)
+        progress.finish()
+        return result
+
+    pool = ThreadPoolExecutor(max_workers=backend.slots, thread_name_prefix="extract")
+    futures: list[Future[dict[str, Any]]] = [pool.submit(work, w) for w in parts]
+    try:
+        wait(futures, return_when=FIRST_EXCEPTION)
+        for future in futures:
+            if future.done() and not future.cancelled() and future.exception() is not None:
+                raise future.exception()  # type: ignore[misc]
+        return [f.result() for f in futures]
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
 def run(manifest: Manifest) -> None:
     cfg = llm_client.config_from(manifest.options)
     cfg.ensure_allowed()
@@ -273,22 +351,12 @@ def run(manifest: Manifest) -> None:
     context, language, parts = prepare(manifest)
     results: list[dict[str, Any]] = []
     if parts:
-        total = len(parts)
-        with llm_client.open_backend(cfg) as backend:
-            for i, window in enumerate(parts):
-                start_frac = 0.10 + 0.85 * (i / total)
-                end_frac = 0.10 + 0.85 * ((i + 1) / total)
-                protocol.progress(STEP, start_frac, f"window {i + 1}/{total}")
-                results.append(
-                    extract_window(
-                        backend,
-                        window,
-                        context,
-                        language,
-                        lambda message, f=start_frac: protocol.progress(STEP, f, message),
-                    )
-                )
-                protocol.progress(STEP, end_frac, f"window {i + 1}/{total}")
+        slots = min(llm_client.slots_for(cfg), len(parts))
+        with llm_client.open_backend(cfg, parallel=slots) as backend:
+            if backend.slots > 1:
+                results = _run_parallel(backend, parts, context, language)
+            else:
+                results = _run_sequential(backend, parts, context, language)
     doc = {
         "version": 1,
         "meeting_id": manifest.meeting_id,
