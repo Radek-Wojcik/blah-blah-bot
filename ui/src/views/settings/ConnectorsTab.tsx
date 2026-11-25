@@ -1,14 +1,22 @@
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useBackend } from "../../backend-context";
 import { HelpPopover } from "../../components/HelpPopover";
 import { errorMessage, useCycles } from "../../hooks";
 import type { CycleListItem, ProcessingSettings, PublishingSecrets } from "../../ipc/types";
 import { validateLlmSettings } from "../../llm";
 import { tokenProblem } from "../../publish";
+import type { EditableTabProps } from "../Settings";
 
 interface CheckResult {
   ok: boolean;
   message: string;
+}
+
+/** What a secret field reports to the tab so unsaved typed text takes part in the guard. */
+interface SecretDraft {
+  dirty: boolean;
+  save: () => Promise<boolean>;
+  discard: () => void;
 }
 
 function SecretCard(props: {
@@ -24,12 +32,47 @@ function SecretCard(props: {
   onTest?: () => Promise<CheckResult>;
   testLabel?: string;
   testDisabledReason?: string;
+  onDraft?: (label: string, draft: SecretDraft | null) => void;
 }) {
   const { label, isSet } = props;
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ text: string; kind: "status" | "error" } | null>(null);
   const helpId = useId();
+  const propsRef = useRef(props);
+  useEffect(() => {
+    propsRef.current = props;
+  });
+
+  const storeValue = useCallback(async (): Promise<boolean> => {
+    const err = propsRef.current.validate ? propsRef.current.validate(value) : null;
+    if (err) {
+      setMessage({ text: err, kind: "error" });
+      return false;
+    }
+    try {
+      await propsRef.current.onStore(value);
+      setValue("");
+      setMessage({ text: "Stored.", kind: "status" });
+      return true;
+    } catch (e) {
+      setMessage({ text: errorMessage(e), kind: "error" });
+      return false;
+    }
+  }, [value]);
+
+  useEffect(() => {
+    propsRef.current.onDraft?.(label, {
+      dirty: value.trim() !== "",
+      save: storeValue,
+      discard: () => {
+        setValue("");
+        setMessage(null);
+      },
+    });
+  }, [label, value, storeValue]);
+
+  useEffect(() => () => propsRef.current.onDraft?.(label, null), [label]);
 
   const run = (work: () => Promise<void>) => {
     setMessage(null);
@@ -45,16 +88,9 @@ function SecretCard(props: {
       aria-label={label}
       onSubmit={(e) => {
         e.preventDefault();
-        const err = props.validate ? props.validate(value) : null;
-        if (err) {
-          setMessage({ text: err, kind: "error" });
-          return;
-        }
-        run(async () => {
-          await props.onStore(value);
-          setValue("");
-          setMessage({ text: "Stored.", kind: "status" });
-        });
+        setMessage(null);
+        setBusy(true);
+        void storeValue().finally(() => setBusy(false));
       }}
     >
       <p className="token-state">{isSet ? props.storedText : props.emptyText}</p>
@@ -74,6 +110,11 @@ function SecretCard(props: {
         />
         <small id={helpId}>{props.help}</small>
       </label>
+      <p className="person-meta" data-testid="secret-hint">
+        {value.trim() !== ""
+          ? "Not stored yet: press Store to keep it, or it counts as an unsaved change."
+          : "Saved immediately when you press Store; nothing else to save."}
+      </p>
       {message && (
         <p
           className={message.kind === "error" ? "error" : "secret-result"}
@@ -125,7 +166,7 @@ function SecretCard(props: {
  * Manager (GitHub Token, Hugging Face Token, External / Cloud LLM API keys).
  * Discord webhooks and Notion targets are intentionally per-project inside Project Settings.
  */
-export function ConnectorsTab() {
+export function ConnectorsTab({ onDirtyChange, registerHandle }: Partial<EditableTabProps> = {}) {
   const backend = useBackend();
   const { cycles, repos } = useCycles();
   const [secrets, setSecrets] = useState<PublishingSecrets | null>(null);
@@ -138,6 +179,8 @@ export function ConnectorsTab() {
     null,
   );
   const [error, setError] = useState<string | null>(null);
+  const draftsRef = useRef(new Map<string, SecretDraft>());
+  const [dirtySecrets, setDirtySecrets] = useState<ReadonlySet<string>>(new Set());
 
   const load = useCallback(() => {
     void Promise.all([backend.publishingSecrets(), backend.getProcessingSettings()])
@@ -178,33 +221,93 @@ export function ConnectorsTab() {
     return validCycles[0];
   };
 
-  const saveEndpoints = async (kind: "external" | "cloud") => {
-    if (!processing?.llm) return;
-    setEndpointMsg(null);
-    const nextLlm = {
-      ...processing.llm,
-      external:
-        kind === "external"
+  const externalDirty =
+    processing?.llm != null &&
+    (extUrl.trim() !== processing.llm.external.baseUrl ||
+      extModel.trim() !== processing.llm.external.model);
+  const cloudDirty =
+    processing?.llm != null &&
+    (cloudUrl.trim() !== processing.llm.cloud.baseUrl ||
+      cloudModel.trim() !== processing.llm.cloud.model);
+  const dirty = dirtySecrets.size > 0 || externalDirty || cloudDirty;
+
+  const onDraft = useCallback((label: string, draft: SecretDraft | null) => {
+    if (draft) draftsRef.current.set(label, draft);
+    else draftsRef.current.delete(label);
+    setDirtySecrets((prev) => {
+      const isDirty = draft?.dirty ?? false;
+      if (prev.has(label) === isDirty) return prev;
+      const next = new Set(prev);
+      if (isDirty) next.add(label);
+      else next.delete(label);
+      return next;
+    });
+  }, []);
+
+  const saveEndpoints = useCallback(
+    async (kinds: ("external" | "cloud")[]): Promise<boolean> => {
+      if (!processing?.llm) return true;
+      setEndpointMsg(null);
+      const nextLlm = {
+        ...processing.llm,
+        external: kinds.includes("external")
           ? { baseUrl: extUrl.trim(), model: extModel.trim() }
           : processing.llm.external,
-      cloud:
-        kind === "cloud"
+        cloud: kinds.includes("cloud")
           ? { baseUrl: cloudUrl.trim(), model: cloudModel.trim() }
           : processing.llm.cloud,
-    };
-    const problem = validateLlmSettings(nextLlm);
-    if (problem) {
-      setEndpointMsg({ text: problem, kind: "error" });
-      return;
+      };
+      const problem = validateLlmSettings(nextLlm);
+      if (problem) {
+        setEndpointMsg({ text: problem, kind: "error" });
+        return false;
+      }
+      try {
+        await backend.saveProcessingSettings({ ...processing, llm: nextLlm });
+        setEndpointMsg({ text: "Endpoint settings saved.", kind: "status" });
+        load();
+        return true;
+      } catch (e) {
+        setEndpointMsg({ text: errorMessage(e), kind: "error" });
+        return false;
+      }
+    },
+    [backend, cloudModel, cloudUrl, extModel, extUrl, load, processing],
+  );
+
+  const save = useCallback(async (): Promise<boolean> => {
+    let ok = true;
+    const kinds: ("external" | "cloud")[] = [];
+    if (externalDirty) kinds.push("external");
+    if (cloudDirty) kinds.push("cloud");
+    if (kinds.length > 0 && !(await saveEndpoints(kinds))) ok = false;
+    for (const draft of Array.from(draftsRef.current.values())) {
+      if (draft.dirty && !(await draft.save())) ok = false;
     }
-    try {
-      await backend.saveProcessingSettings({ ...processing, llm: nextLlm });
-      setEndpointMsg({ text: "Endpoint settings saved.", kind: "status" });
-      load();
-    } catch (e) {
-      setEndpointMsg({ text: errorMessage(e), kind: "error" });
+    return ok;
+  }, [cloudDirty, externalDirty, saveEndpoints]);
+
+  const discard = useCallback(() => {
+    for (const draft of Array.from(draftsRef.current.values())) draft.discard();
+    if (processing?.llm) {
+      setExtUrl(processing.llm.external.baseUrl);
+      setExtModel(processing.llm.external.model);
+      setCloudUrl(processing.llm.cloud.baseUrl);
+      setCloudModel(processing.llm.cloud.model);
     }
-  };
+    setEndpointMsg(null);
+  }, [processing]);
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
+
+  useEffect(() => {
+    registerHandle?.({ save, discard });
+    return () => registerHandle?.(null);
+  }, [registerHandle, save, discard]);
 
   return (
     <div className="settings-pane">
@@ -248,6 +351,7 @@ export function ConnectorsTab() {
                     placeholder="github_pat_…"
                     help="Used to push reports and manage issues for linked repositories."
                     validate={tokenProblem}
+                    onDraft={onDraft}
                     onStore={(tok) =>
                       backend
                         .setGithubToken(tok, h.api === "https://api.github.com" ? undefined : h.api)
@@ -301,6 +405,7 @@ export function ConnectorsTab() {
               placeholder="hf_…"
               help="Used only during model downloads for gated diarization weights."
               validate={tokenProblem}
+              onDraft={onDraft}
               onStore={(tok) => backend.setHfToken(tok).then(load)}
               onClear={() => backend.clearHfToken().then(load)}
             />
@@ -363,10 +468,15 @@ export function ConnectorsTab() {
                     <button
                       type="button"
                       className="btn btn-small"
-                      onClick={() => void saveEndpoints("external")}
+                      onClick={() => void saveEndpoints(["external"])}
                     >
                       Save external host
                     </button>
+                    <span className="person-meta" data-testid="external-endpoint-state">
+                      {externalDirty
+                        ? "Unsaved changes: press the button to save, or Settings will ask."
+                        : "Saved."}
+                    </span>
                   </div>
                 </div>
                 <SecretCard
@@ -376,6 +486,7 @@ export function ConnectorsTab() {
                   isSet={processing.llm.externalKeySet}
                   placeholder="Optional bearer key"
                   help="Stored in Windows Credential Manager for the external OpenAI-compatible host."
+                  onDraft={onDraft}
                   onStore={(k) => backend.setExternalKey(k).then(load)}
                   onClear={() => backend.clearExternalKey().then(load)}
                 />
@@ -406,10 +517,15 @@ export function ConnectorsTab() {
                     <button
                       type="button"
                       className="btn btn-small"
-                      onClick={() => void saveEndpoints("cloud")}
+                      onClick={() => void saveEndpoints(["cloud"])}
                     >
                       Save cloud host
                     </button>
+                    <span className="person-meta" data-testid="cloud-endpoint-state">
+                      {cloudDirty
+                        ? "Unsaved changes: press the button to save, or Settings will ask."
+                        : "Saved."}
+                    </span>
                   </div>
                 </div>
                 <SecretCard
@@ -419,6 +535,7 @@ export function ConnectorsTab() {
                   isSet={processing.llm.cloudKeySet}
                   placeholder="API key"
                   help="Stored in Windows Credential Manager for per-meeting cloud extraction."
+                  onDraft={onDraft}
                   onStore={(k) => backend.setCloudKey(k).then(load)}
                   onClear={() => backend.clearCloudKey().then(load)}
                 />

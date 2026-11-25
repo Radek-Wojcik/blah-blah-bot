@@ -5,6 +5,7 @@ import { HelpPopover } from "../components/HelpPopover";
 import { errorMessage } from "../hooks";
 import { bytesToBlob } from "../ipc/bytes";
 import type { CycleListItem, GlobalVoiceProfile } from "../ipc/types";
+import type { EditableTabProps } from "./Settings";
 
 type Confirm =
   | { kind: "reset"; profile: GlobalVoiceProfile }
@@ -71,7 +72,7 @@ function useSampleClipPlayer(onError: (msg: string) => void) {
  * Participants and their voice profiles across projects:
  * project badges, playable sample clip, manual 15-30 s enrollment, rename, reset, and delete.
  */
-export function VoiceProfiles() {
+export function VoiceProfiles({ onDirtyChange, registerHandle }: Partial<EditableTabProps> = {}) {
   const backend = useBackend();
   const [profiles, setProfiles] = useState<GlobalVoiceProfile[] | null>(null);
   const [cycles, setCycles] = useState<CycleListItem[]>([]);
@@ -134,9 +135,8 @@ export function VoiceProfiles() {
     else void act(backend.deleteVoiceData());
   };
 
-  const handleEnroll = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (enrollName.trim() === "" || enrollPath.trim() === "") return;
+  const enroll = useCallback(async (): Promise<boolean> => {
+    if (enrollName.trim() === "" || enrollPath.trim() === "") return false;
     setError(null);
     setEnrollStatus(null);
     setEnrolling(true);
@@ -154,12 +154,69 @@ export function VoiceProfiles() {
       setEnrollPath("");
       setEnrollStatus(`Enrolled voice profile for ${created.name}.`);
       load();
+      return true;
     } catch (err) {
       setError(errorMessage(err));
+      return false;
     } finally {
       setEnrolling(false);
     }
+  }, [backend, enrollCycleId, enrollName, enrollPath, load]);
+
+  const handleEnroll = (e: React.FormEvent) => {
+    e.preventDefault();
+    void enroll();
   };
+
+  const enrollDirty = enrollName.trim() !== "" || enrollPath.trim() !== "";
+  const renameDirty =
+    renaming !== null &&
+    profiles?.find((p) => p.id === renaming.id)?.name.trim() !== renaming.name.trim();
+  const dirty = enrollDirty || renameDirty;
+
+  const save = useCallback(async (): Promise<boolean> => {
+    if (enrollDirty) {
+      if (enrollName.trim() === "" || enrollPath.trim() === "") {
+        setError("Enter both a person name and a sample path to enroll, or discard the entry.");
+        return false;
+      }
+      if (!(await enroll())) return false;
+    }
+    if (renameDirty && renaming) {
+      if (renaming.name.trim() === "") {
+        setError("A voice profile needs a name.");
+        return false;
+      }
+      try {
+        await backend.renameParticipant(renaming.id, renaming.name);
+        setRenaming(null);
+        load();
+      } catch (err) {
+        setError(errorMessage(err));
+        return false;
+      }
+    }
+    return true;
+  }, [backend, enroll, enrollDirty, enrollName, enrollPath, load, renameDirty, renaming]);
+
+  const discard = useCallback(() => {
+    setEnrollName("");
+    setEnrollPath("");
+    setEnrollStatus(null);
+    setRenaming(null);
+    setError(null);
+  }, []);
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
+
+  useEffect(() => {
+    registerHandle?.({ save, discard });
+    return () => registerHandle?.(null);
+  }, [registerHandle, save, discard]);
 
   return (
     <div className="settings-pane">
@@ -234,6 +291,11 @@ export function VoiceProfiles() {
               </span>
               <small>Provide a 15–30 second recording where only this person speaks clearly.</small>
             </label>
+            <p className="person-meta" data-testid="enroll-hint">
+              {enrollDirty
+                ? "Not enrolled yet: press Enroll voice profile, or it counts as an unsaved change."
+                : "Enrolling saves immediately; nothing else to save here."}
+            </p>
             {enrollStatus && (
               <p className="secret-result" role="status">
                 {enrollStatus}
