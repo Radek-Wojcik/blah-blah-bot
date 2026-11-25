@@ -572,11 +572,11 @@ export function correctionBadgeClass(state: CorrectionState): string {
 export function correctionRuleHelp(rule: PublishMode): string {
   switch (rule) {
     case "off":
-      return "GitHub is Off for this cycle: corrections stay on this computer and are never published, not even when you press Publish. They still reach the next meeting.";
+      return "GitHub is Off for this project: corrections stay on this computer and are never published, not even when you press Publish. They still reach the next meeting.";
     case "auto":
-      return "GitHub is Automatic for this cycle: a correction is published as soon as you add it. It cannot be taken back. A public or unconfirmed repository still waits for your confirmation.";
+      return "GitHub is Automatic for this project: a correction is published as soon as you add it. It cannot be taken back. A public or unconfirmed repository still waits for your confirmation.";
     default:
-      return "GitHub is On approval for this cycle: a correction stays on this computer until you press Publish next to it.";
+      return "GitHub is On approval for this project: a correction stays on this computer until you press Publish next to it.";
   }
 }
 

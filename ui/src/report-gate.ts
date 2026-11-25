@@ -9,12 +9,12 @@ import type {
 
 export const REPORT_MODES: ReportMode[] = ["fixed", "template", "auto", "by-type"];
 
-/** One line each: what the mode does. Shown at the gate and in the cycle editor. */
+/** One line each: what the mode does. Shown in the recorder and in the project settings. */
 export const MODE_HELP: Record<ReportMode, string> = {
   fixed: "Built-in sections: decisions, tasks, open topics, notes, ideas and budgets.",
-  template: "Sections come from a template of the cycle; the model puts each item in one.",
+  template: "Sections come from a template of the project; the model puts each item in one.",
   auto: "The model proposes the sections for this meeting; you can change them in the draft.",
-  "by-type": "The meeting type picks a template of the cycle.",
+  "by-type": "The meeting type picks a template of the project.",
 };
 
 export const MODE_NAMES: Record<ReportMode, string> = {
@@ -56,20 +56,20 @@ export function formFromDefaults(d: ReportDefaults): GateForm {
 
 /** Why the form cannot start a recording, or null when it can. */
 export function validateGate(form: GateForm, d: ReportDefaults | null): string | null {
-  if (form.cycleId === "") return "Choose a cycle.";
-  if (d === null || d.cycleId !== form.cycleId) return "Loading the cycle…";
+  if (form.cycleId === "") return "Choose a project.";
+  if (d === null || d.cycleId !== form.cycleId) return "Loading the project…";
   if (form.mode === "") return "Choose a report mode.";
   if (form.mode === "template") {
     if (form.template === "") return "Choose a template.";
     if (!d.templates.some((t) => t.name === form.template))
-      return `The cycle has no template named ${form.template}.`;
+      return `The project has no template named ${form.template}.`;
   }
   if (form.mode === "by-type") {
     if (d.meetingTypes.length === 0)
-      return "This cycle defines no meeting types. Add one in the cycle settings.";
+      return "This project defines no meeting types. Add one in the project settings.";
     if (form.meetingType === "") return "Choose the meeting type.";
     if (!d.meetingTypes.some((t) => t.name === form.meetingType))
-      return `The cycle does not define the meeting type ${form.meetingType}.`;
+      return `The project does not define the meeting type ${form.meetingType}.`;
   }
   return null;
 }
@@ -84,16 +84,6 @@ export function toReportChoice(form: GateForm): ReportChoice {
     ...(form.mode === "by-type" ? { meetingType: form.meetingType } : {}),
     ...(form.outputLanguage === "" ? {} : { outputLanguage: form.outputLanguage }),
   };
-}
-
-/** `NOMAD · fixed`, `NOMAD · template (budget-review)`, `NOMAD · by-type (budget)`. */
-export function describeChoice(
-  c: Pick<LastReport, "cycleId" | "mode" | "template" | "meetingType">,
-): string {
-  let detail = "";
-  if (c.mode === "template" && c.template) detail = ` (${c.template})`;
-  if (c.mode === "by-type" && c.meetingType) detail = ` (${c.meetingType})`;
-  return `${c.cycleId} · ${c.mode}${detail}`;
 }
 
 /** The last report when it is still usable: its cycle exists and has no issues. */
@@ -120,6 +110,6 @@ export function initialCycleId(
 export function gateMessage(code: string | undefined, message: string): string {
   if (code === "report_mode_required")
     return `The recording was not started: ${message.replace(/\.$/, "")}.`;
-  if (code === "cycle_invalid") return `This cycle cannot be used until it is fixed: ${message}`;
+  if (code === "cycle_invalid") return `This project cannot be used until it is fixed: ${message}`;
   return message;
 }

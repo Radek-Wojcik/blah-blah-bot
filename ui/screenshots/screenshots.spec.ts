@@ -17,7 +17,7 @@ const OUT = path.resolve(here, "../../docs/img");
 const TRANSITION_MS = 110;
 const HOLD_MS = 320;
 
-test.use({ colorScheme: "dark", deviceScaleFactor: 1 });
+test.use({ colorScheme: "dark", deviceScaleFactor: 1, launchOptions: { args: ["--lang=en-US"] } });
 
 // The frame folders of the GIFs live in <repo>/target/e2e-tmp and go after every test.
 test.afterEach(() => {
@@ -27,6 +27,28 @@ test.afterEach(() => {
 async function settle(page: Page) {
   await page.evaluate(() => document.fonts.ready);
   await page.waitForTimeout(400);
+}
+
+/**
+ * Grows the window until the content of the main window fits, so a long screen is captured whole
+ * and without a scroll bar. The width stays as it is.
+ */
+async function fitWindowToPage(page: Page, width = 1280, minHeight = 800, maxHeight = 4000) {
+  // The main window scrolls inside `.content`; the window must be as tall as that content needs.
+  const height = await page.evaluate(() => {
+    const content = document.querySelector(".content");
+    const extra = content ? content.scrollHeight - content.clientHeight : 0;
+    return Math.ceil(window.innerHeight + Math.max(0, extra));
+  });
+  await page.setViewportSize({ width, height: Math.min(maxHeight, Math.max(minHeight, height)) });
+  await page.evaluate(() => document.querySelector(".content")?.scrollTo(0, 0));
+  await settle(page);
+}
+
+/** A dialog that scrolls inside itself would be cut off in its picture. */
+async function expectDialogNotClipped(dialog: ReturnType<Page["locator"]>) {
+  const clipped = await dialog.evaluate((el) => el.scrollHeight > el.clientHeight + 1);
+  expect(clipped, "the dialog is taller than the window").toBe(false);
 }
 
 interface GifFrame {
@@ -151,8 +173,8 @@ test.describe("static screenshots", () => {
     await page.screenshot({ path: path.join(OUT, "speakers-profiles.png") });
   });
 
-  // Stage 4. Run only these with: npx playwright test --project=screenshots -g "cycle settings|source popover|report mode gate"
-  test("cycle settings", async ({ page }) => {
+  // Stage 4. Run only these with: npx playwright test --project=screenshots -g "project settings|source popover|report mode gate"
+  test("project settings", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 1100 });
     await page.goto("/?view=main&backend=mock&rate=0&page=project&cycle=NOMAD");
     await page.getByRole("button", { name: "Project settings" }).click();
@@ -430,6 +452,107 @@ test.describe("static screenshots", () => {
     ).toContainText("Token stored");
     await settle(page);
     await connectors.screenshot({ path: path.join(OUT, "token-setup.png") });
+  });
+
+  // Gap fixes. Run only these with: npx playwright test --project=screenshots -g "gap fixes"
+  test.describe("gap fixes", () => {
+    // Numbers in fields are written the same way on every machine: the page language and the
+    // language of the browser itself (which sets the decimal mark of a number field).
+    test.use({ locale: "en-US" });
+
+    test("record view in the main window", async ({ page }) => {
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.goto("/?view=main&backend=mock&rate=0&tabs=1&page=record");
+      await expect(page.getByRole("heading", { name: "Record", level: 2 })).toBeVisible();
+      await expect(page.getByRole("complementary", { name: "Recording tips" })).toBeVisible();
+      await page.getByLabel("Discord").check();
+      await fitWindowToPage(page);
+      await page.screenshot({ path: path.join(OUT, "record-view.png") });
+    });
+
+    test("new project wizard: private GitHub repository", async ({ page }) => {
+      await page.setViewportSize({ width: 1280, height: 1100 });
+      await page.goto("/?view=main&backend=mock&rate=0&page=projects");
+      await page.getByRole("button", { name: "New Project" }).click();
+      const wizard = page.getByRole("dialog", { name: "Create New Project" });
+      await wizard.getByLabel("Project name").fill("Lunar Scout");
+      await wizard.getByRole("button", { name: "Next" }).click();
+      await wizard.getByLabel("Create a private GitHub repository").check();
+      await expect(wizard.getByText("A saved GitHub token was found")).toBeVisible();
+      await expectDialogNotClipped(wizard);
+      await settle(page);
+      await wizard.screenshot({ path: path.join(OUT, "project-wizard.png") });
+
+      // The confirm step: nothing is sent to GitHub before the user agrees.
+      await wizard.getByRole("button", { name: "Create project" }).click();
+      const confirm = wizard.getByRole("region", { name: "Confirm the new GitHub repository" });
+      await expect(confirm).toContainText("Nothing has been sent to GitHub yet");
+      await expectDialogNotClipped(wizard);
+      await settle(page);
+      await wizard.screenshot({ path: path.join(OUT, "project-wizard-github-confirm.png") });
+    });
+
+    test("new project wizard: local-only fallback", async ({ page }) => {
+      await page.setViewportSize({ width: 1280, height: 1100 });
+      await page.goto("/?view=main&backend=mock&rate=0&ghtoken=none&page=projects");
+      await page.getByRole("button", { name: "New Project" }).click();
+      const wizard = page.getByRole("dialog", { name: "Create New Project" });
+      await wizard.getByLabel("Project name").fill("Lunar Scout");
+      await wizard.getByRole("button", { name: "Next" }).click();
+      await wizard.getByLabel("Create a private GitHub repository").check();
+      await expect(wizard.getByText("No GitHub token is saved yet")).toBeVisible();
+      await wizard.getByRole("button", { name: "Create project" }).click();
+      await expect(wizard.getByRole("status")).toContainText("No GitHub token is saved");
+      await expect(wizard.getByRole("button", { name: "Open project" })).toBeVisible();
+      await expectDialogNotClipped(wizard);
+      await settle(page);
+      await wizard.screenshot({ path: path.join(OUT, "project-wizard-local-only.png") });
+    });
+
+    test("import meeting with the file picker", async ({ page }) => {
+      await page.setViewportSize({ width: 1280, height: 1100 });
+      // The mock file dialog answers with this path instead of opening a window.
+      await page.addInitScript(() => {
+        window.__bbbPick = { file: "C:\\Recordings\\ground-station-sync.mp4" };
+      });
+      await page.goto("/?view=main&backend=mock&rate=0&page=project&cycle=NOMAD");
+      await page.getByRole("button", { name: "+ Add meeting" }).click();
+      const modal = page.getByRole("dialog", { name: "Add Meeting from Recording" });
+      await modal.getByRole("button", { name: "Browse for the audio or video file" }).click();
+      await expect(modal.getByLabel("Audio or video file path")).toHaveValue(
+        "C:\\Recordings\\ground-station-sync.mp4",
+      );
+      await expect(modal.getByRole("radiogroup", { name: "Video handling mode" })).toBeVisible();
+      await expectDialogNotClipped(modal);
+      await settle(page);
+      await modal.screenshot({ path: path.join(OUT, "import-meeting.png") });
+    });
+
+    for (const [tab, file, ready] of [
+      ["models", "settings-ai-models.png", "Context size"],
+      ["preferences", "settings-preferences.png", "Local notes folder"],
+      ["processing", "settings-processing.png", "Max GPU utilization (%)"],
+    ] as const) {
+      test(`settings: ${tab} tab`, async ({ page }) => {
+        await page.setViewportSize({ width: 1280, height: 800 });
+        await page.goto(`/?view=main&backend=mock&rate=0&page=settings&tab=${tab}`);
+        await expect(page.getByRole("tab", { selected: true })).toBeVisible();
+        await expect(page.getByLabel(ready, { exact: false }).first()).toBeAttached();
+        await fitWindowToPage(page);
+        await page.screenshot({ path: path.join(OUT, file) });
+      });
+    }
+
+    test("unsaved changes dialog", async ({ page }) => {
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.goto("/?view=main&backend=mock&rate=0&page=settings&tab=processing");
+      await page.getByLabel("Max GPU utilization (%)").fill("65");
+      await page.getByRole("tab", { name: "Voice Profiles" }).click();
+      const dialog = page.getByRole("dialog", { name: "You have unsaved changes" });
+      await expect(dialog).toBeVisible();
+      await settle(page);
+      await page.screenshot({ path: path.join(OUT, "unsaved-changes.png") });
+    });
   });
 });
 

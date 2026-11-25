@@ -11,6 +11,7 @@ whenever a dependency changes.
 Software dependencies
 ---------------------
 Tauri 2                      Apache-2.0 OR MIT       https://github.com/tauri-apps/tauri
+tauri-plugin-dialog          Apache-2.0 OR MIT       https://github.com/tauri-apps/plugins-workspace
 wasapi (Rust crate)          MIT                     https://github.com/HEnquist/wasapi-rs
 windows (Rust crate)         MIT OR Apache-2.0       https://github.com/microsoft/windows-rs
 nvml-wrapper (Rust crate)    MIT OR Apache-2.0       https://github.com/rust-nvml/nvml-wrapper

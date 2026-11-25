@@ -19,6 +19,7 @@ import { createMockDetection } from "./mock-detection";
 import { createMockDrafts } from "./mock-drafts";
 import { createMockPublishing, type MockHooks } from "./mock-publish";
 import { fail } from "./mock-util";
+import { createMockPicker, type MockPickResults } from "./mock-pick";
 import { isLocalHost, missingForKind, urlHost, validateLlmSettings } from "../llm";
 import { validateVoiceSettings } from "../speakers";
 import type {
@@ -49,9 +50,15 @@ import type {
   VoiceView,
   VoicesData,
   WizardCreateProjectInput,
+  WizardCreateResult,
+  GithubFallbackReason,
+  GithubRepoRequest,
+  GithubRepoStatus,
 } from "./types";
 
 const MIN = 60_000;
+/** The login of the fictional GitHub account the mock creates repositories under. */
+const MOCK_GITHUB_LOGIN = "demo-user";
 
 /** What a job does in the language-model stages: run with a backend or skip them with a note. */
 interface LlmPlan {
@@ -240,6 +247,8 @@ function computeMockLevels(elapsedMs: number, activeSources: ActiveSource[]): Re
 }
 
 export interface MockOptions {
+  /** Answers of the file dialogs (a path, or null for a cancelled dialog); default fake paths otherwise. */
+  pick?: MockPickResults;
   /** Start with a recording in progress (used for the widget screenshots). */
   recording?: boolean;
   /** Simulated milliseconds added per real second while recording. */
@@ -265,6 +274,13 @@ export interface MockOptions {
    * captured. Without it the extension is not connected and only the whole browser is offered.
    */
   browserTabs?: "ok" | "failed";
+  /** Start without a saved GitHub token: the wizard falls back to a local-only project. */
+  noGithubToken?: boolean;
+  /**
+   * Make creating a GitHub repository fail the way GitHub would: `name-taken` is a 422,
+   * `offline` a lost connection. The wizard then falls back to a local-only project.
+   */
+  githubCreateFault?: "name-taken" | "offline";
 }
 
 /** In-memory backend that serves the fictional demo cycle. No audio devices, files or network. */
@@ -351,6 +367,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
   });
   lock.is = publishing.isLocked;
   if (opts.offline) publishing.hooks.setOffline(true);
+  if (opts.noGithubToken) void publishing.methods.clearGithubToken();
   (globalThis as { __bbbMock?: MockHooks }).__bbbMock = publishing.hooks;
   drafts.create("m5", reports.get("m5")!);
   if (opts.newDraft) drafts.leaveNewDraft("m5");
@@ -693,7 +710,15 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     if (jobs.find((j) => j.meetingId === id)?.state === "queued") enqueue(id);
   }
 
-  return {
+  // ----- creating a GitHub repository from the project wizard -----
+  const createdRepos = new Set<string>();
+  const githubStatus = async (): Promise<GithubRepoStatus> => {
+    const secrets = await publishing.methods.publishingSecrets();
+    const host = "api.github.com";
+    return { tokenSet: secrets.github.some((h) => h.host === host && h.tokenSet), host };
+  };
+
+  const backend: Backend = {
     listMeetings: async () => meetings.map(withJob),
     getMeeting: async (id): Promise<MeetingDetails> => {
       const found = meetings.find((x) => x.id === id);
@@ -1295,6 +1320,63 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       emitCycles();
       return structuredClone(saved.details!.cycle);
     },
+    githubRepoStatus: async (): Promise<GithubRepoStatus> => githubStatus(),
+    wizardCreateProjectWithGithub: async (
+      req: WizardCreateProjectInput,
+      github: GithubRepoRequest,
+    ): Promise<WizardCreateResult> => {
+      if (req.mode !== "auto")
+        fail(
+          "invalid",
+          "a GitHub repository can only be created together with a new project folder",
+        );
+      const name = github.name.trim();
+      const owner = (github.owner ?? "").trim();
+      const localOnly = async (
+        reason: GithubFallbackReason,
+        message: string,
+      ): Promise<WizardCreateResult> => ({
+        cycle: await backend.wizardCreateProject({ ...req, githubRepo: null }),
+        github: { status: "local_only", reason, message, repo: null, url: null },
+      });
+      if (!/^[A-Za-z0-9_.-]+$/.test(name) || name.endsWith(".git") || /^\.+$/.test(name))
+        return localOnly(
+          "invalid_name",
+          "The GitHub repository name may contain only letters, digits, - _ and ., so only a local project folder was created.",
+        );
+      if (!github.confirmed)
+        return localOnly(
+          "not_confirmed",
+          "The GitHub repository was not confirmed, so only a local project folder was created.",
+        );
+      if (!(await githubStatus()).tokenSet)
+        return localOnly(
+          "no_token",
+          "No GitHub token is saved, so only a local project folder was created. Save a token in Settings > Connectors to create the repository next time.",
+        );
+      const full = `${owner || MOCK_GITHUB_LOGIN}/${name}`;
+      if (opts.githubCreateFault === "offline")
+        return localOnly(
+          "failed",
+          "GitHub could not be reached (cannot reach api.github.com). Only a local project folder was created.",
+        );
+      if (opts.githubCreateFault === "name-taken" || createdRepos.has(full.toLowerCase()))
+        return localOnly(
+          "failed",
+          `${owner ? `the organization ${owner}` : "your GitHub account"} already has a repository named ${name}, or GitHub does not accept that name. Only a local project folder was created.`,
+        );
+      createdRepos.add(full.toLowerCase());
+      return {
+        cycle: await backend.wizardCreateProject({ ...req, githubRepo: full }),
+        github: {
+          status: "created",
+          reason: null,
+          message: `Created the private GitHub repository ${full} and linked it to the project.`,
+          repo: full,
+          url: `https://github.com/${full}`,
+        },
+      };
+    },
     importMeeting: async (req: ImportMeetingInput): Promise<MeetingDetails> => {
       const filePath = req.filePath.trim();
       if (filePath === "") fail("invalid", "choose an audio or video file to import");
@@ -1366,6 +1448,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         })),
       };
     },
+    ...createMockPicker(opts.pick),
     exportMeetingMarkdown: async (meetingId: string, destPath?: string | null) => {
       const found = meetings.find((x) => x.id === meetingId);
       if (!found) fail("not_found", "Meeting not found");
@@ -1615,4 +1698,5 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     // ----- publishing -----
     ...publishing.methods,
   };
+  return backend;
 }

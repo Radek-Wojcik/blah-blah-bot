@@ -16,6 +16,9 @@ pub const DEFAULT_API: &str = "https://api.github.com";
 const API_VERSION: &str = "2022-11-28";
 
 mod issues;
+mod repos;
+
+pub use repos::{create_failure_message, CreatedRepo, NewRepo};
 
 pub use issues::{
     defuse_mentions, issue_body, CorrectionSpec, DueOutcome, IssueOutcome, IssueSpec,

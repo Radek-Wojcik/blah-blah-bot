@@ -185,6 +185,10 @@ pub struct Draft {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub status_proposals: Vec<StatusProposal>,
     pub warnings: Vec<Warning>,
+    /// Screenshots picked as the key ones (`img/<name>` or `<name>`). Left out of the file
+    /// while empty; an empty list means every screenshot may be published.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub key_screenshots: Vec<String>,
 }
 
 impl Draft {
@@ -263,6 +267,7 @@ pub(crate) mod fixtures {
             items,
             status_proposals: vec![],
             warnings: vec![],
+            key_screenshots: vec![],
         }
     }
 

@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Projects workspace: project list, project detail view (meetings, open tasks, topics), Project Settings, and a multi-step project creation wizard.
+- The project wizard can create a private GitHub repository for a new project (`POST /user/repos`, or `/orgs/{org}/repos` for an organization owner) when a GitHub token is saved: it shows what will be created (name, private, owner), asks for confirmation before any request, links the repository as the project's `origin`, and falls back to a local-only Git folder with a clear message when there is no token or GitHub refuses. Discord stays a manual optional webhook field.
+- Media import for existing audio and video files (`ffmpeg` ingest) and local Markdown note export.
+- Processing queue controls: weighted progress with granular step reporting, scheduled or deferred processing, post-stop processing prompt, pause/resume/force-run actions, and a floating tray widget.
+- Global voice profiles with voice sample clip playback and enrollment from audio files, plus key slide extraction in meeting details.
+- Recorder enhancements: `AudioSrv` session filtering, 12-bar live audio metering, and `SystemWakeLock` during active recordings.
+- NSIS Windows installer bundle with a desktop shortcut hook.
+
+### Changed
+
+- Redesigned main shell with a navigation sidebar, updated Record view, and tabbed Settings (General, Recording & Audio, Models & Prompts, Connectors, Voice Profiles, Detection & Extension).
+- Fluid centered layout for wide screens.
+- The interface says "project" everywhere it said "cycle" (recorder panel, Preferences, speaker header, report mode help, publishing messages); the old Cycles, Cycle editor, Briefing, Publishing, Processing and report gate screens, which nothing opened any more, are removed. Every option they offered lives in Project settings, the project page and the Settings tabs.
+
+### Fixed
+
+- Moved speaker naming instructions out of task rules and compacted the speaker line in the extraction prompt.
+- Guarded local note export against path traversal, fixed voice clip cleanup, `cycleId` handling, and vision settings persistence.
+- Fixed the NSIS installer desktop shortcut hook to target the installed executable and use an ASCII publisher name.
+- The Connectors and Voice Profiles tabs now take part in the unsaved-changes prompt: a token or API key typed but not stored, an edited LLM host or model, an un-enrolled voice entry or a pending rename asks to save or discard before you leave the tab or Settings, and each field says whether it saves immediately (Store, Enroll) or is still unsaved.
+- Publishing sends only the draft's key screenshots to GitHub and Discord when the draft has any (excluded passages still win); without key screenshots nothing changes.
+- Import, voice enrollment, project folders and "Download note (.md)" use the native file, folder and Save as dialogs (`tauri-plugin-dialog`, only `dialog:allow-open` and `dialog:allow-save` for the main window); the browser file input that never gave a full path is gone, so an import no longer fails on a bare file name.
+
 ## [0.7.0] - 2026-11-23
 
 ### Stage 6 (convenience)

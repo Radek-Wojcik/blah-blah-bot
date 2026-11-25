@@ -586,18 +586,17 @@ export function ProjectDetailView({ cycleId, onBack, onOpenMeeting }: ProjectDet
             )}
           </div>
         </section>
-      </div>
-
-      {details?.repoId && tasks?.repo && (
-        <section className="panel" aria-label="Tasks">
-          <div className="panel-body">
-            <div className="publish-head">
-              <h3 className="sub-head">Tasks</h3>
+        {details?.repoId && tasks?.repo && (
+          <section className="panel" aria-label="Tasks">
+            <div className="panel-body">
+              <div className="publish-head">
+                <h3 className="sub-head">Tasks</h3>
+              </div>
+              <CycleTasksView cycleId={cycleId} repoId={details.repoId} />
             </div>
-            <CycleTasksView cycleId={cycleId} repoId={details.repoId} />
-          </div>
-        </section>
-      )}
+          </section>
+        )}
+      </div>
 
       <section aria-label="Project meetings">
         <div className="page-head">
@@ -611,7 +610,7 @@ export function ProjectDetailView({ cycleId, onBack, onOpenMeeting }: ProjectDet
             to import an audio or video file.
           </p>
         ) : (
-          <ul className="cycle-rows" aria-label="Meetings list">
+          <ul className="cycle-rows cycle-rows-wide" aria-label="Meetings list">
             {projectMeetings.map((m) => (
               <MeetingRowCard
                 key={m.id}

@@ -338,3 +338,38 @@ fn a_second_meeting_the_same_day_gets_its_own_folder() {
     );
     assert_eq!(lab.github.issues(REPO).len(), 2);
 }
+
+/// Publishes a one-task meeting whose draft names `key` as key screenshots and returns
+/// whether the remote holds the screenshot and how many files the channel received.
+fn publish_with_key(key: &[&str]) -> (bool, usize) {
+    let lab = Lab::new(LabOptions::default());
+    let mut d = lab_draft(
+        vec![task("i1", "Design the mount", Some("alex"), None)],
+        vec![],
+    );
+    d.key_screenshots = key.iter().map(|k| k.to_string()).collect();
+    lab.publish(&d, Trigger::Explicit, &BOTH, &BTreeMap::new())
+        .expect("publish");
+    lab.run_until_settled(5);
+    let on_remote = lab
+        .remote_paths()
+        .contains(&"meetings/NOMAD/2026-11-13/img/0001-00-12-41.png".to_string());
+    let attached = lab
+        .discord
+        .messages()
+        .iter()
+        .map(|m| m.files.len())
+        .sum::<usize>();
+    (on_remote, attached)
+}
+
+#[test]
+fn key_screenshots_decide_what_github_and_discord_receive() {
+    // Without key screenshots every screenshot goes out.
+    assert_eq!(publish_with_key(&[]), (true, 1));
+    // A key screenshot (with or without its folder) goes out.
+    assert_eq!(publish_with_key(&["img/0001-00-12-41.png"]), (true, 1));
+    assert_eq!(publish_with_key(&["0001-00-12-41.png"]), (true, 1));
+    // Key screenshots that name another file leave this one out, on both targets.
+    assert_eq!(publish_with_key(&["0002-other.png"]), (false, 0));
+}

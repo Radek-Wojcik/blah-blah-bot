@@ -1,9 +1,16 @@
 import { useEffect, useId, useState } from "react";
 import { useBackend } from "../backend-context";
+import { BrowseButton } from "../components/BrowseButton";
 import { HelpPopover } from "../components/HelpPopover";
 import { cycleIdError, newCycleError } from "../cycles";
 import { errorMessage } from "../hooks";
-import type { LanguageSetting, ReportMode } from "../ipc/types";
+import type {
+  GithubRepoStatus,
+  LanguageSetting,
+  ReportMode,
+  WizardCreateProjectInput,
+  WizardCreateResult,
+} from "../ipc/types";
 import { MODE_HELP, MODE_NAMES, REPORT_MODES } from "../report-gate";
 import { Modal } from "./Modal";
 
@@ -23,10 +30,58 @@ export function suggestProjectId(name: string): string {
   return /^[A-Z0-9]/.test(cleaned) ? cleaned : `P-${cleaned}`;
 }
 
+const REPO_PART = /^[A-Za-z0-9_.-]+$/;
+const DOTS_ONLY = /^\.+$/;
+
+/** The repository name proposed for a project: its id as a valid, lower-case GitHub name. */
+export function suggestRepoName(id: string): string {
+  const cleaned = id
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^[-.]+|[-.]+$/g, "");
+  return cleaned === "" ? "meeting-notes" : cleaned;
+}
+
+export type GithubRepoPlan = { owner: string | null; name: string } | { error: string };
+
+/**
+ * What would be created on GitHub: the `owner/name` field when it is filled (the owner is then
+ * an organization, or the token account itself when it is the same login), otherwise the project
+ * id as the name in the account of the saved token.
+ */
+export function planGithubRepo(githubRepo: string, id: string): GithubRepoPlan {
+  const text = githubRepo.trim();
+  if (text === "") return { owner: null, name: suggestRepoName(id) };
+  const [owner, name, ...rest] = text.split("/");
+  if (
+    rest.length > 0 ||
+    name === undefined ||
+    !REPO_PART.test(owner) ||
+    !REPO_PART.test(name) ||
+    DOTS_ONLY.test(owner) ||
+    DOTS_ONLY.test(name) ||
+    name.endsWith(".git")
+  ) {
+    return { error: "Write the GitHub repository as owner/name, or leave it empty." };
+  }
+  return { owner, name };
+}
+
+type Phase = "edit" | "confirm" | "done";
+
+function describeRepo(plan: { owner: string | null; name: string }): string {
+  return plan.owner === null ? `${plan.name} (in your account)` : `${plan.owner}/${plan.name}`;
+}
+
 /** Guided 2-step modal wizard for creating a new project and optional local auto-export. */
 export function ProjectWizard({ onClose, onCreated }: ProjectWizardProps) {
   const backend = useBackend();
   const [step, setStep] = useState<1 | 2>(1);
+  const [phase, setPhase] = useState<Phase>("edit");
+  const [githubStatus, setGithubStatus] = useState<GithubRepoStatus | null>(null);
+  const [createGithub, setCreateGithub] = useState(false);
+  const [result, setResult] = useState<WizardCreateResult | null>(null);
   const [name, setName] = useState("");
   const [id, setId] = useState("");
   const [idTouched, setIdTouched] = useState(false);
@@ -64,6 +119,21 @@ export function ProjectWizard({ onClose, onCreated }: ProjectWizardProps) {
     };
   }, [backend]);
 
+  useEffect(() => {
+    let cancelled = false;
+    void backend
+      .githubRepoStatus()
+      .then((status) => {
+        if (!cancelled) setGithubStatus(status);
+      })
+      .catch(() => {
+        if (!cancelled) setGithubStatus({ tokenSet: false, host: "" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [backend]);
+
   const handleNameChange = (nextName: string) => {
     setName(nextName);
     if (!idTouched) {
@@ -92,33 +162,88 @@ export function ProjectWizard({ onClose, onCreated }: ProjectWizardProps) {
     setStep(2);
   };
 
+  const buildRequest = (): WizardCreateProjectInput => ({
+    mode,
+    id: id.trim(),
+    name: name.trim(),
+    repoPath: repoPath.trim() || null,
+    remoteUrl: mode === "existing" ? remoteUrl.trim() || null : null,
+    outputLanguage,
+    defaultReportMode,
+    githubRepo: githubRepo.trim() || null,
+    discordWebhookRef: discordWebhookRef.trim() || null,
+    localSaveEnabled,
+    localSaveDir: localSaveEnabled ? localSaveDir.trim() || defaultSaveDir || null : null,
+  });
+
+  const wantsGithubRepo = mode === "auto" && createGithub;
+  const githubPlan = planGithubRepo(githubRepo, id);
+  const githubPlanError = wantsGithubRepo && "error" in githubPlan ? githubPlan.error : null;
+  const tokenSet = githubStatus?.tokenSet === true;
+
+  /** Plain creation: a local folder, with the GitHub field only as a link. */
+  const createLocal = async () => {
+    setError(null);
+    setSubmitting(true);
+    try {
+      const created = await backend.wizardCreateProject(buildRequest());
+      onCreated(created.id);
+    } catch (e) {
+      setError(errorMessage(e));
+      setPhase("edit");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  /**
+   * Creation with a private GitHub repository. Called only after the confirm step, or when no
+   * token is saved (then nothing is sent and the answer explains the local-only result).
+   */
+  const createWithGithub = async () => {
+    if ("error" in githubPlan) {
+      setError(githubPlan.error);
+      setPhase("edit");
+      return;
+    }
+    setError(null);
+    setSubmitting(true);
+    try {
+      const created = await backend.wizardCreateProjectWithGithub(buildRequest(), {
+        name: githubPlan.name,
+        owner: githubPlan.owner,
+        confirmed: true,
+      });
+      setResult(created);
+      setPhase("done");
+    } catch (e) {
+      setError(errorMessage(e));
+      setPhase("edit");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const submit = async () => {
     if (step1Problem) {
       setError(step1Problem);
       setStep(1);
       return;
     }
+    if (!wantsGithubRepo) {
+      await createLocal();
+      return;
+    }
+    if (githubPlanError) {
+      setError(githubPlanError);
+      return;
+    }
     setError(null);
-    setSubmitting(true);
-    try {
-      const created = await backend.wizardCreateProject({
-        mode,
-        id: id.trim(),
-        name: name.trim(),
-        repoPath: repoPath.trim() || null,
-        remoteUrl: mode === "existing" ? remoteUrl.trim() || null : null,
-        outputLanguage,
-        defaultReportMode,
-        githubRepo: githubRepo.trim() || null,
-        discordWebhookRef: discordWebhookRef.trim() || null,
-        localSaveEnabled,
-        localSaveDir: localSaveEnabled ? localSaveDir.trim() || defaultSaveDir || null : null,
-      });
-      onCreated(created.id);
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setSubmitting(false);
+    if (tokenSet) {
+      // The person sees exactly what would be created before anything is sent.
+      setPhase("confirm");
+    } else {
+      await createWithGithub();
     }
   };
 
@@ -141,7 +266,7 @@ export function ProjectWizard({ onClose, onCreated }: ProjectWizardProps) {
         </p>
       )}
 
-      {step === 1 && (
+      {phase === "edit" && step === 1 && (
         <form
           className="form"
           aria-label="Project details"
@@ -247,12 +372,20 @@ export function ProjectWizard({ onClose, onCreated }: ProjectWizardProps) {
 
               <label>
                 Existing local folder path
-                <input
-                  aria-label="Existing local folder path"
-                  value={repoPath}
-                  placeholder="C:\Users\me\projects\team-notes"
-                  onChange={(e) => setRepoPath(e.target.value)}
-                />
+                <span className="path-row">
+                  <input
+                    aria-label="Existing local folder path"
+                    value={repoPath}
+                    placeholder="C:\Users\me\projects\team-notes"
+                    onChange={(e) => setRepoPath(e.target.value)}
+                  />
+                  <BrowseButton
+                    target={{ folder: true }}
+                    label="Browse for the existing local folder"
+                    title="Choose the project folder"
+                    onPicked={setRepoPath}
+                  />
+                </span>
                 <small>
                   Folder on this computer (or destination folder if also cloning a remote URL).
                 </small>
@@ -271,7 +404,7 @@ export function ProjectWizard({ onClose, onCreated }: ProjectWizardProps) {
         </form>
       )}
 
-      {step === 2 && (
+      {phase === "edit" && step === 2 && (
         <form
           className="form"
           aria-label="Language and saving options"
@@ -348,6 +481,10 @@ export function ProjectWizard({ onClose, onCreated }: ProjectWizardProps) {
               placeholder="cred:discord/project"
               onChange={(e) => setDiscordWebhookRef(e.target.value)}
             />
+            <small>
+              Discord is never set up automatically. Create the webhook in Discord yourself and save
+              it in Settings &gt; Connectors; this field only names it.
+            </small>
           </div>
 
           <fieldset>
@@ -369,16 +506,61 @@ export function ProjectWizard({ onClose, onCreated }: ProjectWizardProps) {
             {localSaveEnabled && (
               <label>
                 Local notes folder
-                <input
-                  aria-label="Local notes folder"
-                  value={localSaveDir}
-                  placeholder={defaultSaveDir || "Documents\\BlahBlahBot\\notes"}
-                  onChange={(e) => setLocalSaveDir(e.target.value)}
-                />
+                <span className="path-row">
+                  <input
+                    aria-label="Local notes folder"
+                    value={localSaveDir}
+                    placeholder={defaultSaveDir || "Documents\\BlahBlahBot\\notes"}
+                    onChange={(e) => setLocalSaveDir(e.target.value)}
+                  />
+                  <BrowseButton
+                    target={{ folder: true }}
+                    label="Browse for the local notes folder"
+                    title="Choose the notes folder"
+                    onPicked={setLocalSaveDir}
+                  />
+                </span>
                 <small>Works completely offline with zero Git or cloud setup required.</small>
               </label>
             )}
           </fieldset>
+
+          {mode === "auto" && (
+            <fieldset aria-label="New private GitHub repository">
+              <legend>New GitHub repository (optional)</legend>
+              <label className="check">
+                <input
+                  type="checkbox"
+                  aria-label="Create a private GitHub repository"
+                  checked={createGithub}
+                  onChange={(e) => setCreateGithub(e.target.checked)}
+                />
+                Also create a private GitHub repository for this project
+              </label>
+              {createGithub && githubPlanError && (
+                <span className="field-issue" role="alert">
+                  {githubPlanError}
+                </span>
+              )}
+              {createGithub && !githubPlanError && "name" in githubPlan && (
+                <small>
+                  Will create: <strong>{describeRepo(githubPlan)}</strong>, private.
+                </small>
+              )}
+              {githubStatus !== null &&
+                (tokenSet ? (
+                  <small>
+                    A saved GitHub token was found. You will confirm what is created before anything
+                    is sent to GitHub.
+                  </small>
+                ) : (
+                  <small>
+                    No GitHub token is saved yet, so only a local Git folder is created. Save a
+                    token in Settings &gt; Connectors to create repositories here.
+                  </small>
+                ))}
+            </fieldset>
+          )}
 
           <div className="actions">
             <button
@@ -397,6 +579,85 @@ export function ProjectWizard({ onClose, onCreated }: ProjectWizardProps) {
             </button>
           </div>
         </form>
+      )}
+
+      {phase === "confirm" && "name" in githubPlan && (
+        <section className="form" aria-label="Confirm the new GitHub repository">
+          <p>
+            Blah Blah Bot will now create this repository on GitHub with your saved token, then
+            create the project folder and link them.
+          </p>
+          <dl className="wizard-summary">
+            <dt>Repository</dt>
+            <dd>{describeRepo(githubPlan)}</dd>
+            <dt>Visibility</dt>
+            <dd>Private: only you and the people you invite can see it.</dd>
+            <dt>Owner</dt>
+            <dd>
+              {githubPlan.owner === null
+                ? "Your GitHub account (the one the saved token belongs to)"
+                : `${githubPlan.owner} (an organization, or your own account when it is your login)`}
+            </dd>
+            <dt>Project</dt>
+            <dd>
+              {name.trim()} ({id.trim()})
+            </dd>
+          </dl>
+          <p className="person-meta">
+            Nothing has been sent to GitHub yet. The token is used only for this request and is
+            never shown. If GitHub refuses, the project is still created as a local Git folder.
+          </p>
+          <div className="actions">
+            <button
+              className="btn btn-ghost"
+              type="button"
+              disabled={submitting}
+              onClick={() => setPhase("edit")}
+            >
+              Back
+            </button>
+            <button
+              className="btn btn-ghost"
+              type="button"
+              disabled={submitting}
+              onClick={() => void createLocal()}
+            >
+              Create local project only
+            </button>
+            <button
+              className="btn btn-record"
+              type="button"
+              disabled={submitting}
+              onClick={() => void createWithGithub()}
+            >
+              {submitting ? "Creating…" : "Create repository & project"}
+            </button>
+          </div>
+        </section>
+      )}
+
+      {phase === "done" && result && (
+        <section className="form" aria-label="Project created">
+          <p>
+            <strong>Project {result.cycle.name} was created.</strong>
+          </p>
+          <p
+            className={result.github.status === "created" ? "notice" : "notice notice-warn"}
+            role="status"
+          >
+            {result.github.message}
+          </p>
+          {result.github.url && <p className="person-meta">{result.github.url}</p>}
+          <div className="actions">
+            <button
+              className="btn btn-record"
+              type="button"
+              onClick={() => onCreated(result.cycle.id)}
+            >
+              Open project
+            </button>
+          </div>
+        </section>
       )}
     </Modal>
   );

@@ -26,7 +26,7 @@ meetings/                 # `targets.github.path`; `meetings` unless the cycle s
 * The directory name under `cycles/` is the cycle id and must equal `id` in `cycle.yaml`.
 * A directory under `cycles/` without a `cycle.yaml` is ignored.
 * A second meeting on the same day is stored in a folder with a suffix: `2026-11-13-2`.
-* The application creates a repository itself (a local repository without a remote) or clones an existing one. Text encodings are UTF-8; a byte order mark and Windows line endings are accepted when reading.
+* The application creates a repository itself (a local repository without a remote; with a saved GitHub token and the person's confirmation in the project wizard, also an empty private repository on GitHub that becomes its `origin`, falling back to the local-only repository with a message when GitHub cannot be used) or clones an existing one. Text encodings are UTF-8; a byte order mark and Windows line endings are accepted when reading.
 
 ## `cycles/<ID>/cycle.yaml`
 
@@ -123,7 +123,7 @@ Before anything is published the panel shows `topics.yaml` before and after, top
 
 ### What is written to the repository
 
-Only new files go into the meeting folder `meetings/<ID>/<folder>`: `report.md`, `transcript.md`, `meeting.json` (the draft with its decisions on status changes) and `img/` with the screenshots that are not inside an excluded passage. The folder is the date of the meeting, with a suffix `-2`, `-3` if another meeting of the cycle took the date (chosen against the remote at publishing time). `transcript.md` has one line per segment with an anchor `t-hh-mm-ss` and the speaker's name, and leaves out passages you excluded. `topics.yaml` is the only existing file that changes (below). Other edits to the cycle (`cycle.yaml`, templates) are not committed by the application; commit them yourself.
+Only new files go into the meeting folder `meetings/<ID>/<folder>`: `report.md`, `transcript.md`, `meeting.json` (the draft with its decisions on status changes) and `img/` with the screenshots that are not inside an excluded passage. When the draft lists `key_screenshots`, only those go out (a screenshot in an excluded passage stays out even if it is a key one); without key screenshots all of them go out. Discord attaches the same set. The folder is the date of the meeting, with a suffix `-2`, `-3` if another meeting of the cycle took the date (chosen against the remote at publishing time). `transcript.md` has one line per segment with an anchor `t-hh-mm-ss` and the speaker's name, and leaves out passages you excluded. `topics.yaml` is the only existing file that changes (below). Other edits to the cycle (`cycle.yaml`, templates) are not committed by the application; commit them yourself.
 
 ### Issues
 

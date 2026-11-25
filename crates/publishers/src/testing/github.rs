@@ -23,7 +23,7 @@
 //! behind a preview, and which token permission they need, is not known: the fake does not
 //! check either, and the publisher treats any failure as "no field".
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -112,6 +112,10 @@ struct State {
     next_field_id: u64,
     token: Option<String>,
     clock: u64,
+    /// Organisations that exist without having a repository yet (lower case).
+    organisations: BTreeSet<String>,
+    /// Whether creating a repository is refused for the token (403).
+    repo_creation_forbidden: bool,
 }
 
 impl State {
@@ -132,6 +136,24 @@ impl Deref for FakeGithub {
     type Target = FakeServer;
     fn deref(&self) -> &FakeServer {
         &self.server
+    }
+}
+
+fn new_repo(full_name: &str, visibility: Visibility, owner_type: &'static str) -> Repo {
+    Repo {
+        full_name: full_name.to_string(),
+        visibility,
+        owner_type,
+        issues_enabled: true,
+        push_allowed: true,
+        assignable: None,
+        unknown_users: Vec::new(),
+        issues: Vec::new(),
+        field_values: BTreeMap::new(),
+        labels: Vec::new(),
+        next_number: 1,
+        next_comment_id: 1,
+        list_lag: 0,
     }
 }
 
@@ -170,6 +192,8 @@ impl FakeGithub {
             next_field_id: 100,
             token: None,
             clock: 0,
+            organisations: BTreeSet::new(),
+            repo_creation_forbidden: false,
         }));
         let shared = Arc::clone(&state);
         let server = FakeServer::start(move |req| handle(&shared, req));
@@ -191,22 +215,30 @@ impl FakeGithub {
     pub fn add_repo(&self, full_name: &str, visibility: Visibility) {
         lock(&self.state).repos.insert(
             full_name.to_ascii_lowercase(),
-            Repo {
-                full_name: full_name.to_string(),
-                visibility,
-                owner_type: "User",
-                issues_enabled: true,
-                push_allowed: true,
-                assignable: None,
-                unknown_users: Vec::new(),
-                issues: Vec::new(),
-                field_values: BTreeMap::new(),
-                labels: Vec::new(),
-                next_number: 1,
-                next_comment_id: 1,
-                list_lag: 0,
-            },
+            new_repo(full_name, visibility, "User"),
         );
+    }
+
+    /// An organisation that exists, so repositories can be created in it.
+    pub fn add_organization(&self, name: &str) {
+        lock(&self.state)
+            .organisations
+            .insert(name.to_ascii_lowercase());
+    }
+
+    /// Makes creating a repository a 403 for every token, as for a token without the
+    /// permission.
+    pub fn forbid_repo_creation(&self) {
+        lock(&self.state).repo_creation_forbidden = true;
+    }
+
+    /// The visibility of a repository (`None` when the fake has none of that name), to check
+    /// what a creation made.
+    pub fn visibility_of(&self, full_name: &str) -> Option<Visibility> {
+        lock(&self.state)
+            .repos
+            .get(&full_name.to_ascii_lowercase())
+            .map(|r| r.visibility)
     }
 
     fn with_repo<R>(&self, full_name: &str, f: impl FnOnce(&mut Repo) -> R) -> R {
@@ -419,6 +451,18 @@ fn handle(shared: &Mutex<State>, req: &Recorded) -> Reply {
                 error(401, "Requires authentication")
             }
         }
+        ["user", "repos"] if req.method == "POST" => {
+            if !authed {
+                return error(401, "Requires authentication");
+            }
+            create_repo(&mut state, None, req)
+        }
+        ["orgs", org, "repos"] if req.method == "POST" => {
+            if !authed {
+                return error(401, "Requires authentication");
+            }
+            create_repo(&mut state, Some(org), req)
+        }
         ["orgs", org, "issue-fields"] if req.method == "GET" => {
             if !authed {
                 return error(401, "Requires authentication");
@@ -468,6 +512,77 @@ fn handle(shared: &Mutex<State>, req: &Recorded) -> Reply {
         }
         _ => not_found(),
     }
+}
+
+/// `POST /user/repos` and `POST /orgs/{org}/repos`: the owner is the fake's user `fake-bot`
+/// or a known organisation; a taken name is a 422 as on GitHub; the repository starts empty.
+fn create_repo(state: &mut State, org: Option<&str>, req: &Recorded) -> Reply {
+    if state.repo_creation_forbidden {
+        return error(403, "Resource not accessible by personal access token");
+    }
+    let body = match parse_body(req) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let Some(name) = body
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|n| !n.is_empty())
+    else {
+        return validation_failed("name", "missing_field");
+    };
+    let owner = match org {
+        None => "fake-bot".to_string(),
+        Some(org) => {
+            let lower = org.to_ascii_lowercase();
+            let known = state.organisations.contains(&lower)
+                || state
+                    .repos
+                    .keys()
+                    .any(|k| k.starts_with(&format!("{lower}/")));
+            if !known {
+                return not_found();
+            }
+            org.to_string()
+        }
+    };
+    let full_name = format!("{owner}/{name}");
+    let key = full_name.to_ascii_lowercase();
+    if state.repos.contains_key(&key) {
+        return Reply::json(
+            422,
+            &json!({
+                "message": "Repository creation failed.",
+                "errors": [{"resource": "Repository", "code": "custom", "field": "name",
+                            "message": "name already exists on this account"}],
+            }),
+        );
+    }
+    let visibility = if body.get("private").and_then(Value::as_bool) == Some(true) {
+        Visibility::Private
+    } else {
+        Visibility::Public
+    };
+    let owner_type = if org.is_some() {
+        "Organization"
+    } else {
+        "User"
+    };
+    state
+        .repos
+        .insert(key, new_repo(&full_name, visibility, owner_type));
+    Reply::json(
+        201,
+        &json!({
+            "name": name,
+            "full_name": full_name,
+            "private": visibility != Visibility::Public,
+            "visibility": visibility.as_str(),
+            "owner": {"login": owner, "type": owner_type},
+            "html_url": format!("https://github.com/{full_name}"),
+            "clone_url": format!("{}/{full_name}.git", state.base),
+        }),
+    )
 }
 
 fn route(

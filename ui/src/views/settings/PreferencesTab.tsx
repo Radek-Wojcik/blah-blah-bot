@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useBackend } from "../../backend-context";
+import { BrowseButton } from "../../components/BrowseButton";
 import { HelpPopover } from "../../components/HelpPopover";
 import { repoState } from "../../cycles";
 import { errorMessage, useCycles } from "../../hooks";
@@ -274,11 +275,20 @@ export function PreferencesTab({ onDirtyChange, registerHandle }: EditableTabPro
               </label>
               <label>
                 Local notes folder
-                <input
-                  value={draft.localSaveDir ?? ""}
-                  placeholder="Documents\BlahBlahBot\notes"
-                  onChange={(e) => set({ localSaveDir: e.target.value })}
-                />
+                <span className="path-row">
+                  <input
+                    aria-label="Local notes folder"
+                    value={draft.localSaveDir ?? ""}
+                    placeholder="Documents\BlahBlahBot\notes"
+                    onChange={(e) => set({ localSaveDir: e.target.value })}
+                  />
+                  <BrowseButton
+                    target={{ folder: true }}
+                    label="Browse for the local notes folder"
+                    title="Choose the notes folder"
+                    onPicked={(path) => set({ localSaveDir: path })}
+                  />
+                </span>
                 <small>Works independently of GitHub or Discord.</small>
               </label>
             </fieldset>
@@ -298,10 +308,19 @@ export function PreferencesTab({ onDirtyChange, registerHandle }: EditableTabPro
               </legend>
               <label>
                 Recordings folder
-                <input
-                  value={draft.recordingsDir}
-                  onChange={(e) => set({ recordingsDir: e.target.value })}
-                />
+                <span className="path-row">
+                  <input
+                    aria-label="Recordings folder"
+                    value={draft.recordingsDir}
+                    onChange={(e) => set({ recordingsDir: e.target.value })}
+                  />
+                  <BrowseButton
+                    target={{ folder: true }}
+                    label="Browse for the recordings folder"
+                    title="Choose the recordings folder"
+                    onPicked={(path) => set({ recordingsDir: path })}
+                  />
+                </span>
                 <small>Leave empty to use the default folder in Documents.</small>
               </label>
               <div className="settings-grid-2col">
@@ -425,7 +444,7 @@ export function PreferencesTab({ onDirtyChange, registerHandle }: EditableTabPro
         {repos.length === 0 ? (
           <p className="empty">No connected project repositories yet.</p>
         ) : (
-          <ul className="repos" aria-label="Cycle repositories">
+          <ul className="repos" aria-label="Project repositories">
             {repos.map((repo) => (
               <li key={repo.id}>
                 <article className="panel quiet repo" aria-label={`Repository ${repo.id}`}>
@@ -492,8 +511,8 @@ export function PreferencesTab({ onDirtyChange, registerHandle }: EditableTabPro
                   value={repoWhere}
                   placeholder={
                     repoKind === "clone"
-                      ? "https://example.org/team/cycles.git"
-                      : "C:\\Users\\me\\cycles"
+                      ? "https://example.org/team/projects.git"
+                      : "C:\\Users\\me\\projects"
                   }
                   onChange={(e) => setRepoWhere(e.target.value)}
                 />

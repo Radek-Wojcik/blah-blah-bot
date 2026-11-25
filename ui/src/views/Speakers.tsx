@@ -158,7 +158,7 @@ export function SpeakersView(props: {
       {title && (
         <p className="card-when">
           {title}
-          {cycleId && cycleName && ` · Cycle: ${cycleName}`}
+          {cycleId && cycleName && ` · Project: ${cycleName}`}
         </p>
       )}
       {error && (

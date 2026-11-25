@@ -366,7 +366,7 @@ test.describe("publishing on the mock backend", () => {
     await expect(plan).toContainText("Close the topic t-1");
   });
 
-  test("the rule of every cycle is set in the settings as well", async ({ page }) => {
+  test("the rule of every project is set in the settings as well", async ({ page }) => {
     await page.goto(MAIN + "&page=settings&tab=preferences");
     const github = page.getByRole("radiogroup", {
       name: "GitHub, project Nomad rover publishing rule",
@@ -643,7 +643,7 @@ test.describe("corrections to a published meeting", () => {
     await expect(region(page)).toContainText(
       "This draft is locked because the meeting was published",
     );
-    await expect(region(page)).toContainText("GitHub is On approval for this cycle");
+    await expect(region(page)).toContainText("GitHub is On approval for this project");
     await expect(panel(page)).toContainText("Draft locked");
   });
 
@@ -742,14 +742,14 @@ test.describe("corrections to a published meeting", () => {
   test("Automatic publishes a correction when it is added, Off never does", async ({ page }) => {
     await publishMeeting(page);
     await rule(page, "GitHub").getByRole("radio", { name: "Automatic" }).click();
-    await expect(region(page)).toContainText("GitHub is Automatic for this cycle");
+    await expect(region(page)).toContainText("GitHub is Automatic for this project");
     await addCorrection(page, "Automatic note.");
     await expect(correction(page, "c1")).toContainText("Published as corrections.md", {
       timeout: 15_000,
     });
 
     await rule(page, "GitHub").getByRole("radio", { name: "Off" }).click();
-    await expect(region(page)).toContainText("GitHub is Off for this cycle");
+    await expect(region(page)).toContainText("GitHub is Off for this project");
     await addCorrection(page, "Off note.");
     await expect(correction(page, "c2")).toContainText("Kept on this computer: publishing is Off");
     await expect(

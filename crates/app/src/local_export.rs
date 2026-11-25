@@ -443,6 +443,43 @@ pub fn export_meeting_markdown_with(
     Ok(report_path.to_string_lossy().into_owned())
 }
 
+/// Validate the target of "Save as": an absolute path to a `.md` file in an existing folder.
+fn validate_note_target(dest: &str) -> IpcResult<PathBuf> {
+    let path = PathBuf::from(dest.trim());
+    let is_md = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("md"));
+    if !path.is_absolute() || path.file_stem().is_none() || !is_md {
+        return Err(IpcError::new(
+            "invalid",
+            "choose a full path to a Markdown file that ends in .md",
+        ));
+    }
+    if !path.parent().is_some_and(Path::is_dir) {
+        return Err(IpcError::new("invalid", "the folder does not exist"));
+    }
+    if path.is_dir() {
+        return Err(IpcError::new("invalid", "the path is a folder, not a file"));
+    }
+    Ok(path)
+}
+
+/// Write the report note of a meeting to the file chosen in the "Save as" dialog. The operating
+/// system dialog has already asked about replacing an existing file; the folder is never created.
+pub fn save_meeting_note_as(
+    repos: &[CycleRepoSetting],
+    store: &Store,
+    meeting_id: &str,
+    meeting_dir: &Path,
+    dest: &str,
+) -> IpcResult<String> {
+    let path = validate_note_target(dest)?;
+    let (_, _, report_md) = render_report_markdown(repos, store, meeting_id, meeting_dir)?;
+    fs::write(&path, report_md)?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 /// Automatically export `<dir>/<cycle>/<date>/report.md`, `transcript.md` and `img/*` when
 /// project `local_save_enabled` OR global `settings.local_save_enabled` is true.
 pub fn auto_export_if_enabled_with(
@@ -613,5 +650,41 @@ mod tests {
                 export_to_local_folder(&[], &store, "m1", &meeting_dir, &base_dir).unwrap_err();
             assert_eq!(err.code, "invalid", "expected invalid for {cycle}/{date}");
         }
+    }
+
+    #[test]
+    fn save_meeting_note_as_writes_only_absolute_md_files_in_existing_folders() {
+        let dir = test_tmp::TestDir::new("save-note-as");
+        let store = Store::open_in_memory().unwrap();
+        seed_meeting(&store, "m1", Some("ALPHA"));
+        let meeting_dir = dir.path().join("rec").join("m1");
+        fs::create_dir_all(meeting_dir.join("work")).unwrap();
+
+        let target = dir.path().join("note.md");
+        let written =
+            save_meeting_note_as(&[], &store, "m1", &meeting_dir, &target.to_string_lossy())
+                .unwrap();
+        assert_eq!(PathBuf::from(&written), target);
+        assert!(fs::read_to_string(&target)
+            .unwrap()
+            .contains("Test Meeting"));
+
+        let bad = [
+            dir.path().join("note.txt").to_string_lossy().into_owned(),
+            dir.path().join("note").to_string_lossy().into_owned(),
+            dir.path().join(".md").to_string_lossy().into_owned(),
+            dir.path()
+                .join("missing")
+                .join("n.md")
+                .to_string_lossy()
+                .into_owned(),
+            "relative.md".to_string(),
+            String::new(),
+        ];
+        for dest in bad {
+            let err = save_meeting_note_as(&[], &store, "m1", &meeting_dir, &dest).unwrap_err();
+            assert_eq!(err.code, "invalid", "expected invalid for {dest:?}");
+        }
+        assert!(!dir.path().join("note.txt").exists());
     }
 }
