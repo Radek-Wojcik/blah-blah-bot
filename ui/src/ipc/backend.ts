@@ -400,6 +400,18 @@ export interface Backend {
     cycleId: string | null,
     audioPath: string,
   ): Promise<GlobalVoiceProfile>;
+  /** Link an existing voice profile to a project/cycle. */
+  addProfileToProject(participantId: string, cycleId: string): Promise<GlobalVoiceProfile>;
+  /** Unlink a voice profile from a project/cycle (keeps global profile & samples intact). */
+  removeProfileFromProject(participantId: string, cycleId: string): Promise<GlobalVoiceProfile>;
+  /** Merge two voice profiles (`dropId` into `keepId`). */
+  mergeParticipants(keepId: string, dropId: string): Promise<GlobalVoiceProfile>;
+  /** Undo a naming decision on a voice, optionally unlinking from `unlinkCycleId`. */
+  undoVoiceDecision(
+    meetingId: string,
+    voiceId: string,
+    unlinkCycleId?: string | null,
+  ): Promise<VoicesData>;
 
   onRecordingState(cb: (state: RecordingState) => void): Promise<Unsubscribe>;
   onRecordingLevels(cb: (levels: RecordingLevels) => void): Promise<Unsubscribe>;

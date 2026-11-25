@@ -558,6 +558,8 @@ export interface VoiceView {
   /** Cosine similarity of the match, 0 to 1. */
   score?: number | null;
   suggestedParticipantId?: string | null;
+  suggestedParticipantName?: string | null;
+  suggestedFromProjects?: string[];
   assignedParticipantId?: string | null;
   /** True once the user decided (or accepted the automatic match). */
   confirmed: boolean;

@@ -259,7 +259,8 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         conn.pragma_update(None, "foreign_keys", foreign_keys)?;
         result?;
     }
-    ensure_ux_schema(conn)
+    ensure_ux_schema(conn)?;
+    ensure_people_schema(conn)
 }
 
 fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
@@ -301,6 +302,51 @@ fn ensure_ux_schema(conn: &Connection) -> Result<()> {
     if !has_column(conn, "project_prefs", "audio_retention")? {
         conn.execute(
             "ALTER TABLE project_prefs ADD COLUMN audio_retention TEXT",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+/// Idempotently ensures the `project_people` join table exists, drops the legacy
+/// `participants` name-uniqueness indexes (so two different people in different projects can
+/// share a name without auto-merging), and backfills `project_people` from existing
+/// `participants.cycle_id` rows when `project_people` is empty.
+fn ensure_people_schema(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS project_people (
+            cycle_id TEXT NOT NULL,
+            participant_id TEXT NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
+            cycle_participant_id TEXT,
+            created_unix_ms INTEGER NOT NULL,
+            PRIMARY KEY (cycle_id, participant_id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_project_people_cycle_slug
+            ON project_people(cycle_id, cycle_participant_id)
+            WHERE cycle_participant_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_project_people_participant
+            ON project_people(participant_id);
+        DROP INDEX IF EXISTS idx_participants_name_local;
+        DROP INDEX IF EXISTS idx_participants_name_cycle;",
+    )?;
+    let has_rows: bool =
+        conn.query_row("SELECT EXISTS(SELECT 1 FROM project_people)", [], |r| {
+            r.get(0)
+        })?;
+    if !has_rows {
+        conn.execute(
+            "INSERT INTO project_people (cycle_id, participant_id, cycle_participant_id, created_unix_ms)
+             SELECT p.cycle_id,
+                    p.id,
+                    CASE
+                        WHEN substr(p.id, 1, length(p.cycle_id) + 1) = p.cycle_id || ':'
+                             AND length(p.id) > length(p.cycle_id) + 1
+                        THEN substr(p.id, length(p.cycle_id) + 2)
+                        ELSE NULL
+                    END,
+                    p.created_unix_ms
+             FROM participants p
+             WHERE p.cycle_id IS NOT NULL",
             [],
         )?;
     }
@@ -580,5 +626,29 @@ mod tests {
         assert_eq!(s.get_project_prefs("NOMAD").unwrap(), saved);
         // Opening again is harmless.
         ensure_ux_schema(&s.conn).unwrap();
+    }
+
+    #[test]
+    fn ensure_people_schema_backfills_project_people_without_auto_merging() {
+        let conn = v4_database();
+        // Add a second person with the same name in another cycle before migrating.
+        conn.execute_batch(
+            "INSERT INTO participants (id, name, created_unix_ms, cycle_id)
+               VALUES ('ATLAS:ola', 'Ola', 8, 'ATLAS');",
+        )
+        .unwrap();
+        let s = Store::init(conn).unwrap();
+        // Both people keep their own id and project link; no auto-merge occurred.
+        let nomad = s.participants_for_cycle("NOMAD").unwrap();
+        let atlas = s.participants_for_cycle("ATLAS").unwrap();
+        assert_eq!(nomad.len(), 1);
+        assert_eq!(atlas.len(), 1);
+        assert_eq!(nomad[0].id, "NOMAD:ola");
+        assert_eq!(atlas[0].id, "ATLAS:ola");
+        assert_eq!(nomad[0].cycle_participant_id.as_deref(), Some("ola"));
+        assert_eq!(atlas[0].cycle_participant_id.as_deref(), Some("ola"));
+        // Re-running ensure_people_schema is idempotent.
+        ensure_people_schema(&s.conn).unwrap();
+        assert_eq!(s.list_all_participants_with_profiles().unwrap().len(), 2);
     }
 }

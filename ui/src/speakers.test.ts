@@ -190,4 +190,22 @@ describe("validateVoiceSettings", () => {
     expect(validateVoiceSettings({ ...ok, clipMaxDays: 0 })).not.toBeNull();
     expect(validateVoiceSettings({ ...ok, clipMaxDays: 2.5 })).not.toBeNull();
   });
+
+  it("formats cross-project suggestions with Recognised from <projects>", () => {
+    const s = voiceState(
+      voice("2", {
+        decision: "suggested",
+        score: 0.78,
+        suggestedParticipantId: "NOMAD:ola",
+        suggestedParticipantName: "Ola Cross",
+        suggestedFromProjects: ["NOMAD", "ATLAS"],
+      }),
+      people,
+    );
+    expect(s).toEqual({
+      kind: "suggested",
+      label: "Recognised from NOMAD, ATLAS: Ola Cross? 78%",
+      participantId: "NOMAD:ola",
+    });
+  });
 });

@@ -1573,9 +1573,65 @@ pub fn add_cycle_participant(
         }
     };
     store.sync_cycle_participants(cycle_id, &participant_pairs(&cycle))?;
-    let key = store::cycle_participant_key(cycle_id, &id);
-    find_participant(store, &key)?
+    store
+        .participants_for_cycle(cycle_id)?
+        .into_iter()
+        .find(|p| p.cycle_participant_id.as_deref() == Some(id.as_str()))
         .ok_or_else(|| IpcError::new("internal", "the participant was not stored"))
+}
+
+/// Links an existing participant (global or from another project) into `cycle_id`, adding
+/// them to `cycle.yaml` when a repo is configured and recording the link in `project_people`.
+pub fn add_existing_participant_to_cycle(
+    repos: &[CycleRepoSetting],
+    store: &Store,
+    cycle_id: &str,
+    participant_id: &str,
+) -> IpcResult<ParticipantInfo> {
+    let participant = store
+        .get_participant(participant_id)?
+        .ok_or_else(|| IpcError::new("not_found", "participant not found"))?;
+    if let Some(existing) = store
+        .participants_for_cycle(cycle_id)?
+        .into_iter()
+        .find(|p| p.id == participant_id)
+    {
+        return Ok(existing);
+    }
+    let slug = if let Some(located) = locate(repos, cycle_id)? {
+        let mut cycle = load_valid(&located)?;
+        if let Some(found) = cycle
+            .participants
+            .iter()
+            .find(|p| same_name(&p.name, &participant.name))
+        {
+            found.id.clone()
+        } else {
+            let taken: Vec<String> = cycle.participants.iter().map(|p| p.id.clone()).collect();
+            let id = participant_slug(&participant.name, &taken);
+            cycle.participants.push(Participant {
+                id: id.clone(),
+                name: participant.name.clone(),
+                github: None,
+                discord: None,
+            });
+            located.repo.save_cycle(&cycle)?;
+            id
+        }
+    } else {
+        let taken: Vec<String> = store
+            .participants_for_cycle(cycle_id)?
+            .into_iter()
+            .filter_map(|p| p.cycle_participant_id)
+            .collect();
+        participant_slug(&participant.name, &taken)
+    };
+    store.add_participant_to_project(participant_id, cycle_id, Some(&slug), queue::now_ms())?;
+    store
+        .participants_for_cycle(cycle_id)?
+        .into_iter()
+        .find(|p| p.id == participant_id)
+        .ok_or_else(|| IpcError::new("internal", "the participant was not linked"))
 }
 
 /// Renames a person of a cycle in `cycle.yaml` and in the store. `duplicate` when another
@@ -1611,8 +1667,8 @@ pub fn rename_cycle_participant(
     Ok(())
 }
 
-/// Removes a person from `cycle.yaml` and deletes the stored participant with the voice
-/// profile.
+/// Removes a person from `cycle.yaml` and unlinks them from the project in `project_people`,
+/// keeping their global voice profile and samples intact.
 pub fn delete_cycle_participant(
     repos: &[CycleRepoSetting],
     store: &Store,
@@ -1627,12 +1683,15 @@ pub fn delete_cycle_participant(
             located.repo.save_cycle(&cycle)?;
         }
     }
-    store.delete_participant(&info.id)?;
+    store.remove_participant_from_project(&info.id, cycle_id)?;
     Ok(())
 }
 
 fn cycle_and_id(info: &ParticipantInfo) -> IpcResult<(&str, &str)> {
-    match (info.cycle_id.as_deref(), info.cycle_participant_id()) {
+    match (
+        info.cycle_id.as_deref(),
+        info.cycle_participant_id.as_deref(),
+    ) {
         (Some(c), Some(id)) => Ok((c, id)),
         _ => Err(IpcError::new(
             "invalid",
@@ -1984,7 +2043,7 @@ targets:
         let rows = lab.store.participants_for_cycle("NOMAD").unwrap();
         let names: Vec<&str> = rows.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["Alex", "Sam"]);
-        assert_eq!(rows[0].cycle_participant_id(), Some("alex"));
+        assert_eq!(rows[0].cycle_participant_id.as_deref(), Some("alex"));
 
         // A rename keeps the row, so the voice profile stays.
         let mut dto = get_cycle(lab.repos(), "NOMAD").unwrap().cycle;
@@ -2947,9 +3006,9 @@ targets:
         assert!(r.warnings[0].contains("alexander"), "{:?}", r.warnings);
         let rows = lab.store.participants_for_cycle("NOMAD").unwrap();
         let alex = rows.iter().find(|p| p.name == "Alex").unwrap();
-        assert_eq!(alex.id, store::cycle_participant_key("NOMAD", "alexander"));
+        assert_eq!(alex.id, old);
+        assert_eq!(alex.cycle_participant_id.as_deref(), Some("alexander"));
         assert_eq!(alex.sample_count, 1, "the voice profile came along");
-        assert!(rows.iter().all(|p| p.id != old));
 
         // Later syncs (a pull, a recording) work and say nothing more.
         assert!(sync_repo(&lab.settings.cycle_repos[0], &lab.store).is_empty());

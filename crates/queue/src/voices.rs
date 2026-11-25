@@ -136,76 +136,6 @@ fn to_sample(r: SampleRow) -> Sample {
     }
 }
 
-fn participant_slug(name: &str) -> String {
-    let mut out = String::new();
-    let mut dash = false;
-    for ch in name.chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch.to_ascii_lowercase());
-            dash = false;
-        } else if !dash && !out.is_empty() {
-            out.push('-');
-            dash = true;
-        }
-    }
-    while out.ends_with('-') {
-        out.pop();
-    }
-    if out.is_empty() {
-        "participant".into()
-    } else {
-        out
-    }
-}
-
-/// Auto-enroll or link a global (`cycle_id IS NULL`) participant into `cycle_id` when their
-/// global voice profile matches a speaker in a meeting of `cycle_id`.
-fn link_global_participant_to_cycle(
-    store: &Store,
-    cycle_id: &str,
-    global_participant_id: &str,
-    now_ms: i64,
-) -> Result<String, store::StoreError> {
-    let Some(global_p) = store.get_participant(global_participant_id)? else {
-        return Ok(global_participant_id.to_string());
-    };
-    let target_id = if let Some(existing) =
-        store.find_participant_by_name_in(Some(cycle_id), &global_p.name)?
-    {
-        existing.id
-    } else {
-        let existing_ids: HashSet<String> = store
-            .participants_for_cycle(cycle_id)?
-            .into_iter()
-            .map(|p| p.id)
-            .collect();
-        let base = participant_slug(&global_p.name);
-        let mut candidate_key = store::cycle_participant_key(cycle_id, &base);
-        let mut n = 2u32;
-        while existing_ids.contains(&candidate_key) {
-            candidate_key = store::cycle_participant_key(cycle_id, &format!("{base}-{n}"));
-            n += 1;
-        }
-        store.create_participant_in(Some(cycle_id), &candidate_key, &global_p.name, now_ms)?;
-        candidate_key
-    };
-
-    if store.samples_of(&target_id)?.is_empty() {
-        for sample in store.samples_of(global_participant_id)? {
-            store.put_sample(&target_id, &sample, now_ms)?;
-        }
-    }
-    if let Some(clip) = global_p.sample_clip_file.as_deref() {
-        let needs_clip = store
-            .get_participant(&target_id)?
-            .is_some_and(|p| p.sample_clip_file.is_none());
-        if needs_clip {
-            store.set_participant_sample_clip(&target_id, Some(clip))?;
-        }
-    }
-    Ok(target_id)
-}
-
 /// Stage `speaker_id`: one embedding per detected voice, matched against the profiles.
 ///
 /// A match at or above the accept threshold and clearly ahead of the runner-up names the
@@ -286,68 +216,26 @@ pub fn run_speaker_id(
             .cloned()
             .collect();
         if !unclaimed.is_empty() {
-            let claimed_names: HashSet<String> = decisions
-                .values()
-                .filter_map(|d| match d {
-                    Decision::Auto { participant_id, .. }
-                    | Decision::Suggest { participant_id, .. } => store
-                        .get_participant(participant_id)
-                        .ok()
-                        .flatten()
-                        .map(|p| p.name.to_lowercase()),
-                    Decision::Unknown => None,
-                })
-                .collect();
-            let global_profiles: Vec<ProfileRef> = load_profiles_for(store, None)
-                .map_err(err)?
-                .into_iter()
-                .filter(|p| {
-                    store
-                        .get_participant(&p.participant_id)
-                        .ok()
-                        .flatten()
-                        .is_none_or(|part| !claimed_names.contains(&part.name.to_lowercase()))
-                })
-                .collect();
-            if !global_profiles.is_empty() {
-                let now = crate::supervisor::now_ms();
+            let unlinked_rows = store.profiles_unlinked().map_err(err)?;
+            let outside_rows = store.profiles_outside(cycle).map_err(err)?;
+            let outside_ids: HashSet<String> =
+                outside_rows.iter().map(|(id, _)| id.clone()).collect();
+            let mut combined_rows = unlinked_rows;
+            combined_rows.extend(outside_rows);
+            let combined_profiles = profile_refs(combined_rows).map_err(err)?;
+            if !combined_profiles.is_empty() {
                 for (voice_id, decision) in
-                    assign_unique(&unclaimed, &global_profiles, &settings.thresholds)
+                    assign_unique(&unclaimed, &combined_profiles, &settings.thresholds)
                 {
                     let mapped = match decision {
                         Decision::Auto {
                             participant_id,
                             score,
-                        } => {
-                            let linked = link_global_participant_to_cycle(
-                                store,
-                                cycle,
-                                &participant_id,
-                                now,
-                            )
-                            .map_err(err)?;
-                            Decision::Auto {
-                                participant_id: linked,
-                                score,
-                            }
-                        }
-                        Decision::Suggest {
+                        } if outside_ids.contains(&participant_id) => Decision::Suggest {
                             participant_id,
                             score,
-                        } => {
-                            let linked = link_global_participant_to_cycle(
-                                store,
-                                cycle,
-                                &participant_id,
-                                now,
-                            )
-                            .map_err(err)?;
-                            Decision::Suggest {
-                                participant_id: linked,
-                                score,
-                            }
-                        }
-                        Decision::Unknown => Decision::Unknown,
+                        },
+                        other => other,
                     };
                     if !matches!(mapped, Decision::Unknown) {
                         decisions.insert(voice_id, mapped);
@@ -973,6 +861,30 @@ pub fn assign_voice(
     Ok(true)
 }
 
+/// Undo a naming decision on a voice: removes any sample contributed by this voice, clears
+/// its confirmed assignment, and optionally unlinks the previously assigned participant from
+/// `unlink_cycle_id`.
+pub fn undo_voice_decision(
+    store: &Store,
+    meeting_id: &str,
+    voice_id: &str,
+    unlink_cycle_id: Option<&str>,
+) -> Result<bool, store::StoreError> {
+    let voices = store.list_meeting_voices(meeting_id)?;
+    let Some(voice) = voices.iter().find(|v| v.voice_id == voice_id) else {
+        return Ok(false);
+    };
+    let prev_participant = voice.assigned_participant.clone();
+    store.remove_samples_of_source(&source_key(meeting_id, voice_id))?;
+    if !store.clear_voice_assignment(meeting_id, voice_id)? {
+        return Ok(false);
+    }
+    if let (Some(cid), Some(pid)) = (unlink_cycle_id, prev_participant.as_deref()) {
+        store.remove_participant_from_project(pid, cid)?;
+    }
+    Ok(true)
+}
+
 /// Merge a voice into another one of the same meeting (or undo with `None`). A voice cannot
 /// be merged into itself or into a voice that is merged into it.
 pub fn merge_voice(
@@ -1458,6 +1370,8 @@ mod tests {
             sample_count: 0,
             speech_ms: 0,
             cycle_id: None,
+            cycle_participant_id: None,
+            projects: Vec::new(),
             sample_clip_file: None,
         }];
         let sp = |id: &str, label: &str| Speaker {
@@ -1629,17 +1543,200 @@ mod tests {
         assert_eq!(voices[0].decision, VoiceDecision::Auto);
         assert_eq!(
             voices[0].assigned_participant.as_deref(),
-            Some("NOMAD:ewa-global")
+            Some("global-ewa")
         );
 
+        // Not eagerly linked into NOMAD during speaker_id.
         let cycle_participants = participants_for_meeting(&s, "m-cycle").unwrap();
-        assert_eq!(cycle_participants.len(), 1);
-        assert_eq!(cycle_participants[0].id, "NOMAD:ewa-global");
-        assert_eq!(cycle_participants[0].name, "Ewa Global");
-        assert_eq!(cycle_participants[0].sample_count, 1);
+        assert!(cycle_participants.is_empty());
+    }
+
+    #[test]
+    fn run_speaker_id_suggests_tier3_cross_project_and_respects_margin() {
+        let s = Store::open_in_memory().unwrap();
+        s.create_meeting(&Meeting {
+            id: "m-atlas".into(),
+            title: "Atlas sync".into(),
+            started_unix_ms: 2,
+            duration_ms: None,
+            state: MeetingState::Stopped,
+            dir: "m-atlas".into(),
+        })
+        .unwrap();
+        s.set_report_settings(
+            "m-atlas",
+            &store::ReportSettings {
+                cycle_id: Some("ATLAS".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // Tier 3 participant in NOMAD (outside ATLAS).
+        s.create_participant_in(Some("NOMAD"), "NOMAD:kasia", "Kasia", 1)
+            .unwrap();
+        s.put_sample(
+            "NOMAD:kasia",
+            &SampleRow {
+                source_key: "m0:v0".into(),
+                embedding: vec![1.0, 0.0, 0.0],
+                speech_ms: 15_000,
+            },
+            1,
+        )
+        .unwrap();
+
+        let dir = tempdir("tier3-match");
+        let work = dir.join("work").join("diarize");
+        fs::create_dir_all(&work).unwrap();
+        fs::write(
+            work.join("t.json"),
+            serde_json::json!({
+                "track": "t",
+                "speakers": ["SPEAKER_00"],
+                "turns": [{"start_ms": 0, "end_ms": 12000, "speaker": "SPEAKER_00"}],
+                "embeddings": [[0.99, 0.05, 0.0]]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        s.upsert_track(
+            "m-atlas",
+            &Track {
+                name: "t".into(),
+                source: "system".into(),
+                pid: None,
+                offset_ms: 0.0,
+                ended: true,
+                end_offset_ms: None,
+                total_samples: None,
+            },
+        )
+        .unwrap();
+
+        run_speaker_id(&s, "m-atlas", &dir, &VoiceSettings::default()).unwrap();
+        let voices = s.list_meeting_voices("m-atlas").unwrap();
+        assert_eq!(voices.len(), 1);
+        // Cross-project Tier 3 match is always emitted as Suggested, never Auto.
+        assert_eq!(voices[0].decision, VoiceDecision::Suggested);
         assert_eq!(
-            cycle_participants[0].sample_clip_file.as_deref(),
-            Some(".voice-samples/global-ewa.wav")
+            voices[0].matched_participant.as_deref(),
+            Some("NOMAD:kasia")
         );
+        assert_eq!(voices[0].assigned_participant, None);
+
+        // Adding a close Tier 2 unlinked global competitor within the 0.10 margin prevents
+        // Auto-assignment (downgrading to Suggested instead of Auto).
+        s.create_participant("global-twin", "Twin", 2).unwrap();
+        s.put_sample(
+            "global-twin",
+            &SampleRow {
+                source_key: "m0:v1".into(),
+                embedding: vec![0.995, 0.01, 0.0],
+                speech_ms: 15_000,
+            },
+            2,
+        )
+        .unwrap();
+        run_speaker_id(&s, "m-atlas", &dir, &VoiceSettings::default()).unwrap();
+        let voices_after = s.list_meeting_voices("m-atlas").unwrap();
+        assert_eq!(voices_after[0].decision, VoiceDecision::Suggested);
+        assert_eq!(voices_after[0].assigned_participant, None);
+    }
+
+    #[test]
+    fn run_speaker_id_skips_microphone_track_and_undo_restores_suggestion() {
+        let s = Store::open_in_memory().unwrap();
+        s.create_meeting(&Meeting {
+            id: "m".into(),
+            title: "m".into(),
+            started_unix_ms: 1,
+            duration_ms: None,
+            state: MeetingState::Stopped,
+            dir: "m".into(),
+        })
+        .unwrap();
+        s.set_report_settings(
+            "m",
+            &store::ReportSettings {
+                cycle_id: Some("ATLAS".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.create_participant_in(Some("NOMAD"), "NOMAD:kasia", "Kasia", 1)
+            .unwrap();
+        s.put_sample(
+            "NOMAD:kasia",
+            &SampleRow {
+                source_key: "m0:v0".into(),
+                embedding: vec![1.0, 0.0, 0.0],
+                speech_ms: 15_000,
+            },
+            1,
+        )
+        .unwrap();
+
+        let dir = tempdir("mic-skip-undo");
+        let work = dir.join("work").join("diarize");
+        fs::create_dir_all(&work).unwrap();
+        for trk in ["mic", "sys"] {
+            fs::write(
+                work.join(format!("{trk}.json")),
+                serde_json::json!({
+                    "track": trk,
+                    "speakers": ["SPEAKER_00"],
+                    "turns": [{"start_ms": 0, "end_ms": 12000, "speaker": "SPEAKER_00"}],
+                    "embeddings": [[0.99, 0.05, 0.0]]
+                })
+                .to_string(),
+            )
+            .unwrap();
+        }
+        s.upsert_track(
+            "m",
+            &Track {
+                name: "mic".into(),
+                source: "microphone".into(),
+                pid: None,
+                offset_ms: 0.0,
+                ended: true,
+                end_offset_ms: None,
+                total_samples: None,
+            },
+        )
+        .unwrap();
+        s.upsert_track(
+            "m",
+            &Track {
+                name: "sys".into(),
+                source: "system".into(),
+                pid: None,
+                offset_ms: 0.0,
+                ended: true,
+                end_offset_ms: None,
+                total_samples: None,
+            },
+        )
+        .unwrap();
+
+        run_speaker_id(&s, "m", &dir, &VoiceSettings::default()).unwrap();
+        let voices = s.list_meeting_voices("m").unwrap();
+        assert_eq!(voices.len(), 1);
+        assert_eq!(voices[0].track, "sys");
+
+        // Accept + link to ATLAS, then undo.
+        s.add_participant_to_project("NOMAD:kasia", "ATLAS", Some("kasia"), 2)
+            .unwrap();
+        assert!(assign_voice(&s, "m", "sys:SPEAKER_00", Some("NOMAD:kasia"), 3).unwrap());
+        assert_eq!(s.samples_of("NOMAD:kasia").unwrap().len(), 2);
+
+        assert!(undo_voice_decision(&s, "m", "sys:SPEAKER_00", Some("ATLAS")).unwrap());
+        let after = &s.list_meeting_voices("m").unwrap()[0];
+        assert!(!after.confirmed);
+        assert_eq!(after.assigned_participant, None);
+        assert_eq!(after.decision, VoiceDecision::Suggested);
+        assert_eq!(s.samples_of("NOMAD:kasia").unwrap().len(), 1);
+        assert!(s.participants_for_cycle("ATLAS").unwrap().is_empty());
     }
 }

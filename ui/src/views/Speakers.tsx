@@ -85,6 +85,8 @@ export function SpeakersView(props: {
   const [error, setError] = useState<string | null>(null);
   // Suggestions the user turned down on this screen; those voices are shown as unknown.
   const [rejected, setRejected] = useState<ReadonlySet<string>>(new Set());
+  // Suggestions accepted on this screen, tracking whether to unlink from `cycleId` on Undo.
+  const [acceptedUndo, setAcceptedUndo] = useState<ReadonlyMap<string, string | null>>(new Map());
   const player = useClipPlayer(meetingId, setError);
   const stopPlayer = player.stop;
 
@@ -205,13 +207,47 @@ export function SpeakersView(props: {
                   participants={data.participants}
                   candidates={groups.map((x) => x.voice).filter((v) => v !== g.voice)}
                   rejected={rejected.has(g.voice.voiceId)}
+                  acceptedUndo={acceptedUndo.has(g.voice.voiceId)}
                   playing={player.playing}
                   onPlay={(idx) => void player.toggle(g.voice.voiceId, idx)}
                   onOpenTranscript={onOpenTranscript}
                   onReject={() => setRejected((r) => new Set(r).add(g.voice.voiceId))}
-                  onAssign={(participantId) =>
-                    act(backend.assignVoice(meetingId, g.voice.voiceId, participantId))
-                  }
+                  onAcceptSuggestion={(participantId) => {
+                    const isExternal =
+                      !!cycleId && !data.participants.some((p) => p.id === participantId);
+                    void act(backend.assignVoice(meetingId, g.voice.voiceId, participantId)).then(
+                      (ok) => {
+                        if (ok) {
+                          setAcceptedUndo((prev) =>
+                            new Map(prev).set(g.voice.voiceId, isExternal ? cycleId : null),
+                          );
+                        }
+                      },
+                    );
+                  }}
+                  onUndoAccept={() => {
+                    const unlink = acceptedUndo.get(g.voice.voiceId) ?? null;
+                    void act(backend.undoVoiceDecision(meetingId, g.voice.voiceId, unlink)).then(
+                      (ok) => {
+                        if (ok) {
+                          setAcceptedUndo((prev) => {
+                            const next = new Map(prev);
+                            next.delete(g.voice.voiceId);
+                            return next;
+                          });
+                        }
+                      },
+                    );
+                  }}
+                  onAssign={(participantId) => {
+                    setAcceptedUndo((prev) => {
+                      if (!prev.has(g.voice.voiceId)) return prev;
+                      const next = new Map(prev);
+                      next.delete(g.voice.voiceId);
+                      return next;
+                    });
+                    return act(backend.assignVoice(meetingId, g.voice.voiceId, participantId));
+                  }}
                   onAssignNew={(name) =>
                     act(backend.assignVoiceNew(meetingId, g.voice.voiceId, name))
                   }
@@ -232,15 +268,18 @@ function VoiceCard(props: {
   /** The other top-level voices this one can be declared the same person as. */
   candidates: VoiceView[];
   rejected: boolean;
+  acceptedUndo: boolean;
   playing: string | null;
   onPlay: (idx: number) => void;
   onOpenTranscript: () => void;
   onReject: () => void;
+  onAcceptSuggestion: (participantId: string) => void;
+  onUndoAccept: () => void;
   onAssign: (participantId: string | null) => Promise<boolean>;
   onAssignNew: (name: string) => Promise<boolean>;
   onMerge: (voiceId: string, into: string | null) => Promise<boolean>;
 }) {
-  const { group, participants, candidates, rejected, playing } = props;
+  const { group, participants, candidates, rejected, acceptedUndo, playing } = props;
   const { voice, merged } = group;
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
@@ -282,7 +321,7 @@ function VoiceCard(props: {
             <button
               className="btn btn-small"
               aria-label={`Accept the suggestion for ${voice.label}`}
-              onClick={() => void props.onAssign(state.participantId)}
+              onClick={() => state.participantId && props.onAcceptSuggestion(state.participantId)}
             >
               Accept
             </button>
@@ -293,6 +332,21 @@ function VoiceCard(props: {
             >
               Reject
             </button>
+          </div>
+        )}
+        {acceptedUndo && voice.confirmed && (
+          <div className="voice-suggest">
+            <span className="person-meta">
+              Accepted ·{" "}
+              <button
+                type="button"
+                className="btn btn-small btn-ghost"
+                aria-label={`Undo accepted suggestion for ${voice.label}`}
+                onClick={props.onUndoAccept}
+              >
+                Undo
+              </button>
+            </span>
           </div>
         )}
         {state.kind === "auto" && (

@@ -3,7 +3,6 @@
 //! Voice profiles, embeddings and sample clips are biometric data. They are kept in the local
 //! database and recordings folder only; no command here sends them anywhere.
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -50,6 +49,10 @@ pub struct VoiceDto {
     pub score: Option<f32>,
     /// The participant the matcher found, for a suggestion.
     pub suggested_participant_id: Option<String>,
+    /// Display name of the suggested participant (even when from another project or global).
+    pub suggested_participant_name: Option<String>,
+    /// Projects the suggested participant belongs to (empty for unlinked global).
+    pub suggested_from_projects: Vec<String>,
     /// The participant the voice is named after (automatic match or the user's choice).
     pub assigned_participant_id: Option<String>,
     pub confirmed: bool,
@@ -76,7 +79,7 @@ pub struct ParticipantDto {
 impl From<ParticipantInfo> for ParticipantDto {
     fn from(p: ParticipantInfo) -> Self {
         Self {
-            cycle_participant_id: p.cycle_participant_id().map(str::to_string),
+            cycle_participant_id: p.cycle_participant_id,
             id: p.id,
             name: p.name,
             sample_count: p.sample_count,
@@ -95,7 +98,13 @@ pub struct VoicesData {
     pub all_confirmed: bool,
 }
 
-fn to_dto(v: VoiceRow, clips: &[store::ClipRow]) -> VoiceDto {
+fn to_dto(v: VoiceRow, clips: &[store::ClipRow], all_participants: &[ParticipantInfo]) -> VoiceDto {
+    let suggested_id = (v.decision == VoiceDecision::Suggested)
+        .then(|| v.matched_participant.clone())
+        .flatten();
+    let suggested_info = suggested_id
+        .as_deref()
+        .and_then(|sid| all_participants.iter().find(|p| p.id == sid));
     VoiceDto {
         clips: clips
             .iter()
@@ -107,9 +116,11 @@ fn to_dto(v: VoiceRow, clips: &[store::ClipRow]) -> VoiceDto {
                 text: c.text.clone(),
             })
             .collect(),
-        suggested_participant_id: (v.decision == VoiceDecision::Suggested)
-            .then(|| v.matched_participant.clone())
-            .flatten(),
+        suggested_participant_name: suggested_info.map(|p| p.name.clone()),
+        suggested_from_projects: suggested_info
+            .map(|p| p.projects.clone())
+            .unwrap_or_default(),
+        suggested_participant_id: suggested_id,
         voice_id: v.voice_id,
         track: v.track,
         label: v.label,
@@ -154,14 +165,22 @@ fn participants_for(
 fn voices_data(state: &AppState, id: &str) -> IpcResult<VoicesData> {
     let repos = state.cycle_repos();
     let participants = state.with_store_ipc(|s| participants_for(&repos, s, None, Some(id)))?;
-    let (voices, clips) =
-        state.with_store(|s| Ok((s.list_meeting_voices(id)?, s.list_clips(id)?)))?;
+    let (voices, clips, all_participants) = state.with_store(|s| {
+        Ok((
+            s.list_meeting_voices(id)?,
+            s.list_clips(id)?,
+            s.list_participants()?,
+        ))
+    })?;
     let all_confirmed = voices::all_voices_confirmed(&voices);
     // The labels of the transcript ("Speaker 1") are shown as they are; the screen lists voices
     // by their order of appearance, which is the diarization label order.
     Ok(VoicesData {
         meeting_id: id.to_string(),
-        voices: voices.into_iter().map(|v| to_dto(v, &clips)).collect(),
+        voices: voices
+            .into_iter()
+            .map(|v| to_dto(v, &clips, &all_participants))
+            .collect(),
         participants: participants.into_iter().map(Into::into).collect(),
         all_confirmed,
     })
@@ -234,6 +253,9 @@ fn create_participant_in(
             Ok(cycles::add_cycle_participant(repos, store, cycle, &name)?.into())
         }
         None => {
+            if store.find_participant_by_name_in(None, &name)?.is_some() {
+                return Err(duplicate());
+            }
             let id = new_id();
             store
                 .create_participant(&id, &name, queue::now_ms())
@@ -337,22 +359,27 @@ fn delete_participant_in(
 ) -> IpcResult<()> {
     let info = cycles::find_participant(store, participant_id)?;
     let unshared = cleanup_participant_sample_clip(store, recordings_root, participant_id)?;
-    match info {
-        Some(p) if p.cycle_id.is_some() => {
-            if unshared {
-                voices::reset_profile(store, participant_id, recordings_root)?;
+    if let Some(p) = info {
+        let mut cycles_to_clean = p.projects.clone();
+        if let Some(cid) = p.cycle_id.as_deref() {
+            if !cycles_to_clean.iter().any(|c| c == cid) {
+                cycles_to_clean.push(cid.to_string());
             }
-            cycles::delete_cycle_participant(repos, store, &p)
         }
-        _ => {
-            if unshared {
-                voices::delete_participant_profile(store, participant_id, recordings_root)?;
-            } else {
-                store.delete_participant(participant_id)?;
+        for cid in cycles_to_clean {
+            if let Ok(rows) = store.participants_for_cycle(&cid) {
+                if let Some(in_cycle) = rows.into_iter().find(|r| r.id == p.id) {
+                    let _ = cycles::delete_cycle_participant(repos, store, &in_cycle);
+                }
             }
-            Ok(())
         }
     }
+    if unshared {
+        voices::delete_participant_profile(store, participant_id, recordings_root)?;
+    } else {
+        store.delete_participant(participant_id)?;
+    }
+    Ok(())
 }
 
 pub fn reset_profile_in(
@@ -407,14 +434,26 @@ pub fn assign_voice(
     voice_id: String,
     participant_id: Option<String>,
 ) -> IpcResult<VoicesData> {
-    let ok = state.with_store(|s| {
-        voices::assign_voice(
+    let repos = state.cycle_repos();
+    let ok = state.with_store_ipc(|s| {
+        if let Some(pid) = participant_id.as_deref() {
+            if let Some(cycle) = meeting_cycle(s, &id)? {
+                let already_in_cycle = s
+                    .participants_for_cycle(&cycle)?
+                    .iter()
+                    .any(|p| p.id == pid);
+                if !already_in_cycle {
+                    cycles::add_existing_participant_to_cycle(&repos, s, &cycle, pid)?;
+                }
+            }
+        }
+        Ok(voices::assign_voice(
             s,
             &id,
             &voice_id,
             participant_id.as_deref(),
             queue::now_ms(),
-        )
+        )?)
     })?;
     if !ok {
         return Err(IpcError::new("not_found", "voice not found"));
@@ -602,39 +641,13 @@ pub fn list_all_voice_profiles_in(
     store: &Store,
     recordings_root: &Path,
 ) -> IpcResult<Vec<GlobalVoiceProfileDto>> {
-    let cycle_items = cycles::list_cycles(repos);
-    let mut projects_by_name: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for item in &cycle_items {
+    for item in &cycles::list_cycles(repos) {
         let _ = cycles::sync_cycle(repos, store, &item.id);
-        if let Ok(details) = cycles::get_cycle(repos, &item.id) {
-            for p in details.cycle.participants {
-                projects_by_name
-                    .entry(p.name.trim().to_lowercase())
-                    .or_default()
-                    .insert(item.id.clone());
-            }
-        }
     }
 
     let all = store.list_all_participants_with_profiles()?;
-    for p in &all {
-        if let Some(cid) = &p.cycle_id {
-            projects_by_name
-                .entry(p.name.trim().to_lowercase())
-                .or_default()
-                .insert(cid.clone());
-        }
-    }
-
     let mut out = Vec::with_capacity(all.len());
     for p in all {
-        let mut projects = BTreeSet::new();
-        if let Some(cid) = &p.cycle_id {
-            projects.insert(cid.clone());
-        }
-        if let Some(extra) = projects_by_name.get(&p.name.trim().to_lowercase()) {
-            projects.extend(extra.iter().cloned());
-        }
         let updated_unix_ms = store
             .get_participant(&p.id)?
             .map_or(0, |row| row.created_unix_ms);
@@ -649,7 +662,7 @@ pub fn list_all_voice_profiles_in(
             id: p.id,
             name: p.name,
             cycle_id: p.cycle_id,
-            projects: projects.into_iter().collect(),
+            projects: p.projects,
             sample_count: p.sample_count,
             updated_unix_ms,
             has_sample_clip,
@@ -849,6 +862,106 @@ pub fn enroll_voice_profile(
             &audio_path,
         )
     })
+}
+
+pub fn add_profile_to_project_in(
+    repos: &[CycleRepoSetting],
+    store: &Store,
+    recordings_root: &Path,
+    participant_id: &str,
+    cycle_id: &str,
+) -> IpcResult<GlobalVoiceProfileDto> {
+    cycles::add_existing_participant_to_cycle(repos, store, cycle_id, participant_id)?;
+    list_all_voice_profiles_in(repos, store, recordings_root)?
+        .into_iter()
+        .find(|p| p.id == participant_id)
+        .ok_or_else(|| IpcError::new("not_found", "participant not found"))
+}
+
+pub fn remove_profile_from_project_in(
+    repos: &[CycleRepoSetting],
+    store: &Store,
+    recordings_root: &Path,
+    participant_id: &str,
+    cycle_id: &str,
+) -> IpcResult<GlobalVoiceProfileDto> {
+    let info = store
+        .participants_for_cycle(cycle_id)?
+        .into_iter()
+        .find(|p| p.id == participant_id)
+        .ok_or_else(|| IpcError::new("not_found", "participant not in project"))?;
+    cycles::delete_cycle_participant(repos, store, &info)?;
+    list_all_voice_profiles_in(repos, store, recordings_root)?
+        .into_iter()
+        .find(|p| p.id == participant_id)
+        .ok_or_else(|| IpcError::new("not_found", "participant not found"))
+}
+
+pub fn merge_participants_in(
+    repos: &[CycleRepoSetting],
+    store: &Store,
+    recordings_root: &Path,
+    keep_id: &str,
+    drop_id: &str,
+) -> IpcResult<GlobalVoiceProfileDto> {
+    store.merge_participants(keep_id, drop_id)?;
+    list_all_voice_profiles_in(repos, store, recordings_root)?
+        .into_iter()
+        .find(|p| p.id == keep_id)
+        .ok_or_else(|| IpcError::new("not_found", "participant not found"))
+}
+
+#[tauri::command]
+pub fn add_profile_to_project(
+    state: State<'_, AppState>,
+    participant_id: String,
+    cycle_id: String,
+) -> IpcResult<GlobalVoiceProfileDto> {
+    let repos = state.cycle_repos();
+    let root = state.recordings_root()?;
+    state
+        .with_store_ipc(|s| add_profile_to_project_in(&repos, s, &root, &participant_id, &cycle_id))
+}
+
+#[tauri::command]
+pub fn remove_profile_from_project(
+    state: State<'_, AppState>,
+    participant_id: String,
+    cycle_id: String,
+) -> IpcResult<GlobalVoiceProfileDto> {
+    let repos = state.cycle_repos();
+    let root = state.recordings_root()?;
+    state.with_store_ipc(|s| {
+        remove_profile_from_project_in(&repos, s, &root, &participant_id, &cycle_id)
+    })
+}
+
+#[tauri::command]
+pub fn merge_participants(
+    state: State<'_, AppState>,
+    keep_id: String,
+    drop_id: String,
+) -> IpcResult<GlobalVoiceProfileDto> {
+    let repos = state.cycle_repos();
+    let root = state.recordings_root()?;
+    state.with_store_ipc(|s| merge_participants_in(&repos, s, &root, &keep_id, &drop_id))
+}
+
+#[tauri::command]
+pub fn undo_voice_decision(
+    state: State<'_, AppState>,
+    id: String,
+    voice_id: String,
+    unlink_cycle_id: Option<String>,
+) -> IpcResult<VoicesData> {
+    let ok = state.with_store(|s| {
+        voices::undo_voice_decision(s, &id, &voice_id, unlink_cycle_id.as_deref())
+    })?;
+    if !ok {
+        return Err(IpcError::new("not_found", "voice not found"));
+    }
+    after_change(&state)?;
+    voices_data(&state, &id)
 }
 
 #[cfg(test)]
@@ -1087,13 +1200,21 @@ mod tests {
         assert!(enrolled.has_sample_clip);
         assert_eq!(enrolled.projects, vec!["NOMAD".to_string()]);
 
-        // Add the same person to ATLAS cycle too so `projects` spans both.
-        create_participant_in(lab.repos(), &lab.store, Some("ATLAS"), "Kasia").unwrap();
+        // Link the same person to ATLAS cycle too so `projects` spans both without creating a duplicate.
+        add_profile_to_project_in(
+            lab.repos(),
+            &lab.store,
+            rec_root.path(),
+            &enrolled.id,
+            "ATLAS",
+        )
+        .unwrap();
 
         let all = list_all_voice_profiles_in(lab.repos(), &lab.store, rec_root.path()).unwrap();
-        let kasia_nomad = all.iter().find(|p| p.id == enrolled.id).unwrap();
+        let kasia_matches: Vec<_> = all.iter().filter(|p| p.name == "Kasia").collect();
+        assert_eq!(kasia_matches.len(), 1);
         assert_eq!(
-            kasia_nomad.projects,
+            kasia_matches[0].projects,
             vec!["ATLAS".to_string(), "NOMAD".to_string()]
         );
 
@@ -1236,5 +1357,56 @@ mod tests {
         std::fs::write(&orphan, b"RIFFstale").unwrap();
         delete_voice_data_in(&lab.store, rec_root.path()).unwrap();
         assert!(!orphan.exists());
+    }
+
+    #[test]
+    fn merge_and_project_link_commands_keep_samples_on_unlink() {
+        let lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        lab.make_cycle("ATLAS");
+        let rec_root = test_tmp::TestDir::new("voice-merge-unlink");
+        let sample_wav = rec_root.path().join("sample.wav");
+        crate::project_commands::write_demo_wav(&sample_wav, 330.0, 2).unwrap();
+
+        let p1 = enroll_voice_profile_in(
+            lab.repos(),
+            &lab.store,
+            rec_root.path(),
+            EnrollMode::Demo,
+            "Jan",
+            Some("NOMAD"),
+            &sample_wav.to_string_lossy(),
+        )
+        .unwrap();
+        let p2 = enroll_voice_profile_in(
+            lab.repos(),
+            &lab.store,
+            rec_root.path(),
+            EnrollMode::Demo,
+            "Jan",
+            Some("ATLAS"),
+            &sample_wav.to_string_lossy(),
+        )
+        .unwrap();
+        assert_ne!(p1.id, p2.id);
+
+        let merged =
+            merge_participants_in(lab.repos(), &lab.store, rec_root.path(), &p1.id, &p2.id)
+                .unwrap();
+        assert_eq!(
+            merged.projects,
+            vec!["ATLAS".to_string(), "NOMAD".to_string()]
+        );
+
+        let after_unlink = remove_profile_from_project_in(
+            lab.repos(),
+            &lab.store,
+            rec_root.path(),
+            &p1.id,
+            "ATLAS",
+        )
+        .unwrap();
+        assert_eq!(after_unlink.projects, vec!["NOMAD".to_string()]);
+        assert_eq!(after_unlink.sample_count, 1);
     }
 }
