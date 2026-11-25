@@ -21,7 +21,7 @@ cargo run --release -- selftest  # silent hardware tests, see below
 
 | Command | Purpose |
 |---|---|
-| `record --out DIR --duration S [--mic \| --mic-device NAME] [--system] [--pid PID[:tree]]... [--segment-s 60] [--no-drift-correction]` | Record tracks (`--mic-device` picks a capture device by name, e.g. a virtual cable output). Stops after the duration, or when a file named `STOP` appears in `DIR`. |
+| `record --out DIR --duration S [--mic \| --mic-device NAME] [--system] [--pid PID[:tree]]... [--segment-s 60] [--no-drift-correction] [--mic-buffer-ms MS] [--mic-mmcss]` | Record tracks (`--mic-device` picks a capture device by name, e.g. a virtual cable output). Stops after the duration, or when a file named `STOP` appears in `DIR`. `--mic-buffer-ms` and `--mic-mmcss` are an experiment on the microphone track only (event buffer of that many ms, and MMCSS `Pro Audio` registration of its capture thread); both fall back to the defaults with a warning if refused, and `summary.json` records the tuning (`mic_tuning`). |
 | `sessions [--json]` | List audio sessions: process id, parent, process name, state, session volume, peak level. |
 | `replay DIR` | Check a recording against its journal (segment numbering, offsets, file sizes). |
 | `probe [--pid PID]` | Report whether application loopback can be activated on this Windows build, per format. |
@@ -65,7 +65,7 @@ Reference run: Windows 10 Pro build 19045, RTX 3080 machine. Full numbers and pa
 | `version` | no | Application loopback activates (Windows build recorded). |
 | `crash` | no | Recorder killed in the middle of a segment: audio left readable, journal replay. |
 | `apps` | no | Whether Teams, Discord and Chrome are installed, running, and listed in `sessions`. |
-| `drift` | no | 12 minutes of the default microphone (or `--mic-device NAME`, with a tone on the output it carries) plus loopback tracks of silent processes: drift between sources, projected over 2 and 10 hours (`--quick`: 2 minutes). The microphone audio is deleted afterwards unless `--keep-mic-audio`. |
+| `drift` | no | 12 minutes of the default microphone (or `--mic-device NAME`, with a tone on the output it carries) plus loopback tracks of silent processes: drift between sources, projected over 2 and 10 hours (`--quick`: 2 minutes). The microphone audio is deleted afterwards unless `--keep-mic-audio`. `--minutes N` overrides the length, `--mic-buffer-ms MS` / `--mic-mmcss` pass the microphone tuning through, and the result holds `mic_tuning`, `mic_data_discontinuities` and `mic_discontinuities_per_minute`. |
 | `soak-start` / `soak-report` | no | Starts a 2 hour recording of three silent processes in the background (`--hours`, `--mic` to add the microphone); `soak-report` reads `summary.json`, checks continuity and the criteria. |
 | `isolation` | **yes** | Three players with 440, 1000 and 2000 Hz plus a fourth, unrecorded 3000 Hz player; each track must hold only its own tone (other tones 40 dB or more below), the system loopback track must hold all four. |
 | `tree` | **yes** | `cmd /c <player>` recorded through the parent in include mode; exclude mode; direct child pid. |

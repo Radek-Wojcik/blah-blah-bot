@@ -15,6 +15,7 @@ pub mod detect_trace;
 pub mod drift;
 pub mod error;
 pub mod journal;
+pub mod mic_tuning;
 pub mod push;
 pub mod recovery;
 pub mod screenshot;

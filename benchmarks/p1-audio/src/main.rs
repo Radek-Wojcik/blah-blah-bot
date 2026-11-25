@@ -4,6 +4,7 @@ mod capture;
 mod convert;
 mod drift;
 mod journal;
+mod mic_tuning;
 mod play;
 mod record;
 mod sessions;
@@ -68,6 +69,15 @@ enum Cmd {
         /// clock drift against the session clock (for comparison runs).
         #[arg(long)]
         no_drift_correction: bool,
+        /// Experiment, microphone only: open the capture stream with an event buffer of
+        /// this many ms (1 to 1000) instead of the device default. Falls back to the default
+        /// with a warning when the device refuses it.
+        #[arg(long, value_name = "MS")]
+        mic_buffer_ms: Option<u32>,
+        /// Experiment, microphone only: register the capture thread with MMCSS as a
+        /// `Pro Audio` task. Capture continues without it when Windows refuses.
+        #[arg(long)]
+        mic_mmcss: bool,
     },
     /// List audio sessions (process id, parent, process name, state).
     Sessions {
@@ -260,7 +270,10 @@ fn run(cli: Cli) -> Result<(), String> {
             format: _,
             segment_s,
             no_drift_correction,
+            mic_buffer_ms,
+            mic_mmcss,
         } => {
+            let mic_tuning = mic_tuning::MicTuning::from_flags(mic_buffer_ms, mic_mmcss)?;
             let mut sources = Vec::new();
             if mic || mic_device.is_some() {
                 sources.push(Source::Mic(mic_device));
@@ -277,6 +290,7 @@ fn run(cli: Cli) -> Result<(), String> {
                 sources,
                 segment_s,
                 no_drift_correction,
+                mic_tuning,
             })
         }
         Cmd::Sessions { json } => cmd_sessions(json),

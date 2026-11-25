@@ -10,6 +10,7 @@ use serde::Serialize;
 
 use crate::capture::{run_track, Shared, Source, TrackState};
 use crate::journal::{replay_file, Entry, Journal};
+use crate::mic_tuning::MicTuning;
 use crate::sysutil::{
     calibrate_cycles_per_second, logical_cpus, os_info, process_cpu_seconds, process_cycles,
     qpc_now_hns, unix_ms, working_set_bytes, OsInfo,
@@ -23,6 +24,7 @@ pub struct RecordArgs {
     pub sources: Vec<Source>,
     pub segment_s: u32,
     pub no_drift_correction: bool,
+    pub mic_tuning: MicTuning,
 }
 
 #[derive(Serialize)]
@@ -94,6 +96,8 @@ struct Summary {
     os: OsInfo,
     sample_rate: u32,
     segment_s: u32,
+    /// Microphone capture tuning that was requested (all off by default).
+    mic_tuning: MicTuning,
     format: &'static str,
     totals: Totals,
     cpu: CpuSummary,
@@ -262,6 +266,7 @@ fn build_summary(
         os: os_info(),
         sample_rate: SAMPLE_RATE,
         segment_s: args.segment_s,
+        mic_tuning: args.mic_tuning,
         format: "pcm16-wav",
         totals,
         cpu: res.cpu_summary(),
@@ -299,6 +304,7 @@ pub fn record(args: RecordArgs) -> Result<(), String> {
         out_dir: args.out.clone(),
         seg_samples,
         no_drift_correction: args.no_drift_correction,
+        mic_tuning: args.mic_tuning,
     });
     journal
         .lock()

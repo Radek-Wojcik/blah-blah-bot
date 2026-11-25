@@ -18,6 +18,7 @@ use crate::convert::{Converter, Format};
 use crate::drift::Corrector;
 use crate::error::{RecorderError, Result};
 use crate::journal::{Entry, Journal};
+use crate::mic_tuning::{MicTuning, MmcssGuard};
 use crate::sysutil::qpc_now_hns;
 use crate::timeline::{hns_to_ms, SAMPLE_RATE};
 use crate::track::TrackWriter;
@@ -211,6 +212,8 @@ pub struct CaptureContext {
     /// Correct clock drift of sources with real device timestamps. Switch off to store
     /// sources as captured (for comparison runs).
     pub drift_correction: bool,
+    /// Optional microphone-only capture tuning (default: none, device defaults).
+    pub mic_tuning: MicTuning,
 }
 
 impl CaptureContext {
@@ -239,6 +242,7 @@ impl CaptureContext {
             out_dir,
             seg_samples,
             drift_correction,
+            mic_tuning: MicTuning::from_env(),
         }
     }
 
@@ -412,6 +416,21 @@ fn wave_format(format: Format) -> WaveFormat {
 ///
 /// Can also be used to probe whether a source can be opened at all.
 pub fn try_format(source: &Source, format: Format) -> Result<AudioClient> {
+    try_format_tuned(source, format, &MicTuning::default())
+}
+
+/// [`try_format`] with the event buffer duration of `tuning` (microphone sources only; every
+/// other source ignores the tuning).
+pub fn try_format_tuned(
+    source: &Source,
+    format: Format,
+    tuning: &MicTuning,
+) -> Result<AudioClient> {
+    let buffer_duration_hns = if matches!(source, Source::Mic(_)) {
+        tuning.buffer_hns()
+    } else {
+        0
+    };
     let attempt: std::result::Result<AudioClient, WasapiError> = (|| {
         let mut client = match source {
             Source::Process { pid, tree } => {
@@ -443,7 +462,7 @@ pub fn try_format(source: &Source, format: Format) -> Result<AudioClient> {
         };
         let mode = StreamMode::EventsShared {
             autoconvert: true,
-            buffer_duration_hns: 0,
+            buffer_duration_hns,
         };
         client.initialize_client(&wave_format(format), Direction::Capture, mode, None)?;
         Ok(client)
@@ -452,12 +471,32 @@ pub fn try_format(source: &Source, format: Format) -> Result<AudioClient> {
 }
 
 /// Create a client, trying the formats in order and logging every attempt.
-fn open_client(source: &Source, log: &mut Vec<String>) -> Result<(AudioClient, Format)> {
+///
+/// A tuned buffer duration that the device refuses is logged as a warning and the same
+/// format is opened again with the default buffer.
+fn open_client(
+    source: &Source,
+    tuning: &MicTuning,
+    log: &mut Vec<String>,
+) -> Result<(AudioClient, Format)> {
     let mut last_err = RecorderError::audio("open audio client", "no format tried");
+    let wants_buffer = matches!(source, Source::Mic(_)) && tuning.buffer_ms.is_some();
     for format in [Format::Pcm16Mono16k, Format::Float32Stereo48k] {
-        match try_format(source, format) {
+        let mut note = String::new();
+        let mut attempt = try_format_tuned(source, format, tuning);
+        if wants_buffer {
+            match &attempt {
+                Ok(_) => note = format!(" (buffer {} ms)", tuning.buffer_ms.unwrap_or(0)),
+                Err(e) => {
+                    tracing::warn!(error = %e, "tuned microphone buffer refused, using the default buffer");
+                    log.push(format!("{}: tuned buffer failed: {e}", format.label()));
+                    attempt = try_format(source, format);
+                }
+            }
+        }
+        match attempt {
             Ok(client) => {
-                log.push(format!("{}: ok", format.label()));
+                log.push(format!("{}: ok{note}", format.label()));
                 return Ok((client, format));
             }
             Err(e) => {
@@ -528,7 +567,18 @@ fn run_track_inner(
         .map_err(|e| RecorderError::audio("COM initialization", e))?;
 
     let mut init_log = Vec::new();
-    let opened = open_client(source, &mut init_log);
+    // Experiment: microphone-only tuning; every failure falls back to the default behaviour.
+    let tuning = shared.mic_tuning;
+    let _mmcss = (matches!(source, Source::Mic(_)) && tuning.mmcss)
+        .then(MmcssGuard::enter)
+        .flatten();
+    if _mmcss.is_some() {
+        init_log.push("mmcss: Pro Audio".to_string());
+    }
+    if tuning.is_active() && matches!(source, Source::Mic(_)) {
+        tracing::info!(track = name, tuning = %tuning.describe(), "microphone tuning requested");
+    }
+    let opened = open_client(source, &tuning, &mut init_log);
     set_state(state, |s| s.init_log = init_log.clone());
     let (client, format) = opened?;
     let capture: AudioCaptureClient = client

@@ -309,6 +309,10 @@ class Context:
         self.keep_mic_audio = False
         self.mic_device: str | None = None
         self.no_drift_correction = False
+        # drift: microphone tuning experiment and a run length override.
+        self.mic_buffer_ms: int | None = None
+        self.mic_mmcss = False
+        self.minutes: float | None = None
         self.work = data / "p1-selftest"
         self.work.mkdir(parents=True, exist_ok=True)
         self.tones: dict[int, Path] = {}
@@ -767,17 +771,22 @@ def scenario_drift(ctx: Context) -> dict:
     """Clock drift between the microphone and loopback tracks. No sound is played: the
     loopback tracks follow a silent process, the microphone records the room. The microphone
     audio is deleted after the measurement unless --keep-mic-audio is given."""
-    minutes = 2 if ctx.quick else 12
-    silent = [SilentProcess(minutes * 60 + 120) for _ in range(2)]
+    minutes = ctx.minutes if ctx.minutes else (2 if ctx.quick else 12)
+    run_s = int(minutes * 60)
+    silent = [SilentProcess(run_s + 120) for _ in range(2)]
     tone = None
     try:
         args = ["--mic-device", ctx.mic_device] if ctx.mic_device else ["--mic"]
         if ctx.no_drift_correction:
             args.append("--no-drift-correction")
+        if ctx.mic_buffer_ms is not None:
+            args += ["--mic-buffer-ms", str(ctx.mic_buffer_ms)]
+        if ctx.mic_mmcss:
+            args.append("--mic-mmcss")
         if ctx.mic_device:
             # A real signal for the microphone track: a tone on the output that the chosen
             # capture device carries.
-            tone = ctx.player(TONES["a"], limit_s=minutes * 60 + 120, volume=20)
+            tone = ctx.player(TONES["a"], limit_s=run_s + 120, volume=20)
             if not ctx.rec.wait_session(tone.pid):
                 return {"pass": False, "error": "tone player has no active session"}
             args += ["--pid", str(tone.pid)]
@@ -801,14 +810,24 @@ def scenario_drift(ctx: Context) -> dict:
             "dropped_buffers": t["dropped_buffers"],
             "continuity_ok": (t["continuity"] or {}).get("ok"),
             "silence_fill_events": t["stats"]["silence_fill_events"],
+            "data_discontinuities": t["stats"]["data_discontinuities"],
             "drift_correction_ppm": t.get("drift_correction_ppm"),
             "max_packet_interval_ms": round(t["stats"]["max_packet_interval_ms"], 2),
         }
     pairs = s.get("drift_pairs", [])
     mic_pairs = [p for p in pairs if "mic" in (p["a"], p["b"]) and p["ms_over_run"] is not None]
     worst = max((abs(p["ms_over_run"]) for p in mic_pairs), default=None)
+    mic_track = tracks.get("mic", {})
+    mic_flags = mic_track.get("data_discontinuities")
     out = {
         "minutes": minutes,
+        # The tuning the recorder reports it was given (all off by default), and the
+        # data-discontinuity flags of the microphone track: the number the experiment is about.
+        "mic_tuning": s.get("mic_tuning"),
+        "mic_data_discontinuities": mic_flags,
+        "mic_discontinuities_per_minute": (
+            round(mic_flags / minutes, 3) if mic_flags is not None else None
+        ),
         "run": summarize_run(res),
         "tracks": tracks,
         "pairs": pairs,
@@ -1108,6 +1127,21 @@ def main() -> int:
         help="drift: record without correction (stored as drift_uncorrected)",
     )
     ap.add_argument(
+        "--mic-buffer-ms",
+        type=int,
+        help="drift: open the microphone with an event buffer of this many ms (experiment)",
+    )
+    ap.add_argument(
+        "--mic-mmcss",
+        action="store_true",
+        help="drift: register the microphone capture thread with MMCSS (experiment)",
+    )
+    ap.add_argument(
+        "--minutes",
+        type=float,
+        help="drift: recording length in minutes (default 12, or 2 with --quick)",
+    )
+    ap.add_argument(
         "--mic-device",
         help="capture device used as the microphone track (e.g. a virtual cable output)",
     )
@@ -1132,6 +1166,9 @@ def main() -> int:
     ctx.keep_mic_audio = args.keep_mic_audio
     ctx.mic_device = args.mic_device
     ctx.no_drift_correction = args.no_drift_correction
+    ctx.mic_buffer_ms = args.mic_buffer_ms
+    ctx.mic_mmcss = args.mic_mmcss
+    ctx.minutes = args.minutes
     names = args.scenarios or [
         n for n in SCENARIOS if n not in AUDIBLE or args.audible or args.output_device
     ]

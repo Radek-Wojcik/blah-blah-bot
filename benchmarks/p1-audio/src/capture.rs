@@ -13,6 +13,7 @@ use wasapi::{
 use crate::convert::{Converter, Format};
 use crate::drift::Corrector;
 use crate::journal::{Entry, Journal};
+use crate::mic_tuning::{MicTuning, MmcssGuard};
 use crate::sysutil::qpc_now_hns;
 use crate::timeline::{hns_to_ms, SAMPLE_RATE};
 use crate::track::TrackWriter;
@@ -82,6 +83,8 @@ pub struct Shared {
     pub seg_samples: u64,
     /// Store sources as captured, without drift correction (for comparison runs).
     pub no_drift_correction: bool,
+    /// Optional microphone-only capture tuning (default: none).
+    pub mic_tuning: MicTuning,
 }
 
 impl Shared {
@@ -131,6 +134,20 @@ fn describe(e: &WasapiError) -> String {
 
 /// Create and initialize a client for the source in one specific format.
 pub fn try_format(source: &Source, format: Format) -> Result<AudioClient, String> {
+    try_format_tuned(source, format, &MicTuning::default())
+}
+
+/// [`try_format`] with the event buffer duration of `tuning` (microphone sources only).
+pub fn try_format_tuned(
+    source: &Source,
+    format: Format,
+    tuning: &MicTuning,
+) -> Result<AudioClient, String> {
+    let buffer_duration_hns = if matches!(source, Source::Mic(_)) {
+        tuning.buffer_hns()
+    } else {
+        0
+    };
     let attempt: Result<AudioClient, WasapiError> = (|| {
         let mut client = match source {
             Source::Process { pid, tree } => {
@@ -162,7 +179,7 @@ pub fn try_format(source: &Source, format: Format) -> Result<AudioClient, String
         };
         let mode = StreamMode::EventsShared {
             autoconvert: true,
-            buffer_duration_hns: 0,
+            buffer_duration_hns,
         };
         client.initialize_client(&wave_format(format), Direction::Capture, mode, None)?;
         Ok(client)
@@ -171,12 +188,31 @@ pub fn try_format(source: &Source, format: Format) -> Result<AudioClient, String
 }
 
 /// Create a client, trying the formats in order and logging every attempt.
-fn open_client(source: &Source, log: &mut Vec<String>) -> Result<(AudioClient, Format), String> {
+fn open_client(
+    source: &Source,
+    tuning: &MicTuning,
+    log: &mut Vec<String>,
+) -> Result<(AudioClient, Format), String> {
     let mut last_err = String::from("no format tried");
+    let wants_buffer = matches!(source, Source::Mic(_)) && tuning.buffer_ms.is_some();
     for format in [Format::Pcm16Mono16k, Format::Float32Stereo48k] {
-        match try_format(source, format) {
+        let mut note = String::new();
+        let mut attempt = try_format_tuned(source, format, tuning);
+        if wants_buffer {
+            match &attempt {
+                Ok(_) => note = format!(" (buffer {} ms)", tuning.buffer_ms.unwrap_or(0)),
+                Err(e) => {
+                    eprintln!(
+                        "warning: tuned microphone buffer refused ({e}), using the default buffer"
+                    );
+                    log.push(format!("{}: tuned buffer failed: {e}", format.label()));
+                    attempt = try_format(source, format);
+                }
+            }
+        }
+        match attempt {
             Ok(client) => {
-                log.push(format!("{}: ok", format.label()));
+                log.push(format!("{}: ok{note}", format.label()));
                 return Ok((client, format));
             }
             Err(e) => {
@@ -237,7 +273,15 @@ fn run_track_inner(
         .map_err(|e| format!("COM init: {e}"))?;
 
     let mut init_log = Vec::new();
-    let opened = open_client(source, &mut init_log);
+    // Experiment: microphone-only tuning; every failure falls back to the default behaviour.
+    let tuning = shared.mic_tuning;
+    let _mmcss = (matches!(source, Source::Mic(_)) && tuning.mmcss)
+        .then(MmcssGuard::enter)
+        .flatten();
+    if _mmcss.is_some() {
+        init_log.push("mmcss: Pro Audio".to_string());
+    }
+    let opened = open_client(source, &tuning, &mut init_log);
     set_state(state, |s| s.init_log = init_log.clone());
     let (client, format) = opened?;
     let capture: AudioCaptureClient = client
