@@ -5,7 +5,7 @@ import type { CycleTask } from "../ipc/types";
 import { safeHttpUrl, taskCounts, tasksAsOf } from "../publish";
 
 /**
- * The tasks of a cycle as its GitHub issues stand: open ones, and done ones (an issue that is
+ * The tasks of a project as its GitHub issues stand: open ones, and done ones (an issue that is
  * closed, by a person or by an approved status change, counts as done and is not handed to the
  * model again). The state is the one of the last pull of the repository.
  */
@@ -36,8 +36,8 @@ export function CycleTasksView(props: { cycleId: string; repoId: string }) {
   if (!tasks.repo) {
     return (
       <p className="empty">
-        This cycle&apos;s repository is not linked to a GitHub repository, so there are no issues to
-        show. Link it in the publishing settings.
+        This project&apos;s repository is not linked to a GitHub repository, so there are no issues
+        to show. Link it in the project settings, under Integrations.
       </p>
     );
   }

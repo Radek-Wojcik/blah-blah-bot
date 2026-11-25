@@ -10,7 +10,13 @@ Draft notes for 1.0.0. Nothing here is released yet.
 
 ### Added
 
-- Windows installer: a per-user NSIS installer that needs no administrator rights. It contains the application, the processing worker, the schemas, the license notices and a pinned `uv`; model files are never part of it. A release workflow builds it on a version tag only, writes `SHA256SUMS.txt` and creates a draft release. The installer is not signed, so Windows SmartScreen shows a warning ([docs/INSTALL.md](docs/INSTALL.md), [ADR 0024](docs/decisions/0024-installer-signing.md), status Proposed).
+- Projects workspace: project list, project detail view (meetings, open tasks, topics), Project Settings, and a multi-step project creation wizard.
+- The project wizard can create a private GitHub repository for a new project (`POST /user/repos`, or `/orgs/{org}/repos` for an organization owner) when a GitHub token is saved: it shows what will be created (name, private, owner), asks for confirmation before any request, links the repository as the project's `origin`, and falls back to a local-only Git folder with a clear message when there is no token or GitHub refuses. Discord stays a manual optional webhook field.
+- Media import for existing audio and video files (`ffmpeg` ingest) and local Markdown note export.
+- Processing queue controls: weighted progress with granular step reporting, scheduled or deferred processing, post-stop processing prompt, pause/resume/force-run actions, and a floating tray widget.
+- Global voice profiles with voice sample clip playback and enrollment from audio files, plus key slide extraction in meeting details.
+- Recorder enhancements: `AudioSrv` session filtering, 12-bar live audio metering, and `SystemWakeLock` during active recordings.
+- Windows installer: a per-user NSIS installer with a desktop shortcut hook that needs no administrator rights. It contains the application, the processing worker, the schemas, the license notices and a pinned `uv`; model files are never part of it. A release workflow builds it on a version tag only, writes `SHA256SUMS.txt` and creates a draft release. The installer is not signed, so Windows SmartScreen shows a warning ([docs/INSTALL.md](docs/INSTALL.md), [ADR 0024](docs/decisions/0024-installer-signing.md), status Proposed).
 - First-run setup wizard: welcome, processing environment, speech models and Hugging Face token, `llama-server`, language model, screenshot analysis (download or skip), a summary with a Fix button for every open item, and a first cycle. Every step can be skipped. A readiness banner appears while something that processing needs is missing, and **Run setup again** in Settings reopens the wizard.
 - Setup readiness check in the application: processing is refused up front with a stable `setup_*` code and a message that says how to fix it, instead of failing inside a job. Paths entered in the settings are checked before they are saved.
 - Option to skip screenshot analysis: with **Describe screenshots** off, the vision stage is skipped and screenshots are kept but not described.
@@ -23,6 +29,9 @@ Draft notes for 1.0.0. Nothing here is released yet.
 
 ### Changed
 
+- Redesigned main shell with a navigation sidebar, updated Record view, and tabbed Settings (`AI Models`, `Connectors`, `Preferences`, `Processing`, `Voice Profiles`, `Detection & Extension`).
+- Fluid centered layout for wide screens.
+- The interface says "project" everywhere it said "cycle" (recorder panel, Preferences, speaker header, report mode help, publishing messages); the old Cycles, Cycle editor, Briefing, Publishing, Processing and report gate screens, which nothing opened any more, are removed. Every option they offered lives in Project settings, the project page and the Settings tabs.
 - Missing `llama-server` and missing or incomplete models now produce messages that say what is missing and how to fix it.
 - Screenshot GIFs are assembled with Pillow from a `uv` environment instead of the system Python.
 - Release notes of a version are extracted from this changelog by the release workflow, and a check keeps the version numbers consistent.
@@ -31,6 +40,12 @@ Draft notes for 1.0.0. Nothing here is released yet.
 
 ### Fixed
 
+- Moved speaker naming instructions out of task rules and compacted the speaker line in the extraction prompt.
+- Guarded local note export against path traversal, fixed voice clip cleanup, `cycleId` handling, and vision settings persistence.
+- Fixed the NSIS installer desktop shortcut hook to target the installed executable and use an ASCII publisher name.
+- The Connectors and Voice Profiles tabs now take part in the unsaved-changes prompt: a token or API key typed but not stored, an edited LLM host or model, an un-enrolled voice entry or a pending rename asks to save or discard before you leave the tab or Settings, and each field says whether it saves immediately (Store, Enroll) or is still unsaved.
+- Publishing sends only the draft's key screenshots to GitHub and Discord when the draft has any (excluded passages still win); without key screenshots nothing changes.
+- Import, voice enrollment, project folders and "Download note (.md)" use the native file, folder and Save as dialogs (`tauri-plugin-dialog`, only `dialog:allow-open` and `dialog:allow-save` for the main window); the browser file input that never gave a full path is gone, so an import no longer fails on a bare file name.
 - Region screenshot (Ctrl+Alt+S) showed a black screen over every monitor. The desktop was captured correctly; the cause was in the display path. The content security policy did not allow the page to reach the IPC protocol, so Tauri fell back to the postMessage interface, which returns binary results as an array of numbers; the overlay built its image from that array as if it were bytes, the PNG could not be decoded and the black page background was all that was left. The policy now allows the IPC protocol, binary results are converted correctly in both modes, and the frozen desktop is encoded with fast compression off the main thread.
 - The overlay no longer stays as a black sheet when something goes wrong: a capture that is all black, cannot be decoded or does not arrive within 20 seconds is reported in a message and the overlay closes itself. Escape, a click and a right click close it in every state.
 - The overlay window is read back after it is placed over the monitors and placed again when the system changed its position or size.

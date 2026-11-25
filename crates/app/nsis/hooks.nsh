@@ -1,5 +1,5 @@
 !macro NSIS_HOOK_POSTINSTALL
-  CreateShortcut "$DESKTOP\Blah Blah Bot.lnk" "$INSTDIR\Blah Blah Bot.exe"
+  CreateShortcut "$DESKTOP\Blah Blah Bot.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL

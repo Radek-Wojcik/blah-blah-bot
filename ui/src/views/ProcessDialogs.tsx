@@ -173,7 +173,7 @@ export function CloudConfirmDialog(props: {
           </dl>
           <p className="modal-text">{preview.summaryText}</p>
           <p className="modal-text">
-            The items of earlier meetings of the cycle (their text, assignees and due dates) are
+            The items of earlier meetings of the project (their text, assignees and due dates) are
             sent too, also those of meetings you processed only on this computer.
           </p>
           <p className="modal-text modal-strong">No audio and no images are sent.</p>

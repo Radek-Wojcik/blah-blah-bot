@@ -32,6 +32,7 @@ import type {
   ReportDefaults,
   ReportMode,
 } from "../ipc/types";
+import { noteFileName, useSaveNote } from "../note-export";
 import { lockedByOps, opsOf } from "../publish";
 import { MODE_HELP, MODE_NAMES, REPORT_MODES } from "../report-gate";
 import { MarkdownView } from "./MarkdownView";
@@ -321,7 +322,7 @@ export function DraftEditor(props: {
                 void apply(backend.setReportMode(meetingId, "template", e.target.value))
               }
             >
-              {draft.template === null && <option value="">Cycle default</option>}
+              {draft.template === null && <option value="">Project default</option>}
               {(defaults?.templates ?? []).map((t) => (
                 <option key={t.name} value={t.name}>
                   {t.name}
@@ -1065,9 +1066,7 @@ function ReportPane({ meetingId, view }: { meetingId: string; view: DraftView })
   const [variant, setVariant] = useState<RenderVariant>("markdown");
   const [chat, setChat] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
-  const [exportedPath, setExportedPath] = useState<string | null>(null);
-  const [exportError, setExportError] = useState<string | null>(null);
-  const [exporting, setExporting] = useState(false);
+  const note = useSaveNote(meetingId);
   const [rendered, setRendered] = useState(false);
   const markdown = view.reportMarkdown;
 
@@ -1091,16 +1090,7 @@ function ReportPane({ meetingId, view }: { meetingId: string; view: DraftView })
       .then(() => setCopied("Copied"))
       .catch(() => setCopied("Could not copy. Select the text and copy it."));
   };
-  const exportMarkdown = () => {
-    setExportError(null);
-    setExportedPath(null);
-    setExporting(true);
-    void backend
-      .exportMeetingMarkdown(meetingId)
-      .then((path) => setExportedPath(`Saved note to ${path}`))
-      .catch((e) => setExportError(errorMessage(e)))
-      .finally(() => setExporting(false));
-  };
+  const exportMarkdown = () => void note.save(noteFileName(view.draft.cycle, view.draft.date));
   return (
     <section className="report-pane" aria-label="Report">
       <div className="report-tools">
@@ -1136,14 +1126,14 @@ function ReportPane({ meetingId, view }: { meetingId: string; view: DraftView })
           </button>
         </span>
         {copied && <span role="status">{copied}</span>}
-        {exportedPath && (
+        {note.savedPath && (
           <span className="valid-note" role="status">
-            {exportedPath}
+            Saved note to {note.savedPath}
           </span>
         )}
-        {exportError && (
+        {note.error && (
           <span className="error" role="alert">
-            {exportError}
+            {note.error}
           </span>
         )}
         <button className="btn btn-small" onClick={copy}>
@@ -1152,10 +1142,10 @@ function ReportPane({ meetingId, view }: { meetingId: string; view: DraftView })
         <button
           className="btn btn-small btn-record"
           type="button"
-          disabled={exporting}
+          disabled={note.saving}
           onClick={exportMarkdown}
         >
-          {exporting ? "Saving…" : "Download note (.md)"}
+          {note.saving ? "Saving…" : "Download note (.md)"}
         </button>
       </div>
       {rendered ? (

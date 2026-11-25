@@ -37,16 +37,16 @@ import { WaveformEq } from "./WaveformEq";
 export interface RecorderPanelProps {
   /** Compact mode for the tray widget vs full mode for the main window Record view. */
   compact?: boolean;
-  /** Optional externally controlled project/cycle id. */
+  /** Optional externally controlled project id. */
   cycleId?: string;
-  /** Optional callback when the user changes the selected project/cycle. */
+  /** Optional callback when the user changes the selected project. */
   onCycleChange?: (cycleId: string) => void;
   className?: string;
 }
 
 /**
  * Self-contained recording control component ready to embed in both `RecordView.tsx` (Main UI)
- * and `Widget.tsx` (tray). Includes Project/Cycle picker, Report mode selector, Source checklist
+ * and `Widget.tsx` (tray). Includes Project picker, Report mode selector, Source checklist
  * with `restorePersistedSelection` and auto-saving `saveLastSources`, live `WaveformEq`, elapsed
  * timer, Screenshot button, and Record/Stop button.
  */
@@ -108,7 +108,7 @@ export function RecorderPanel(props: RecorderPanelProps = {}) {
   const effectiveForm: GateForm =
     activeCycleId === form.cycleId ? form : { ...form, cycleId: activeCycleId };
 
-  // Load report defaults whenever the selected cycle changes.
+  // Load report defaults whenever the selected project changes.
   useEffect(() => {
     if (!activeCycleId) return;
     let cancelled = false;
@@ -233,16 +233,16 @@ export function RecorderPanel(props: RecorderPanelProps = {}) {
               ) : (
                 <div className="inline-field">
                   <div className="field-label-row">
-                    <label htmlFor={cycleSelectId}>Project / Cycle</label>
+                    <label htmlFor={cycleSelectId}>Project</label>
                     <HelpPopover
-                      title="Project / Cycle"
+                      title="Project"
                       text="Each project stores its participants, glossary, report templates, and publishing targets."
                       recommended="Pick the project that matches this meeting series."
                     />
                   </div>
                   <select
                     id={cycleSelectId}
-                    aria-label="Cycle"
+                    aria-label="Project"
                     value={activeCycleId}
                     onChange={(e) => {
                       const nextId = e.target.value;
@@ -251,7 +251,7 @@ export function RecorderPanel(props: RecorderPanelProps = {}) {
                       onCycleChange?.(nextId);
                     }}
                   >
-                    <option value="">Choose a cycle…</option>
+                    <option value="">Choose a project…</option>
                     {(cycles ?? []).map((c) => (
                       <option key={c.id} value={c.id} disabled={!c.valid}>
                         {c.id} · {c.name}
@@ -354,7 +354,7 @@ export function RecorderPanel(props: RecorderPanelProps = {}) {
                       }
                     >
                       <option value="">
-                        Cycle setting
+                        Project setting
                         {selectedDefaults ? ` (${selectedDefaults.outputLanguage})` : ""}
                       </option>
                       <option value="auto">Auto (the language of the meeting)</option>
@@ -369,7 +369,7 @@ export function RecorderPanel(props: RecorderPanelProps = {}) {
             {!creatingCycle && !noCycles && (
               <div className="actions" style={{ marginTop: 8, justifyContent: "space-between" }}>
                 <button className="link-btn" type="button" onClick={() => setCreatingCycle(true)}>
-                  New cycle…
+                  New project…
                 </button>
                 {activeCycleId !== "" && (
                   <button
@@ -388,9 +388,9 @@ export function RecorderPanel(props: RecorderPanelProps = {}) {
 
             {(creatingCycle || noCycles) && (
               <fieldset className="gate-new" style={{ marginTop: 8 }}>
-                <legend>New cycle</legend>
+                <legend>New project</legend>
                 <label>
-                  Cycle id
+                  Project ID
                   <input
                     value={newId}
                     placeholder="NOMAD"
@@ -424,7 +424,7 @@ export function RecorderPanel(props: RecorderPanelProps = {}) {
                     disabled={newCycleError(newId, newName) !== null}
                     onClick={handleCreateCycle}
                   >
-                    Create cycle
+                    Create project
                   </button>
                 </div>
               </fieldset>

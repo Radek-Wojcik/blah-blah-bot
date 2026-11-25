@@ -155,7 +155,9 @@ test.describe("projects and project settings on the mock backend", () => {
     const modal = page.getByRole("dialog", { name: /Project Settings/ });
     await modal.getByRole("tab", { name: "Report & Templates" }).click();
     await modal.getByLabel("Default report mode").selectOption("by-type");
-    await expect(modal.getByText("The meeting type picks a template of the cycle.")).toBeVisible();
+    await expect(
+      modal.getByText("The meeting type picks a template of the project."),
+    ).toBeVisible();
     await modal.getByRole("button", { name: "Add meeting type" }).click();
     await modal.getByLabel("Meeting type 4", { exact: true }).fill("weekly");
     await modal.getByRole("button", { name: "Save project settings" }).click();
@@ -178,7 +180,7 @@ test.describe("recorder panel report selection on the mock backend", () => {
 
   test("shows the last choice preselected and starts recording immediately", async ({ page }) => {
     await page.goto(WIDGET);
-    await expect(page.getByLabel("Cycle", { exact: true })).toHaveValue("NOMAD");
+    await expect(page.getByLabel("Project", { exact: true })).toHaveValue("NOMAD");
     await expect(page.getByLabel("Report mode", { exact: true })).toHaveValue("fixed");
     await expect(page.getByText("Standby")).toBeVisible();
 
@@ -189,13 +191,13 @@ test.describe("recorder panel report selection on the mock backend", () => {
   test("refuses without a mode and passes with one", async ({ page }) => {
     await page.goto(WIDGET);
     const start = page.getByRole("button", { name: "Record" });
-    await expect(page.getByLabel("Cycle", { exact: true })).toHaveValue("NOMAD");
+    await expect(page.getByLabel("Project", { exact: true })).toHaveValue("NOMAD");
     await expect(page.getByLabel("Report mode", { exact: true })).toHaveValue("fixed");
     await page.getByLabel("Report mode", { exact: true }).selectOption("");
     await expect(start).toBeDisabled();
 
     await page.getByLabel("Report mode", { exact: true }).selectOption("by-type");
-    await expect(page.getByText("The meeting type picks a template of the cycle.")).toBeVisible();
+    await expect(page.getByText("The meeting type picks a template of the project.")).toBeVisible();
     await page.getByLabel("Meeting type").selectOption("");
     await expect(start).toBeDisabled();
     await page.getByLabel("Meeting type").selectOption("budget");
@@ -209,26 +211,26 @@ test.describe("recorder panel report selection on the mock backend", () => {
       .getByRole("dialog", { name: "Process now or later?" })
       .getByRole("button", { name: "Later" })
       .click();
-    await expect(page.getByLabel("Cycle", { exact: true })).toHaveValue("NOMAD");
+    await expect(page.getByLabel("Project", { exact: true })).toHaveValue("NOMAD");
     await expect(page.getByLabel("Report mode", { exact: true })).toHaveValue("by-type");
     await expect(page.getByLabel("Meeting type")).toHaveValue("budget");
   });
 
-  test("a cycle that needs fixing cannot be chosen", async ({ page }) => {
+  test("a project that needs fixing cannot be chosen", async ({ page }) => {
     await page.goto(WIDGET);
     await expect(page.getByRole("option", { name: /OLDPROJ.*needs fixing/ })).toBeDisabled();
-    await page.getByLabel("Cycle", { exact: true }).selectOption("SANDBOX");
+    await page.getByLabel("Project", { exact: true }).selectOption("SANDBOX");
     await expect(page.getByLabel("Report mode", { exact: true })).toHaveValue("fixed");
     await expect(page.getByRole("button", { name: "Record" })).toBeEnabled();
   });
 
-  test("a new cycle can be created from the recorder panel", async ({ page }) => {
+  test("a new project can be created from the recorder panel", async ({ page }) => {
     await page.goto(WIDGET);
-    await page.getByRole("button", { name: "New cycle…" }).click();
-    await page.getByLabel("Cycle id").fill("BRAND-NEW");
+    await page.getByRole("button", { name: "New project…" }).click();
+    await page.getByLabel("Project ID").fill("BRAND-NEW");
     await page.getByLabel("Name", { exact: true }).fill("Brand new");
-    await page.getByRole("button", { name: "Create cycle" }).click();
-    await expect(page.getByLabel("Cycle", { exact: true })).toHaveValue("BRAND-NEW");
+    await page.getByRole("button", { name: "Create project" }).click();
+    await expect(page.getByLabel("Project", { exact: true })).toHaveValue("BRAND-NEW");
     await page.getByRole("button", { name: "Record" }).click();
     await expect(page.getByText("Recording", { exact: true })).toBeVisible();
   });
@@ -668,18 +670,18 @@ test.describe("language model settings on the mock backend", () => {
     await expect(form.getByRole("status")).toHaveText("AI model settings saved.");
   });
 
-  test("the cycle repositories are listed in the settings", async ({ page }) => {
+  test("the project repositories are listed in the settings", async ({ page }) => {
     await page.goto(`${MAIN}&page=settings&tab=preferences`);
-    const repos = page.getByRole("list", { name: "Cycle repositories" });
+    const repos = page.getByRole("list", { name: "Project repositories" });
     await expect(repos.getByRole("listitem")).toHaveCount(2);
     await expect(repos).toContainText("State as of 2026-11-12");
   });
 });
 
-test.describe("speakers of a cycle on the mock backend", () => {
-  test("the header names the cycle and the participants are the cycle's", async ({ page }) => {
+test.describe("speakers of a project on the mock backend", () => {
+  test("the header names the project and the participants are the project's", async ({ page }) => {
     await page.goto(`${MAIN}&page=speakers&meeting=m5`);
-    await expect(page.getByText("Cycle: Nomad rover (NOMAD)")).toBeVisible();
+    await expect(page.getByText("Project: Nomad rover (NOMAD)")).toBeVisible();
     const select = page
       .getByRole("article", { name: "SPEAKER_03" })
       .getByLabel("Name for SPEAKER_03");

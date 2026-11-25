@@ -161,7 +161,7 @@ export function ProjectsView({ onOpenProject, onOpenMeeting, onOpenSetup }: Proj
               {plural(standaloneMeetings.length, "recording", "recordings")}
             </span>
           </div>
-          <ul className="cycle-rows" aria-label="Standalone meetings">
+          <ul className="cycle-rows cycle-rows-wide" aria-label="Standalone meetings">
             {standaloneMeetings.map((m) => (
               <MeetingRowCard
                 key={m.id}

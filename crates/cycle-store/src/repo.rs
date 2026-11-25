@@ -256,6 +256,20 @@ impl Repo {
         Ok(repo)
     }
 
+    /// Adds the remote `name` (for example `origin`) with address `url` to this repository:
+    /// the address is checked like a clone address, a remote of that name must not exist yet,
+    /// and nothing is fetched or pushed.
+    pub fn add_remote(&self, name: &str, url: &str) -> Result<()> {
+        if let Err(why) = check_remote_url(url) {
+            return Err(CycleError::Other(format!("invalid repository URL: {why}")));
+        }
+        if name.is_empty() || name.starts_with('-') || name.contains(char::is_whitespace) {
+            return Err(CycleError::Other("invalid remote name".into()));
+        }
+        git::run_ok(Some(&self.root), ["remote", "add", "--", name, url.trim()])?;
+        Ok(())
+    }
+
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -855,6 +869,27 @@ mod tests {
         let report = repo.pull_rebase().unwrap();
         assert_eq!(report.outcome, PullOutcome::NoRemote);
         assert_eq!(report.state.last_pull_error, None);
+    }
+
+    #[test]
+    fn add_remote_sets_an_origin_without_contacting_it() {
+        let tmp = test_tmp::TestDir::new("repo-remote");
+        let repo = Repo::init_local(tmp.path().join("repo")).unwrap();
+        repo.add_remote("origin", "https://github.com/owner/rover.git")
+            .unwrap();
+        let out = git::run_ok(Some(repo.root()), ["remote", "get-url", "origin"]).unwrap();
+        assert_eq!(out, "https://github.com/owner/rover.git");
+        assert!(repo.status().unwrap().has_remote);
+        // The same name twice, an address with a token in it and a bad name are refused.
+        assert!(repo
+            .add_remote("origin", "https://github.com/o/x.git")
+            .is_err());
+        assert!(repo
+            .add_remote("second", "https://token@github.com/o/x.git")
+            .is_err());
+        assert!(repo
+            .add_remote("-bad", "https://github.com/o/x.git")
+            .is_err());
     }
 
     #[test]

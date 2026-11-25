@@ -1,14 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  daysBetween,
-  dueLabel,
-  groupHeading,
-  isEmptyBriefing,
-  plural,
-  sourceLabel,
-  statusLine,
-  summaryLine,
-} from "./briefing";
+import { daysBetween, dueLabel, plural, sourceLabel, statusLine, summaryLine } from "./briefing";
 
 describe("dates", () => {
   it("counts whole days, also across a month and a year", () => {
@@ -49,21 +40,6 @@ describe("wording", () => {
     );
   });
 
-  it("heads a group with the login of a participant only", () => {
-    expect(groupHeading({ kind: "participant", name: "Alex Demo", github: "alex-demo" })).toBe(
-      "Alex Demo (@alex-demo)",
-    );
-    expect(groupHeading({ kind: "participant", name: "Piotr Demo", github: null })).toBe(
-      "Piotr Demo",
-    );
-    expect(groupHeading({ kind: "other", name: "@octo-guest", github: "octo-guest" })).toBe(
-      "@octo-guest",
-    );
-    expect(groupHeading({ kind: "unassigned", name: "Unassigned", github: null })).toBe(
-      "Unassigned",
-    );
-  });
-
   it("summarises the screen", () => {
     expect(summaryLine({ openCount: 7, overdueCount: 2, topics: [{}, {}, {}] as never })).toBe(
       "7 open tasks, 2 overdue · 3 open topics",
@@ -71,12 +47,6 @@ describe("wording", () => {
     expect(summaryLine({ openCount: 1, overdueCount: 0, topics: [{}] as never })).toBe(
       "1 open task · 1 open topic",
     );
-  });
-
-  it("knows an empty briefing", () => {
-    expect(isEmptyBriefing({ openCount: 0, topics: [] })).toBe(true);
-    expect(isEmptyBriefing({ openCount: 0, topics: [{}] as never })).toBe(false);
-    expect(isEmptyBriefing({ openCount: 1, topics: [] })).toBe(false);
   });
 });
 

@@ -172,7 +172,9 @@ export function SettingsView(props: SettingsViewProps = {}) {
           {tab === "models" && (
             <AiModelsTab onDirtyChange={setDirty} registerHandle={registerHandle} />
           )}
-          {tab === "connectors" && <ConnectorsTab />}
+          {tab === "connectors" && (
+            <ConnectorsTab onDirtyChange={setDirty} registerHandle={registerHandle} />
+          )}
           {tab === "preferences" && (
             <PreferencesTab onDirtyChange={setDirty} registerHandle={registerHandle} />
           )}
@@ -183,7 +185,9 @@ export function SettingsView(props: SettingsViewProps = {}) {
               onRunSetup={onRunSetup}
             />
           )}
-          {tab === "voices" && <VoiceProfiles />}
+          {tab === "voices" && (
+            <VoiceProfiles onDirtyChange={setDirty} registerHandle={registerHandle} />
+          )}
         </div>
       </div>
     </section>

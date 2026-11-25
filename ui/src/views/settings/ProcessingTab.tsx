@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useBackend } from "../../backend-context";
 import { AudioRetentionHelp } from "../../components/AudioRetentionHelp";
+import { BrowseButton } from "../../components/BrowseButton";
 import { HelpPopover } from "../../components/HelpPopover";
 import { errorMessage } from "../../hooks";
 import type { ProcessingSettings } from "../../ipc/types";
@@ -324,10 +325,19 @@ export function ProcessingTab({ onDirtyChange, registerHandle, onRunSetup }: Pro
                 </label>
                 <label>
                   Worker folder
-                  <input
-                    value={draft.workerDir}
-                    onChange={(e) => set({ workerDir: e.target.value })}
-                  />
+                  <span className="path-row">
+                    <input
+                      aria-label="Worker folder"
+                      value={draft.workerDir}
+                      onChange={(e) => set({ workerDir: e.target.value })}
+                    />
+                    <BrowseButton
+                      target={{ folder: true }}
+                      label="Browse for the worker folder"
+                      title="Choose the worker folder"
+                      onPicked={(path) => set({ workerDir: path })}
+                    />
+                  </span>
                 </label>
               </div>
             </fieldset>

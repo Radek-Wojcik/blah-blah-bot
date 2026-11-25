@@ -5,7 +5,8 @@
 //!
 //! Publishing copies what goes out into `work/publish/<n>/` of the meeting folder: the draft
 //! as `meeting.json` (with the decisions on the status changes), the rendered `report.md`,
-//! `transcript.md` and the screenshots that are not inside an excluded passage. Every
+//! `transcript.md` and the screenshots that are not inside an excluded passage (only the
+//! draft's `key_screenshots` among them when it has any). Every
 //! operation reads from there, so a retry days later publishes what the user approved, not
 //! what the draft looks like by then. The draft files of Stage 4 are not touched.
 //!
@@ -70,6 +71,15 @@ fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     fs::write(path, bytes)
 }
 
+/// Whether a screenshot goes out: always without key screenshots, otherwise only the key
+/// ones (listed as `img/<name>` or `<name>`).
+fn is_key(key: &[String], name: &str) -> bool {
+    key.is_empty()
+        || key
+            .iter()
+            .any(|k| k.strip_prefix("img/").unwrap_or(k) == name)
+}
+
 /// Writes the next snapshot of the meeting folder. Images whose name could break a path are
 /// left out.
 pub fn freeze(meeting_dir: &Path, input: &SnapshotInput<'_>) -> io::Result<Frozen> {
@@ -89,8 +99,9 @@ pub fn freeze(meeting_dir: &Path, input: &SnapshotInput<'_>) -> io::Result<Froze
         if let Some(t) = input.transcript_md {
             write(&dir.join("transcript.md"), t.as_bytes())?;
         }
+        let key = &input.draft.key_screenshots;
         for (name, source) in input.images {
-            if valid_name(name) {
+            if valid_name(name) && is_key(key, name) {
                 write(&dir.join("img").join(name), &fs::read(source)?)?;
             }
         }

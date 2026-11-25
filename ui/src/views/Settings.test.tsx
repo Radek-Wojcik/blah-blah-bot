@@ -256,9 +256,13 @@ describe("SettingsView", () => {
   });
 
   it("displays VoiceProfiles project badges, plays/stops WAV sample clips, and enrolls a new profile", async () => {
-    const backend = createMockBackend({ clockRate: 0 });
+    const backend = createMockBackend({
+      clockRate: 0,
+      pick: { file: "C:\\Audio\\marta-22s.wav" },
+    });
     const clipSpy = vi.spyOn(backend, "voiceProfileSampleClip");
     const enrollSpy = vi.spyOn(backend, "enrollVoiceProfile");
+    const pickFileSpy = vi.spyOn(backend, "pickFile");
 
     const createObjectURL = vi.fn(() => "blob:voice-sample-1");
     const revokeObjectURL = vi.fn();
@@ -331,9 +335,14 @@ describe("SettingsView", () => {
     await act(async () => {
       setInputValue(nameInput, "Marta Enroll");
       setSelectValue(projectSelect, "NOMAD");
-      setInputValue(pathInput, "C:\\Audio\\marta-22s.wav");
+    });
+    // The path comes from the native file dialog (the mock answers with the preset path).
+    await act(async () => {
+      buttonByText("Browse…", enrollForm).click();
     });
     await flush();
+    expect(pickFileSpy).toHaveBeenCalledWith(expect.objectContaining({ kind: "audio" }));
+    expect(pathInput.value).toBe("C:\\Audio\\marta-22s.wav");
 
     await act(async () => {
       buttonByText("Enroll voice profile", enrollForm).click();
@@ -382,7 +391,7 @@ describe("SettingsView", () => {
     await mount(backend, "preferences");
 
     expect(host.textContent).toContain("Connected project repositories");
-    const repoList = host.querySelector('ul[aria-label="Cycle repositories"]')!;
+    const repoList = host.querySelector('ul[aria-label="Project repositories"]')!;
     expect(repoList).not.toBeNull();
     expect(repoList.querySelectorAll("li").length).toBe(2);
     expect(repoList.textContent).toContain("State as of 2026-11-12");

@@ -123,6 +123,57 @@ fn freezing_copies_what_goes_out_and_numbers_the_snapshots() {
 }
 
 #[test]
+fn key_screenshots_limit_the_snapshot_and_excluded_ones_stay_out() {
+    let tmp = test_tmp::TestDir::new("flow-tests");
+    let meeting = tmp.path().join(MEETING);
+    fs::create_dir_all(meeting.join("img")).unwrap();
+    for n in ["a.png", "b.png", "c.png"] {
+        fs::write(meeting.join("img").join(n), n.as_bytes()).unwrap();
+    }
+    let all = |names: &[&str]| -> Vec<(String, PathBuf)> {
+        names
+            .iter()
+            .map(|n| (n.to_string(), meeting.join("img").join(n)))
+            .collect()
+    };
+    let freeze_with = |key: &[&str], images: &[(String, PathBuf)]| {
+        let mut d = draft(MEETING, vec![], vec![]);
+        d.key_screenshots = key.iter().map(|k| k.to_string()).collect();
+        let frozen = freeze(
+            &meeting,
+            &SnapshotInput {
+                draft: &d,
+                report_md: "r",
+                transcript_md: None,
+                images,
+            },
+        )
+        .unwrap();
+        frozen
+            .files
+            .into_iter()
+            .filter(|f| f.starts_with("img/"))
+            .collect::<Vec<_>>()
+    };
+    let three = all(&["a.png", "b.png", "c.png"]);
+    // No key screenshots: unchanged, all of them.
+    assert_eq!(
+        freeze_with(&[], &three),
+        ["img/a.png", "img/b.png", "img/c.png"]
+    );
+    // Key screenshots, with or without the folder; names that match nothing are ignored.
+    assert_eq!(
+        freeze_with(&["img/b.png", "c.png", "gone.png"], &three),
+        ["img/b.png", "img/c.png"]
+    );
+    // `b.png` is key but inside an excluded passage, so it is not among the images.
+    let without_b = all(&["a.png", "c.png"]);
+    assert_eq!(freeze_with(&["b.png", "c.png"], &without_b), ["img/c.png"]);
+    // Only excluded key screenshots: nothing goes out, not everything else.
+    assert!(freeze_with(&["b.png"], &without_b).is_empty());
+}
+
+#[test]
 fn a_snapshot_that_cannot_be_written_leaves_nothing_behind() {
     let tmp = test_tmp::TestDir::new("flow-tests");
     let d = draft(MEETING, vec![], vec![]);

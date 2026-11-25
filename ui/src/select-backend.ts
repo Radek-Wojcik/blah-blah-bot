@@ -25,6 +25,9 @@ export function selectBackend(search: string = window.location.search): Backend 
   const detectms = params.get("detectms");
   // `tabs=1` makes the mock extension offer captured tabs; `tabs=failed` adds a failed tab.
   const tabs = params.get("tabs");
+  // `ghtoken=none` starts without a saved GitHub token; `ghfault=name-taken|offline` makes
+  // creating a GitHub repository fail. The project wizard then falls back to a local project.
+  const ghfault = params.get("ghfault");
   return createMockBackend({
     recording: params.get("state") === "recording",
     // `newdraft=1` starts with a newer draft next to the edited one of the demo meeting.
@@ -36,6 +39,8 @@ export function selectBackend(search: string = window.location.search): Backend 
     ...(jobms === null ? {} : { jobStepMs: Number(jobms) }),
     ...(pairms === null ? {} : { bridgePairMs: Number(pairms) }),
     ...(detectms === null ? {} : { detectMs: Number(detectms) }),
+    ...(params.get("ghtoken") === "none" ? { noGithubToken: true } : {}),
+    ...(ghfault === "name-taken" || ghfault === "offline" ? { githubCreateFault: ghfault } : {}),
     ...(tabs === "1" ? { browserTabs: "ok" as const } : {}),
     ...(tabs === "failed" ? { browserTabs: "failed" as const } : {}),
     ...(fault === "blank" || fault === "black" || fault === "broken"

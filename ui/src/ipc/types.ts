@@ -1366,6 +1366,40 @@ export interface WizardCreateProjectInput {
   localSaveDir?: string | null;
 }
 
+/** Whether a GitHub token is saved: a boolean and the API host, never the token. */
+export interface GithubRepoStatus {
+  tokenSet: boolean;
+  host: string;
+}
+
+/** The private repository the person confirmed in the wizard. */
+export interface GithubRepoRequest {
+  /** Repository name without the owner. */
+  name: string;
+  /** An organization to create it in; empty or absent for the token's own account. */
+  owner?: string | null;
+  /** True only after the confirm step; without it nothing is sent to GitHub. */
+  confirmed: boolean;
+}
+
+export type GithubRepoOutcomeStatus = "created" | "local_only";
+export type GithubFallbackReason = "no_token" | "not_confirmed" | "invalid_name" | "failed";
+
+/** What happened to the GitHub step: created, or fell back to a local-only project with a message. */
+export interface GithubRepoOutcome {
+  status: GithubRepoOutcomeStatus;
+  reason: GithubFallbackReason | null;
+  message: string;
+  /** `owner/name` when created. */
+  repo: string | null;
+  url: string | null;
+}
+
+export interface WizardCreateResult {
+  cycle: CycleDto;
+  github: GithubRepoOutcome;
+}
+
 export interface ImportMeetingInput {
   cycleId: string;
   filePath: string;

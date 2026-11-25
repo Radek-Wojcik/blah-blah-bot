@@ -65,7 +65,7 @@ describe("RecordView", () => {
     expect(host.textContent).toContain("Ctrl+Alt+R");
     expect(host.textContent).toContain("Ctrl+Alt+S");
 
-    // Open briefing button calls openBriefing for selected cycle.
+    // Open briefing button calls openBriefing for selected project.
     const openBriefingBtn = Array.from(host.querySelectorAll("button")).find(
       (b) => b.textContent === "Open briefing",
     ) as HTMLButtonElement;

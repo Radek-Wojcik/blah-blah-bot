@@ -82,6 +82,7 @@ pub fn draft(meeting_id: &str, items: Vec<Item>, proposals: Vec<StatusProposal>)
         items,
         status_proposals: proposals,
         warnings: vec![],
+        key_screenshots: vec![],
     }
 }
 
