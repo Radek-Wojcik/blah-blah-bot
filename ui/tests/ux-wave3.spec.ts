@@ -19,7 +19,7 @@ test.describe("wave 3 UX overhaul flows on the mock backend", () => {
     await wizard
       .getByLabel("Automatically save a Markdown (.md) note to a local folder after processing")
       .check();
-    await expect(wizard.getByLabel("Local notes folder")).toHaveValue(
+    await expect(wizard.getByLabel("Local notes folder", { exact: true })).toHaveValue(
       "Documents\\BlahBlahBot\\notes",
     );
     await wizard.getByRole("button", { name: "Create project" }).click();
@@ -150,7 +150,7 @@ test.describe("wave 3 UX overhaul flows on the mock backend", () => {
       "Automatically save meeting notes & transcripts to a local folder",
     );
     await expect(localCheck).not.toBeChecked();
-    await expect(page.getByLabel("Local notes folder")).toHaveValue(
+    await expect(page.getByLabel("Local notes folder", { exact: true })).toHaveValue(
       "Documents\\BlahBlahBot\\notes",
     );
     await localCheck.check();
