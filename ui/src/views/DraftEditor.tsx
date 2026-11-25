@@ -641,16 +641,23 @@ function ItemCard(props: {
       const created = await backend.createParticipant(trimmed, draft.cycle);
       await props.onUpdate({ assignee: created.cycleParticipantId ?? created.id });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (msg.toLowerCase().includes("duplicate")) {
-        const listed = await backend.listParticipants(draft.cycle);
-        const match = listed.find((p) => p.name.trim().toLowerCase() === target);
-        if (match) {
-          await props.onUpdate({ assignee: match.cycleParticipantId ?? match.id });
+      if (
+        (isIpcError(e) && e.code === "duplicate") ||
+        errorMessage(e).toLowerCase().includes("duplicate")
+      ) {
+        try {
+          const listed = await backend.listParticipants(draft.cycle);
+          const match = listed.find((p) => p.name.trim().toLowerCase() === target);
+          if (match) {
+            await props.onUpdate({ assignee: match.cycleParticipantId ?? match.id });
+            return;
+          }
+        } catch (err) {
+          props.onError(errorMessage(err));
           return;
         }
       }
-      props.onError(msg);
+      props.onError(errorMessage(e));
     } finally {
       setAddingPerson(false);
     }

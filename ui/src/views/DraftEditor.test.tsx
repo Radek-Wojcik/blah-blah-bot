@@ -164,9 +164,10 @@ describe("DraftEditor assigneeName", () => {
     const view = makeView(makeTask());
     const backend = createMockBackend();
     vi.spyOn(backend, "getDraft").mockResolvedValue(view);
-    vi.spyOn(backend, "createParticipant").mockRejectedValue(
-      new Error("duplicate: a participant with this name already exists"),
-    );
+    vi.spyOn(backend, "createParticipant").mockRejectedValue({
+      code: "duplicate",
+      message: "a participant with this name already exists",
+    });
     const existing: ParticipantView = {
       id: "NOMAD:marek-1",
       name: "Marek",
