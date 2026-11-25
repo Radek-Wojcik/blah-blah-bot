@@ -661,6 +661,20 @@ select {
   text-transform: none;
 }
 
+/* A path field with its Browse button. */
+.path-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  text-transform: none;
+  letter-spacing: normal;
+}
+.path-row input {
+  flex: 1;
+  min-width: 12em;
+}
+
 /* Narrow windows: the sidebar becomes a top bar. */
 @media (max-width: 720px) {
   .main {

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useBackend } from "../backend-context";
 import { formatDateTimeUtc, formatDuration } from "../format";
-import { errorMessage } from "../hooks";
+import { isoDateUtc, noteFileName, useSaveNote } from "../note-export";
 import type { MeetingDetails } from "../ipc/types";
 import { jobStateLabel } from "../processing";
 import { DraftEditor } from "./DraftEditor";
@@ -34,9 +34,7 @@ export function MeetingDetailView({
   const [tab, setTab] = useState<MeetingDetailTab>(initialTab);
   const [jumpMs, setJumpMs] = useState<number | null>(highlightMs);
   const [details, setDetails] = useState<MeetingDetails | null>(null);
-  const [exporting, setExporting] = useState(false);
-  const [exportedPath, setExportedPath] = useState<string | null>(null);
-  const [exportError, setExportError] = useState<string | null>(null);
+  const note = useSaveNote(meetingId);
 
   useEffect(() => {
     let cancelled = false;
@@ -51,22 +49,12 @@ export function MeetingDetailView({
     };
   }, [backend, meetingId]);
 
-  const handleExport = async () => {
-    setExportError(null);
-    setExportedPath(null);
-    setExporting(true);
-    try {
-      const savedPath = await backend.exportMeetingMarkdown(meetingId);
-      setExportedPath(savedPath);
-    } catch (e) {
-      setExportError(errorMessage(e));
-    } finally {
-      setExporting(false);
-    }
-  };
-
   const summary = details?.summary;
   const heading = summary?.shortTitle?.trim() || summary?.title || meetingId;
+  const defaultNoteName = noteFileName(
+    summary?.shortTitle?.trim() || summary?.title,
+    summary ? isoDateUtc(summary.startedUnixMs) : "",
+  );
   const safeReportUrl = isSafeHttpUrl(summary?.reportUrl) ? summary.reportUrl : null;
 
   return (
@@ -109,10 +97,10 @@ export function MeetingDetailView({
           <button
             type="button"
             className="btn btn-small btn-record"
-            disabled={exporting}
-            onClick={() => void handleExport()}
+            disabled={note.saving}
+            onClick={() => void note.save(defaultNoteName)}
           >
-            {exporting ? "Saving…" : "Download note (.md)"}
+            {note.saving ? "Saving…" : "Download note (.md)"}
           </button>
           <button type="button" className="btn btn-small btn-ghost" onClick={onBack}>
             Back
@@ -120,14 +108,14 @@ export function MeetingDetailView({
         </span>
       </div>
 
-      {exportedPath && (
+      {note.savedPath && (
         <p className="valid-note" role="status">
-          Saved note to {exportedPath}
+          Saved note to {note.savedPath}
         </p>
       )}
-      {exportError && (
+      {note.error && (
         <p className="error" role="alert">
-          {exportError}
+          {note.error}
         </p>
       )}
 

@@ -49,8 +49,9 @@ test.describe("wave 3 UX overhaul flows on the mock backend", () => {
 
     await expect(page.getByRole("tab", { name: "Draft & Report" })).toBeVisible();
     await page.getByRole("button", { name: "Download note (.md)" }).click();
+    // The mock Save as dialog answers with a fake path built from the offered file name.
     await expect(page.getByRole("status")).toContainText(
-      "Saved note to Documents\\BlahBlahBot\\notes\\ORBIT-LAUNCH\\",
+      /Saved note to Documents\\BlahBlahBot\\notes\\.+\.md/,
     );
 
     // 4. Back to ProjectDetail and save per-project local AI override in ProjectSettingsModal.

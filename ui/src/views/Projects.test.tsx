@@ -50,6 +50,12 @@ async function setSelectValue(el: HTMLSelectElement, value: string) {
   });
 }
 
+function browseButton(label: string): HTMLButtonElement {
+  const btn = host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+  if (!btn) throw new Error(`Browse button not found: ${label}`);
+  return btn;
+}
+
 function findButton(text: string, container: ParentNode = host): HTMLButtonElement {
   const btn = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
     (b) => b.textContent?.trim() === text || b.textContent?.includes(text),
@@ -514,10 +520,159 @@ describe("ProjectDetailView, ProjectSettingsModal, and ImportMeetingModal", () =
   });
 });
 
+describe("native file dialogs", () => {
+  async function openImportModal(backend: Backend) {
+    await act(async () => {
+      root.render(
+        <BackendProvider value={backend}>
+          <ProjectDetailView cycleId="NOMAD" onBack={vi.fn()} onOpenMeeting={vi.fn()} />
+        </BackendProvider>,
+      );
+    });
+    await flush();
+    await act(async () => {
+      findButton("+ Add meeting").click();
+    });
+    await flush();
+  }
+
+  it("imports the path the file dialog returned", async () => {
+    const backend = createMockBackend({
+      clockRate: 0,
+      jobStepMs: 5000,
+      pick: { file: "D:\\Calls\\kickoff.mp4" },
+    });
+    const pickSpy = vi.spyOn(backend, "pickFile");
+    const importSpy = vi.spyOn(backend, "importMeeting");
+    await openImportModal(backend);
+
+    await act(async () => {
+      browseButton("Browse for the audio or video file").click();
+    });
+    await flush();
+
+    expect(pickSpy).toHaveBeenCalledWith(expect.objectContaining({ kind: "media" }));
+    const pathInput = host.querySelector<HTMLInputElement>(
+      'input[aria-label="Audio or video file path"]',
+    )!;
+    expect(pathInput.value).toBe("D:\\Calls\\kickoff.mp4");
+    expect(host.querySelector(".import-mode-cards")).not.toBeNull();
+
+    await act(async () => {
+      findButton("Import meeting").click();
+    });
+    await flush();
+    expect(importSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ cycleId: "NOMAD", filePath: "D:\\Calls\\kickoff.mp4" }),
+    );
+  });
+
+  it("does not import and shows no path after a cancelled dialog", async () => {
+    const backend = createMockBackend({ clockRate: 0, jobStepMs: 5000, pick: { file: null } });
+    const importSpy = vi.spyOn(backend, "importMeeting");
+    await openImportModal(backend);
+
+    await act(async () => {
+      browseButton("Browse for the audio or video file").click();
+    });
+    await flush();
+
+    const pathInput = host.querySelector<HTMLInputElement>(
+      'input[aria-label="Audio or video file path"]',
+    )!;
+    expect(pathInput.value).toBe("");
+    expect(findButton("Import meeting").disabled).toBe(true);
+    expect(importSpy).not.toHaveBeenCalled();
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("shows a clear error and keeps the field empty when the dialog gives no path", async () => {
+    const base = createMockBackend({ clockRate: 0, jobStepMs: 5000 });
+    const backend: Backend = {
+      ...base,
+      pickFile: async () => {
+        throw new Error("The file dialog did not return a path. Type the path instead.");
+      },
+    };
+    await openImportModal(backend);
+
+    await act(async () => {
+      browseButton("Browse for the audio or video file").click();
+    });
+    await flush();
+
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("did not return a path");
+    const pathInput = host.querySelector<HTMLInputElement>(
+      'input[aria-label="Audio or video file path"]',
+    )!;
+    expect(pathInput.value).toBe("");
+  });
+
+  it("fills the project folder in the wizard from the folder dialog", async () => {
+    const backend = createMockBackend({ clockRate: 0, pick: { folder: "D:\\Teams\\notes" } });
+    const folderSpy = vi.spyOn(backend, "pickFolder");
+    await act(async () => {
+      root.render(
+        <BackendProvider value={backend}>
+          <ProjectsView onOpenProject={vi.fn()} onOpenMeeting={vi.fn()} />
+        </BackendProvider>,
+      );
+    });
+    await flush();
+    await act(async () => {
+      findButton("New Project").click();
+    });
+    await flush();
+    await setInputValue(
+      host.querySelector<HTMLInputElement>('input[aria-label="Project name"]')!,
+      "Lunar Scout",
+    );
+    await act(async () => {
+      findButton("Connect existing repository / URL").click();
+    });
+    await flush();
+    await act(async () => {
+      findButton("Next").click();
+    });
+    await flush();
+    await act(async () => {
+      browseButton("Browse for the existing local folder").click();
+    });
+    await flush();
+
+    expect(folderSpy).toHaveBeenCalledTimes(1);
+    expect(
+      host.querySelector<HTMLInputElement>('input[aria-label="Existing local folder path"]')!.value,
+    ).toBe("D:\\Teams\\notes");
+  });
+
+  it("writes nothing when the Save as dialog is cancelled", async () => {
+    const backend = createMockBackend({ clockRate: 0, pick: { save: null } });
+    const saveNoteSpy = vi.spyOn(backend, "saveMeetingNoteAs");
+    await act(async () => {
+      root.render(
+        <BackendProvider value={backend}>
+          <MeetingDetailView meetingId="m5" onBack={vi.fn()} onOpenQueue={vi.fn()} />
+        </BackendProvider>,
+      );
+    });
+    await flush();
+
+    await act(async () => {
+      findButton("Download note (.md)").click();
+    });
+    await flush();
+
+    expect(saveNoteSpy).not.toHaveBeenCalled();
+    expect(host.textContent).not.toContain("Saved note to");
+  });
+});
+
 describe("MeetingDetailView and DraftEditor markdown export", () => {
   it("switches between Draft & Report, Transcript, and Speakers tabs and exports Markdown", async () => {
     const backend = createMockBackend({ clockRate: 0 });
-    const exportSpy = vi.spyOn(backend, "exportMeetingMarkdown");
+    const saveAsSpy = vi.spyOn(backend, "saveFileAs");
+    const saveNoteSpy = vi.spyOn(backend, "saveMeetingNoteAs");
 
     await act(async () => {
       root.render(
@@ -535,7 +690,20 @@ describe("MeetingDetailView and DraftEditor markdown export", () => {
       findButton("Download note (.md)").click();
     });
     await flush();
-    expect(exportSpy).toHaveBeenCalledWith("m5");
+    expect(saveAsSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        extension: "md",
+        defaultName: expect.stringMatching(
+          /^thruster-test-7-pressure-flat.*-\d{4}-\d{2}-\d{2}\.md$/,
+        ),
+      }),
+    );
+    expect(saveNoteSpy).toHaveBeenCalledWith(
+      "m5",
+      expect.stringMatching(
+        /^Documents\\BlahBlahBot\\notes\\thruster-test-7-pressure-flat-.*\.md$/,
+      ),
+    );
     expect(host.textContent).toContain("Saved note to");
 
     // Switch to Transcript tab.

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useBackend } from "../backend-context";
+import { BrowseButton } from "../components/BrowseButton";
 import { HelpPopover } from "../components/HelpPopover";
 import { errorMessage } from "../hooks";
 import { bytesToBlob } from "../ipc/bytes";
@@ -217,12 +218,20 @@ export function VoiceProfiles() {
             </div>
             <label>
               15–30 s audio/video sample path
-              <input
-                aria-label="15–30 s audio/video sample path"
-                value={enrollPath}
-                placeholder="C:\Audio\alex-sample-20s.wav"
-                onChange={(e) => setEnrollPath(e.target.value)}
-              />
+              <span className="path-row">
+                <input
+                  aria-label="15–30 s audio/video sample path"
+                  value={enrollPath}
+                  placeholder="C:\Audio\alex-sample-20s.wav"
+                  onChange={(e) => setEnrollPath(e.target.value)}
+                />
+                <BrowseButton
+                  target={{ file: "audio" }}
+                  label="Browse for the voice sample"
+                  title="Choose a voice sample"
+                  onPicked={setEnrollPath}
+                />
+              </span>
               <small>Provide a 15–30 second recording where only this person speaks clearly.</small>
             </label>
             {enrollStatus && (

@@ -19,6 +19,7 @@ import { createMockDetection } from "./mock-detection";
 import { createMockDrafts } from "./mock-drafts";
 import { createMockPublishing, type MockHooks } from "./mock-publish";
 import { fail } from "./mock-util";
+import { createMockPicker, type MockPickResults } from "./mock-pick";
 import { isLocalHost, missingForKind, urlHost, validateLlmSettings } from "../llm";
 import { validateVoiceSettings } from "../speakers";
 import type {
@@ -240,6 +241,8 @@ function computeMockLevels(elapsedMs: number, activeSources: ActiveSource[]): Re
 }
 
 export interface MockOptions {
+  /** Answers of the file dialogs (a path, or null for a cancelled dialog); default fake paths otherwise. */
+  pick?: MockPickResults;
   /** Start with a recording in progress (used for the widget screenshots). */
   recording?: boolean;
   /** Simulated milliseconds added per real second while recording. */
@@ -1366,6 +1369,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         })),
       };
     },
+    ...createMockPicker(opts.pick),
     exportMeetingMarkdown: async (meetingId: string, destPath?: string | null) => {
       const found = meetings.find((x) => x.id === meetingId);
       if (!found) fail("not_found", "Meeting not found");

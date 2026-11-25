@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useBackend } from "../backend-context";
+import { BrowseButton } from "../components/BrowseButton";
 import { newCycleError, repoState } from "../cycles";
 import { errorMessage, useCycles } from "../hooks";
 import type { CycleListItem, CycleRepoView, PullResult, RepoKind } from "../ipc/types";
@@ -206,13 +207,26 @@ export function CyclesView(props: {
             </label>
             <label>
               {kind === "clone" ? "Repository address" : "Folder path"}
-              <input
-                value={where}
-                placeholder={
-                  kind === "clone" ? "https://example.org/team/cycles.git" : "C:\\Users\\me\\cycles"
-                }
-                onChange={(e) => setWhere(e.target.value)}
-              />
+              <span className="path-row">
+                <input
+                  aria-label={kind === "clone" ? "Repository address" : "Folder path"}
+                  value={where}
+                  placeholder={
+                    kind === "clone"
+                      ? "https://example.org/team/cycles.git"
+                      : "C:\\Users\\me\\cycles"
+                  }
+                  onChange={(e) => setWhere(e.target.value)}
+                />
+                {kind === "local" && (
+                  <BrowseButton
+                    target={{ folder: true }}
+                    label="Browse for the repository folder"
+                    title="Choose the repository folder"
+                    onPicked={setWhere}
+                  />
+                )}
+              </span>
               <small>
                 {kind === "clone"
                   ? "Credentials come from the Git credential manager, never from this address."

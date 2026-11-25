@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Publishing sends only the draft's key screenshots to GitHub and Discord when the draft has any (excluded passages still win); without key screenshots nothing changes.
+- Import, voice enrollment, project folders and "Download note (.md)" use the native file, folder and Save as dialogs (`tauri-plugin-dialog`, only `dialog:allow-open` and `dialog:allow-save` for the main window); the browser file input that never gave a full path is gone, so an import no longer fails on a bare file name.
+
 ## [0.7.0] - 2026-11-23
 
 ### Stage 6 (convenience)

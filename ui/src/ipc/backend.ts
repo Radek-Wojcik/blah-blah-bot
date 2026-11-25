@@ -1,3 +1,4 @@
+import type { PickFileRequest, PickFolderRequest, SaveFileRequest } from "./pick";
 import type {
   AddRepoRequest,
   AnswerOutcome,
@@ -347,6 +348,14 @@ export interface Backend {
   importMeeting(req: ImportMeetingInput): Promise<MeetingDetail>;
   /** Export a standalone Markdown report note to disk and return the written path. */
   exportMeetingMarkdown(meetingId: string, destPath?: string | null): Promise<string>;
+  /** Write the note of a meeting to a `.md` file chosen in the Save as dialog; returns the path. */
+  saveMeetingNoteAs(meetingId: string, destPath: string): Promise<string>;
+  /** Native open dialog for one file; the full path, or null when the user cancelled. */
+  pickFile(req: PickFileRequest): Promise<string | null>;
+  /** Native folder dialog; the full path, or null when the user cancelled. */
+  pickFolder(req?: PickFolderRequest): Promise<string | null>;
+  /** Native Save as dialog; the full path of the file to write, or null when cancelled. */
+  saveFileAs(req: SaveFileRequest): Promise<string | null>;
   /** Scan common local folders for llama-server, GGUF models, and default local save path. */
   autoDetectModels(): Promise<DetectedModels>;
   /** List all voice profiles across all projects with project memberships and sample clip state. */

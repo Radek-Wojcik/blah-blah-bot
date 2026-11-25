@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useBackend } from "../backend-context";
+import { BrowseButton } from "../components/BrowseButton";
 import { HelpPopover } from "../components/HelpPopover";
 import { errorMessage } from "../hooks";
 import type { LanguageSetting, MeetingDetails, ReportDefaults, ReportMode } from "../ipc/types";
@@ -50,17 +51,10 @@ export function ImportMeetingModal({ cycleId, onClose, onImported }: ImportMeeti
 
   const isVideo = isVideoFilePath(filePath);
 
-  const handleFilePick = (files: FileList | null) => {
-    const file = files?.[0] as (File & { path?: string }) | undefined;
-    if (!file) return;
-    setFilePath(file.path && file.path.trim() !== "" ? file.path : file.name);
-    setError(null);
-  };
-
   const submit = async () => {
     const trimmed = filePath.trim();
     if (trimmed === "") {
-      setError("Choose or paste the path to an audio or video file.");
+      setError("Choose a file with Browse, or type the full path to an audio or video file.");
       return;
     }
     setError(null);
@@ -101,26 +95,27 @@ export function ImportMeetingModal({ cycleId, onClose, onImported }: ImportMeeti
       >
         <label>
           Audio or video file path
-          <input
-            aria-label="Audio or video file path"
-            value={filePath}
-            placeholder="C:\Recordings\sprint-review.mp4"
-            autoFocus
-            onChange={(e) => setFilePath(e.target.value)}
-          />
+          <span className="path-row">
+            <input
+              aria-label="Audio or video file path"
+              value={filePath}
+              placeholder="C:\Recordings\sprint-review.mp4"
+              autoFocus
+              onChange={(e) => setFilePath(e.target.value)}
+            />
+            <BrowseButton
+              target={{ file: "media" }}
+              label="Browse for the audio or video file"
+              title="Choose a recording"
+              onPicked={(path) => {
+                setFilePath(path);
+                setError(null);
+              }}
+            />
+          </span>
           <small>
             Supports audio (mp3, wav, m4a, ogg, flac, aac) and video (mkv, mp4, webm, mov, avi).
           </small>
-        </label>
-
-        <label>
-          Browse file
-          <input
-            type="file"
-            aria-label="Browse audio or video file"
-            accept=".mp3,.wav,.m4a,.ogg,.flac,.aac,.mkv,.mp4,.webm,.mov,.avi,audio/*,video/*"
-            onChange={(e) => handleFilePick(e.target.files)}
-          />
         </label>
 
         {isVideo && (

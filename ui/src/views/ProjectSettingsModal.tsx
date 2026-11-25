@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { useBackend } from "../backend-context";
+import { BrowseButton } from "../components/BrowseButton";
 import { HelpPopover } from "../components/HelpPopover";
 import {
   type TypeRow,
@@ -425,12 +426,20 @@ export function ProjectSettingsModal({ cycleId, onClose, onSaved }: ProjectSetti
             </label>
             <label>
               Local export folder
-              <input
-                aria-label="Local export folder"
-                value={prefs.localSaveDir}
-                placeholder={detected?.defaultLocalSaveDir || "Documents\\BlahBlahBot\\notes"}
-                onChange={(e) => setPrefs({ ...prefs, localSaveDir: e.target.value })}
-              />
+              <span className="path-row">
+                <input
+                  aria-label="Local export folder"
+                  value={prefs.localSaveDir}
+                  placeholder={detected?.defaultLocalSaveDir || "Documents\\BlahBlahBot\\notes"}
+                  onChange={(e) => setPrefs({ ...prefs, localSaveDir: e.target.value })}
+                />
+                <BrowseButton
+                  target={{ folder: true }}
+                  label="Browse for the local export folder"
+                  title="Choose the export folder"
+                  onPicked={(path) => setPrefs({ ...prefs, localSaveDir: path })}
+                />
+              </span>
               <small>Leave empty to fall back to the global folder in Settings.</small>
             </label>
           </fieldset>

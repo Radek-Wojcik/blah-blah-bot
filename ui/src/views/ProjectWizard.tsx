@@ -1,5 +1,6 @@
 import { useEffect, useId, useState } from "react";
 import { useBackend } from "../backend-context";
+import { BrowseButton } from "../components/BrowseButton";
 import { HelpPopover } from "../components/HelpPopover";
 import { cycleIdError, newCycleError } from "../cycles";
 import { errorMessage } from "../hooks";
@@ -247,12 +248,20 @@ export function ProjectWizard({ onClose, onCreated }: ProjectWizardProps) {
 
               <label>
                 Existing local folder path
-                <input
-                  aria-label="Existing local folder path"
-                  value={repoPath}
-                  placeholder="C:\Users\me\projects\team-notes"
-                  onChange={(e) => setRepoPath(e.target.value)}
-                />
+                <span className="path-row">
+                  <input
+                    aria-label="Existing local folder path"
+                    value={repoPath}
+                    placeholder="C:\Users\me\projects\team-notes"
+                    onChange={(e) => setRepoPath(e.target.value)}
+                  />
+                  <BrowseButton
+                    target={{ folder: true }}
+                    label="Browse for the existing local folder"
+                    title="Choose the project folder"
+                    onPicked={setRepoPath}
+                  />
+                </span>
                 <small>
                   Folder on this computer (or destination folder if also cloning a remote URL).
                 </small>
@@ -369,12 +378,20 @@ export function ProjectWizard({ onClose, onCreated }: ProjectWizardProps) {
             {localSaveEnabled && (
               <label>
                 Local notes folder
-                <input
-                  aria-label="Local notes folder"
-                  value={localSaveDir}
-                  placeholder={defaultSaveDir || "Documents\\BlahBlahBot\\notes"}
-                  onChange={(e) => setLocalSaveDir(e.target.value)}
-                />
+                <span className="path-row">
+                  <input
+                    aria-label="Local notes folder"
+                    value={localSaveDir}
+                    placeholder={defaultSaveDir || "Documents\\BlahBlahBot\\notes"}
+                    onChange={(e) => setLocalSaveDir(e.target.value)}
+                  />
+                  <BrowseButton
+                    target={{ folder: true }}
+                    label="Browse for the local notes folder"
+                    title="Choose the notes folder"
+                    onPicked={setLocalSaveDir}
+                  />
+                </span>
                 <small>Works completely offline with zero Git or cloud setup required.</small>
               </label>
             )}

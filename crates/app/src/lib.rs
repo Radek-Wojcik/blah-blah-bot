@@ -142,6 +142,7 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main(app);
         }))
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             let handle = app.handle().clone();
@@ -253,6 +254,7 @@ pub fn run() {
             project_commands::wizard_create_project,
             project_commands::import_meeting,
             project_commands::export_meeting_markdown,
+            project_commands::save_meeting_note_as,
             project_commands::auto_detect_models,
             speaker_commands::get_meeting_voices,
             speaker_commands::assign_voice,

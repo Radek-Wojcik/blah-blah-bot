@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Backend } from "./backend";
 import { type IpcBytes, bytesToBlob } from "./bytes";
+import { filtersFor, pickedPath } from "./pick";
 import type { IpcError } from "./types";
 
 /** Command names are snake_case and mirror the `#[tauri::command]` functions in `crates/app`. */
@@ -130,6 +131,37 @@ export function createTauriBackend(): Backend {
     importMeeting: (req) => invoke("import_meeting", { req }),
     exportMeetingMarkdown: (meetingId, destPath) =>
       invoke("export_meeting_markdown", { meetingId, destPath: destPath ?? null }),
+    saveMeetingNoteAs: (meetingId, destPath) =>
+      invoke("save_meeting_note_as", { meetingId, destPath }),
+    // The dialog plugin is called directly: the page never reads or writes the files itself, it
+    // only receives the chosen path.
+    pickFile: async (req) =>
+      pickedPath(
+        await invoke("plugin:dialog|open", {
+          options: {
+            title: req.title,
+            multiple: false,
+            directory: false,
+            filters: filtersFor(req.kind),
+          },
+        }),
+      ),
+    pickFolder: async (req) =>
+      pickedPath(
+        await invoke("plugin:dialog|open", {
+          options: { title: req?.title, multiple: false, directory: true },
+        }),
+      ),
+    saveFileAs: async (req) =>
+      pickedPath(
+        await invoke("plugin:dialog|save", {
+          options: {
+            title: req.title,
+            defaultPath: req.defaultName,
+            filters: [{ name: req.extension.toUpperCase(), extensions: [req.extension] }],
+          },
+        }),
+      ),
     autoDetectModels: () => invoke("auto_detect_models"),
     listAllVoiceProfiles: () => invoke("list_all_voice_profiles"),
     voiceProfileSampleClip: (participantId) =>

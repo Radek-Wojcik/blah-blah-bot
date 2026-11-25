@@ -860,6 +860,20 @@ pub fn export_meeting_markdown(
     })
 }
 
+/// Write the report note of a meeting to a `.md` file chosen in the "Save as" dialog.
+#[tauri::command]
+pub fn save_meeting_note_as(
+    state: State<'_, AppState>,
+    meeting_id: String,
+    dest_path: String,
+) -> IpcResult<String> {
+    let dir = meeting_dir(&state, &meeting_id)?;
+    let repos = state.cycle_repos();
+    state.with_store_ipc(|s| {
+        local_export::save_meeting_note_as(&repos, s, &meeting_id, &dir, &dest_path)
+    })
+}
+
 #[tauri::command]
 pub fn auto_detect_models(state: State<'_, AppState>) -> IpcResult<DetectedModelsDto> {
     let proc_settings = state.processing().settings()?;

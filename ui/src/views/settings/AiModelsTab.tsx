@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { useBackend } from "../../backend-context";
+import { BrowseButton } from "../../components/BrowseButton";
 import { HelpPopover } from "../../components/HelpPopover";
 import { errorMessage } from "../../hooks";
 import type { DetectedModels, LlmKind, ModelStatus, ProcessingSettings } from "../../ipc/types";
@@ -364,11 +365,20 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
                   </div>
                   <label>
                     Models folder
-                    <input
-                      value={draft.modelsDir}
-                      placeholder="Documents\BlahBlahBot\models"
-                      onChange={(e) => setDraft({ ...draft, modelsDir: e.target.value })}
-                    />
+                    <span className="path-row">
+                      <input
+                        aria-label="Models folder"
+                        value={draft.modelsDir}
+                        placeholder="Documents\BlahBlahBot\models"
+                        onChange={(e) => setDraft({ ...draft, modelsDir: e.target.value })}
+                      />
+                      <BrowseButton
+                        target={{ folder: true }}
+                        label="Browse for the models folder"
+                        title="Choose the models folder"
+                        onPicked={(path) => setDraft({ ...draft, modelsDir: path })}
+                      />
+                    </span>
                   </label>
                 </fieldset>
 
