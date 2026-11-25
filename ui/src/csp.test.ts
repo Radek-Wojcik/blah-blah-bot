@@ -17,4 +17,13 @@ describe("content security policy of the shell", () => {
   it("lets images load from blob URLs, which carry the frozen desktop", () => {
     expect(/img-src [^;]*\bblob:/.test(csp)).toBe(true);
   });
+
+  it("lets audio clips play from blob URLs without opening media-src to the network", () => {
+    expect(/media-src [^;]*\bblob:/.test(csp)).toBe(true);
+    const media = /media-src ([^;]*)/.exec(csp)?.[1] ?? "";
+    expect(media).toContain("'self'");
+    expect(media).not.toContain("*");
+    expect(media).not.toContain("http:");
+    expect(media).not.toContain("https:");
+  });
 });
