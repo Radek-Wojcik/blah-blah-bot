@@ -45,6 +45,12 @@ function useClipPlayer(meetingId: string, onError: (message: string) => void) {
       if (same) return;
       const mine = token.current;
       setPlaying(key);
+      let reported = false;
+      const reportError = (msg: string) => {
+        if (reported) return;
+        reported = true;
+        onError(msg);
+      };
       try {
         const url = await backend.voiceClip(meetingId, voiceId, idx);
         if (token.current !== mine) {
@@ -56,11 +62,17 @@ function useClipPlayer(meetingId: string, onError: (message: string) => void) {
         audio.onended = () => {
           if (token.current === mine) stop();
         };
+        audio.onerror = () => {
+          if (token.current === mine) {
+            stop();
+            reportError("The clip could not be played.");
+          }
+        };
         await audio.play();
       } catch (e) {
         if (token.current === mine) {
           stop();
-          onError(`The clip could not be played: ${errorMessage(e)}`);
+          reportError(`The clip could not be played: ${errorMessage(e)}`);
         }
       }
     },

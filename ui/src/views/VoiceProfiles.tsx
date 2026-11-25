@@ -36,6 +36,12 @@ function useSampleClipPlayer(onError: (msg: string) => void) {
       if (wasPlaying) return;
       const mine = tokenRef.current;
       setPlayingId(profileId);
+      let reported = false;
+      const reportError = (msg: string) => {
+        if (reported) return;
+        reported = true;
+        onError(msg);
+      };
       try {
         const bytes = await backend.voiceProfileSampleClip(profileId);
         if (tokenRef.current !== mine) return;
@@ -51,13 +57,16 @@ function useSampleClipPlayer(onError: (msg: string) => void) {
           if (tokenRef.current === mine) stop();
         };
         audio.onerror = () => {
-          if (tokenRef.current === mine) stop();
+          if (tokenRef.current === mine) {
+            stop();
+            reportError("Sample clip could not be played.");
+          }
         };
         await Promise.resolve(audio.play());
       } catch (e) {
         if (tokenRef.current === mine) {
           stop();
-          onError(`Sample clip could not be played: ${errorMessage(e)}`);
+          reportError(`Sample clip could not be played: ${errorMessage(e)}`);
         }
       }
     },
