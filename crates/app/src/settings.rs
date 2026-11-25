@@ -5,6 +5,23 @@ use std::path::{Path, PathBuf};
 use recorder::detect::Sensitivity;
 use serde::{Deserialize, Serialize};
 
+pub const DEFAULT_RECORD_HOTKEY: &str = "Ctrl+Shift+R";
+pub const DEFAULT_SCREENSHOT_HOTKEY: &str = "Ctrl+Shift+S";
+
+/// How mouse side buttons (X1/X2, back/forward) behave in the UI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MouseButtonsMode {
+    #[default]
+    Normal,
+    Swapped,
+    Off,
+}
+
+fn default_false() -> bool {
+    false
+}
+
 /// How a cycle repository came to be registered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -238,6 +255,12 @@ pub struct Settings {
     pub recordings_dir: String,
     pub record_hotkey: String,
     pub screenshot_hotkey: String,
+    /// Behavior of mouse side buttons (back/forward) in the main UI.
+    #[serde(default)]
+    pub mouse_buttons: MouseButtonsMode,
+    /// Whether legacy `Ctrl+Alt+R` / `Ctrl+Alt+S` defaults have been migrated.
+    #[serde(default = "default_false")]
+    pub hotkeys_migrated: bool,
     /// Automatically export Markdown reports and transcripts to a local directory.
     #[serde(default)]
     pub local_save_enabled: bool,
@@ -263,8 +286,10 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             recordings_dir: String::new(),
-            record_hotkey: "Ctrl+Alt+R".into(),
-            screenshot_hotkey: "Ctrl+Alt+S".into(),
+            record_hotkey: DEFAULT_RECORD_HOTKEY.into(),
+            screenshot_hotkey: DEFAULT_SCREENSHOT_HOTKEY.into(),
+            mouse_buttons: MouseButtonsMode::default(),
+            hotkeys_migrated: true,
             local_save_enabled: false,
             local_save_dir: String::new(),
             last_source_keys: Vec::new(),
@@ -277,6 +302,25 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Migrate legacy `Ctrl+Alt+R` / `Ctrl+Alt+S` defaults once, independently per key.
+    pub fn migrate_legacy_hotkeys(&mut self) -> bool {
+        if self.hotkeys_migrated {
+            return false;
+        }
+        if self.record_hotkey.trim().eq_ignore_ascii_case("Ctrl+Alt+R") {
+            self.record_hotkey = DEFAULT_RECORD_HOTKEY.into();
+        }
+        if self
+            .screenshot_hotkey
+            .trim()
+            .eq_ignore_ascii_case("Ctrl+Alt+S")
+        {
+            self.screenshot_hotkey = DEFAULT_SCREENSHOT_HOTKEY.into();
+        }
+        self.hotkeys_migrated = true;
+        true
+    }
+
     /// Load settings; a missing or unreadable file yields the defaults.
     pub fn load(path: &Path) -> Self {
         let mut settings: Self = std::fs::read_to_string(path)
@@ -284,6 +328,9 @@ impl Settings {
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
         settings.detection.migrate_legacy_meet();
+        if settings.migrate_legacy_hotkeys() {
+            let _ = settings.save(path);
+        }
         settings
     }
 
@@ -306,6 +353,7 @@ impl Settings {
         self.last_report = current.last_report.clone();
         self.bridge.clients = current.bridge.clients.clone();
         self.detection = current.detection.clone();
+        self.hotkeys_migrated = true;
         if self.last_source_keys.is_empty() {
             self.last_source_keys = current.last_source_keys.clone();
         }
@@ -380,6 +428,8 @@ mod tests {
             recordings_dir: "D:\\Rec".into(),
             record_hotkey: "Ctrl+F9".into(),
             screenshot_hotkey: "Ctrl+F10".into(),
+            mouse_buttons: MouseButtonsMode::Swapped,
+            hotkeys_migrated: true,
             local_save_enabled: true,
             local_save_dir: "D:\\Notes".into(),
             last_source_keys: vec!["mic:default".into()],
@@ -656,5 +706,37 @@ mod tests {
         assert!(!loaded.detection.meet);
         assert_eq!(loaded.detection.known_apps, ["zoom"]);
         assert_eq!(loaded.detection.opted_out, ["zoom"]);
+    }
+
+    #[test]
+    fn legacy_hotkeys_migrate_once_independently_and_persist() {
+        let (_dir, path) = temp("legacy-hotkeys");
+        std::fs::write(
+            &path,
+            r#"{"recordHotkey":"ctrl+alt+r","screenshotHotkey":"Ctrl+F10"}"#,
+        )
+        .unwrap();
+        let loaded = Settings::load(&path);
+        assert_eq!(loaded.record_hotkey, DEFAULT_RECORD_HOTKEY);
+        assert_eq!(loaded.screenshot_hotkey, "Ctrl+F10");
+        assert!(loaded.hotkeys_migrated);
+
+        // Persisted file has hotkeysMigrated: true, so a subsequent manual change back to
+        // Ctrl+Alt+R is NOT overwritten.
+        let mut manual = Settings::load(&path);
+        manual.record_hotkey = "Ctrl+Alt+R".into();
+        manual.save(&path).unwrap();
+        let reloaded = Settings::load(&path);
+        assert_eq!(reloaded.record_hotkey, "Ctrl+Alt+R");
+        assert!(reloaded.hotkeys_migrated);
+    }
+
+    #[test]
+    fn mouse_buttons_mode_defaults_to_normal_and_round_trips() {
+        assert_eq!(Settings::default().mouse_buttons, MouseButtonsMode::Normal);
+        let s: Settings = serde_json::from_str(r#"{"mouseButtons":"off"}"#).unwrap();
+        assert_eq!(s.mouse_buttons, MouseButtonsMode::Off);
+        let s2: Settings = serde_json::from_str(r#"{"mouseButtons":"swapped"}"#).unwrap();
+        assert_eq!(s2.mouse_buttons, MouseButtonsMode::Swapped);
     }
 }

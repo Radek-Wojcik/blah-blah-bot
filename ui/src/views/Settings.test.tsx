@@ -571,4 +571,59 @@ describe("Keep audio after processing (global setting)", () => {
     await flush();
     expect(saveSpy.mock.calls[0][0].audioRetention).toEqual({ mode: "keep" });
   });
+
+  it("edits hotkeys via HotkeyCapture and mouse side buttons in PreferencesTab", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    const saveSpy = vi.spyOn(backend, "saveSettings");
+    const onBack = vi.fn();
+    await act(async () => {
+      root.render(
+        <BackendProvider value={backend}>
+          <SettingsView initialTab="preferences" onBack={onBack} />
+        </BackendProvider>,
+      );
+    });
+    await flush();
+
+    // Top-left BackButton works
+    await act(async () => {
+      buttonByText("Back").click();
+    });
+    expect(onBack).toHaveBeenCalledTimes(1);
+
+    // Capture a new Record / Stop hotkey
+    const recBtn = host.querySelector<HTMLButtonElement>("#pref-record-hotkey")!;
+    expect(recBtn.textContent).toBe("Ctrl+Shift+R");
+    await act(async () => {
+      recBtn.click();
+    });
+    await act(async () => {
+      recBtn.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          code: "F9",
+          key: "F9",
+          ctrlKey: true,
+          bubbles: true,
+        }),
+      );
+    });
+    expect(recBtn.textContent).toBe("Ctrl+F9");
+
+    // Change mouse side buttons mode
+    const select = host.querySelector<HTMLSelectElement>(
+      'select[aria-label="Mouse side buttons"]',
+    )!;
+    await act(async () => {
+      setSelectValue(select, "swapped");
+    });
+
+    await act(async () => {
+      buttonByText("Save preferences").click();
+    });
+    await flush();
+
+    expect(saveSpy).toHaveBeenCalledTimes(1);
+    expect(saveSpy.mock.calls[0][0].recordHotkey).toBe("Ctrl+F9");
+    expect(saveSpy.mock.calls[0][0].mouseButtons).toBe("swapped");
+  });
 });

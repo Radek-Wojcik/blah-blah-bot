@@ -119,7 +119,7 @@ These are the places where a requirement is not met as stated, or where "covered
 ## Manual demo steps
 
 - **M1. Recorder.** Start the application, open the widget from the tray icon, press Record, pick the microphone and one application, add a second application while recording, press Stop. The meeting list shows a meeting with three tracks.
-- **M2. Screenshot.** While recording, press the screenshot hotkey (Ctrl+Alt+S by default), drag a rectangle, release. The meeting shows a screenshot with its offset; the cropped image matches the selection.
+- **M2. Screenshot.** While recording, press the screenshot hotkey (Ctrl+Shift+S by default), drag a rectangle, release. The meeting shows a screenshot with its offset; the cropped image matches the selection.
 - **M3. Recovery.** Start a recording, end the application process from the task manager, start the application again. The meeting is listed as recovered; recovering it keeps all complete segments.
 - **M4. Processing.** With the models set up, process a recorded meeting. The queue shows each stage, waits while another program uses the GPU, and finishes with a transcript with speakers and described screenshots.
 - **M5. Draft.** Process a meeting of a cycle with a language model configured. Open the draft, open the source of an item (quote, time, jump to the transcript), change the report mode and move an item to another section.

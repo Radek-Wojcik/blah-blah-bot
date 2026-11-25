@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useBackend } from "../backend-context";
+import { BackButton } from "../components/BackButton";
 import { formatDateTimeUtc, formatDuration } from "../format";
 import { isoDateUtc, noteFileName, useSaveNote } from "../note-export";
 import type { MeetingDetails } from "../ipc/types";
@@ -15,6 +16,7 @@ export interface MeetingDetailViewProps {
   meetingId: string;
   initialTab?: MeetingDetailTab;
   highlightMs?: number | null;
+  onTabChange?: (tab: MeetingDetailTab) => void;
   onBack: () => void;
   onOpenQueue: () => void;
 }
@@ -27,14 +29,26 @@ export function MeetingDetailView({
   meetingId,
   initialTab = "draft",
   highlightMs = null,
+  onTabChange,
   onBack,
   onOpenQueue,
 }: MeetingDetailViewProps) {
   const backend = useBackend();
   const [tab, setTab] = useState<MeetingDetailTab>(initialTab);
+  const [prevInitialTab, setPrevInitialTab] = useState<MeetingDetailTab>(initialTab);
   const [jumpMs, setJumpMs] = useState<number | null>(highlightMs);
   const [details, setDetails] = useState<MeetingDetails | null>(null);
   const note = useSaveNote(meetingId);
+
+  if (prevInitialTab !== initialTab) {
+    setPrevInitialTab(initialTab);
+    setTab(initialTab);
+  }
+
+  const selectTab = (next: MeetingDetailTab) => {
+    setTab(next);
+    onTabChange?.(next);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -60,27 +74,32 @@ export function MeetingDetailView({
   return (
     <>
       <div className="page-head">
-        <div>
-          <h2>
-            <span className="glitch" data-text={heading}>
-              {heading}
-            </span>
-          </h2>
-          {summary && (
-            <p className="card-when" style={{ margin: "4px 0 0" }}>
-              {formatDateTimeUtc(summary.startedUnixMs)} UTC
-              {summary.durationMs !== null && ` · ${formatDuration(summary.durationMs)}`}
-              {summary.shortTitle && summary.shortTitle !== summary.title && ` · ${summary.title}`}
-              {summary.job && (
-                <>
-                  {" "}
-                  <span className={`badge badge-job-${summary.job}`}>
-                    {jobStateLabel(summary.job)}
-                  </span>
-                </>
-              )}
-            </p>
-          )}
+        <div className="page-head-start">
+          <BackButton label="Back" onClick={onBack} />
+          <div>
+            <h2>
+              <span className="glitch" data-text={heading}>
+                {heading}
+              </span>
+            </h2>
+            {summary && (
+              <p className="card-when" style={{ margin: "4px 0 0" }}>
+                {formatDateTimeUtc(summary.startedUnixMs)} UTC
+                {summary.durationMs !== null && ` · ${formatDuration(summary.durationMs)}`}
+                {summary.shortTitle &&
+                  summary.shortTitle !== summary.title &&
+                  ` · ${summary.title}`}
+                {summary.job && (
+                  <>
+                    {" "}
+                    <span className={`badge badge-job-${summary.job}`}>
+                      {jobStateLabel(summary.job)}
+                    </span>
+                  </>
+                )}
+              </p>
+            )}
+          </div>
         </div>
 
         <span className="head-actions">
@@ -102,9 +121,6 @@ export function MeetingDetailView({
           >
             {note.saving ? "Saving…" : "Download note (.md)"}
           </button>
-          <button type="button" className="btn btn-small btn-ghost" onClick={onBack}>
-            Back
-          </button>
         </span>
       </div>
 
@@ -125,7 +141,7 @@ export function MeetingDetailView({
           role="tab"
           aria-selected={tab === "draft"}
           className={tab === "draft" ? "btn btn-small btn-stop" : "btn btn-small btn-ghost"}
-          onClick={() => setTab("draft")}
+          onClick={() => selectTab("draft")}
         >
           Draft &amp; Report
         </button>
@@ -134,7 +150,7 @@ export function MeetingDetailView({
           role="tab"
           aria-selected={tab === "transcript"}
           className={tab === "transcript" ? "btn btn-small btn-stop" : "btn btn-small btn-ghost"}
-          onClick={() => setTab("transcript")}
+          onClick={() => selectTab("transcript")}
         >
           Transcript
         </button>
@@ -143,7 +159,7 @@ export function MeetingDetailView({
           role="tab"
           aria-selected={tab === "speakers"}
           className={tab === "speakers" ? "btn btn-small btn-stop" : "btn btn-small btn-ghost"}
-          onClick={() => setTab("speakers")}
+          onClick={() => selectTab("speakers")}
         >
           Speakers
         </button>
@@ -155,7 +171,7 @@ export function MeetingDetailView({
           onBack={onBack}
           onOpenTranscript={(atMs) => {
             setJumpMs(atMs);
-            setTab("transcript");
+            selectTab("transcript");
           }}
           onOpenQueue={onOpenQueue}
         />
@@ -165,14 +181,14 @@ export function MeetingDetailView({
           meetingId={meetingId}
           highlightMs={jumpMs}
           onBack={onBack}
-          onOpenSpeakers={() => setTab("speakers")}
+          onOpenSpeakers={() => selectTab("speakers")}
         />
       )}
       {tab === "speakers" && (
         <SpeakersView
           meetingId={meetingId}
           onBack={onBack}
-          onOpenTranscript={() => setTab("transcript")}
+          onOpenTranscript={() => selectTab("transcript")}
         />
       )}
     </>

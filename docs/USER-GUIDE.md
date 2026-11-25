@@ -60,7 +60,7 @@ You can record from either the **Record** tab in the Main UI or the compact **Tr
 - **Source picker:** Sources are grouped into **Microphone**, **Applications** (desktop apps with active audio sessions, filtering out `AudioSrv`), and **Browser** (tabs captured via the Chrome extension, or `Chrome (whole browser)` fallback).
 - **Dynamic sources:** Add or remove sources mid-recording; tracks stay aligned on the session clock.
 - **Report gate:** Choose the target project (cycle), report mode, template/meeting type, and output language before recording starts.
-- **Region screenshots:** Press the global hotkey (`Ctrl+Alt+S` by default) to freeze the desktop, drag a rectangle, and save a timestamped PNG.
+- **Region screenshots:** Press the global hotkey (`Ctrl+Shift+S` by default) to freeze the desktop, drag a rectangle, and save a timestamped PNG.
 - **Crash recovery & wake lock:** Audio writes in 60-second segments alongside an append-only journal. Crashed recordings appear as **Needs recovery** and can be recovered with at most the in-progress segment lost. A `SystemWakeLock` keeps the computer awake while recording or while jobs are scheduled/processing.
 
 ### Browser extension & call detection

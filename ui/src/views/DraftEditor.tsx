@@ -50,12 +50,12 @@ type Pane = "items" | "report";
  */
 export function DraftEditor(props: {
   meetingId: string;
-  onBack: () => void;
+  onBack?: () => void;
   /** Opens the transcript at a time in the meeting. */
   onOpenTranscript: (atMs: number) => void;
   onOpenQueue: () => void;
 }) {
-  const { meetingId, onBack, onOpenTranscript, onOpenQueue } = props;
+  const { meetingId, onOpenTranscript, onOpenQueue } = props;
   const backend = useBackend();
   const [view, setView] = useState<DraftView | null>(null);
   const [noDraft, setNoDraft] = useState(false);
@@ -163,9 +163,6 @@ export function DraftEditor(props: {
       <span className="head-actions">
         <button className="btn btn-small" onClick={() => onOpenTranscript(0)}>
           Transcript
-        </button>
-        <button className="btn btn-small btn-ghost" onClick={onBack}>
-          Back to meetings
         </button>
       </span>
     </div>

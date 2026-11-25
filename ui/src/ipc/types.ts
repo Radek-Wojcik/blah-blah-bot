@@ -92,10 +92,13 @@ export interface RecordingLevels {
   bars: number[];
 }
 
+export type MouseButtonsMode = "normal" | "swapped" | "off";
+
 export interface Settings {
   recordingsDir: string;
   recordHotkey: string;
   screenshotHotkey: string;
+  mouseButtons?: MouseButtonsMode;
   localSaveEnabled?: boolean;
   localSaveDir?: string;
   lastSourceKeys?: string[];

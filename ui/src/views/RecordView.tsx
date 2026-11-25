@@ -1,7 +1,15 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useBackend } from "../backend-context";
 import { HelpPopover } from "../components/HelpPopover";
+import { HotkeyCapture } from "../components/HotkeyCapture";
 import { RecorderPanel } from "../components/RecorderPanel";
+import { errorMessage } from "../hooks";
+import {
+  DEFAULT_RECORD_HOTKEY,
+  DEFAULT_SCREENSHOT_HOTKEY,
+  notifySettingsChanged,
+  onSettingsChanged,
+} from "../hotkeys";
 import type { Settings } from "../ipc/types";
 
 /**
@@ -11,8 +19,10 @@ import type { Settings } from "../ipc/types";
 export function RecordView() {
   const backend = useBackend();
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [savingHotkey, setSavingHotkey] = useState(false);
+  const [hotkeyError, setHotkeyError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadSettings = useCallback(() => {
     let cancelled = false;
     void backend
       .getSettings()
@@ -25,8 +35,38 @@ export function RecordView() {
     };
   }, [backend]);
 
-  const recordHotkey = settings?.recordHotkey || "Ctrl+Alt+R";
-  const screenshotHotkey = settings?.screenshotHotkey || "Ctrl+Alt+S";
+  useEffect(() => {
+    const cancel = loadSettings();
+    const unsub = onSettingsChanged(() => {
+      void backend
+        .getSettings()
+        .then((s) => setSettings(s))
+        .catch(() => {});
+    });
+    return () => {
+      cancel();
+      unsub();
+    };
+  }, [backend, loadSettings]);
+
+  const recordHotkey = settings?.recordHotkey ?? DEFAULT_RECORD_HOTKEY;
+  const screenshotHotkey = settings?.screenshotHotkey ?? DEFAULT_SCREENSHOT_HOTKEY;
+
+  const updateHotkey = async (field: "recordHotkey" | "screenshotHotkey", next: string) => {
+    setHotkeyError(null);
+    setSavingHotkey(true);
+    try {
+      const latest = await backend.getSettings();
+      const updated: Settings = { ...latest, [field]: next };
+      await backend.saveSettings(updated);
+      setSettings(updated);
+      notifySettingsChanged();
+    } catch (err) {
+      setHotkeyError(errorMessage(err));
+    } finally {
+      setSavingHotkey(false);
+    }
+  };
 
   return (
     <>
@@ -60,16 +100,29 @@ export function RecordView() {
               Pick your microphone and the application or browser tab playing the call. Selections
               are saved automatically between restarts.
             </p>
-            <dl className="facts">
-              <div>
-                <dt>Record / Stop</dt>
-                <dd>{recordHotkey}</dd>
-              </div>
-              <div>
-                <dt>Region screenshot</dt>
-                <dd>{screenshotHotkey}</dd>
-              </div>
-            </dl>
+            <div className="record-hotkeys">
+              <HotkeyCapture
+                id="record-view-record-hotkey"
+                label="Record / Stop"
+                value={recordHotkey}
+                otherHotkey={screenshotHotkey}
+                disabled={savingHotkey}
+                onChange={(next) => void updateHotkey("recordHotkey", next)}
+              />
+              <HotkeyCapture
+                id="record-view-screenshot-hotkey"
+                label="Region screenshot"
+                value={screenshotHotkey}
+                otherHotkey={recordHotkey}
+                disabled={savingHotkey}
+                onChange={(next) => void updateHotkey("screenshotHotkey", next)}
+              />
+              {hotkeyError && (
+                <p className="error" role="alert">
+                  {hotkeyError}
+                </p>
+              )}
+            </div>
             <p className="section-hint">
               You can add or remove audio sources and capture region screenshots at any point while
               recording is active.

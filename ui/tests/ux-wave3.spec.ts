@@ -75,7 +75,7 @@ test.describe("wave 3 UX overhaul flows on the mock backend", () => {
     await page.getByRole("button", { name: "Record", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Record", level: 2 })).toBeVisible();
     await expect(page.getByRole("complementary", { name: "Recording tips" })).toContainText(
-      "Ctrl+Alt+R",
+      "Ctrl+Shift+R",
     );
 
     const eq = page.getByRole("img", { name: /Audio waveform/ });
@@ -91,7 +91,7 @@ test.describe("wave 3 UX overhaul flows on the mock backend", () => {
     await page.getByRole("button", { name: /Screenshot/ }).click();
     await expect(page.getByRole("button", { name: /Screenshot/ })).toContainText("1");
 
-    await page.getByRole("button", { name: "Stop" }).click();
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
     const prompt = page.getByRole("dialog", { name: "Process now or later?" });
     await expect(prompt).toBeVisible();
     await prompt.getByRole("button", { name: "Process now" }).click();
@@ -190,5 +190,34 @@ test.describe("wave 3 UX overhaul flows on the mock backend", () => {
     await expect(elena.getByRole("button", { name: "Stop sample for Elena Vance" })).toBeVisible();
     await elena.getByRole("button", { name: "Stop sample for Elena Vance" }).click();
     await expect(elena.getByRole("button", { name: "Play sample for Elena Vance" })).toBeVisible();
+  });
+
+  test("hotkey capture in Preferences and Record, plus mouse side-button navigation", async ({
+    page,
+  }) => {
+    await page.goto(`${MAIN}&page=settings&tab=preferences`);
+    const recHotkey = page.getByLabel("Record / Stop hotkey", { exact: true });
+    await expect(recHotkey).toHaveText("Ctrl+Shift+R");
+    await recHotkey.click();
+    await expect(recHotkey).toHaveAttribute("data-hotkey-capturing", "true");
+    await page.keyboard.press("Control+F9");
+    await expect(recHotkey).toHaveText("Ctrl+F9");
+    await page.getByRole("button", { name: "Save preferences" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Preferences saved." })).toBeVisible();
+
+    // Record tab reflects the updated hotkey and allows direct capture.
+    await page.getByRole("button", { name: "Record", exact: true }).click();
+    await expect(page.getByLabel("Record / Stop", { exact: true })).toHaveText("Ctrl+F9");
+
+    // Mouse side buttons navigate Back (button 3) and Forward (button 4).
+    await page.evaluate(() => {
+      window.dispatchEvent(new MouseEvent("mouseup", { button: 3, bubbles: true }));
+    });
+    await expect(page.getByRole("heading", { name: "Settings", level: 2 })).toBeVisible();
+
+    await page.evaluate(() => {
+      window.dispatchEvent(new MouseEvent("mouseup", { button: 4, bubbles: true }));
+    });
+    await expect(page.getByRole("heading", { name: "Record", level: 2 })).toBeVisible();
   });
 });

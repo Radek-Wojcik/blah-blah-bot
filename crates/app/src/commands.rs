@@ -197,12 +197,13 @@ pub fn save_settings(
     state: State<'_, AppState>,
     settings: Settings,
 ) -> IpcResult<()> {
+    let previous = state.settings()?;
     // A folder that is refused must not leave new hotkeys registered.
     settings
-        .check_new_locations(&state.settings()?)
+        .check_new_locations(&previous)
         .map_err(|p| IpcError::new("invalid", p.message))?;
     // Register first: a hotkey that is taken must not be saved.
-    hotkeys::register(&app, &settings)?;
+    hotkeys::replace(&app, &settings, &previous)?;
     state.save_settings(settings)
 }
 

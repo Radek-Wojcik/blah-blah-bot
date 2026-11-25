@@ -171,7 +171,8 @@ test.describe("main window on the mock backend", () => {
     await page.goto("/?view=main&backend=mock");
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByRole("tab", { name: "Preferences" }).click();
-    await page.getByLabel("Record / Stop hotkey").fill("Ctrl+F9");
+    await page.getByLabel("Record / Stop hotkey", { exact: true }).click();
+    await page.keyboard.press("Control+F9");
     await page.getByRole("button", { name: "Save preferences", exact: true }).click();
     await expect(page.getByRole("status")).toHaveText("Preferences saved.");
   });
@@ -372,7 +373,7 @@ test.describe("transcript on the mock backend", () => {
     await expect(page.getByText("excluded from reports")).toHaveCount(2);
 
     // Leave the transcript and open it again: the backend kept the edits.
-    await page.getByRole("button", { name: "Back to meetings" }).click();
+    await page.getByRole("button", { name: "Back", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Nomad rover", level: 2 })).toBeVisible();
     const row = page
       .getByRole("list", { name: "Meetings list" })
@@ -484,7 +485,7 @@ test.describe("speakers on the mock backend", () => {
     await expect(page.getByRole("heading", { name: "Transcript" })).toBeVisible();
     await page.getByRole("button", { name: "Name speakers" }).click();
     await expect(page.getByRole("heading", { name: "Speakers" })).toBeVisible();
-    await page.getByRole("button", { name: "Back to meetings" }).click();
+    await page.getByRole("button", { name: "Back", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Nomad rover", level: 2 })).toBeVisible();
 
     // A standalone meeting without a finished job offers no labeling button on its row.
