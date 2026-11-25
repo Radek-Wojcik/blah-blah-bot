@@ -119,7 +119,7 @@ flowchart LR
 
 **Stop and ask**
 - UI direction after the first widget and main window mockups;
-- repository visibility at the end of the stage.
+- repository visibility (done: the repository is public).
 
 ---
 

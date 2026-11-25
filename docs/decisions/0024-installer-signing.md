@@ -73,7 +73,7 @@ For MSIX packages published through the Microsoft Store, Microsoft re-signs the 
 - Each unsigned release starts with zero reputation, so the warning does not fade between versions.
 - The signing step and `SHA256SUMS.txt` are part of the workflow in either case, so adopting an option later is a secrets and configuration change, not a pipeline rewrite.
 - Options 2 and 4 depend on facts that outside parties control (eligible regions, the foundation's acceptance). Option 3 depends on a hardware or cloud key and on the CA's validation rules.
-- A public repository is a precondition for option 4 and is independent of the other options. The repository is currently private.
+- A public repository is a precondition for option 4 and is independent of the other options. The repository is public.
 
 ## Alternatives
 
