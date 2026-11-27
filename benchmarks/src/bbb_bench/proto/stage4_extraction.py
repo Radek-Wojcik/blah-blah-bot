@@ -233,6 +233,7 @@ def build_context(
     *,
     speakers: Sequence[str],
     meeting_date: str,
+    participants: Sequence[str] | None = None,
     mode: str = "fixed",
     output_language: str = "auto",
     sections: Sequence[dict[str, str]] = (),
@@ -241,12 +242,13 @@ def build_context(
 ) -> dict[str, Any]:
     """`work/context.json` (schemas/cycle-context.schema.json): no glossary, no open topics,
     no issues, no previous items."""
+    roster = speakers if participants is None else participants
     return {
         "version": 1,
         "cycle": CYCLE_ID,
         "name": "Stage 4 benchmark",
         "meeting_date": meeting_date,
-        "participants": participants_of(speakers),
+        "participants": participants_of(roster),
         "glossary": [],
         "instruction": "",
         "output_language": output_language,
@@ -840,6 +842,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 build_context(
                     speakers=item.script["speakers"],
                     meeting_date=item.annotation["meeting_date"],
+                    participants=item.annotation.get("participants"),
                     output_language=language,
                 ),
                 args.mode,
@@ -1000,6 +1003,7 @@ def run_modes(args: argparse.Namespace) -> dict[str, Any]:
     base = build_context(
         speakers=item.script["speakers"],
         meeting_date=item.annotation["meeting_date"],
+        participants=item.annotation.get("participants"),
         output_language=language,
     )
     transcript = build_transcript(

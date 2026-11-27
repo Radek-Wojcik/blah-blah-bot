@@ -49,6 +49,7 @@
           "type": { "enum": ["task", "decision", "topic", "note", "idea", "budget"] },
           "text": { "type": "string", "minLength": 1 },
           "assignee": { "type": ["string", "null"] },
+          "assignee_name": { "type": ["string", "null"], "minLength": 1, "description": "Spoken name of a named person not in Participants, or null" },
           "due": { "type": ["string", "null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
           "certainty": {
             "type": "object",

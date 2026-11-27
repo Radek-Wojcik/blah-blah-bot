@@ -438,6 +438,9 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     [keyOf("NOMAD", "jan"), { sampleCount: 2, speechMs: 7 * MIN + 45_000 }],
     [keyOf("NOMAD", "kasia"), { sampleCount: 3, speechMs: 11 * MIN + 5_000 }],
   ]);
+  const extraProjects = new Map<string, Set<string>>();
+  const removedProjects = new Map<string, Set<string>>();
+  const mergedDeleted = new Set<string>();
   /** The participants of a cycle as the voice screens see them. */
   const cycleViews = (cycleId: string): ParticipantView[] =>
     cycles
@@ -474,6 +477,16 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     return n;
   };
   const sameName = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  const participantDisplayName = (pid: string | null | undefined): string | null => {
+    if (!pid) return null;
+    const local = participants.find((p) => p.id === pid);
+    if (local) return local.name;
+    const inCycle = splitKey(pid);
+    if (inCycle) {
+      return cycles.participants(inCycle.cycleId).find((p) => p.id === inCycle.id)?.name ?? null;
+    }
+    return null;
+  };
   /** Like the backend: a meeting whose voices are all decided loses its sample clips. */
   function voicesData(id: string): VoicesData {
     const list = voicesOf(id);
@@ -481,18 +494,34 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     if (allConfirmed) list.forEach((v) => (v.clips = []));
     return {
       meetingId: id,
-      voices: structuredClone(list),
+      cycleId: cycleOf(id),
+      voices: structuredClone(list).map((v) => ({
+        ...v,
+        assignedParticipantName:
+          v.assignedParticipantName ?? participantDisplayName(v.assignedParticipantId),
+      })),
       participants: participantsFor(undefined, id),
       allConfirmed,
     };
   }
   function assign(id: string, voiceId: string, participantId: string | null): VoicesData {
     const v = findVoice(id, voiceId);
-    if (
-      participantId !== null &&
-      !participantsFor(undefined, id).some((p) => p.id === participantId)
-    )
-      fail("not_found", "participant not found");
+    if (participantId !== null) {
+      const knownInMeeting = participantsFor(undefined, id).some((p) => p.id === participantId);
+      const knownGlobal = participants.some((p) => p.id === participantId);
+      const knownOtherCycle = cycles
+        .listCycles()
+        .some((c) => cycles.participants(c.id).some((p) => keyOf(c.id, p.id) === participantId));
+      if (!knownInMeeting && !knownGlobal && !knownOtherCycle) {
+        fail("not_found", "participant not found");
+      }
+      const cid = cycleOf(id);
+      if (cid && !knownInMeeting) {
+        const extra = extraProjects.get(participantId) ?? new Set<string>();
+        extra.add(cid);
+        extraProjects.set(participantId, extra);
+      }
+    }
     v.assignedParticipantId = participantId;
     v.confirmed = true;
     return voicesData(id);
@@ -999,8 +1028,18 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       return voicesData(id);
     },
     confirmMatches: async (id) => {
-      for (const v of voicesOf(id))
-        if (v.decision === "auto" && !v.confirmed && v.assignedParticipantId) v.confirmed = true;
+      const cid = cycleOf(id);
+      const inCycle = participantsFor(undefined, id);
+      for (const v of voicesOf(id)) {
+        if (v.decision === "auto" && !v.confirmed && v.assignedParticipantId) {
+          if (cid && !inCycle.some((p) => p.id === v.assignedParticipantId)) {
+            const extra = extraProjects.get(v.assignedParticipantId) ?? new Set<string>();
+            extra.add(cid);
+            extraProjects.set(v.assignedParticipantId, extra);
+          }
+          v.confirmed = true;
+        }
+      }
       return voicesData(id);
     },
     voiceClip: async (id, voiceId, idx) => {
@@ -1621,22 +1660,28 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     }),
     listAllVoiceProfiles: async (): Promise<GlobalVoiceProfile[]> => {
       const allCycles = cycles.listCycles();
-      const projectsForName = (name: string): string[] =>
-        allCycles
-          .filter((c) => cycles.participants(c.id).some((p) => sameName(p.name, name)))
-          .map((c) => c.id)
-          .sort();
       const out: GlobalVoiceProfile[] = [];
+      const seenIds = new Set<string>();
       for (const c of allCycles.filter((x) => x.valid)) {
         for (const p of cycles.participants(c.id)) {
           const fullId = keyOf(c.id, p.id);
+          if (mergedDeleted.has(fullId)) continue;
+          seenIds.add(fullId);
           const st = stats.get(fullId);
           const sampleCount = st?.sampleCount ?? 0;
+          const projSet = new Set<string>();
+          if (!removedProjects.get(fullId)?.has(c.id)) {
+            projSet.add(c.id);
+          }
+          for (const extra of extraProjects.get(fullId) ?? []) {
+            projSet.add(extra);
+          }
+          const projects = [...projSet].sort();
           out.push({
             id: fullId,
             name: p.name,
-            cycleId: c.id,
-            projects: projectsForName(p.name),
+            cycleId: projects[0] ?? null,
+            projects,
             sampleCount,
             updatedUnixMs: DEMO_NOW - 3600_000,
             hasSampleClip: sampleCount > 0,
@@ -1645,15 +1690,16 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       }
       const legacyShadowIds = new Set(["p-alex", "p-jan", "p-kasia"]);
       for (const p of participants) {
-        if (
-          !legacyShadowIds.has(p.id) &&
-          !out.some((existing) => sameName(existing.name, p.name) && existing.cycleId !== null)
-        ) {
+        if (mergedDeleted.has(p.id) || seenIds.has(p.id)) continue;
+        if (!legacyShadowIds.has(p.id)) {
+          const projects = [...(extraProjects.get(p.id) ?? [])]
+            .filter((cid) => !removedProjects.get(p.id)?.has(cid))
+            .sort();
           out.push({
             id: p.id,
             name: p.name,
-            cycleId: null,
-            projects: projectsForName(p.name),
+            cycleId: projects[0] ?? null,
+            projects,
             sampleCount: p.sampleCount,
             updatedUnixMs: DEMO_NOW - 7200_000,
             hasSampleClip: p.sampleCount > 0,
@@ -1722,11 +1768,158 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         id: p.id,
         name: p.name,
         cycleId: null,
-        projects: projectsForName(p.name),
+        projects: [...(extraProjects.get(p.id) ?? [])].sort(),
         sampleCount: p.sampleCount,
         updatedUnixMs: DEMO_NOW,
         hasSampleClip: true,
       };
+    },
+    addProfileToProject: async (participantId, cycleId) => {
+      const removed = removedProjects.get(participantId);
+      removed?.delete(cycleId);
+      const extra = extraProjects.get(participantId) ?? new Set<string>();
+      extra.add(cycleId);
+      extraProjects.set(participantId, extra);
+      emitCycles();
+      const all = cycles.listCycles().flatMap((c) =>
+        cycles.participants(c.id).map((p) => ({
+          id: keyOf(c.id, p.id),
+          name: p.name,
+          cycleId: c.id,
+        })),
+      );
+      const foundCycle = all.find((x) => x.id === participantId);
+      const foundLocal = participants.find((x) => x.id === participantId);
+      if (!foundCycle && !foundLocal) fail("not_found", "participant not found");
+      const name = foundCycle?.name ?? foundLocal!.name;
+      const projSet = new Set<string>(extra);
+      if (foundCycle && !removed?.has(foundCycle.cycleId)) projSet.add(foundCycle.cycleId);
+      const sampleCount = foundCycle
+        ? (stats.get(participantId)?.sampleCount ?? 0)
+        : foundLocal!.sampleCount;
+      return {
+        id: participantId,
+        name,
+        cycleId: [...projSet].sort()[0] ?? null,
+        projects: [...projSet].sort(),
+        sampleCount,
+        updatedUnixMs: DEMO_NOW,
+        hasSampleClip: sampleCount > 0,
+      };
+    },
+    removeProfileFromProject: async (participantId, cycleId) => {
+      extraProjects.get(participantId)?.delete(cycleId);
+      const removed = removedProjects.get(participantId) ?? new Set<string>();
+      removed.add(cycleId);
+      removedProjects.set(participantId, removed);
+      emitCycles();
+      const inCycle = splitKey(participantId);
+      const foundLocal = participants.find((x) => x.id === participantId);
+      const cycleName = inCycle
+        ? cycles.participants(inCycle.cycleId).find((p) => p.id === inCycle.id)?.name
+        : undefined;
+      if (!cycleName && !foundLocal) fail("not_found", "participant not found");
+      const projSet = new Set<string>(extraProjects.get(participantId) ?? []);
+      if (inCycle && !removed.has(inCycle.cycleId)) projSet.add(inCycle.cycleId);
+      const sampleCount = inCycle
+        ? (stats.get(participantId)?.sampleCount ?? 0)
+        : foundLocal!.sampleCount;
+      return {
+        id: participantId,
+        name: cycleName ?? foundLocal!.name,
+        cycleId: [...projSet].sort()[0] ?? null,
+        projects: [...projSet].sort(),
+        sampleCount,
+        updatedUnixMs: DEMO_NOW,
+        hasSampleClip: sampleCount > 0,
+      };
+    },
+    mergeParticipants: async (keepId, dropId) => {
+      if (keepId === dropId) fail("invalid", "cannot merge a participant with itself");
+      if (mergedDeleted.has(keepId) || mergedDeleted.has(dropId)) {
+        fail("not_found", "participant not found");
+      }
+      const keepInCycle = splitKey(keepId);
+      const dropInCycle = splitKey(dropId);
+      const keepLocal = participants.find((x) => x.id === keepId);
+      const dropLocal = participants.find((x) => x.id === dropId);
+      const keepCycleEntry = keepInCycle
+        ? cycles.participants(keepInCycle.cycleId).find((p) => p.id === keepInCycle.id)
+        : undefined;
+      const dropCycleEntry = dropInCycle
+        ? cycles.participants(dropInCycle.cycleId).find((p) => p.id === dropInCycle.id)
+        : undefined;
+      if (!keepLocal && !keepCycleEntry) fail("not_found", "participant not found");
+      if (!dropLocal && !dropCycleEntry) fail("not_found", "participant not found");
+      const keepProjs = new Set<string>(extraProjects.get(keepId) ?? []);
+      if (keepInCycle && !removedProjects.get(keepId)?.has(keepInCycle.cycleId)) {
+        keepProjs.add(keepInCycle.cycleId);
+      }
+      const dropProjs = new Set<string>(extraProjects.get(dropId) ?? []);
+      if (dropInCycle && !removedProjects.get(dropId)?.has(dropInCycle.cycleId)) {
+        dropProjs.add(dropInCycle.cycleId);
+      }
+      for (const proj of dropProjs) {
+        if (keepProjs.has(proj)) {
+          fail("invalid", `cannot merge participants that both belong to project ${proj}`);
+        }
+      }
+      const keepSt = stats.get(keepId) ?? {
+        sampleCount: keepLocal?.sampleCount ?? 0,
+        speechMs: keepLocal?.speechMs ?? 0,
+      };
+      const dropSt = stats.get(dropId) ?? {
+        sampleCount: dropLocal?.sampleCount ?? 0,
+        speechMs: dropLocal?.speechMs ?? 0,
+      };
+      const totalSamples = Math.min(20, keepSt.sampleCount + dropSt.sampleCount);
+      const totalSpeech = keepSt.speechMs + dropSt.speechMs;
+      stats.set(keepId, { sampleCount: totalSamples, speechMs: totalSpeech });
+      stats.delete(dropId);
+      if (keepLocal) {
+        keepLocal.sampleCount = totalSamples;
+        keepLocal.speechMs = totalSpeech;
+      }
+      const mergedProjs = new Set([...keepProjs, ...dropProjs]);
+      const keepRemoved = removedProjects.get(keepId);
+      if (keepRemoved) {
+        for (const proj of dropProjs) keepRemoved.delete(proj);
+      }
+      extraProjects.set(keepId, mergedProjs);
+      extraProjects.delete(dropId);
+      removedProjects.delete(dropId);
+      mergedDeleted.add(dropId);
+      participants = participants.filter((p) => p.id !== dropId);
+      for (const list of voices.values()) {
+        for (const v of list) {
+          if (v.assignedParticipantId === dropId) v.assignedParticipantId = keepId;
+          if (v.suggestedParticipantId === dropId) v.suggestedParticipantId = keepId;
+        }
+      }
+      emitCycles();
+      const keepName = keepCycleEntry?.name ?? keepLocal!.name;
+      return {
+        id: keepId,
+        name: keepName,
+        cycleId: [...mergedProjs].sort()[0] ?? null,
+        projects: [...mergedProjs].sort(),
+        sampleCount: totalSamples,
+        updatedUnixMs: DEMO_NOW,
+        hasSampleClip: totalSamples > 0,
+      };
+    },
+    undoVoiceDecision: async (id, voiceId, unlinkCycleId = null) => {
+      const v = findVoice(id, voiceId);
+      const prev = v.assignedParticipantId;
+      v.assignedParticipantId = undefined;
+      v.confirmed = false;
+      if (unlinkCycleId && prev) {
+        extraProjects.get(prev)?.delete(unlinkCycleId);
+        const removed = removedProjects.get(prev) ?? new Set<string>();
+        removed.add(unlinkCycleId);
+        removedProjects.set(prev, removed);
+      }
+      return voicesData(id);
     },
     ...bridge.methods,
     ...detection.methods,

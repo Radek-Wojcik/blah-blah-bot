@@ -775,6 +775,7 @@ mod tests {
                     origin: TaskOrigin::Issue,
                     github: Some("alex-example".into()),
                     participant: None,
+                    assignee_name: None,
                     due: Some("2026-11-01".into()),
                     issue: Some(1),
                     relates_to: None,

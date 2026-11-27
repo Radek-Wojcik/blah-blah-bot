@@ -36,9 +36,12 @@ def test_annotations_point_at_their_turns(lang, mixed):
     for item in m.tasks + m.decisions + m.budgets:
         assert m.turns[item["turn"]]["text"] == item["quote"]
     for task in m.tasks:
-        assert task["assignee"] in m.speakers
-        due = date.fromisoformat(task["due"])
-        assert due.weekday() < 5 and due > m.meeting_date
+        assert task["assignee"] in m.speakers or (
+            task["assignee"] is None and bool(task.get("assignee_name"))
+        )
+        if task["due"] is not None:
+            due = date.fromisoformat(task["due"])
+            assert due.weekday() < 5 and due > m.meeting_date
 
 
 def test_duration_target_is_met():

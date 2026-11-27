@@ -31,8 +31,14 @@ def _similarity(a: str, b: str) -> float:
     return 2 * p * r / (p + r)
 
 
+def _owner(item: Item) -> tuple[str | None, str | None]:
+    name = item.get("assignee_name")
+    norm_name = str(name).strip().casefold() if isinstance(name, str) and name.strip() else None
+    return (item.get("assignee"), norm_name)
+
+
 def _agrees(r: Item, p: Item) -> bool:
-    return r.get("assignee") == p.get("assignee") and r.get("due") == p.get("due")
+    return _owner(r) == _owner(p) and r.get("due") == p.get("due")
 
 
 def _match(
@@ -75,7 +81,10 @@ def _field_accuracy(
     matches: Sequence[tuple[int, int]],
     field: str,
 ) -> float:
-    ok = sum(1 for i, j in matches if reference[i].get(field) == predicted[j].get(field))
+    if field == "assignee":
+        ok = sum(1 for i, j in matches if _owner(reference[i]) == _owner(predicted[j]))
+    else:
+        ok = sum(1 for i, j in matches if reference[i].get(field) == predicted[j].get(field))
     return ok / len(matches) if matches else 0.0
 
 
@@ -128,10 +137,10 @@ def score_by_owner_due(
     a diagnostic next to `score_extraction`, never a replacement: it is blind to the task text
     and so more lenient than the text-based figures.
     """
-    pool = Counter((r.get("assignee"), r.get("due")) for r in reference)
+    pool = Counter((_owner(r), r.get("due")) for r in reference)
     tp = 0
     for p in predicted:
-        key = (p.get("assignee"), p.get("due"))
+        key = (_owner(p), p.get("due"))
         if pool[key] > 0:
             pool[key] -= 1
             tp += 1

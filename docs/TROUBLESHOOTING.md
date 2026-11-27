@@ -76,7 +76,7 @@ The installer is not signed ([ADR 0024](decisions/0024-installer-signing.md)), s
 
 ### WebView2 is missing
 
-The installer downloads the Microsoft WebView2 runtime when it is not installed (Windows 11 and current Windows 10 have it). That needs an internet connection during installation. If the download is blocked, install the runtime from Microsoft and run the installer again.
+The installer does not download or bundle the Microsoft Edge WebView2 runtime (`webviewInstallMode: skip`), because Windows 11 and current Windows 10 already include it. If the application fails to open its window on an older Windows 10 machine, install the Evergreen WebView2 Runtime from Microsoft and launch the application again.
 
 ## Offline use
 

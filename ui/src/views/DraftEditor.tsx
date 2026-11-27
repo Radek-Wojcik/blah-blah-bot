@@ -614,12 +614,50 @@ function ItemCard(props: {
   onError: (message: string | null) => void;
 }) {
   const { item, draft, people, movable, locked, sourceOpen } = props;
+  const backend = useBackend();
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(item.text);
+  const [addingPerson, setAddingPerson] = useState(false);
   // Set when Escape or a save already ended the edit, so the blur that follows does nothing.
   const finished = useRef(false);
   const targets = moveTargets(draft, item);
   const unverified = isUnverified(item);
+
+  const addToProjectPeople = async (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const target = trimmed.toLowerCase();
+    const existing = people.find((p) => p.name.trim().toLowerCase() === target);
+    setAddingPerson(true);
+    try {
+      if (existing) {
+        await props.onUpdate({ assignee: existing.id });
+        return;
+      }
+      const created = await backend.createParticipant(trimmed, draft.cycle);
+      await props.onUpdate({ assignee: created.cycleParticipantId ?? created.id });
+    } catch (e) {
+      if (
+        (isIpcError(e) && e.code === "duplicate") ||
+        errorMessage(e).toLowerCase().includes("duplicate")
+      ) {
+        try {
+          const listed = await backend.listParticipants(draft.cycle);
+          const match = listed.find((p) => p.name.trim().toLowerCase() === target);
+          if (match) {
+            await props.onUpdate({ assignee: match.cycleParticipantId ?? match.id });
+            return;
+          }
+        } catch (err) {
+          props.onError(errorMessage(err));
+          return;
+        }
+      }
+      props.onError(errorMessage(e));
+    } finally {
+      setAddingPerson(false);
+    }
+  };
 
   const begin = () => {
     finished.current = false;
@@ -721,28 +759,52 @@ function ItemCard(props: {
 
       {item.type === "task" && (
         <div className="item-fields">
-          <label>
-            Assignee
-            <span className="field-with-mark">
-              <select
-                aria-label={`Assignee of: ${item.text}`}
-                value={item.assignee ?? ""}
-                disabled={locked}
-                onChange={(e) => void props.onUpdate({ assignee: e.target.value || null })}
-              >
-                <option value="">Unassigned</option>
-                {item.assignee !== null && !people.some((p) => p.id === item.assignee) && (
-                  <option value={item.assignee}>{item.assignee}</option>
-                )}
-                {people.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-              <Mark level={item.certainty.assignee} />
-            </span>
-          </label>
+          <div className="item-field">
+            <label>
+              Assignee
+              <span className="field-with-mark">
+                <select
+                  aria-label={`Assignee of: ${item.text}`}
+                  value={item.assignee ?? ""}
+                  disabled={locked}
+                  onChange={(e) => void props.onUpdate({ assignee: e.target.value || null })}
+                >
+                  <option value="">Unassigned</option>
+                  {item.assignee !== null && !people.some((p) => p.id === item.assignee) && (
+                    <option value={item.assignee}>{item.assignee}</option>
+                  )}
+                  {people.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+                <Mark level={item.certainty.assignee} />
+              </span>
+            </label>
+            {item.assignee === null && item.assigneeName && (
+              <span className="assignee-unlisted">
+                <span>{item.assigneeName} (not in project people)</span>
+                <button
+                  type="button"
+                  className="btn btn-small btn-ghost"
+                  disabled={locked || addingPerson}
+                  onClick={() => void addToProjectPeople(item.assigneeName!)}
+                >
+                  Add to project people
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-small btn-ghost"
+                  aria-label={`Clear the assignee name of: ${item.text}`}
+                  disabled={locked || addingPerson}
+                  onClick={() => void props.onUpdate({ assignee: null })}
+                >
+                  Clear
+                </button>
+              </span>
+            )}
+          </div>
           <label>
             Due
             <span className="field-with-mark">

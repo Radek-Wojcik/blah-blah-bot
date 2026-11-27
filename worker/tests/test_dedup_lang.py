@@ -100,6 +100,26 @@ def test_result_is_ordered_by_time():
     ]
 
 
+def test_assignee_name_merges_and_conflicts_without_keyerror():
+    a = item("Opróżnić plecak", 0, 100)
+    a["assignee_name"] = None
+    b = item("Opróżnić plecak", 1, 105)
+    b["assignee_name"] = "Marek"
+    b["certainty"]["assignee"] = "stated"
+    (merged,) = dedup.merge_duplicates([a, b])
+    assert merged["assignee"] is None
+    assert merged["assignee_name"] == "Marek"
+    assert merged["certainty"]["assignee"] == "stated"
+
+    c = item("Opróżnić plecak", 0, 200)
+    c["assignee_name"] = "Marek"
+    c["certainty"]["assignee"] = "stated"
+    d = item("Opróżnić plecak", 1, 205)
+    d["assignee_name"] = "Tomek"
+    d["certainty"]["assignee"] = "stated"
+    assert len(dedup.merge_duplicates([c, d])) == 2
+
+
 # Language ----------------------------------------------------------------------------------
 
 PL = [
@@ -136,3 +156,21 @@ def test_auto_tie_goes_to_english():
 def test_mixed_speech_with_a_clear_majority():
     mixed = [*PL, *PL, EN[1]]
     assert lang.resolve("auto", "en", mixed) == "pl"
+
+
+def test_a_whitespace_assignee_name_does_not_make_an_item_more_complete():
+    blank = item("Opróżnić plecak", 0, 100)
+    blank["assignee_name"] = "   "
+    empty = item("Opróżnić plecak", 1, 105)
+    assert dedup._completeness(blank) == dedup._completeness(empty)
+
+
+def test_merging_an_equal_name_keeps_the_best_certainty():
+    a = item("Opróżnić plecak", 0, 100)
+    a["assignee_name"] = "Marek"
+    a["certainty"]["assignee"] = "stated"
+    b = item("Opróżnić plecak", 1, 105)
+    b["assignee_name"] = "marek"
+    b["certainty"]["assignee"] = "inferred"
+    (merged,) = dedup.merge_duplicates([a, b])
+    assert merged["certainty"]["assignee"] == "stated"
