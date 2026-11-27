@@ -227,43 +227,40 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
 
   return (
     <div className="settings-pane">
-      <div className="panel quiet">
-        <div className="panel-body">
-          <div className="actions" style={{ justifyContent: "space-between", marginBottom: 12 }}>
-            <div>
-              <h3 className="sub-head" style={{ margin: 0 }}>
-                AI Models
-              </h3>
-              <p className="person-meta" style={{ margin: "4px 0 0" }}>
-                Configure which language and vision models turn transcripts and screenshots into
-                notes.
-              </p>
-            </div>
-            <button
-              type="button"
-              className="btn"
-              disabled={detecting}
-              onClick={() => void handleAutoDetect()}
-            >
-              {detecting ? "Scanning disk…" : "Auto-detect models on disk"}
-            </button>
-          </div>
-          {detectMessage && (
-            <p className="secret-result" role="status">
-              {detectMessage}
-            </p>
-          )}
+      <form
+        className="settings-pane"
+        aria-label="AI Models"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void save();
+        }}
+      >
+        {llm && (
+          <div className="panel quiet">
+            <div className="panel-body">
+              <div className="settings-card-head">
+                <div>
+                  <h3 className="sub-head">Language model</h3>
+                  <p className="person-meta settings-card-sub">
+                    Configure which language model turns transcripts into notes.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={detecting}
+                  onClick={() => void handleAutoDetect()}
+                >
+                  {detecting ? "Scanning disk…" : "Auto-detect models on disk"}
+                </button>
+              </div>
+              {detectMessage && (
+                <p className="secret-result" role="status" style={{ marginBottom: 12 }}>
+                  {detectMessage}
+                </p>
+              )}
 
-          <form
-            className="form"
-            aria-label="AI Models"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void save();
-            }}
-          >
-            {llm && (
-              <>
+              <div className="form">
                 <div className="field-block">
                   <div className="field-label-row">
                     <label htmlFor={defaultLlmId}>Default LLM backend</label>
@@ -305,16 +302,7 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
                   </select>
                 </div>
 
-                <fieldset className="llm-group">
-                  <legend>Managed local server</legend>
-                  <label>
-                    llama-server executable
-                    <input
-                      value={draft.llamaServerPath}
-                      placeholder="C:\Tools\llama\llama-server.exe"
-                      onChange={(e) => setDraft({ ...draft, llamaServerPath: e.target.value })}
-                    />
-                  </label>
+                <div className="settings-grid-2col">
                   <label>
                     Default language model (GGUF)
                     <input
@@ -364,81 +352,125 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
                       }
                     />
                   </div>
-                  <label>
-                    Models folder
-                    <span className="path-row">
-                      <input
-                        aria-label="Models folder"
-                        value={draft.modelsDir}
-                        placeholder="Documents\BlahBlahBot\models"
-                        onChange={(e) => setDraft({ ...draft, modelsDir: e.target.value })}
-                      />
-                      <BrowseButton
-                        target={{ folder: true }}
-                        label="Browse for the models folder"
-                        title="Choose the models folder"
-                        onPicked={(path) => setDraft({ ...draft, modelsDir: path })}
-                      />
-                    </span>
-                  </label>
-                </fieldset>
+                </div>
 
-                <fieldset className="llm-group">
-                  <legend>External local server (OpenAI-compatible endpoint)</legend>
-                  <label>
-                    Endpoint URL
-                    <input
-                      value={llm.external.baseUrl}
-                      placeholder="http://127.0.0.1:11434/v1"
-                      onChange={(e) =>
-                        setLlm({ external: { ...llm.external, baseUrl: e.target.value } })
-                      }
-                    />
-                  </label>
-                  <label>
-                    Model name
-                    <input
-                      value={llm.external.model}
-                      onChange={(e) =>
-                        setLlm({ external: { ...llm.external, model: e.target.value } })
-                      }
-                    />
-                  </label>
-                  {llm.externalHostIsRemote && (
-                    <p className="error" role="note">
-                      This server is not on this machine or private network. Manage its API key in
-                      the Connectors tab.
+                <div className="settings-grid-2col">
+                  <div className="settings-subcard">
+                    <p className="token-state">
+                      External local server (OpenAI-compatible endpoint)
                     </p>
-                  )}
-                </fieldset>
+                    <label>
+                      Endpoint URL
+                      <input
+                        value={llm.external.baseUrl}
+                        placeholder="http://127.0.0.1:11434/v1"
+                        onChange={(e) =>
+                          setLlm({ external: { ...llm.external, baseUrl: e.target.value } })
+                        }
+                      />
+                    </label>
+                    <label>
+                      Model name
+                      <input
+                        value={llm.external.model}
+                        onChange={(e) =>
+                          setLlm({ external: { ...llm.external, model: e.target.value } })
+                        }
+                      />
+                    </label>
+                    {llm.externalHostIsRemote && (
+                      <p className="error" role="note">
+                        This server is not on this machine or private network. Manage its API key in
+                        the Connectors tab.
+                      </p>
+                    )}
+                  </div>
 
-                <fieldset className="llm-group">
-                  <legend>Cloud endpoint (per-meeting only)</legend>
-                  <p className="person-meta" style={{ margin: 0 }}>
-                    Cloud endpoints are never selected automatically. Store your External / Cloud
-                    LLM API keys in Connectors, and confirm per meeting before sending transcripts.
-                  </p>
-                  <label>
-                    Cloud endpoint URL
-                    <input
-                      value={llm.cloud.baseUrl}
-                      placeholder="https://api.example.com/v1"
-                      onChange={(e) => setLlm({ cloud: { ...llm.cloud, baseUrl: e.target.value } })}
-                    />
-                  </label>
-                  <label>
-                    Cloud model name
-                    <input
-                      value={llm.cloud.model}
-                      onChange={(e) => setLlm({ cloud: { ...llm.cloud, model: e.target.value } })}
-                    />
-                  </label>
-                </fieldset>
-              </>
-            )}
+                  <div className="settings-subcard">
+                    <p className="token-state">Cloud endpoint (per-meeting only)</p>
+                    <p className="person-meta" style={{ margin: 0 }}>
+                      Cloud endpoints are never selected automatically. Store your External / Cloud
+                      LLM API keys in Connectors, and confirm per meeting before sending
+                      transcripts.
+                    </p>
+                    <label>
+                      Cloud endpoint URL
+                      <input
+                        value={llm.cloud.baseUrl}
+                        placeholder="https://api.example.com/v1"
+                        onChange={(e) =>
+                          setLlm({ cloud: { ...llm.cloud, baseUrl: e.target.value } })
+                        }
+                      />
+                    </label>
+                    <label>
+                      Cloud model name
+                      <input
+                        value={llm.cloud.model}
+                        onChange={(e) => setLlm({ cloud: { ...llm.cloud, model: e.target.value } })}
+                      />
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
-            <fieldset className="llm-group">
-              <legend>Vision & screenshots</legend>
+        <div className="panel quiet">
+          <div className="panel-body">
+            <div className="settings-card-head">
+              <div>
+                <h3 className="sub-head">llama-server</h3>
+                <p className="person-meta settings-card-sub">
+                  Local server executable and models folder used by the managed backend.
+                </p>
+              </div>
+            </div>
+            <div className="form">
+              <div className="settings-grid-2col">
+                <label>
+                  llama-server executable
+                  <input
+                    value={draft.llamaServerPath}
+                    placeholder="C:\Tools\llama\llama-server.exe"
+                    onChange={(e) => setDraft({ ...draft, llamaServerPath: e.target.value })}
+                  />
+                </label>
+                <label>
+                  Models folder
+                  <span className="path-row">
+                    <input
+                      aria-label="Models folder"
+                      value={draft.modelsDir}
+                      placeholder="Documents\BlahBlahBot\models"
+                      onChange={(e) => setDraft({ ...draft, modelsDir: e.target.value })}
+                    />
+                    <BrowseButton
+                      target={{ folder: true }}
+                      label="Browse for the models folder"
+                      title="Choose the models folder"
+                      onPicked={(path) => setDraft({ ...draft, modelsDir: path })}
+                    />
+                  </span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="panel quiet">
+          <div className="panel-body">
+            <div className="settings-card-head">
+              <div>
+                <h3 className="sub-head">Vision</h3>
+                <p className="person-meta settings-card-sub">
+                  Describe captured screenshots and slides so visual context is included in your
+                  notes.
+                </p>
+              </div>
+            </div>
+            <div className="form">
               <div className="field-block">
                 <div className="field-label-row">
                   <label htmlFor={visionPathId}>Vision model path (GGUF)</label>
@@ -492,50 +524,49 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
               <small>
                 When enabled, captured screenshots are kept on disk without loading a vision model.
               </small>
-            </fieldset>
-
-            {llmProblem && (
-              <p className="error" role="alert">
-                {llmProblem}
-              </p>
-            )}
-            {message && (
-              <p
-                className={message.kind === "error" ? "error" : "secret-result"}
-                role={message.kind === "error" ? "alert" : "status"}
-              >
-                {message.text}
-              </p>
-            )}
-            <div className="actions">
-              <button
-                type="submit"
-                className="btn btn-record"
-                disabled={llmProblem !== null || !dirty}
-              >
-                Save AI model settings
-              </button>
             </div>
-          </form>
+          </div>
         </div>
-      </div>
+
+        <div className="settings-save-bar">
+          {llmProblem && (
+            <p className="error" role="alert">
+              {llmProblem}
+            </p>
+          )}
+          {message && (
+            <p
+              className={message.kind === "error" ? "error" : "secret-result"}
+              role={message.kind === "error" ? "alert" : "status"}
+            >
+              {message.text}
+            </p>
+          )}
+          <button type="submit" className="btn btn-record" disabled={llmProblem !== null || !dirty}>
+            Save AI model settings
+          </button>
+        </div>
+      </form>
 
       <div className="panel quiet">
         <div className="panel-body">
-          <div className="field-label-row" style={{ marginBottom: 8 }}>
-            <h3 className="sub-head" style={{ margin: 0 }}>
-              Model downloads & cache
-            </h3>
-            <HelpPopover
-              title="Hugging Face gated models"
-              recommended="Accept model terms on Hugging Face and store a Read token in Connectors"
-            >
-              <p>
-                Speech recognition and vision models download openly. Gated speaker diarization
-                weights require accepting the license on Hugging Face and saving a Hugging Face
-                Token under Connectors.
-              </p>
-            </HelpPopover>
+          <div className="settings-card-head">
+            <div>
+              <div className="field-label-row">
+                <h3 className="sub-head">Speech models</h3>
+                <HelpPopover
+                  title="Hugging Face gated models"
+                  recommended="Accept model terms on Hugging Face and store a Read token in Connectors"
+                >
+                  <p>
+                    Speech recognition and vision models download openly. Gated speaker diarization
+                    weights require accepting the license on Hugging Face and saving a Hugging Face
+                    Token under Connectors.
+                  </p>
+                </HelpPopover>
+              </div>
+              <p className="person-meta settings-card-sub">Model downloads &amp; cache</p>
+            </div>
           </div>
           {downloadError && (
             <p className="error" role="alert">
@@ -545,6 +576,7 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
           <ul className="models" aria-label="Models">
             {models.map((m) => {
               const p = progress[m.key];
+              const status = m.status ?? (m.cached ? "ready" : "missing");
               return (
                 <li key={m.key} className="model">
                   <div className="model-main">
@@ -553,14 +585,14 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
                       {m.sizeMb !== null && `${m.sizeMb} MB`}
                       {m.gated && " · gated"}
                     </span>
-                    {m.gated && !m.cached && (
+                    {m.gated && status !== "ready" && (
                       <small className="model-note">
                         Requires a Hugging Face Token in Connectors after accepting the model terms.
                       </small>
                     )}
                   </div>
-                  {m.cached ? (
-                    <span className="badge badge-recovered">Cached</span>
+                  {status === "ready" ? (
+                    <span className="badge badge-recovered">Downloaded</span>
                   ) : p ? (
                     <div className="model-progress">
                       <div
@@ -578,6 +610,18 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
                       </div>
                       <small>{p.message}</small>
                     </div>
+                  ) : status === "older" ? (
+                    <span className="person-actions">
+                      <span className="badge">Downloaded (older version, update?)</span>
+                      <button
+                        type="button"
+                        className="btn btn-small"
+                        aria-label={`Update ${m.label}`}
+                        onClick={() => download(m.key)}
+                      >
+                        Update
+                      </button>
+                    </span>
                   ) : (
                     <button
                       type="button"

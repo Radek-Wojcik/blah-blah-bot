@@ -443,7 +443,7 @@ export function ConnectorsTab({ onDirtyChange, registerHandle }: Partial<Editabl
           )}
           {processing?.llm && (
             <div className="settings-grid-2col">
-              <div className="llm-group">
+              <div className="settings-subcard">
                 <p className="token-state" style={{ marginTop: 0 }}>
                   External LLM Server
                 </p>
@@ -492,7 +492,7 @@ export function ConnectorsTab({ onDirtyChange, registerHandle }: Partial<Editabl
                 />
               </div>
 
-              <div className="llm-group">
+              <div className="settings-subcard">
                 <p className="token-state" style={{ marginTop: 0 }}>
                   Cloud LLM API (per-meeting only)
                 </p>
