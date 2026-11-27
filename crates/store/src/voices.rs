@@ -3,10 +3,12 @@
 //! Embeddings are biometric data. They live only in this local database; nothing here is
 //! ever sent anywhere.
 
+use std::collections::HashMap;
+
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-use crate::{Result, Store};
+use crate::{Result, Store, StoreError};
 
 /// A person who can be named as a speaker. `cycle_id` is the cycle the participant belongs
 /// to; `None` is the legacy local list of participants made before cycles existed.
@@ -29,15 +31,11 @@ pub struct ParticipantInfo {
     pub speech_ms: u64,
     pub cycle_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cycle_participant_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projects: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sample_clip_file: Option<String>,
-}
-
-impl ParticipantInfo {
-    /// The participant's id inside its cycle (`cycle.yaml`), for a cycle participant.
-    pub fn cycle_participant_id(&self) -> Option<&str> {
-        let cycle = self.cycle_id.as_deref()?;
-        self.id.strip_prefix(cycle)?.strip_prefix(KEY_SEPARATOR)
-    }
 }
 
 /// Separates the cycle id from the participant id in the key of a cycle participant.
@@ -129,6 +127,8 @@ pub fn blob_to_embedding(b: &[u8]) -> Vec<f32> {
         .collect()
 }
 
+type ParticipantProjects = HashMap<String, Vec<(String, Option<String>)>>;
+
 impl Store {
     // ----- participants -----
 
@@ -137,8 +137,7 @@ impl Store {
         self.create_participant_in(None, id, name, now_ms)
     }
 
-    /// Create a participant of a cycle (or of the local list with `None`). Names are unique
-    /// per cycle, ignoring case.
+    /// Create a participant of a cycle (or of the global list with `None`).
     pub fn create_participant_in(
         &self,
         cycle_id: Option<&str>,
@@ -146,11 +145,24 @@ impl Store {
         name: &str,
         now_ms: i64,
     ) -> Result<()> {
-        self.conn.execute(
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
             "INSERT INTO participants (id, name, created_unix_ms, cycle_id)
              VALUES (?1, ?2, ?3, ?4)",
             params![id, name, now_ms, cycle_id],
         )?;
+        if let Some(cid) = cycle_id {
+            let slug = id
+                .strip_prefix(cid)
+                .and_then(|r| r.strip_prefix(KEY_SEPARATOR));
+            tx.execute(
+                "INSERT INTO project_people (cycle_id, participant_id, cycle_participant_id, created_unix_ms)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(cycle_id, participant_id) DO NOTHING",
+                params![cid, id, slug, now_ms],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -180,30 +192,61 @@ impl Store {
         self.find_participant_by_name_in(None, name)
     }
 
-    /// Find a participant of one cycle (or of the local list with `None`) by name. The
-    /// participants of other cycles are never found.
+    /// Find a participant of one cycle (or of the unlinked global list with `None`) by name.
+    /// The participants of other cycles are never found.
     pub fn find_participant_by_name_in(
         &self,
         cycle_id: Option<&str>,
         name: &str,
     ) -> Result<Option<Participant>> {
-        Ok(self
-            .conn
-            .query_row(
-                "SELECT id, name, created_unix_ms, cycle_id, sample_clip_file FROM participants
-                 WHERE name = ?1 AND cycle_id IS ?2",
-                params![name, cycle_id],
-                |r| {
-                    Ok(Participant {
-                        id: r.get(0)?,
-                        name: r.get(1)?,
-                        created_unix_ms: r.get(2)?,
-                        cycle_id: r.get(3)?,
-                        sample_clip_file: r.get(4)?,
-                    })
-                },
-            )
-            .optional()?)
+        let row = match cycle_id {
+            Some(cid) => self
+                .conn
+                .query_row(
+                    "SELECT p.id, p.name, p.created_unix_ms, p.cycle_id, p.sample_clip_file
+                     FROM participants p
+                     JOIN project_people pp ON pp.participant_id = p.id
+                     WHERE pp.cycle_id = ?1 AND p.name = ?2 COLLATE NOCASE
+                     ORDER BY p.created_unix_ms, p.id
+                     LIMIT 1",
+                    params![cid, name],
+                    |r| {
+                        Ok(Participant {
+                            id: r.get(0)?,
+                            name: r.get(1)?,
+                            created_unix_ms: r.get(2)?,
+                            cycle_id: r.get(3)?,
+                            sample_clip_file: r.get(4)?,
+                        })
+                    },
+                )
+                .optional()?,
+            None => self
+                .conn
+                .query_row(
+                    "SELECT p.id, p.name, p.created_unix_ms, p.cycle_id, p.sample_clip_file
+                     FROM participants p
+                     WHERE p.cycle_id IS NULL
+                       AND NOT EXISTS (
+                           SELECT 1 FROM project_people pp WHERE pp.participant_id = p.id
+                       )
+                       AND p.name = ?1 COLLATE NOCASE
+                     ORDER BY p.created_unix_ms, p.id
+                     LIMIT 1",
+                    params![name],
+                    |r| {
+                        Ok(Participant {
+                            id: r.get(0)?,
+                            name: r.get(1)?,
+                            created_unix_ms: r.get(2)?,
+                            cycle_id: r.get(3)?,
+                            sample_clip_file: r.get(4)?,
+                        })
+                    },
+                )
+                .optional()?,
+        };
+        Ok(row)
     }
 
     /// Set or clear the retained preview clip path (relative to recordings root) for a participant.
@@ -256,32 +299,279 @@ impl Store {
         self.list_participants_for(Some(cycle_id))
     }
 
+    fn projects_by_participant(&self) -> Result<ParticipantProjects> {
+        let mut stmt = self.conn.prepare(
+            "SELECT participant_id, cycle_id, cycle_participant_id
+             FROM project_people
+             ORDER BY participant_id, cycle_id",
+        )?;
+        let mut map: HashMap<String, Vec<(String, Option<String>)>> = HashMap::new();
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+            ))
+        })?;
+        for row in rows {
+            let (pid, cid, slug) = row?;
+            map.entry(pid).or_default().push((cid, slug));
+        }
+        Ok(map)
+    }
+
     fn query_participants(&self, scope: Option<Option<&str>>) -> Result<Vec<ParticipantInfo>> {
-        let filter = if scope.is_some() {
-            "p.cycle_id IS ?1"
-        } else {
-            "?1 IS NULL OR 1 = 1"
+        let projects_map = self.projects_by_participant()?;
+        let (sql, cycle_param): (String, Option<&str>) = match scope {
+            Some(Some(cid)) => (
+                "SELECT p.id, p.name, COUNT(s.source_key), COALESCE(SUM(s.speech_ms), 0),
+                        pp.cycle_id, pp.cycle_participant_id, p.sample_clip_file
+                 FROM participants p
+                 JOIN project_people pp ON pp.participant_id = p.id
+                 LEFT JOIN voice_samples s ON s.participant_id = p.id
+                 WHERE pp.cycle_id = ?1
+                 GROUP BY p.id, pp.cycle_id, pp.cycle_participant_id
+                 ORDER BY p.name COLLATE NOCASE, p.id"
+                    .to_string(),
+                Some(cid),
+            ),
+            Some(None) => (
+                "SELECT p.id, p.name, COUNT(s.source_key), COALESCE(SUM(s.speech_ms), 0),
+                        NULL, NULL, p.sample_clip_file
+                 FROM participants p
+                 LEFT JOIN voice_samples s ON s.participant_id = p.id
+                 WHERE p.cycle_id IS NULL
+                   AND NOT EXISTS (
+                       SELECT 1 FROM project_people pp WHERE pp.participant_id = p.id
+                   )
+                 GROUP BY p.id
+                 ORDER BY p.name COLLATE NOCASE, p.id"
+                    .to_string(),
+                None,
+            ),
+            None => (
+                "SELECT p.id, p.name, COUNT(s.source_key), COALESCE(SUM(s.speech_ms), 0),
+                        p.cycle_id, NULL, p.sample_clip_file
+                 FROM participants p
+                 LEFT JOIN voice_samples s ON s.participant_id = p.id
+                 GROUP BY p.id
+                 ORDER BY p.name COLLATE NOCASE, p.id"
+                    .to_string(),
+                None,
+            ),
         };
-        let cycle: Option<&str> = scope.flatten();
-        let sql = format!(
-            "SELECT p.id, p.name, COUNT(s.source_key), COALESCE(SUM(s.speech_ms), 0), p.cycle_id,
-                    p.sample_clip_file
-             FROM participants p LEFT JOIN voice_samples s ON s.participant_id = p.id
-             WHERE {filter}
-             GROUP BY p.id ORDER BY p.name COLLATE NOCASE, p.id"
-        );
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(params![cycle], |r| {
+        let map_row = |r: &rusqlite::Row<'_>| -> rusqlite::Result<ParticipantInfo> {
+            let id: String = r.get(0)?;
+            let cycle_id: Option<String> = r.get(4)?;
+            let row_slug: Option<String> = r.get(5)?;
+            let links = projects_map.get(&id);
+            let projects: Vec<String> = links
+                .map(|v| v.iter().map(|(c, _)| c.clone()).collect())
+                .unwrap_or_default();
+            let resolved_cycle_id = cycle_id.or_else(|| {
+                if scope.is_none() && projects.len() == 1 {
+                    Some(projects[0].clone())
+                } else {
+                    None
+                }
+            });
+            let cycle_participant_id = row_slug.or_else(|| {
+                let cid = resolved_cycle_id.as_deref()?;
+                links
+                    .and_then(|v| v.iter().find(|(c, _)| c == cid))
+                    .and_then(|(_, s)| s.clone())
+                    .or_else(|| {
+                        id.strip_prefix(cid)
+                            .and_then(|rest| rest.strip_prefix(KEY_SEPARATOR))
+                            .map(str::to_string)
+                    })
+            });
             Ok(ParticipantInfo {
-                id: r.get(0)?,
+                id,
                 name: r.get(1)?,
                 sample_count: r.get(2)?,
                 speech_ms: r.get::<_, i64>(3)? as u64,
-                cycle_id: r.get(4)?,
-                sample_clip_file: r.get(5)?,
+                cycle_id: resolved_cycle_id,
+                cycle_participant_id,
+                projects,
+                sample_clip_file: r.get(6)?,
             })
-        })?;
-        Ok(rows.collect::<std::result::Result<_, _>>()?)
+        };
+        let out = if let Some(cid) = cycle_param {
+            stmt.query_map(params![cid], map_row)?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        } else {
+            stmt.query_map([], map_row)?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        Ok(out)
+    }
+
+    /// Link an existing participant to a project/cycle in `project_people`.
+    pub fn add_participant_to_project(
+        &self,
+        participant_id: &str,
+        cycle_id: &str,
+        cycle_participant_id: Option<&str>,
+        now_ms: i64,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO project_people (cycle_id, participant_id, cycle_participant_id, created_unix_ms)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(cycle_id, participant_id) DO UPDATE SET
+               cycle_participant_id = COALESCE(excluded.cycle_participant_id, project_people.cycle_participant_id)",
+            params![cycle_id, participant_id, cycle_participant_id, now_ms],
+        )?;
+        Ok(())
+    }
+
+    /// Unlink a participant from a project/cycle. Keeps the participant row, voice samples,
+    /// and retained sample clip intact (falling back to Global when no projects remain).
+    pub fn remove_participant_from_project(
+        &self,
+        participant_id: &str,
+        cycle_id: &str,
+    ) -> Result<bool> {
+        let tx = self.conn.unchecked_transaction()?;
+        let removed = tx.execute(
+            "DELETE FROM project_people WHERE participant_id = ?1 AND cycle_id = ?2",
+            params![participant_id, cycle_id],
+        )?;
+        if removed > 0 {
+            tx.execute(
+                "UPDATE participants
+                 SET cycle_id = (
+                     SELECT cycle_id FROM project_people
+                     WHERE participant_id = ?1
+                     ORDER BY created_unix_ms, cycle_id
+                     LIMIT 1
+                 )
+                 WHERE id = ?1 AND cycle_id = ?2",
+                params![participant_id, cycle_id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(removed > 0)
+    }
+
+    /// Merge `drop_id` into `keep_id` transactionally:
+    /// - Rejects self-merge or merging two participants who share any project in `project_people`.
+    /// - Consolidates `voice_samples` keeping up to 20 longest samples (deduped by `source_key`).
+    /// - Repoints `meeting_voices` (`matched_participant`, `assigned_participant`).
+    /// - Moves `project_people` memberships from `drop_id` to `keep_id`.
+    /// - Transfers `sample_clip_file` if `keep_id` has none.
+    /// - Deletes `drop_id`.
+    pub fn merge_participants(&self, keep_id: &str, drop_id: &str) -> Result<()> {
+        if keep_id == drop_id {
+            return Err(StoreError::Invalid(
+                "cannot merge a participant with itself".into(),
+            ));
+        }
+        const MAX_SAMPLES: usize = 20;
+        let tx = self.conn.unchecked_transaction()?;
+        let keep_clip: Option<String> = tx
+            .query_row(
+                "SELECT sample_clip_file FROM participants WHERE id = ?1",
+                params![keep_id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| StoreError::Invalid(format!("participant {keep_id:?} not found")))?;
+        let drop_clip: Option<String> = tx
+            .query_row(
+                "SELECT sample_clip_file FROM participants WHERE id = ?1",
+                params![drop_id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| StoreError::Invalid(format!("participant {drop_id:?} not found")))?;
+
+        let collision: Option<String> = tx
+            .query_row(
+                "SELECT a.cycle_id FROM project_people a
+                 JOIN project_people b ON a.cycle_id = b.cycle_id
+                 WHERE a.participant_id = ?1 AND b.participant_id = ?2
+                 LIMIT 1",
+                params![keep_id, drop_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(cycle) = collision {
+            return Err(StoreError::Invalid(format!(
+                "cannot merge participants that both belong to project {cycle}"
+            )));
+        }
+
+        // Consolidate voice_samples with MAX_SAMPLES = 20 cap.
+        let mut by_key: HashMap<String, (Vec<u8>, i64, i64)> = HashMap::new();
+        {
+            let mut stmt = tx.prepare(
+                "SELECT source_key, embedding, speech_ms, created_unix_ms
+                 FROM voice_samples
+                 WHERE participant_id IN (?1, ?2)",
+            )?;
+            let rows = stmt.query_map(params![keep_id, drop_id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Vec<u8>>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            })?;
+            for row in rows {
+                let (key, emb, speech_ms, created) = row?;
+                by_key
+                    .entry(key)
+                    .and_modify(|cur| {
+                        if speech_ms > cur.1 {
+                            *cur = (emb.clone(), speech_ms, created);
+                        }
+                    })
+                    .or_insert((emb, speech_ms, created));
+            }
+        }
+        let mut consolidated: Vec<(String, Vec<u8>, i64, i64)> = by_key
+            .into_iter()
+            .map(|(k, (emb, ms, ts))| (k, emb, ms, ts))
+            .collect();
+        consolidated.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+        consolidated.truncate(MAX_SAMPLES);
+
+        tx.execute(
+            "DELETE FROM voice_samples WHERE participant_id IN (?1, ?2)",
+            params![keep_id, drop_id],
+        )?;
+        for (key, emb, speech_ms, created) in consolidated {
+            tx.execute(
+                "INSERT INTO voice_samples
+                   (participant_id, source_key, embedding, speech_ms, created_unix_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![keep_id, key, emb, speech_ms, created],
+            )?;
+        }
+
+        for col in ["matched_participant", "assigned_participant"] {
+            tx.execute(
+                &format!("UPDATE meeting_voices SET {col} = ?2 WHERE {col} = ?1"),
+                params![drop_id, keep_id],
+            )?;
+        }
+        tx.execute(
+            "UPDATE project_people SET participant_id = ?2 WHERE participant_id = ?1",
+            params![drop_id, keep_id],
+        )?;
+        if keep_clip.is_none() {
+            if let Some(clip) = drop_clip {
+                tx.execute(
+                    "UPDATE participants SET sample_clip_file = ?2 WHERE id = ?1",
+                    params![keep_id, clip],
+                )?;
+            }
+        }
+        tx.execute("DELETE FROM participants WHERE id = ?1", params![drop_id])?;
+        tx.commit()?;
+        Ok(())
     }
 
     // ----- voice profiles -----
@@ -351,13 +641,62 @@ impl Store {
     }
 
     /// The voice profiles a meeting of this cycle is matched against: those of the cycle's
-    /// participants only (`None`: the legacy local list, used by meetings without a cycle).
+    /// participants (`Some(cid)` via `project_people`) or unlinked global participants (`None`).
     pub fn profiles_for(&self, cycle_id: Option<&str>) -> Result<Vec<(String, Vec<SampleRow>)>> {
+        match cycle_id {
+            Some(cid) => {
+                let ids: Vec<String> = {
+                    let mut stmt = self.conn.prepare(
+                        "SELECT DISTINCT s.participant_id FROM voice_samples s
+                         JOIN project_people pp ON pp.participant_id = s.participant_id
+                         WHERE pp.cycle_id = ?1 ORDER BY s.participant_id",
+                    )?;
+                    let rows = stmt.query_map(params![cid], |r| r.get(0))?;
+                    rows.collect::<std::result::Result<_, _>>()?
+                };
+                ids.into_iter()
+                    .map(|id| Ok((id.clone(), self.samples_of(&id)?)))
+                    .collect()
+            }
+            None => self.profiles_unlinked(),
+        }
+    }
+
+    /// Voice profiles of global participants that are not linked to any project in `project_people`.
+    pub fn profiles_unlinked(&self) -> Result<Vec<(String, Vec<SampleRow>)>> {
         let ids: Vec<String> = {
             let mut stmt = self.conn.prepare(
                 "SELECT DISTINCT s.participant_id FROM voice_samples s
                  JOIN participants p ON p.id = s.participant_id
-                 WHERE p.cycle_id IS ?1 ORDER BY s.participant_id",
+                 WHERE p.cycle_id IS NULL
+                   AND NOT EXISTS (
+                       SELECT 1 FROM project_people pp WHERE pp.participant_id = s.participant_id
+                   )
+                 ORDER BY s.participant_id",
+            )?;
+            let rows = stmt.query_map([], |r| r.get(0))?;
+            rows.collect::<std::result::Result<_, _>>()?
+        };
+        ids.into_iter()
+            .map(|id| Ok((id.clone(), self.samples_of(&id)?)))
+            .collect()
+    }
+
+    /// Voice profiles of participants linked to at least one project other than `cycle_id`
+    /// and NOT linked to `cycle_id`.
+    pub fn profiles_outside(&self, cycle_id: &str) -> Result<Vec<(String, Vec<SampleRow>)>> {
+        let ids: Vec<String> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT DISTINCT s.participant_id FROM voice_samples s
+                 WHERE EXISTS (
+                     SELECT 1 FROM project_people pp
+                     WHERE pp.participant_id = s.participant_id AND pp.cycle_id <> ?1
+                 )
+                 AND NOT EXISTS (
+                     SELECT 1 FROM project_people pp
+                     WHERE pp.participant_id = s.participant_id AND pp.cycle_id = ?1
+                 )
+                 ORDER BY s.participant_id",
             )?;
             let rows = stmt.query_map(params![cycle_id], |r| r.get(0))?;
             rows.collect::<std::result::Result<_, _>>()?
@@ -500,6 +839,17 @@ impl Store {
         )? > 0)
     }
 
+    /// Undo a naming decision on a voice: clears `assigned_participant` and `confirmed`
+    /// while preserving `decision`, `score`, and `matched_participant` so a suggestion can
+    /// be reviewed again.
+    pub fn clear_voice_assignment(&self, meeting_id: &str, voice_id: &str) -> Result<bool> {
+        Ok(self.conn.execute(
+            "UPDATE meeting_voices SET assigned_participant = NULL, confirmed = 0
+             WHERE meeting_id = ?1 AND voice_id = ?2",
+            params![meeting_id, voice_id],
+        )? > 0)
+    }
+
     /// Mark a voice as the same person as another voice of the meeting (or undo with `None`).
     pub fn set_voice_merge(
         &self,
@@ -634,10 +984,11 @@ mod tests {
     }
 
     #[test]
-    fn participant_names_are_unique_ignoring_case() {
+    fn participant_names_can_repeat_across_global_people_and_lookup_is_case_insensitive() {
         let s = store();
         s.create_participant("a", "Ola", 1).unwrap();
-        assert!(s.create_participant("b", "ola", 2).is_err());
+        // Different global people can share a name without auto-merging.
+        s.create_participant("b", "ola", 2).unwrap();
         assert_eq!(s.find_participant_by_name("OLA").unwrap().unwrap().id, "a");
     }
 
@@ -781,5 +1132,156 @@ mod tests {
                 .sample_clip_file,
             None
         );
+    }
+
+    #[test]
+    fn add_remove_project_and_merge_participants_with_collision_guard_and_cap() {
+        let s = store();
+        s.create_participant_in(Some("NOMAD"), "NOMAD:ola", "Ola", 1)
+            .unwrap();
+        s.create_participant_in(Some("ATLAS"), "ATLAS:ola", "Ola", 2)
+            .unwrap();
+        s.set_participant_sample_clip("ATLAS:ola", Some(".voice-samples/atlas-ola.wav"))
+            .unwrap();
+
+        for i in 0..12 {
+            s.put_sample(
+                "NOMAD:ola",
+                &SampleRow {
+                    source_key: format!("n:{i}"),
+                    embedding: vec![1.0, 0.0],
+                    speech_ms: 5_000 + i * 100,
+                },
+                i as i64,
+            )
+            .unwrap();
+            s.put_sample(
+                "ATLAS:ola",
+                &SampleRow {
+                    source_key: format!("a:{i}"),
+                    embedding: vec![1.0, 0.0],
+                    speech_ms: 6_000 + i * 100,
+                },
+                i as i64,
+            )
+            .unwrap();
+        }
+        s.put_meeting_voices("m", &[voice("t:0")]).unwrap();
+        s.set_voice_assignment("m", "t:0", Some("ATLAS:ola"))
+            .unwrap();
+
+        // Merging ATLAS:ola into NOMAD:ola consolidates samples (cap 20), moves project_people,
+        // repoints meeting_voices, transfers sample_clip_file, and deletes drop_id.
+        s.merge_participants("NOMAD:ola", "ATLAS:ola").unwrap();
+        assert!(s.get_participant("ATLAS:ola").unwrap().is_none());
+        assert_eq!(s.samples_of("NOMAD:ola").unwrap().len(), 20);
+        assert_eq!(
+            s.list_meeting_voices("m").unwrap()[0]
+                .assigned_participant
+                .as_deref(),
+            Some("NOMAD:ola")
+        );
+        let merged = s
+            .list_all_participants_with_profiles()
+            .unwrap()
+            .into_iter()
+            .find(|p| p.id == "NOMAD:ola")
+            .unwrap();
+        assert_eq!(merged.projects, vec!["ATLAS", "NOMAD"]);
+        assert_eq!(
+            merged.sample_clip_file.as_deref(),
+            Some(".voice-samples/atlas-ola.wav")
+        );
+
+        // Same-cycle collision guard: cannot merge two people in NOMAD.
+        s.create_participant_in(Some("NOMAD"), "NOMAD:other", "Other", 3)
+            .unwrap();
+        assert!(s.merge_participants("NOMAD:ola", "NOMAD:other").is_err());
+
+        // Removing from NOMAD keeps global profile and samples intact.
+        assert!(s
+            .remove_participant_from_project("NOMAD:ola", "NOMAD")
+            .unwrap());
+        assert_eq!(s.samples_of("NOMAD:ola").unwrap().len(), 20);
+        assert!(s
+            .remove_participant_from_project("NOMAD:ola", "ATLAS")
+            .unwrap());
+        let global = s
+            .list_all_participants_with_profiles()
+            .unwrap()
+            .into_iter()
+            .find(|p| p.id == "NOMAD:ola")
+            .unwrap();
+        assert!(global.projects.is_empty());
+        assert_eq!(global.sample_count, 20);
+    }
+
+    #[test]
+    fn merge_participants_edge_cases_and_duplicate_source_key() {
+        let s = store();
+        s.create_participant("p1", "Ola", 1).unwrap();
+        s.create_participant("p2", "Ola Two", 2).unwrap();
+
+        // Self-merge is refused.
+        assert!(matches!(
+            s.merge_participants("p1", "p1"),
+            Err(StoreError::Invalid(_))
+        ));
+        // Missing keep_id or drop_id is refused.
+        assert!(matches!(
+            s.merge_participants("missing", "p2"),
+            Err(StoreError::Invalid(_))
+        ));
+        assert!(matches!(
+            s.merge_participants("p1", "missing"),
+            Err(StoreError::Invalid(_))
+        ));
+
+        // Duplicate source_key keeps the longer speech_ms embedding.
+        s.put_sample(
+            "p1",
+            &SampleRow {
+                source_key: "m1/v0".into(),
+                embedding: vec![1.0, 0.0],
+                speech_ms: 4_000,
+            },
+            1,
+        )
+        .unwrap();
+        s.put_sample(
+            "p2",
+            &SampleRow {
+                source_key: "m1/v0".into(),
+                embedding: vec![0.0, 1.0],
+                speech_ms: 9_000,
+            },
+            2,
+        )
+        .unwrap();
+
+        s.merge_participants("p1", "p2").unwrap();
+        let samples = s.samples_of("p1").unwrap();
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].speech_ms, 9_000);
+        assert_eq!(samples[0].embedding, vec![0.0, 1.0]);
+
+        // Merging an already-deleted participant fails cleanly.
+        assert!(matches!(
+            s.merge_participants("p1", "p2"),
+            Err(StoreError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn query_participants_resolves_slug_for_global_profile_pinned_to_one_project() {
+        let s = store();
+        s.create_participant("global-1", "Ola", 1).unwrap();
+        s.add_participant_to_project("global-1", "NOMAD", Some("ola"), 2)
+            .unwrap();
+        let all = s.list_participants().unwrap();
+        let p = all.iter().find(|x| x.id == "global-1").unwrap();
+        assert_eq!(p.cycle_id.as_deref(), Some("NOMAD"));
+        assert_eq!(p.cycle_participant_id.as_deref(), Some("ola"));
+        assert_eq!(p.projects, vec!["NOMAD".to_string()]);
     }
 }

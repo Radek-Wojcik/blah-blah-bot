@@ -391,3 +391,40 @@ def test_helpers():
     assert not reduce.valid_due("tomorrow", "2026-11-16")
     assert reduce.first_sentence("One two. Three four.") == "One two."
     assert reduce.first_sentence("No end") == "No end"
+
+
+def _raw_task(assignee=None, assignee_name=None, cert="unknown"):
+    return {
+        "text": "Send the invoice",
+        "assignee": assignee,
+        "assignee_name": assignee_name,
+        "due": None,
+        "certainty": {"assignee": cert, "due": "unknown"},
+        "relates_to": None,
+    }
+
+
+def test_validate_items_keeps_an_outside_assignee_name_as_inferred():
+    it = _raw_task(assignee_name="  Marta   Outside ")
+    assert reduce.validate_items([it], context_doc()) == []
+    assert it["assignee"] is None
+    assert it["assignee_name"] == "Marta Outside"
+    assert it["certainty"]["assignee"] == "inferred"
+
+
+def test_validate_items_resolves_a_name_to_a_participant_and_raises_certainty():
+    it = _raw_task(assignee_name="alex kowalski")
+    reduce.validate_items([it], context_doc())
+    assert it["assignee"] == "alex"
+    assert it["assignee_name"] is None
+    assert it["certainty"]["assignee"] == "inferred"
+
+
+@pytest.mark.parametrize(
+    "label", ["SPEAKER_00", "Speaker_1", "speaker 2", "Speaker", "Mówca 3", "unknown", "  "]
+)
+def test_validate_items_drops_generic_speaker_labels(label):
+    it = _raw_task(assignee_name=label)
+    reduce.validate_items([it], context_doc())
+    assert it["assignee_name"] is None
+    assert it["certainty"]["assignee"] == "unknown"

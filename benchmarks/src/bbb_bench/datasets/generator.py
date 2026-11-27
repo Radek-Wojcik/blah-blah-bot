@@ -26,6 +26,7 @@ class Meeting:
     lang: str
     meeting_date: date
     speakers: list[str]
+    participants: list[str] | None = None
     turns: list[dict[str, Any]] = field(default_factory=list)
     tasks: list[dict[str, Any]] = field(default_factory=list)
     decisions: list[dict[str, Any]] = field(default_factory=list)
@@ -72,8 +73,17 @@ def _others(speakers: list[str], *excluded: str) -> list[str]:
     return [s for s in speakers if s not in excluded]
 
 
+def _external_person(m: Meeting, rng: random.Random) -> str:
+    roster = set(m.participants if m.participants is not None else m.speakers)
+    candidates = [p for p in pools.PEOPLE if p not in roster]
+    return rng.choice(candidates) if candidates else "marek"
+
+
 def _task_event(m: Meeting, rng: random.Random, mixed: bool) -> None:
-    """A task is requested and accepted; variants: request, self-assign, reassign, decline."""
+    """A task is requested and accepted.
+
+    Variants: request, self, reassign, third_party, declined, unaccepted.
+    """
     lang = m.lang
     # In mixed meetings a fifth of the turns are fully English.
     turn_lang = "en" if (mixed and rng.random() < 0.2) else lang
@@ -81,7 +91,10 @@ def _task_event(m: Meeting, rng: random.Random, mixed: bool) -> None:
     action, _terms = _pick_action(turn_lang, mixed, rng)
     due = _random_due(m.meeting_date, rng)
     due_s = _due_phrase(due, m.meeting_date, turn_lang, rng)
-    variant = rng.choices(["request", "self", "reassign", "declined"], [6, 2, 1, 1])[0]
+    variant = rng.choices(
+        ["request", "self", "reassign", "third_party", "declined", "unaccepted"],
+        [5, 2, 1, 1, 1, 1],
+    )[0]
     pl = turn_lang == "pl"
 
     if variant == "declined":
@@ -93,6 +106,52 @@ def _task_event(m: Meeting, rng: random.Random, mixed: bool) -> None:
             if pl
             else "No, that makes no sense, let us drop it.",
             turn_lang,
+        )
+        return
+
+    if variant == "unaccepted":
+        # Wish or tentative proposal without commitment: not a task.
+        m.say(
+            a,
+            f"Fajnie byłoby kiedyś {action}." if pl else f"It would be nice to {action} sometime.",
+            turn_lang,
+        )
+        m.say(
+            b,
+            "Zobaczymy, na razie nic nie obiecuję."
+            if pl
+            else "Let us see, I cannot promise anything right now.",
+            turn_lang,
+        )
+        return
+
+    if variant == "third_party":
+        ext_id = _external_person(m, rng)
+        ext_name = ext_id.capitalize()
+        with_due = rng.random() < 0.5
+        if pl:
+            line = (
+                f"{ext_name} ma {action} na {due_s}."
+                if with_due
+                else f"{ext_name} ma do zrobienia: {action}."
+            )
+        else:
+            line = (
+                f"{ext_name} has to {action} by {due_s}."
+                if with_due
+                else f"{ext_name} has to {action}."
+            )
+        t = m.say(a, line, turn_lang)
+        m.say(b, "Jasne, dopiszmy to." if pl else "Sure, let us note that down.", turn_lang)
+        m.tasks.append(
+            {
+                "text": action,
+                "assignee": None,
+                "assignee_name": ext_name,
+                "due": due.isoformat() if with_due else None,
+                "turn": t,
+                "quote": m.turns[t]["text"],
+            }
         )
         return
 
@@ -263,6 +322,7 @@ def to_files(m: Meeting, out: Path, glossary: list[str] | None = None) -> None:
         "meeting_date": m.meeting_date.isoformat(),
         "lang": m.lang,
         "speakers": m.speakers,
+        "participants": m.participants if m.participants is not None else m.speakers,
         "tasks": m.tasks,
         "decisions": m.decisions,
         "budgets": m.budgets,

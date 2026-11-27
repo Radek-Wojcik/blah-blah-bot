@@ -285,6 +285,31 @@ describe("report rendering", () => {
     expect(line("i12")).toBe("- Record the next test with a high-speed camera.");
   });
 
+  it("shows an outside assignee name, ignores a blank one and prefers a participant id", () => {
+    const d = demoDraft("m5");
+    const task = { ...d.items.find((i) => i.id === "i04")!, assignee: null };
+    const line = (item: DraftItem) => itemLine(item, people, "chat");
+    expect(line({ ...task, assigneeName: " Marta Outside " })).toContain("(@Marta Outside?,");
+    expect(line({ ...task, assigneeName: "   " })).toContain("(@?,");
+    expect(line({ ...task, assignee: "jan", assigneeName: "Marta Outside" })).toContain(
+      "(@Jan Demo",
+    );
+  });
+
+  it("clears the outside assignee name when the assignee is set or cleared", async () => {
+    const b = backend();
+    const v = await b.getDraft("m5");
+    const withName = v.draft.items.find((i) => i.id === "i04")!;
+    withName.assigneeName = "Marta Outside";
+    const set = await b.updateDraftItem("m5", "i04", { assignee: "jan" });
+    expect(set.draft.items.find((i) => i.id === "i04")).toMatchObject({
+      assignee: "jan",
+      assigneeName: null,
+    });
+    const cleared = await b.updateDraftItem("m5", "i04", { assignee: null });
+    expect(cleared.draft.items.find((i) => i.id === "i04")!.assigneeName).toBeNull();
+  });
+
   it("renders the sections of the draft under the default template", async () => {
     const view = await backend().getDraft("m5");
     expect(view.reportMarkdown).toMatch(
@@ -316,6 +341,7 @@ describe("report rendering", () => {
       type,
       text,
       assignee: null,
+      assigneeName: null,
       due: null,
       certainty: { assignee: "unknown", due: "unknown" },
       section: null,
@@ -1018,5 +1044,31 @@ describe("meeting detection", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("supports global voice profile project links, merge, and undo", async () => {
+    const b = createMockBackend({ clockRate: 0 });
+    const g = await b.enrollVoiceProfile("Marta Global", null, "C:\\Audio\\marta.wav");
+    expect(g.projects).toEqual([]);
+
+    const linked = await b.addProfileToProject(g.id, "NOMAD");
+    expect(linked.projects).toEqual(["NOMAD"]);
+
+    const unlinked = await b.removeProfileFromProject(g.id, "NOMAD");
+    expect(unlinked.projects).toEqual([]);
+    expect(unlinked.sampleCount).toBe(1);
+
+    const p2 = await b.enrollVoiceProfile("Marta Two", "NOMAD", "C:\\Audio\\marta2.wav");
+    const merged = await b.mergeParticipants(g.id, p2.id);
+    expect(merged.projects).toEqual(["NOMAD"]);
+    expect(merged.sampleCount).toBe(2);
+
+    const before = await b.getMeetingVoices("m5");
+    const vId = before.voices[0].voiceId;
+    await b.assignVoice("m5", vId, g.id);
+    const undone = await b.undoVoiceDecision("m5", vId, "NOMAD");
+    const afterVoice = undone.voices.find((v) => v.voiceId === vId)!;
+    expect(afterVoice.confirmed).toBe(false);
+    expect(afterVoice.assignedParticipantId).toBeUndefined();
   });
 });

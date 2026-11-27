@@ -397,95 +397,106 @@ impl Store {
         }
         let now = unix_ms();
         let tx = self.conn.unchecked_transaction()?;
-        // Rebinding changes a primary key that voice rows refer to: check at commit.
-        tx.execute_batch("PRAGMA defer_foreign_keys = ON")?;
         let mut outcome = SyncOutcome::default();
-        let incoming_keys: std::collections::HashSet<String> = participants
-            .iter()
-            .map(|(id, _)| cycle_participant_key(cycle_id, id.as_ref()))
-            .collect();
-        // Existing rows first, so a swap of two names cannot trip the unique index: rows
-        // that change name get a placeholder, then the final name.
-        let mut pending: Vec<(String, String, String)> = Vec::new();
+
+        // Load existing links for this cycle from `project_people`.
+        let mut by_slug: std::collections::HashMap<String, (String, String)> =
+            std::collections::HashMap::new();
+        let mut existing_rows: Vec<(String, Option<String>, String)> = Vec::new();
+        {
+            let mut stmt = tx.prepare(
+                "SELECT pp.participant_id, pp.cycle_participant_id, p.name
+                 FROM project_people pp
+                 JOIN participants p ON p.id = pp.participant_id
+                 WHERE pp.cycle_id = ?1",
+            )?;
+            let rows = stmt.query_map(params![cycle_id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })?;
+            for row in rows {
+                let (pid, slug, name) = row?;
+                if let Some(s) = &slug {
+                    by_slug.insert(s.clone(), (pid.clone(), name.clone()));
+                }
+                existing_rows.push((pid, slug, name));
+            }
+        }
+
+        let incoming_slugs: std::collections::HashSet<&str> =
+            participants.iter().map(|(id, _)| id.as_ref()).collect();
+
         for (id, name) in participants {
             let (id, name) = (id.as_ref(), name.as_ref());
-            let key = cycle_participant_key(cycle_id, id);
-            let current: Option<String> = tx
-                .query_row(
-                    "SELECT name FROM participants WHERE id = ?1 AND cycle_id = ?2",
-                    params![key, cycle_id],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            match current {
-                Some(current) if current == name => {}
-                Some(_) => {
+            if let Some((pid, current_name)) = by_slug.get(id) {
+                if current_name != name {
                     tx.execute(
                         "UPDATE participants SET name = ?2 WHERE id = ?1",
-                        params![key, format!("\u{1}renaming:{key}")],
+                        params![pid, name],
                     )?;
-                    pending.push((key.clone(), name.to_string(), id.to_string()));
                     outcome.renamed.push(id.to_string());
                 }
-                None => {
-                    pending.push((key.clone(), name.to_string(), id.to_string()));
-                    outcome.created.push(id.to_string());
-                }
+                continue;
             }
-        }
-        for (key, name, id) in pending {
-            let updated = tx.execute(
-                "UPDATE participants SET name = ?2 WHERE id = ?1 AND cycle_id = ?3",
-                params![key, name, cycle_id],
+
+            // Rebind: an existing participant in THIS cycle with the same name (ignoring case)
+            // whose `cycle_participant_id` is no longer in the incoming list.
+            let rebound_pid = existing_rows
+                .iter()
+                .find(|(_, slug, existing_name)| {
+                    existing_name.to_lowercase() == name.to_lowercase()
+                        && slug.as_deref().is_none_or(|s| !incoming_slugs.contains(s))
+                })
+                .map(|(pid, _, existing_name)| (pid.clone(), existing_name.clone()));
+
+            if let Some((pid, existing_name)) = rebound_pid {
+                tx.execute(
+                    "UPDATE project_people SET cycle_participant_id = ?3
+                     WHERE cycle_id = ?1 AND participant_id = ?2",
+                    params![cycle_id, pid, id],
+                )?;
+                if existing_name != name {
+                    tx.execute(
+                        "UPDATE participants SET name = ?2 WHERE id = ?1",
+                        params![pid, name],
+                    )?;
+                }
+                outcome.rebound.push(id.to_string());
+                continue;
+            }
+
+            // New participant in this cycle (never auto-merged across cycles or global).
+            let base_key = cycle_participant_key(cycle_id, id);
+            let mut key = base_key.clone();
+            let mut n = 2u32;
+            while tx
+                .query_row(
+                    "SELECT 1 FROM participants WHERE id = ?1",
+                    params![key],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some()
+            {
+                key = format!("{base_key}-{n}");
+                n += 1;
+            }
+            tx.execute(
+                "INSERT INTO participants (id, name, created_unix_ms, cycle_id)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![key, name, now, cycle_id],
             )?;
-            if updated == 0 {
-                // A stored participant of this cycle with this name whose id is gone from
-                // the list is the same person under a new id.
-                let holder: Option<String> = tx
-                    .query_row(
-                        "SELECT id FROM participants WHERE cycle_id = ?1 AND name = ?2",
-                        params![cycle_id, name],
-                        |r| r.get(0),
-                    )
-                    .optional()?;
-                if let Some(old) = holder.filter(|old| !incoming_keys.contains(old)) {
-                    tx.execute(
-                        "UPDATE participants SET id = ?2, name = ?3 WHERE id = ?1",
-                        params![old, key, name],
-                    )?;
-                    tx.execute(
-                        "UPDATE voice_samples SET participant_id = ?2 WHERE participant_id = ?1",
-                        params![old, key],
-                    )?;
-                    for column in ["matched_participant", "assigned_participant"] {
-                        tx.execute(
-                            &format!("UPDATE meeting_voices SET {column} = ?2 WHERE {column} = ?1"),
-                            params![old, key],
-                        )?;
-                    }
-                    outcome.created.retain(|c| *c != id);
-                    outcome.rebound.push(id);
-                    continue;
-                }
-                let inserted = tx.execute(
-                    "INSERT INTO participants (id, name, created_unix_ms, cycle_id)
-                     VALUES (?1, ?2, ?3, ?4)",
-                    params![key, name, now, cycle_id],
-                );
-                match inserted {
-                    Ok(_) => {}
-                    Err(rusqlite::Error::SqliteFailure(f, _))
-                        if f.code == rusqlite::ErrorCode::ConstraintViolation =>
-                    {
-                        outcome.created.retain(|c| *c != id);
-                        outcome.warnings.push(format!(
-                            "the participant {name:?} could not be stored: the name is already used by another participant of the cycle"
-                        ));
-                    }
-                    Err(other) => return Err(other.into()),
-                }
-            }
+            tx.execute(
+                "INSERT INTO project_people (cycle_id, participant_id, cycle_participant_id, created_unix_ms)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![cycle_id, key, id, now],
+            )?;
+            outcome.created.push(id.to_string());
         }
+
         tx.commit()?;
         Ok(outcome)
     }
@@ -510,7 +521,29 @@ impl Store {
             )?;
         }
         tx.execute(
-            "DELETE FROM participants WHERE cycle_id = ?1",
+            "DELETE FROM project_people WHERE cycle_id = ?1",
+            params![cycle_id],
+        )?;
+        tx.execute(
+            "UPDATE participants
+             SET cycle_id = (
+                 SELECT cycle_id FROM project_people
+                 WHERE participant_id = participants.id
+                 ORDER BY created_unix_ms, cycle_id
+                 LIMIT 1
+             )
+             WHERE cycle_id = ?1
+               AND EXISTS (
+                   SELECT 1 FROM project_people pp WHERE pp.participant_id = participants.id
+               )",
+            params![cycle_id],
+        )?;
+        tx.execute(
+            "DELETE FROM participants
+             WHERE cycle_id = ?1
+               AND NOT EXISTS (
+                   SELECT 1 FROM project_people pp WHERE pp.participant_id = participants.id
+               )",
             params![cycle_id],
         )?;
         tx.execute(
@@ -747,7 +780,7 @@ mod tests {
         assert_eq!(out.created, ["alex", "jan"]);
         let list = s.participants_for_cycle("NOMAD").unwrap();
         assert_eq!(list.len(), 2);
-        assert_eq!(list[0].cycle_participant_id(), Some("alex"));
+        assert_eq!(list[0].cycle_participant_id.as_deref(), Some("alex"));
         assert_eq!(list[0].cycle_id.as_deref(), Some("NOMAD"));
 
         // Rename keeps the row (and so the voice profile); the same list is a no-op.
@@ -789,7 +822,12 @@ mod tests {
             .participants_for_cycle("C")
             .unwrap()
             .into_iter()
-            .map(|p| (p.cycle_participant_id().unwrap().to_string(), p.name))
+            .map(|p| {
+                (
+                    p.cycle_participant_id.as_deref().unwrap().to_string(),
+                    p.name,
+                )
+            })
             .collect();
         assert!(names.contains(&("a".into(), "Jan".into())));
         assert!(names.contains(&("b".into(), "Ola".into())));
@@ -823,7 +861,8 @@ mod tests {
             1,
         )
         .unwrap();
-        // The id of Ewa changes upstream; the name stays. This used to fail for good.
+        // The id of Ewa changes upstream; the name stays. `project_people.cycle_participant_id`
+        // rebinds to `"ewa"` while the stable `participants.id` and voice profile stay intact.
         let out = s
             .sync_cycle_participants("C", &pairs(&[("a", "Ola"), ("ewa", "Ewa")]))
             .unwrap();
@@ -832,10 +871,9 @@ mod tests {
         let list = s.participants_for_cycle("C").unwrap();
         assert_eq!(list.len(), 2);
         let ewa = list.iter().find(|p| p.name == "Ewa").unwrap();
-        assert_eq!(ewa.id, cycle_participant_key("C", "ewa"));
-        assert_eq!(ewa.cycle_participant_id(), Some("ewa"));
+        assert_eq!(ewa.id, old_key);
+        assert_eq!(ewa.cycle_participant_id.as_deref(), Some("ewa"));
         assert_eq!(ewa.sample_count, 1);
-        assert!(list.iter().all(|p| p.id != old_key));
         // The same list again changes nothing.
         assert_eq!(
             s.sync_cycle_participants("C", &pairs(&[("a", "Ola"), ("ewa", "Ewa")]))
@@ -867,10 +905,13 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-        let new_key = cycle_participant_key("C", "new");
-        assert_eq!((matched, assigned), (Some(new_key.clone()), Some(new_key)));
-        // The stored name follows the list.
-        assert_eq!(s.participants_for_cycle("C").unwrap()[0].name, "ewa");
+        // Because `participants.id` stays stable across `cycle_participant_id` rebinding,
+        // existing `meeting_voices` assignments remain valid without rewriting foreign keys.
+        assert_eq!((matched, assigned), (Some(old_key.clone()), Some(old_key)));
+        // The stored name and cycle_participant_id follow the list.
+        let ewa = &s.participants_for_cycle("C").unwrap()[0];
+        assert_eq!(ewa.name, "ewa");
+        assert_eq!(ewa.cycle_participant_id.as_deref(), Some("new"));
     }
 
     #[test]
@@ -882,14 +923,15 @@ mod tests {
         s.sync_cycle_participants("B", &pairs(&[("ola", "Ola")]))
             .unwrap();
         s.create_participant("legacy-ola", "Ola", 1).unwrap();
-        assert!(s.create_participant("legacy-2", "OLA", 1).is_err());
+        // Global people can share a name without auto-merging.
+        s.create_participant("legacy-2", "OLA", 2).unwrap();
 
         let in_a = s.participants_for_cycle("A").unwrap();
         let in_b = s.participants_for_cycle("B").unwrap();
         assert_eq!((in_a.len(), in_b.len()), (1, 1));
         assert_ne!(in_a[0].id, in_b[0].id);
-        assert_eq!(s.list_participants_for(None).unwrap().len(), 1);
-        assert_eq!(s.list_participants().unwrap().len(), 3);
+        assert_eq!(s.list_participants_for(None).unwrap().len(), 2);
+        assert_eq!(s.list_participants().unwrap().len(), 4);
 
         let a = s.find_participant_by_name_in(Some("A"), "ola").unwrap();
         assert_eq!(a.unwrap().id, in_a[0].id);
@@ -997,14 +1039,14 @@ mod tests {
         assert_eq!(s.list_clips("m1").unwrap().len(), 1);
         assert_eq!(s.profiles_for(None).unwrap().len(), 1);
 
-        // The new constraints are live: foreign keys are back on, the name is unique per
-        // cycle, and a cycle participant may reuse a legacy name.
+        // Foreign keys are back on, and a cycle participant or another global participant may
+        // reuse a name without auto-merging.
         let fk: i64 = s
             .conn
             .pragma_query_value(None, "foreign_keys", |r| r.get(0))
             .unwrap();
         assert_eq!(fk, 1);
-        assert!(s.create_participant("p3", "OLA", 1).is_err());
+        s.create_participant("p3", "OLA", 1).unwrap();
         s.create_participant_in(Some("NOMAD"), "NOMAD:ola", "Ola", 1)
             .unwrap();
         s.delete_participant("p1").unwrap();
@@ -1142,5 +1184,22 @@ mod tests {
         let after = s.list_task_completions("NOMAD").unwrap();
         assert_eq!(after.len(), 1);
         assert_eq!(after[0].task_key, "#12");
+    }
+
+    #[test]
+    fn syncing_rebinds_polish_diacritic_case_variants() {
+        let s = store();
+        s.sync_cycle_participants("C", &pairs(&[("old", "Łukasz")]))
+            .unwrap();
+        let old_key = s.participants_for_cycle("C").unwrap()[0].id.clone();
+        let out = s
+            .sync_cycle_participants("C", &pairs(&[("lukasz", "łukasz")]))
+            .unwrap();
+        assert_eq!(out.rebound, ["lukasz"]);
+        assert!(out.created.is_empty());
+        let list = s.participants_for_cycle("C").unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, old_key);
+        assert_eq!(list[0].cycle_participant_id.as_deref(), Some("lukasz"));
     }
 }

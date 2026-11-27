@@ -513,6 +513,14 @@ pub fn build(input: &PlanInput<'_>) -> PublishPlan {
                     .as_deref()
                     .and_then(|id| input.cycle.participant(id))
                     .and_then(|p| p.github.clone());
+                if item.assignee.is_none() {
+                    if let Some(name) = item.assignee_name.as_deref() {
+                        plan.notes.push(format!(
+                            "task {} is assigned to \"{name}\" (not in project people): the GitHub issue will be created unassigned",
+                            item.id
+                        ));
+                    }
+                }
                 let source = item.source.as_ref();
                 let payload = IssuePayload {
                     cycle: cycle_id.clone(),

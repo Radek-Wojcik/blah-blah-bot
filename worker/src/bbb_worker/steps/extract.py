@@ -66,11 +66,16 @@ def build_items(
     warnings: list[dict[str, Any]] = []
     for raw in data["items"]:
         found = quotes.verify(raw["quote"], windows.parse_clock(raw["time"]), corpus)
+        raw_name = raw.get("assignee_name")
+        assignee_name = raw_name.strip() if isinstance(raw_name, str) else None
+        if not assignee_name:
+            assignee_name = None
         items.append(
             {
                 "type": raw["type"],
                 "text": raw["text"].strip(),
                 "assignee": raw["assignee"],
+                "assignee_name": assignee_name,
                 "due": raw["due"],
                 "certainty": dict(raw["certainty"]),
                 "section": raw["section"] if raw["section"] in sections else None,

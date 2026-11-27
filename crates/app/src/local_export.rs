@@ -67,7 +67,7 @@ pub fn render_transcript_markdown(
     };
     if let (Ok(voices), Ok(participants)) = (
         store.list_meeting_voices(meeting_id),
-        queue::voices::participants_for_meeting(store, meeting_id),
+        store.list_participants(),
     ) {
         let names = queue::voices::speaker_names(&voices, &participants);
         queue::voices::apply_names(&mut view, &voices, &names);

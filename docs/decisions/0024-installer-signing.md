@@ -56,7 +56,7 @@ Facts below were retrieved on 2026-11-21. Prices and eligibility change; confirm
 - **Eligibility** ([terms](https://signpath.org/terms)): an OSI-approved license with no commercial dual licensing and no proprietary components; the project is actively maintained and already released in the form to be signed; no malware or potentially unwanted behavior; functionality documented on the download page; only the project's own binaries built from its own source. The project must also enable multi-factor authentication for SignPath and the source repository, define author, reviewer and approver roles, publish a code signing policy with the required attribution on its home and download pages, and enforce product name and version metadata.
 - **Public repository:** the signing is described as verifying that the binary was built from the project's open-source repository. An explicit "public repository" rule was not found on the pages retrieved, and the application page (`https://signpath.org/apply`) could not be read in full; treat a public repository as required until confirmed with the foundation.
 - **Publisher name:** the certificate belongs to the foundation, so users see "SignPath Foundation" as publisher, not the project. The foundation can revoke it if the rules are broken.
-- **Steps:** make the repository public, publish the first release (unsigned), add the code signing policy page, apply, then connect the build so that signing requests are approved by a named approver. Application timing is unknown.
+- **Steps:** make the repository public, publish the first release (unsigned), add the [code signing policy](../CODE-SIGNING-POLICY.md) page, apply, then connect the build so that signing requests are approved by a named approver. Application timing is unknown.
 - **Effect:** the same SmartScreen behavior as options 2 and 3, with the foundation's identity accumulating reputation.
 
 ### 5. Self-signed certificate
@@ -74,6 +74,7 @@ For MSIX packages published through the Microsoft Store, Microsoft re-signs the 
 - The signing step and `SHA256SUMS.txt` are part of the workflow in either case, so adopting an option later is a secrets and configuration change, not a pipeline rewrite.
 - Options 2 and 4 depend on facts that outside parties control (eligible regions, the foundation's acceptance). Option 3 depends on a hardware or cloud key and on the CA's validation rules.
 - A public repository is a precondition for option 4 and is independent of the other options. The repository is public.
+- **2026-11-25 Bearfoos incident:** An unsigned local test build of the NSIS installer (with LZMA solid compression and the WebView2 download bootstrapper) triggered a `Trojan:Win32/Bearfoos.A!ml` Windows Defender machine-learning false positive. While switching to `zlib` compression, `webviewInstallMode: skip`, and complete PE/NSIS version metadata reduces heuristic triggers, unsigned binaries remain susceptible to ML false positives; signing (see [CODE-SIGNING-POLICY.md](../CODE-SIGNING-POLICY.md)) remains the long-term mitigation.
 
 ## Alternatives
 
