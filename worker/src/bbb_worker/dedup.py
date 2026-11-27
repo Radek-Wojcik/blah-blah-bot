@@ -71,7 +71,8 @@ def is_duplicate(a: dict[str, Any], b: dict[str, Any]) -> bool:
 
 
 def _completeness(item: dict[str, Any]) -> tuple[bool, int, float, int]:
-    has_owner = item["assignee"] is not None or bool(item.get("assignee_name"))
+    name = item.get("assignee_name")
+    has_owner = item["assignee"] is not None or (isinstance(name, str) and bool(name.strip()))
     filled = has_owner + (item["due"] is not None)
     return (item["source"]["verified"], filled, item["source"]["match"], len(item["text"]))
 
@@ -105,7 +106,9 @@ def merge_group(group: list[dict[str, Any]]) -> dict[str, Any]:
             winner["assignee_name"] = None
         elif winner.get("assignee_name") is None and other.get("assignee_name") is not None:
             winner["assignee_name"] = other["assignee_name"]
-            winner["certainty"]["assignee"] = other["certainty"]["assignee"]
+            winner["certainty"]["assignee"] = best_certainty(
+                winner["certainty"]["assignee"], other["certainty"]["assignee"]
+            )
         elif (
             winner.get("assignee_name") is not None
             and other.get("assignee_name") is not None

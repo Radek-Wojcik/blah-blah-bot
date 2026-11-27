@@ -80,7 +80,10 @@ def _external_person(m: Meeting, rng: random.Random) -> str:
 
 
 def _task_event(m: Meeting, rng: random.Random, mixed: bool) -> None:
-    """A task is requested and accepted; variants: request, self, reassign, third_party, declined, unaccepted."""
+    """A task is requested and accepted.
+
+    Variants: request, self, reassign, third_party, declined, unaccepted.
+    """
     lang = m.lang
     # In mixed meetings a fifth of the turns are fully English.
     turn_lang = "en" if (mixed and rng.random() < 0.2) else lang
@@ -128,7 +131,7 @@ def _task_event(m: Meeting, rng: random.Random, mixed: bool) -> None:
         with_due = rng.random() < 0.5
         if pl:
             line = (
-                f"{ext_name} przygotuje {action} na {due_s}."
+                f"{ext_name} ma {action} na {due_s}."
                 if with_due
                 else f"{ext_name} ma do zrobienia: {action}."
             )

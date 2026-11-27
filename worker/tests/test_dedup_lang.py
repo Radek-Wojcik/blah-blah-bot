@@ -156,3 +156,21 @@ def test_auto_tie_goes_to_english():
 def test_mixed_speech_with_a_clear_majority():
     mixed = [*PL, *PL, EN[1]]
     assert lang.resolve("auto", "en", mixed) == "pl"
+
+
+def test_a_whitespace_assignee_name_does_not_make_an_item_more_complete():
+    blank = item("Opróżnić plecak", 0, 100)
+    blank["assignee_name"] = "   "
+    empty = item("Opróżnić plecak", 1, 105)
+    assert dedup._completeness(blank) == dedup._completeness(empty)
+
+
+def test_merging_an_equal_name_keeps_the_best_certainty():
+    a = item("Opróżnić plecak", 0, 100)
+    a["assignee_name"] = "Marek"
+    a["certainty"]["assignee"] = "stated"
+    b = item("Opróżnić plecak", 1, 105)
+    b["assignee_name"] = "marek"
+    b["certainty"]["assignee"] = "inferred"
+    (merged,) = dedup.merge_duplicates([a, b])
+    assert merged["certainty"]["assignee"] == "stated"

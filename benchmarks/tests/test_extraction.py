@@ -159,3 +159,19 @@ def test_quote_validity_rejects_invented_and_misplaced_quotes():
         _item("Alex, can you have the mount ready by next Friday?", 300_000, 305_000),  # wrong time
     ]
     assert quote_validity(items, TRANSCRIPT)["valid"] == 0
+
+
+def test_outside_assignee_names_are_compared_case_and_space_insensitively():
+    ref = [{"text": "Send the invoice", "assignee": None, "assignee_name": "Marek", "due": None}]
+    same = [{"text": "Send the invoice", "assignee": None, "assignee_name": " marek ", "due": None}]
+    other = [{"text": "Send the invoice", "assignee": None, "assignee_name": "Tomek", "due": None}]
+    assert score_extraction(ref, same)["assignee_accuracy"] == 1.0
+    assert score_extraction(ref, other)["assignee_accuracy"] == 0.0
+    assert score_by_owner_due(ref, same)["recall"] == 1.0
+    assert score_by_owner_due(ref, other)["recall"] == 0.0
+
+
+def test_a_blank_assignee_name_equals_no_name():
+    ref = [{"text": "Send the invoice", "assignee": None, "due": None}]
+    blank = [{"text": "Send the invoice", "assignee": None, "assignee_name": "  ", "due": None}]
+    assert score_extraction(ref, blank)["assignee_accuracy"] == 1.0

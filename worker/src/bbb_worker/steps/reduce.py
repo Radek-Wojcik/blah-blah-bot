@@ -172,7 +172,7 @@ def _warning(code: str, message: str, item: dict[str, Any] | None = None) -> dic
 
 
 _GENERIC_ASSIGNEE_RE = re.compile(
-    r"^(?:speaker|mówca|participant|uczestnik)(?:\s+\d+)?$", re.IGNORECASE
+    r"^(?:speaker|mówca|participant|uczestnik)(?:[\s_-]*\d+)?$", re.IGNORECASE
 )
 _GENERIC_ASSIGNEE_LABELS = frozenset({"you", "unknown", "ty", "ja", "none", "null", "n/a"})
 
@@ -218,6 +218,8 @@ def validate_items(items: list[dict[str, Any]], context: dict[str, Any]) -> list
         it["assignee"] = resolve_assignee(asked, context["participants"])
         if it["assignee"] is None and asked_name is not None:
             it["assignee"] = resolve_assignee(asked_name, context["participants"])
+            if it["assignee"] is not None and it["certainty"]["assignee"] == "unknown":
+                it["certainty"]["assignee"] = "inferred"
         if it["assignee"] is not None:
             it["assignee_name"] = None
         else:
