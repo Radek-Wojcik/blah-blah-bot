@@ -55,6 +55,8 @@ fn gather_with(
     let env_ready = setup::env_ready(p.env_dir());
     let env_working = p.env_busy().load(Ordering::SeqCst);
     let models_working = p.models_busy();
+    let llama_working = p.llama_busy().load(Ordering::SeqCst);
+    let llm_working = p.llm_busy().load(Ordering::SeqCst);
 
     let models = (probe_models
         && env_ready
@@ -67,7 +69,7 @@ fn gather_with(
         .map(|v| v.into_iter().collect::<HashMap<_, _>>());
 
     let llama = setup::resolve_llama(&s.llama_server_path, &env);
-    let llama_version = match (&llama, probe_llama) {
+    let llama_version = match (&llama, probe_llama && !llama_working) {
         (LlamaResolution::Configured(path) | LlamaResolution::Detected(path), true) => {
             Some(setup::probe_llama_version(path, setup::VERSION_TIMEOUT))
         }
@@ -92,9 +94,11 @@ fn gather_with(
         models_working,
         hf_token_set: secrets::get(secrets::HF_TOKEN).is_some(),
         llama,
+        llama_working,
         llama_version,
         llama_candidates: setup::detect_llama_candidates(&s.llama_server_path, &env),
         llm_model,
+        llm_working,
         legacy_venv_notice,
     };
     (s, probe)
@@ -209,7 +213,12 @@ pub async fn find_gguf_models(
         }
         None => {
             let models_dir = state.processing().settings_snapshot().models_dir;
-            setup::common_model_dirs(&models_dir, &DetectEnv::from_process())
+            let mut dirs = setup::common_model_dirs(&models_dir, &DetectEnv::from_process());
+            let downloads = state.processing().downloads_dir();
+            if downloads.is_dir() && !dirs.contains(&downloads) {
+                dirs.push(downloads);
+            }
+            dirs
         }
     };
     Ok(setup::find_gguf(&dirs))
@@ -291,6 +300,8 @@ pub fn prepare_worker_env(state: State<'_, AppState>) -> IpcResult<()> {
                 },
             );
             let elapsed_secs = started.elapsed().as_secs();
+            // Clear busy BEFORE emitting the terminal event so an immediate Retry is not refused.
+            processing.env_busy().store(false, Ordering::SeqCst);
             match result {
                 Ok(UvSyncOutcome::Done) => {
                     processing.emit_setup_event(SetupProgressEvent {
@@ -325,7 +336,6 @@ pub fn prepare_worker_env(state: State<'_, AppState>) -> IpcResult<()> {
                     });
                 }
             }
-            processing.env_busy().store(false, Ordering::SeqCst);
         });
     if spawned.is_err() {
         state.processing().env_busy().store(false, Ordering::SeqCst);
@@ -340,8 +350,19 @@ pub fn cancel_setup_task(state: State<'_, AppState>) {
     state.processing().cancel_setup_tasks();
 }
 
-/// Downloads the pinned `llama-server` and CUDA runtime archives into Local AppData, emitting
-/// `setup-progress` events. Resumes from `.part` files on retry.
+/// Updates `settings` to use the downloaded managed GGUF model and enables reports.
+pub(crate) fn apply_downloaded_language_model(
+    settings: &mut crate::processing::ProcessingSettings,
+    model_path: &std::path::Path,
+) {
+    settings.llm.managed.model_path = model_path.to_string_lossy().into_owned();
+    settings.llm.default_kind = LlmKind::Managed;
+    settings.skip_reports = false;
+}
+
+/// Downloads the pinned `llama-server` and CUDA runtime archives into Local AppData, extracts
+/// them safely, persists the `llama-server.exe` path, and emits `setup-progress` events.
+/// Resumes from `.part` files on retry.
 #[tauri::command]
 pub fn download_llama_server(state: State<'_, AppState>) -> IpcResult<()> {
     let processing: Arc<Processing> = state.processing().clone();
@@ -354,6 +375,7 @@ pub fn download_llama_server(state: State<'_, AppState>) -> IpcResult<()> {
     let cancel = processing.llama_cancel().clone();
     cancel.store(false, Ordering::SeqCst);
     let download_dir = processing.downloads_dir();
+    let extract_dir = processing.llama_server_dir();
     let spawned = std::thread::Builder::new()
         .name("download-llama-server".into())
         .spawn(move || {
@@ -372,9 +394,12 @@ pub fn download_llama_server(state: State<'_, AppState>) -> IpcResult<()> {
                 (&LLAMA_CPP_ZIP, 0u64, "Downloading llama-server"),
                 (&CUDART_ZIP, LLAMA_CPP_ZIP.size, "Downloading CUDA runtime"),
             ];
+            let mut archive_paths: Vec<PathBuf> = Vec::with_capacity(pins.len());
             let mut outcome: Result<(), DownloadError> = Ok(());
             for (pin, offset, label) in pins {
-                let mut last_emit = Instant::now() - DOWNLOAD_EVENT_THROTTLE;
+                let mut last_emit = Instant::now()
+                    .checked_sub(DOWNLOAD_EVENT_THROTTLE)
+                    .unwrap_or_else(Instant::now);
                 let res = downloads::download_pin(pin, &download_dir, &cancel, |p| {
                     let phase = match p.phase {
                         DownloadPhase::Progress => SetupPhase::Progress,
@@ -400,13 +425,57 @@ pub fn download_llama_server(state: State<'_, AppState>) -> IpcResult<()> {
                         message,
                     });
                 });
-                if let Err(err) = res {
-                    outcome = Err(err);
-                    break;
+                match res {
+                    Ok(path) => archive_paths.push(path),
+                    Err(err) => {
+                        outcome = Err(err);
+                        break;
+                    }
+                }
+            }
+
+            if outcome.is_ok() {
+                if cancel.load(Ordering::SeqCst) {
+                    outcome = Err(DownloadError::Cancelled);
+                } else {
+                    processing.emit_setup_event(SetupProgressEvent {
+                        task: SetupTask::LlamaServer,
+                        phase: SetupPhase::Verifying,
+                        downloaded_bytes: Some(total_bytes),
+                        total_bytes: Some(total_bytes),
+                        elapsed_secs: started.elapsed().as_secs(),
+                        message: "Extracting llama-server archives".to_string(),
+                    });
+                    for zip_path in &archive_paths {
+                        if let Err(msg) = downloads::extract_zip_safe(zip_path, &extract_dir) {
+                            outcome = Err(DownloadError::Failed(msg));
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if outcome.is_ok() {
+                match downloads::find_file_in_tree(&extract_dir, "llama-server.exe", 3) {
+                    Some(exe_path) => {
+                        if let Err(e) = processing.set_llama_server_path(&exe_path) {
+                            outcome = Err(DownloadError::Failed(format!(
+                                "could not save llama-server path: {}",
+                                e.message
+                            )));
+                        }
+                    }
+                    None => {
+                        outcome = Err(DownloadError::Failed(
+                            "llama-server.exe was not found in the extracted archive".to_string(),
+                        ));
+                    }
                 }
             }
 
             let elapsed_secs = started.elapsed().as_secs();
+            // Clear busy BEFORE emitting the terminal event so an immediate Retry is not refused.
+            processing.llama_busy().store(false, Ordering::SeqCst);
             match outcome {
                 Ok(()) => {
                     processing.emit_setup_event(SetupProgressEvent {
@@ -415,7 +484,7 @@ pub fn download_llama_server(state: State<'_, AppState>) -> IpcResult<()> {
                         downloaded_bytes: Some(total_bytes),
                         total_bytes: Some(total_bytes),
                         elapsed_secs,
-                        message: "llama-server archives downloaded and verified".to_string(),
+                        message: "llama-server is ready".to_string(),
                     });
                 }
                 Err(DownloadError::Cancelled) => {
@@ -441,7 +510,6 @@ pub fn download_llama_server(state: State<'_, AppState>) -> IpcResult<()> {
                     });
                 }
             }
-            processing.llama_busy().store(false, Ordering::SeqCst);
         });
     if spawned.is_err() {
         state
@@ -457,7 +525,8 @@ pub fn download_llama_server(state: State<'_, AppState>) -> IpcResult<()> {
 }
 
 /// Downloads the pinned default language model (Gemma 4 12B Q4_K_M GGUF) into Local AppData,
-/// emitting `setup-progress` events. Resumes from `.part` on retry.
+/// saves it as the configured managed model, and emits `setup-progress` events. Resumes from
+/// `.part` on retry.
 #[tauri::command]
 pub fn download_language_model(state: State<'_, AppState>) -> IpcResult<()> {
     let processing: Arc<Processing> = state.processing().clone();
@@ -484,7 +553,9 @@ pub fn download_language_model(state: State<'_, AppState>) -> IpcResult<()> {
                 message: "Starting language model download".to_string(),
             });
 
-            let mut last_emit = Instant::now() - DOWNLOAD_EVENT_THROTTLE;
+            let mut last_emit = Instant::now()
+                .checked_sub(DOWNLOAD_EVENT_THROTTLE)
+                .unwrap_or_else(Instant::now);
             let res = downloads::download_pin(&GEMMA_12B_Q4_K_M, &download_dir, &cancel, |p| {
                 let phase = match p.phase {
                     DownloadPhase::Progress => SetupPhase::Progress,
@@ -509,16 +580,32 @@ pub fn download_language_model(state: State<'_, AppState>) -> IpcResult<()> {
                 });
             });
 
+            let outcome: Result<(), DownloadError> = match res {
+                Ok(final_path) => {
+                    let mut next = processing.settings_snapshot();
+                    apply_downloaded_language_model(&mut next, &final_path);
+                    processing.save_settings(next).map_err(|e| {
+                        DownloadError::Failed(format!(
+                            "could not save language model path: {}",
+                            e.message
+                        ))
+                    })
+                }
+                Err(err) => Err(err),
+            };
+
             let elapsed_secs = started.elapsed().as_secs();
-            match res {
-                Ok(_) => {
+            // Clear busy BEFORE emitting the terminal event so an immediate Retry is not refused.
+            processing.llm_busy().store(false, Ordering::SeqCst);
+            match outcome {
+                Ok(()) => {
                     processing.emit_setup_event(SetupProgressEvent {
                         task: SetupTask::LanguageModel,
                         phase: SetupPhase::Done,
                         downloaded_bytes: Some(total_bytes),
                         total_bytes: Some(total_bytes),
                         elapsed_secs,
-                        message: "Language model downloaded and verified".to_string(),
+                        message: "Language model downloaded and configured".to_string(),
                     });
                 }
                 Err(DownloadError::Cancelled) => {
@@ -544,7 +631,6 @@ pub fn download_language_model(state: State<'_, AppState>) -> IpcResult<()> {
                     });
                 }
             }
-            processing.llm_busy().store(false, Ordering::SeqCst);
         });
     if spawned.is_err() {
         state.processing().llm_busy().store(false, Ordering::SeqCst);
@@ -621,5 +707,22 @@ mod tests {
         let i_err = check_readiness_for_import(&st).unwrap_err();
         assert_eq!(i_err.code, q_err.code);
         assert_eq!(i_err.message, q_err.message);
+    }
+
+    #[test]
+    fn apply_downloaded_language_model_sets_path_kind_and_enables_reports() {
+        let mut settings = ProcessingSettings::default();
+        settings.llm.default_kind = LlmKind::External;
+        settings.skip_reports = true;
+
+        let path = PathBuf::from("C:/local/downloads/gemma-4-12B-it-Q4_K_M.gguf");
+        apply_downloaded_language_model(&mut settings, &path);
+
+        assert_eq!(
+            settings.llm.managed.model_path,
+            "C:/local/downloads/gemma-4-12B-it-Q4_K_M.gguf"
+        );
+        assert_eq!(settings.llm.default_kind, LlmKind::Managed);
+        assert!(!settings.skip_reports);
     }
 }

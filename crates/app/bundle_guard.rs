@@ -35,10 +35,14 @@ fn resolve_src(manifest_dir: &Path, src: &str) -> PathBuf {
 
 /// Checks that `config_json` defines `bundle.resources` containing both:
 /// - the worker payload (`worker/pyproject.toml` and `worker/uv.lock` present on disk), and
-/// - the bundled `uv` binary (`bin/uv.exe` or `bin/uv` present on disk).
+/// - the bundled `uv` binary (`bin/uv.exe` on Windows, `bin/uv` on Unix, present on disk).
 ///
 /// Accepts both Tauri v2 map form (`{ "<src>": "<dst>" }`) and array form (`["<src>", ...]`).
-pub fn check_bundle_resources(config_json: &str, manifest_dir: &Path) -> Result<(), String> {
+/// Returns the resolved file paths checked so `build.rs` can emit `cargo:rerun-if-changed`.
+pub fn check_bundle_resources(
+    config_json: &str,
+    manifest_dir: &Path,
+) -> Result<Vec<PathBuf>, String> {
     let root: Value =
         serde_json::from_str(config_json).map_err(|e| format!("invalid Tauri config JSON: {e}"))?;
     let resources = root
@@ -51,7 +55,14 @@ pub fn check_bundle_resources(config_json: &str, manifest_dir: &Path) -> Result<
     let mut has_pyproject = false;
     let mut has_uv_lock = false;
     let mut has_uv_bin = false;
+    let mut watched: Vec<PathBuf> = Vec::new();
     let mut problems: Vec<String> = Vec::new();
+    let uv_name = if cfg!(windows) { "uv.exe" } else { "uv" };
+    let uv_dst = if cfg!(windows) {
+        "bin/uv.exe"
+    } else {
+        "bin/uv"
+    };
 
     let mut check_entry = |src: &str, dst: Option<&str>| {
         let src_path = resolve_src(manifest_dir, src);
@@ -65,6 +76,7 @@ pub fn check_bundle_resources(config_json: &str, manifest_dir: &Path) -> Result<
             let uv_lock = src_path.join("uv.lock");
             if pyproject.is_file() {
                 has_pyproject = true;
+                watched.push(pyproject);
             } else {
                 problems.push(format!(
                     "missing worker/pyproject.toml at {}",
@@ -73,6 +85,7 @@ pub fn check_bundle_resources(config_json: &str, manifest_dir: &Path) -> Result<
             }
             if uv_lock.is_file() {
                 has_uv_lock = true;
+                watched.push(uv_lock);
             } else {
                 problems.push(format!("missing worker/uv.lock at {}", uv_lock.display()));
             }
@@ -83,6 +96,7 @@ pub fn check_bundle_resources(config_json: &str, manifest_dir: &Path) -> Result<
         if is_pyproject_file {
             if src_path.is_file() {
                 has_pyproject = true;
+                watched.push(src_path.clone());
             } else {
                 problems.push(format!(
                     "missing worker/pyproject.toml at {}",
@@ -96,6 +110,7 @@ pub fn check_bundle_resources(config_json: &str, manifest_dir: &Path) -> Result<
         if is_uv_lock_file {
             if src_path.is_file() {
                 has_uv_lock = true;
+                watched.push(src_path.clone());
             } else {
                 problems.push(format!("missing worker/uv.lock at {}", src_path.display()));
             }
@@ -104,26 +119,29 @@ pub fn check_bundle_resources(config_json: &str, manifest_dir: &Path) -> Result<
         let is_bin_dir = dst_norm.as_deref() == Some("bin")
             || (dst_norm.is_none() && (src_norm == "bin" || src_norm.ends_with("/bin")));
         if is_bin_dir {
-            let uv_exe = src_path.join("uv.exe");
-            let uv_unix = src_path.join("uv");
-            if uv_exe.is_file() || uv_unix.is_file() {
+            let uv_bin = src_path.join(uv_name);
+            if uv_bin.is_file() {
                 has_uv_bin = true;
+                watched.push(uv_bin);
             } else {
                 problems.push(format!(
-                    "missing bundled uv executable in {}",
+                    "missing bundled {uv_name} executable in {}",
                     src_path.display()
                 ));
             }
         }
 
-        let is_uv_file = matches!(dst_norm.as_deref(), Some("bin/uv.exe" | "bin/uv"))
-            || (dst_norm.is_none()
-                && (src_norm.ends_with("bin/uv.exe") || src_norm.ends_with("bin/uv")));
+        let is_uv_file = dst_norm.as_deref() == Some(uv_dst)
+            || (dst_norm.is_none() && src_norm.ends_with(uv_dst));
         if is_uv_file {
             if src_path.is_file() {
                 has_uv_bin = true;
+                watched.push(src_path.clone());
             } else {
-                problems.push(format!("missing bundled uv at {}", src_path.display()));
+                problems.push(format!(
+                    "missing bundled {uv_name} at {}",
+                    src_path.display()
+                ));
             }
         }
     };
@@ -154,11 +172,11 @@ pub fn check_bundle_resources(config_json: &str, manifest_dir: &Path) -> Result<
         problems.push("bundle.resources does not include worker/uv.lock".to_string());
     }
     if !has_uv_bin {
-        problems.push("bundle.resources does not include bin/uv(.exe)".to_string());
+        problems.push(format!("bundle.resources does not include {uv_dst}"));
     }
 
     if problems.is_empty() {
-        Ok(())
+        Ok(watched)
     } else {
         Err(problems.join("; "))
     }
@@ -183,7 +201,8 @@ mod tests {
         fs::create_dir_all(&bin).unwrap();
         fs::write(worker.join("pyproject.toml"), "[project]\nname = \"w\"\n").unwrap();
         fs::write(worker.join("uv.lock"), "version = 1\n").unwrap();
-        fs::write(bin.join("uv.exe"), b"MZ").unwrap();
+        let uv_name = if cfg!(windows) { "uv.exe" } else { "uv" };
+        fs::write(bin.join(uv_name), b"MZ").unwrap();
     }
 
     #[test]
@@ -198,7 +217,8 @@ mod tests {
                 }
             }
         }"#;
-        assert!(check_bundle_resources(cfg, d.path()).is_ok());
+        let watched = check_bundle_resources(cfg, d.path()).unwrap();
+        assert_eq!(watched.len(), 3);
     }
 
     #[test]
@@ -213,7 +233,8 @@ mod tests {
                 ]
             }
         }"#;
-        assert!(check_bundle_resources(cfg, d.path()).is_ok());
+        let watched = check_bundle_resources(cfg, d.path()).unwrap();
+        assert_eq!(watched.len(), 3);
     }
 
     #[test]
@@ -244,7 +265,8 @@ mod tests {
     fn bundle_guard_rejects_missing_uv_binary() {
         let d = scratch("no-uv");
         stage_complete(d.path());
-        fs::remove_file(d.path().join("stage/bin/uv.exe")).unwrap();
+        let uv_name = if cfg!(windows) { "uv.exe" } else { "uv" };
+        fs::remove_file(d.path().join("stage/bin").join(uv_name)).unwrap();
         let cfg = r#"{
             "bundle": {
                 "resources": {
@@ -255,6 +277,36 @@ mod tests {
         }"#;
         let err = check_bundle_resources(cfg, d.path()).unwrap_err();
         assert!(err.contains("uv"), "{err}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn bundle_guard_rejects_unix_uv_name_on_windows() {
+        let d = scratch("unix-uv");
+        stage_complete(d.path());
+        fs::remove_file(d.path().join("stage/bin/uv.exe")).unwrap();
+        fs::write(d.path().join("stage/bin/uv"), b"not-exe").unwrap();
+        let cfg = r#"{
+            "bundle": {
+                "resources": {
+                    "stage/worker": "worker",
+                    "stage/bin": "bin"
+                }
+            }
+        }"#;
+        let err = check_bundle_resources(cfg, d.path()).unwrap_err();
+        assert!(err.contains("uv.exe"), "{err}");
+
+        let file_cfg = r#"{
+            "bundle": {
+                "resources": {
+                    "stage/worker": "worker",
+                    "stage/bin/uv": "bin/uv"
+                }
+            }
+        }"#;
+        let err = check_bundle_resources(file_cfg, d.path()).unwrap_err();
+        assert!(err.contains("uv.exe"), "{err}");
     }
 
     #[test]

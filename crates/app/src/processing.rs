@@ -471,6 +471,7 @@ pub struct Processing {
     last_event: Mutex<Instant>,
     driver_running: Arc<AtomicBool>,
     models_busy: Arc<AtomicBool>,
+    models_cancel: Arc<AtomicBool>,
     /// The processing environment is being created (`prepare_worker_env`).
     env_busy: Arc<AtomicBool>,
     env_cancel: Arc<AtomicBool>,
@@ -611,9 +612,14 @@ impl Processing {
             live,
             pulls: PullLedger::default(),
             cycle_repos,
-            last_event: Mutex::new(Instant::now() - EVENT_THROTTLE),
+            last_event: Mutex::new(
+                Instant::now()
+                    .checked_sub(EVENT_THROTTLE)
+                    .unwrap_or_else(Instant::now),
+            ),
             driver_running: Arc::default(),
             models_busy: Arc::default(),
+            models_cancel: Arc::default(),
             env_busy: Arc::default(),
             env_cancel: Arc::default(),
             llama_busy: Arc::default(),
@@ -663,9 +669,14 @@ impl Processing {
             live: Arc::default(),
             pulls: PullLedger::default(),
             cycle_repos: Arc::new(Vec::new),
-            last_event: Mutex::new(Instant::now() - EVENT_THROTTLE),
+            last_event: Mutex::new(
+                Instant::now()
+                    .checked_sub(EVENT_THROTTLE)
+                    .unwrap_or_else(Instant::now),
+            ),
             driver_running: Arc::default(),
             models_busy: Arc::default(),
+            models_cancel: Arc::default(),
             env_busy: Arc::default(),
             env_cancel: Arc::default(),
             llama_busy: Arc::default(),
@@ -821,10 +832,23 @@ impl Processing {
         self.env_cancel.store(true, Ordering::SeqCst);
         self.llama_cancel.store(true, Ordering::SeqCst);
         self.llm_cancel.store(true, Ordering::SeqCst);
+        self.models_cancel.store(true, Ordering::SeqCst);
     }
 
     pub(crate) fn downloads_dir(&self) -> PathBuf {
         self.local_data_dir.join("downloads")
+    }
+
+    pub(crate) fn llama_server_dir(&self) -> PathBuf {
+        self.local_data_dir
+            .join("llama-server")
+            .join(crate::downloads::LLAMA_SERVER_RELEASE)
+    }
+
+    pub(crate) fn set_llama_server_path(&self, path: &Path) -> IpcResult<()> {
+        let mut next = self.settings_snapshot();
+        next.llama_server_path = path.to_string_lossy().into_owned();
+        self.save_settings(next)
     }
 
     pub(crate) fn emit_setup_event(&self, event: setup::SetupProgressEvent) {
@@ -1454,6 +1478,8 @@ impl Processing {
         if self.models_busy.swap(true, Ordering::SeqCst) {
             return Err(IpcError::new("busy", "a download is already running"));
         }
+        let cancel = self.models_cancel.clone();
+        cancel.store(false, Ordering::SeqCst);
         let this = self.clone();
         let spawned = std::thread::Builder::new()
             .name("model-download".into())
@@ -1470,8 +1496,11 @@ impl Processing {
                 let mut cfg = this.worker_config();
                 cfg.hf_token = secrets::get(secrets::HF_TOKEN);
                 let refs: Vec<&str> = keys.iter().map(String::as_str).collect();
-                let result = worker::ensure_environment(&cfg).and_then(|()| {
-                    worker::ensure_models(&cfg, &refs, |ev| {
+                let result = worker::ensure_environment_cancellable(&cfg, &cancel).and_then(|ok| {
+                    if !ok {
+                        return Ok(false);
+                    }
+                    worker::ensure_models_cancellable(&cfg, &refs, &cancel, |ev| {
                         if let WorkerEvent::Progress {
                             fraction, message, ..
                         } = ev
@@ -1492,8 +1521,10 @@ impl Processing {
                         }
                     })
                 });
+                // Clear busy BEFORE emitting the terminal event so an immediate Retry is not refused.
+                this.models_busy.store(false, Ordering::SeqCst);
                 match result {
-                    Ok(()) => {
+                    Ok(true) => {
                         this.emit_setup_event(setup::SetupProgressEvent {
                             task: setup::SetupTask::SpeechModels,
                             phase: setup::SetupPhase::Done,
@@ -1501,6 +1532,17 @@ impl Processing {
                             total_bytes: None,
                             elapsed_secs: started.elapsed().as_secs(),
                             message: "Speech models are ready".to_string(),
+                        });
+                    }
+                    Ok(false) => {
+                        this.emit_setup_event(setup::SetupProgressEvent {
+                            task: setup::SetupTask::SpeechModels,
+                            phase: setup::SetupPhase::Cancelled,
+                            downloaded_bytes: None,
+                            total_bytes: None,
+                            elapsed_secs: started.elapsed().as_secs(),
+                            message: "Speech model download was cancelled; you can resume later"
+                                .to_string(),
                         });
                     }
                     Err(e) => {
@@ -1520,7 +1562,6 @@ impl Processing {
                         });
                     }
                 }
-                this.models_busy.store(false, Ordering::SeqCst);
                 this.hooks.emit_models_changed();
             });
         if spawned.is_err() {

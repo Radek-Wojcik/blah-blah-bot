@@ -741,11 +741,13 @@ pub struct Probe {
     pub models_working: bool,
     pub hf_token_set: bool,
     pub llama: LlamaResolution,
+    pub llama_working: bool,
     /// Result of `--version`, when it was tried.
     pub llama_version: Option<Result<String, String>>,
     pub llama_candidates: Vec<PathBuf>,
     /// The check of the configured language-model file; `None` while no path is set.
     pub llm_model: Option<Result<PathBuf, PathProblem>>,
+    pub llm_working: bool,
     /// One-time migration notice when an old Roaming `worker-venv` exists.
     pub legacy_venv_notice: Option<String>,
 }
@@ -763,9 +765,11 @@ impl Probe {
             models_working: false,
             hf_token_set: false,
             llama: LlamaResolution::NotSet,
+            llama_working: false,
             llama_version: None,
             llama_candidates: Vec::new(),
             llm_model: None,
+            llm_working: false,
             legacy_venv_notice: None,
         }
     }
@@ -911,6 +915,15 @@ fn llama_needed(s: &ProcessingSettings) -> bool {
 
 fn llama_item(s: &ProcessingSettings, p: &Probe) -> SetupItem {
     let key = KEY_LLAMA_SERVER;
+    if p.llama_working {
+        return item(
+            key,
+            ItemState::Working,
+            CODE_LLAMA_SERVER,
+            "llama-server is being downloaded.",
+            "Wait until the download finishes.",
+        );
+    }
     let found = |path: &Path, detected: bool| match &p.llama_version {
         Some(Err(e)) => item(
             key,
@@ -979,6 +992,15 @@ fn no_model_chosen(s: &ProcessingSettings) -> SetupItem {
 }
 
 fn llm_item(s: &ProcessingSettings, p: &Probe) -> SetupItem {
+    if p.llm_working {
+        return item(
+            KEY_LLM_MODEL,
+            ItemState::Working,
+            CODE_LLM_MODEL,
+            "The language model is being downloaded.",
+            "Wait until the download finishes.",
+        );
+    }
     match s.llm.default_kind {
         LlmKind::External => {
             let e = &s.llm.external;
@@ -1357,8 +1379,25 @@ fn uv_sync_command(uv: &Path, worker_dir: &Path, env_dir: &Path, cache_dir: &Pat
     cmd
 }
 
+/// Terminates `child` and any descendant processes it spawned.
+fn kill_tree(child: &mut std::process::Child) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = Command::new("taskkill")
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// Runs `uv sync --frozen` for the worker, streaming stdout and stderr lines into `on_progress`.
-/// Stops the child process and returns [`UvSyncOutcome::Cancelled`] when `cancel` is set.
+/// Stops the child process tree and returns [`UvSyncOutcome::Cancelled`] when `cancel` is set.
 /// Needs the network on the first run. Stopped after two hours.
 pub fn run_uv_sync(
     uv: &Path,
@@ -1366,15 +1405,27 @@ pub fn run_uv_sync(
     env_dir: &Path,
     cache_dir: &Path,
     cancel: &Arc<AtomicBool>,
+    on_progress: impl FnMut(UvProgressUpdate),
+) -> Result<UvSyncOutcome, String> {
+    if cancel.load(Ordering::SeqCst) {
+        return Ok(UvSyncOutcome::Cancelled);
+    }
+    let cmd = uv_sync_command(uv, worker_dir, env_dir, cache_dir);
+    run_uv_sync_cmd(cmd, uv, cancel, on_progress)
+}
+
+fn run_uv_sync_cmd(
+    mut cmd: Command,
+    program_label: &Path,
+    cancel: &Arc<AtomicBool>,
     mut on_progress: impl FnMut(UvProgressUpdate),
 ) -> Result<UvSyncOutcome, String> {
     if cancel.load(Ordering::SeqCst) {
         return Ok(UvSyncOutcome::Cancelled);
     }
-    let mut cmd = uv_sync_command(uv, worker_dir, env_dir, cache_dir);
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("uv could not be started ({}): {e}", uv.display()))?;
+        .map_err(|e| format!("uv could not be started ({}): {e}", program_label.display()))?;
     let (tx, rx) = mpsc::channel::<String>();
     if let Some(stdout) = child.stdout.take() {
         let tx_out = tx.clone();
@@ -1401,8 +1452,7 @@ pub fn run_uv_sync(
     let mut tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
     loop {
         if cancel.load(Ordering::SeqCst) {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_tree(&mut child);
             return Ok(UvSyncOutcome::Cancelled);
         }
         match rx.recv_timeout(Duration::from_millis(200)) {
@@ -1419,14 +1469,12 @@ pub fn run_uv_sync(
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
         if started.elapsed() > ENV_TIMEOUT {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_tree(&mut child);
             return Err("creating the environment took longer than two hours and was stopped; run it again to continue".into());
         }
     }
     if cancel.load(Ordering::SeqCst) {
-        let _ = child.kill();
-        let _ = child.wait();
+        kill_tree(&mut child);
         return Ok(UvSyncOutcome::Cancelled);
     }
     let status = child.wait().map_err(|e| e.to_string())?;
@@ -1978,12 +2026,16 @@ mod tests {
         let mut probe = ready_probe();
         probe.env_working = true;
         probe.models_working = true;
+        probe.llama_working = true;
+        probe.llm_working = true;
         let st = build_status(&ProcessingSettings::default(), &probe);
         assert_eq!(item_of(&st, "workerEnv").state, ItemState::Working);
         assert_eq!(
             item_of(&st, "model:whisper-turbo").state,
             ItemState::Working
         );
+        assert_eq!(item_of(&st, "llamaServer").state, ItemState::Working);
+        assert_eq!(item_of(&st, "llmModel").state, ItemState::Working);
         assert_eq!(item_of(&st, "vision").state, ItemState::Working);
         assert!(!st.ready);
     }
@@ -2064,6 +2116,14 @@ mod tests {
         assert!(json["items"][0]["fixHint"]
             .as_str()
             .is_some_and(|h| !h.is_empty()));
+        assert!(json.get("legacyVenvNotice").is_none());
+
+        let mut with_notice = ready_probe();
+        with_notice.legacy_venv_notice = Some("old venv notice".to_string());
+        let notice_json =
+            serde_json::to_value(build_status(&ProcessingSettings::default(), &with_notice))
+                .unwrap();
+        assert_eq!(notice_json["legacyVenvNotice"], "old venv notice");
     }
 
     #[test]
@@ -2126,6 +2186,45 @@ mod tests {
         )
         .unwrap();
         assert_eq!(res, UvSyncOutcome::Cancelled);
+    }
+
+    #[test]
+    fn run_uv_sync_cmd_cancels_running_child_process() {
+        let mut cmd = if cfg!(windows) {
+            let mut c = Command::new("ping");
+            c.args(["-n", "30", "127.0.0.1"]);
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                c.creation_flags(0x0800_0000);
+            }
+            c
+        } else {
+            let mut c = Command::new("sleep");
+            c.arg("30");
+            c
+        };
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_bg = cancel.clone();
+        let trigger = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            cancel_bg.store(true, Ordering::SeqCst);
+        });
+
+        let started = Instant::now();
+        let outcome = run_uv_sync_cmd(cmd, Path::new("fake-uv"), &cancel, |_| {})
+            .expect("cancelled child should return Ok(Cancelled)");
+        trigger.join().unwrap();
+
+        assert_eq!(outcome, UvSyncOutcome::Cancelled);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "child should be terminated promptly on cancel"
+        );
     }
 
     #[test]

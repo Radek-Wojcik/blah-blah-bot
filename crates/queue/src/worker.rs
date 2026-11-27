@@ -6,6 +6,7 @@ use std::fmt;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -288,10 +289,13 @@ pub fn build_manifest(details: &MeetingDetails, options: &JobOptions) -> Result<
 fn kill_tree(child: &mut Child) {
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
         let _ = Command::new("taskkill")
             .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
             .status();
     }
     let _ = child.kill();
@@ -345,10 +349,24 @@ fn command_with(cfg: &WorkerConfig, launcher: Option<&Launcher>, args: &[&str]) 
 
 /// Run a command, forwarding worker events, and enforce the timeout.
 fn run_process(
+    cmd: Command,
+    timeout: Duration,
+    on_event: impl FnMut(&WorkerEvent),
+) -> Result<Option<String>, RunError> {
+    run_process_cancellable(cmd, timeout, None, on_event).map(|_| None)
+}
+
+/// Run a command, forwarding worker events, enforcing `timeout`, and stopping early when
+/// `cancel` is set. Returns `Ok(true)` on normal completion and `Ok(false)` when cancelled.
+fn run_process_cancellable(
     mut cmd: Command,
     timeout: Duration,
+    cancel: Option<&AtomicBool>,
     mut on_event: impl FnMut(&WorkerEvent),
-) -> Result<Option<String>, RunError> {
+) -> Result<bool, RunError> {
+    if cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
+        return Ok(false);
+    }
     let mut child = cmd
         .spawn()
         .map_err(|e| RunError::new(format!("could not start the worker: {e}")))?;
@@ -378,6 +396,10 @@ fn run_process(
     let started = Instant::now();
     let mut reported_error: Option<String> = None;
     let status = loop {
+        if cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
+            kill_tree(&mut child);
+            return Ok(false);
+        }
         match rx.recv_timeout(Duration::from_millis(200)) {
             Ok(line) => {
                 if let Some(ev) = parse_event(&line) {
@@ -402,9 +424,12 @@ fn run_process(
             )));
         }
     };
+    if cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
+        return Ok(false);
+    }
     let tail = err_tail.join().unwrap_or_default();
     if status.success() {
-        Ok(None)
+        Ok(true)
     } else {
         Err(RunError::new(match reported_error {
             Some(m) => m,
@@ -452,6 +477,59 @@ pub fn ensure_environment(cfg: &WorkerConfig) -> Result<(), RunError> {
     }
 }
 
+/// Cancellable variant of [`ensure_environment`]. Returns `Ok(true)` on success and
+/// `Ok(false)` when stopped via `cancel`.
+pub fn ensure_environment_cancellable(
+    cfg: &WorkerConfig,
+    cancel: &AtomicBool,
+) -> Result<bool, RunError> {
+    if cancel.load(Ordering::SeqCst) {
+        return Ok(false);
+    }
+    let mut cmd = ensure_environment_command(cfg);
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| RunError::new(format!("could not run uv ({}): {e}", cfg.uv.display())))?;
+    let stderr = child.stderr.take();
+    let err_tail = std::thread::spawn(move || {
+        let mut tail = std::collections::VecDeque::new();
+        if let Some(stderr) = stderr {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                if tail.len() == 8 {
+                    tail.pop_front();
+                }
+                tail.push_back(line);
+            }
+        }
+        tail.into_iter().collect::<Vec<_>>().join(" | ")
+    });
+    let status = loop {
+        if cancel.load(Ordering::SeqCst) {
+            kill_tree(&mut child);
+            return Ok(false);
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+            Err(e) => {
+                kill_tree(&mut child);
+                return Err(RunError::new(format!("waiting for uv failed: {e}")));
+            }
+        }
+    };
+    if cancel.load(Ordering::SeqCst) {
+        return Ok(false);
+    }
+    let tail = err_tail.join().unwrap_or_default();
+    if status.success() {
+        Ok(true)
+    } else {
+        Err(RunError::new(format!(
+            "creating the Python environment failed: {tail}"
+        )))
+    }
+}
+
 fn ensure_models_command(cfg: &WorkerConfig, keys: &[&str]) -> Command {
     let list = keys.join(",");
     command(cfg, &["run", "--frozen"]).tap(|c| {
@@ -470,6 +548,18 @@ pub fn ensure_models(
 ) -> Result<(), RunError> {
     let cmd = ensure_models_command(cfg, keys);
     run_process(cmd, Duration::from_secs(6 * 3600), on_event).map(|_| ())
+}
+
+/// Cancellable variant of [`ensure_models`]. Returns `Ok(true)` on success and `Ok(false)`
+/// when stopped via `cancel`.
+pub fn ensure_models_cancellable(
+    cfg: &WorkerConfig,
+    keys: &[&str],
+    cancel: &AtomicBool,
+    on_event: impl FnMut(&WorkerEvent),
+) -> Result<bool, RunError> {
+    let cmd = ensure_models_command(cfg, keys);
+    run_process_cancellable(cmd, Duration::from_secs(6 * 3600), Some(cancel), on_event)
 }
 
 /// Which models are cached: `(key, cached)` pairs.

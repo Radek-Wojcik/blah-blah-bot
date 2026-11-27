@@ -34,6 +34,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=BBB_INSTALLER_BUILD");
     println!("cargo:rerun-if-changed=tauri.conf.json");
     println!("cargo:rerun-if-changed=tauri.bundle.conf.json");
+    println!("cargo:rerun-if-changed=../../worker/pyproject.toml");
+    println!("cargo:rerun-if-changed=../../worker/uv.lock");
 
     let tauri_config = std::env::var("TAURI_CONFIG").ok();
     let installer_build = std::env::var("BBB_INSTALLER_BUILD").ok();
@@ -43,10 +45,17 @@ fn main() {
         );
         let config_json = load_config_json(&manifest_dir, tauri_config.as_deref())
             .unwrap_or_else(|e| panic!("bundle resource guard failed: {e}"));
-        if let Err(err) = bundle_guard::check_bundle_resources(&config_json, &manifest_dir) {
-            panic!(
-                "bundle resource guard failed: {err}\nBuild installers with `powershell -File scripts\\build-installer.ps1` (never plain `tauri build`)."
-            );
+        match bundle_guard::check_bundle_resources(&config_json, &manifest_dir) {
+            Ok(watched) => {
+                for path in watched {
+                    println!("cargo:rerun-if-changed={}", path.display());
+                }
+            }
+            Err(err) => {
+                panic!(
+                    "bundle resource guard failed: {err}\nBuild installers with `powershell -File scripts\\build-installer.ps1` (never plain `tauri build`)."
+                );
+            }
         }
     }
 
