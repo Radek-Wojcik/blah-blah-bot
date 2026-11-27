@@ -86,12 +86,8 @@ function useClipPlayer(meetingId: string, onError: (message: string) => void) {
 }
 
 /** The labeling screen: name the voices detected in a meeting, with sample clips to listen to. */
-export function SpeakersView(props: {
-  meetingId: string;
-  onBack: () => void;
-  onOpenTranscript: () => void;
-}) {
-  const { meetingId, onBack, onOpenTranscript } = props;
+export function SpeakersView(props: { meetingId: string; onOpenTranscript: () => void }) {
+  const { meetingId, onOpenTranscript } = props;
   const backend = useBackend();
   const [data, setData] = useState<VoicesData | null>(null);
   const [meetingMeta, setMeetingMeta] = useState<{
@@ -213,9 +209,6 @@ export function SpeakersView(props: {
         <span className="head-actions">
           <button className="btn btn-small" onClick={onOpenTranscript}>
             Transcript
-          </button>
-          <button className="btn btn-small btn-ghost" onClick={onBack}>
-            Back to meetings
           </button>
         </span>
       </div>

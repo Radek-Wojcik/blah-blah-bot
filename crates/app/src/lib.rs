@@ -193,9 +193,7 @@ pub fn run() {
             }
 
             // A taken hotkey must not stop the application from starting.
-            if let Err(e) = hotkeys::register(&handle, &settings) {
-                tracing::warn!(error = %e, "hotkeys not registered");
-            }
+            hotkeys::register_initial(&handle, &settings);
             build_tray(&handle)?;
             start_ticker(handle.clone());
             show_main(&handle);
@@ -227,6 +225,9 @@ pub fn run() {
             commands::take_screenshot,
             commands::get_settings,
             commands::save_settings,
+            commands::suspend_hotkeys,
+            commands::resume_hotkeys,
+            commands::hotkey_status,
             commands::save_last_sources,
             browser::bridge_status,
             browser::start_pairing,

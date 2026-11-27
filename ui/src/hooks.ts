@@ -20,6 +20,7 @@ const idleLevels: RecordingLevels = {
   peak: 0,
   rms: 0,
   bars: IDLE_BARS,
+  peakHold: 0,
 };
 
 const idle: RecordingState = {

@@ -430,7 +430,8 @@ fn a_managed_backend_waits_for_the_gpu() {
         lab.sup.drive("m1").unwrap(),
         StepOutcome::Waiting {
             stage: Stage::Extract,
-            reason: "GPU busy".into()
+            reason: "GPU busy".into(),
+            countdown: false,
         }
     );
     assert!(lab.calls().is_empty(), "no worker was started");

@@ -425,7 +425,7 @@ impl Lab {
                     }
                 }
                 StepOutcome::Finished => return,
-                StepOutcome::Waiting { stage, reason } => {
+                StepOutcome::Waiting { stage, reason, .. } => {
                     let since = *waiting_since.get_or_insert_with(|| {
                         println!("  stage {:<14} waits: {reason}", stage.as_str());
                         Instant::now()

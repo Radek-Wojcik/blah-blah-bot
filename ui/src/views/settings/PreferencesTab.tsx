@@ -2,12 +2,15 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useBackend } from "../../backend-context";
 import { BrowseButton } from "../../components/BrowseButton";
 import { HelpPopover } from "../../components/HelpPopover";
+import { HotkeyCapture } from "../../components/HotkeyCapture";
 import { repoState } from "../../cycles";
 import { errorMessage, useCycles } from "../../hooks";
+import { notifySettingsChanged } from "../../hotkeys";
 import type {
   CycleListItem,
   CycleRepoView,
   CycleTargets,
+  MouseButtonsMode,
   PublishMode,
   PublishTargetName,
   PullResult,
@@ -32,6 +35,7 @@ function normalizeSettings(s: Settings, fallbackSaveDir: string): Settings {
     s.localSaveDir && s.localSaveDir.trim() !== "" ? s.localSaveDir : fallbackSaveDir;
   return {
     ...s,
+    mouseButtons: s.mouseButtons ?? "normal",
     localSaveEnabled: Boolean(s.localSaveEnabled),
     localSaveDir,
   };
@@ -43,6 +47,7 @@ function isPrefsDirty(saved: Settings | null, draft: Settings | null): boolean {
     saved.recordingsDir !== draft.recordingsDir ||
     saved.recordHotkey !== draft.recordHotkey ||
     saved.screenshotHotkey !== draft.screenshotHotkey ||
+    (saved.mouseButtons ?? "normal") !== (draft.mouseButtons ?? "normal") ||
     Boolean(saved.localSaveEnabled) !== Boolean(draft.localSaveEnabled) ||
     (saved.localSaveDir ?? "") !== (draft.localSaveDir ?? "")
   ) {
@@ -180,6 +185,7 @@ export function PreferencesTab({ onDirtyChange, registerHandle }: EditableTabPro
     try {
       await backend.saveSettings(draft);
       setSaved(structuredClone(draft));
+      notifySettingsChanged();
       setMessage({ text: "Preferences saved.", kind: "status" });
       return true;
     } catch (err) {
@@ -324,21 +330,33 @@ export function PreferencesTab({ onDirtyChange, registerHandle }: EditableTabPro
                 <small>Leave empty to use the default folder in Documents.</small>
               </label>
               <div className="settings-grid-2col">
-                <label>
-                  Record / Stop hotkey
-                  <input
-                    value={draft.recordHotkey}
-                    onChange={(e) => set({ recordHotkey: e.target.value })}
-                  />
-                </label>
-                <label>
-                  Region screenshot hotkey
-                  <input
-                    value={draft.screenshotHotkey}
-                    onChange={(e) => set({ screenshotHotkey: e.target.value })}
-                  />
-                </label>
+                <HotkeyCapture
+                  id="pref-record-hotkey"
+                  label="Record / Stop hotkey"
+                  value={draft.recordHotkey}
+                  otherHotkey={draft.screenshotHotkey}
+                  onChange={(recordHotkey) => set({ recordHotkey })}
+                />
+                <HotkeyCapture
+                  id="pref-screenshot-hotkey"
+                  label="Region screenshot hotkey"
+                  value={draft.screenshotHotkey}
+                  otherHotkey={draft.recordHotkey}
+                  onChange={(screenshotHotkey) => set({ screenshotHotkey })}
+                />
               </div>
+              <label>
+                Mouse side buttons
+                <select
+                  aria-label="Mouse side buttons"
+                  value={draft.mouseButtons ?? "normal"}
+                  onChange={(e) => set({ mouseButtons: e.target.value as MouseButtonsMode })}
+                >
+                  <option value="normal">Normal (Back / Forward)</option>
+                  <option value="swapped">Swapped (Forward / Back)</option>
+                  <option value="off">Off (Disabled)</option>
+                </select>
+              </label>
             </fieldset>
 
             {bridge && (

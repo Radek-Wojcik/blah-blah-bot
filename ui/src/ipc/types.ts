@@ -85,17 +85,28 @@ export interface RecordingState {
   screenshotCount: number;
 }
 
-/** Live 12-bar audio energy levels emitted while recording. */
+/** Live 12-bar audio energy levels emitted while recording (dB-normalized 0..1). */
 export interface RecordingLevels {
   peak: number;
   rms: number;
   bars: number[];
+  /** Latched peak-hold marker level (0..1). */
+  peakHold?: number;
 }
+
+/** Why a configured global hotkey is not active (taken by another application, or invalid). */
+export interface HotkeyStatus {
+  recordError: string | null;
+  screenshotError: string | null;
+}
+
+export type MouseButtonsMode = "normal" | "swapped" | "off";
 
 export interface Settings {
   recordingsDir: string;
   recordHotkey: string;
   screenshotHotkey: string;
+  mouseButtons?: MouseButtonsMode;
   localSaveEnabled?: boolean;
   localSaveDir?: string;
   lastSourceKeys?: string[];
@@ -346,6 +357,8 @@ export interface JobView {
   scheduledUnixMs?: number | null;
   /** Estimated remaining seconds for the active job. */
   etaSeconds?: number | null;
+  /** Completion timestamp (Unix ms) when the job is `done`. */
+  finishedUnixMs?: number | null;
 }
 
 export interface QueueGpuOverride {
