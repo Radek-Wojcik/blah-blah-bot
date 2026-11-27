@@ -11,7 +11,7 @@ use queue::voices;
 use serde::{Deserialize, Serialize};
 use store::{ParticipantInfo, SampleRow, Store, VoiceDecision, VoiceRow};
 use tauri::ipc::Response;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::cycles;
 use crate::ipc::{IpcError, IpcResult};
@@ -506,12 +506,18 @@ pub fn list_participants(
 /// the legacy list.
 #[tauri::command]
 pub fn create_participant(
+    app: AppHandle,
     state: State<'_, AppState>,
     name: String,
     cycle_id: Option<String>,
 ) -> IpcResult<ParticipantDto> {
     let repos = state.cycle_repos();
-    state.with_store_ipc(|s| create_participant_in(&repos, s, cycle_id.as_deref(), &name))
+    let created =
+        state.with_store_ipc(|s| create_participant_in(&repos, s, cycle_id.as_deref(), &name))?;
+    if let Err(e) = app.emit(crate::cycle_commands::EVENT_CYCLES, ()) {
+        tracing::warn!(error = %e, "emit cycles-changed failed");
+    }
+    Ok(created)
 }
 
 #[tauri::command]

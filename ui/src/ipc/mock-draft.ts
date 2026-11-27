@@ -51,6 +51,7 @@ function item(
     type,
     text,
     assignee: null,
+    assigneeName: null,
     due: null,
     certainty: { assignee: "unknown", due: "unknown" },
     section,
@@ -350,6 +351,7 @@ export function updateItem(draft: Draft, id: string, patch: DraftItemPatch): voi
   }
   if (patch.assignee !== undefined) {
     it.assignee = patch.assignee;
+    it.assigneeName = null;
     it.certainty.assignee = decided(it.assignee);
     touched = true;
   }
@@ -396,6 +398,7 @@ export function addItem(draft: Draft, n: NewDraftItem): string {
     type: n.type,
     text: n.text.trim(),
     assignee,
+    assigneeName: null,
     due,
     certainty: { assignee: decided(assignee), due: decided(due) },
     section: n.section ?? null,

@@ -2206,6 +2206,18 @@ textarea {
   font-size: 0.85rem;
   padding: 0.3em 0.4em;
 }
+.item-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.assignee-unlisted {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  font-size: 0.8rem;
+}
 .field-with-mark {
   display: inline-flex;
   align-items: center;

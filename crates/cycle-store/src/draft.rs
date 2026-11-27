@@ -97,6 +97,9 @@ pub struct Item {
     pub text: String,
     /// Participant id.
     pub assignee: Option<String>,
+    /// Spoken name of a named person not in `cycle.yaml`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignee_name: Option<String>,
     /// `YYYY-MM-DD`.
     pub due: Option<String>,
     pub certainty: Certainty,
@@ -228,6 +231,7 @@ pub(crate) mod fixtures {
             item_type: t,
             text: text.into(),
             assignee: None,
+            assignee_name: None,
             due: None,
             certainty: Certainty {
                 assignee: CertaintyLevel::Unknown,
@@ -300,6 +304,27 @@ mod tests {
         let value = d.to_value();
         assert!(schema::validate(Schema::Meeting, &value).is_empty());
         assert_eq!(Draft::from_value(&value).unwrap(), d);
+    }
+
+    #[test]
+    fn assignee_name_round_trips_and_an_old_draft_without_it_loads() {
+        let mut t = item("i1", ItemType::Task, "Send the invoice");
+        t.assignee_name = Some("Marta Outside".into());
+        let d = draft(vec![t]);
+        let value = d.to_value();
+        assert_eq!(value["items"][0]["assignee_name"], "Marta Outside");
+        assert!(schema::validate(Schema::Meeting, &value).is_empty());
+        assert_eq!(Draft::from_value(&value).unwrap(), d);
+
+        let old = draft(vec![item("i1", ItemType::Task, "Old task")]);
+        let mut value = old.to_value();
+        assert!(value["items"][0].get("assignee_name").is_none());
+        value["items"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("assignee_name");
+        let loaded = Draft::from_value(&value).unwrap();
+        assert_eq!(loaded.items[0].assignee_name, None);
     }
 
     #[test]

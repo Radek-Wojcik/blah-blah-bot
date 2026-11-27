@@ -14,6 +14,7 @@ pub fn item(id: &str, item_type: ItemType, text: &str) -> Item {
         item_type,
         text: text.into(),
         assignee: None,
+        assignee_name: None,
         due: None,
         certainty: Certainty {
             assignee: CertaintyLevel::Unknown,

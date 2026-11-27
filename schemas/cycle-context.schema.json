@@ -82,6 +82,7 @@
           "type": { "enum": ["task", "decision", "topic", "note", "idea", "budget"] },
           "text": { "type": "string" },
           "assignee": { "type": ["string", "null"] },
+          "assignee_name": { "type": ["string", "null"] },
           "due": { "type": ["string", "null"] },
           "issue": { "type": ["string", "null"], "description": "The GitHub issue created for this item, for example #12" }
         }
