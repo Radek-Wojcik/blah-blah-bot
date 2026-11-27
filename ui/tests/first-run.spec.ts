@@ -1,7 +1,8 @@
 import { type Page, expect, test } from "@playwright/test";
 
 // `jobms=40` makes the simulated downloads and the environment preparation take a moment only.
-const url = (setup: string) => `/?view=main&backend=mock&rate=0&jobms=40&setup=${setup}`;
+const url = (setup: string, jobms = 40) =>
+  `/?view=main&backend=mock&rate=0&jobms=${jobms}&setup=${setup}`;
 
 const steps = (page: Page) => page.getByRole("navigation", { name: "Setup steps" });
 // The heading carries a decorative "// " before its text, which the accessible name includes.
@@ -221,5 +222,69 @@ test.describe("first-run wizard on the mock backend", () => {
     await page.getByRole("tab", { name: "Processing" }).click();
     await page.getByRole("button", { name: "Run setup again" }).click();
     await expect(title(page, "Welcome")).toBeVisible();
+  });
+
+  test("the keep the PC on time and disk space note is visible", async ({ page }) => {
+    const note = "This takes 10-30 minutes and needs about 8 GB of free space. Keep the PC on.";
+    await page.goto(url("fresh"));
+    await expect(title(page, "Welcome")).toBeVisible();
+    await expect(page.getByText(note)).toBeVisible();
+    await next(page);
+    await expect(title(page, "Processing environment")).toBeVisible();
+    await expect(page.getByText(note)).toBeVisible();
+  });
+
+  test("setup progress rows appear and update for environment and llama-server", async ({
+    page,
+  }) => {
+    await page.goto(url("fresh", 400));
+    await goTo(page, /Processing environment/);
+    await page.getByRole("button", { name: "Prepare environment" }).click();
+    const envBar = page.getByRole("progressbar", { name: "Preparing the environment" });
+    await expect(envBar).toBeVisible();
+    await expect(page.getByText(/\d+ MB downloaded · \d+s/)).toBeVisible();
+    await expect(page.getByText("The processing environment is ready.")).toBeVisible();
+
+    await goTo(page, /llama-server/);
+    await page.getByRole("button", { name: "Download llama-server" }).click();
+    const llamaBar = page.getByRole("progressbar", { name: "Downloading llama-server" });
+    await expect(llamaBar).toBeVisible();
+    await expect(page.getByText(/\d+% \(\d+ MB \/ 200 MB\)/)).toBeVisible();
+    await expect(llamaBar).toHaveAttribute("aria-valuenow", /\d+/);
+    await expect(page.getByText(/^In use:/)).toBeVisible();
+  });
+
+  test("cancelling a running setup task shows the cancelled state and Retry", async ({ page }) => {
+    await page.goto(url("fresh", 1600));
+    await goTo(page, /Processing environment/);
+    await page.getByRole("button", { name: "Prepare environment" }).click();
+    const cancel = page.getByRole("button", { name: "Cancel" });
+    await expect(cancel).toBeVisible();
+    await cancel.click();
+    await expect(page.getByText(/Cancelled\./)).toBeVisible();
+    await expect(page.getByRole("progressbar", { name: "Preparing the environment" })).toHaveCount(
+      0,
+    );
+    const retry = page.getByRole("button", { name: "Retry" });
+    await expect(retry).toBeVisible();
+    await retry.click();
+    await expect(
+      page.getByRole("progressbar", { name: "Preparing the environment" }),
+    ).toBeVisible();
+  });
+
+  test("offline failure shows the plain offline message and Retry finishes the task", async ({
+    page,
+  }) => {
+    await page.goto(url("setup-offline", 40));
+    await goTo(page, /Processing environment/);
+    await page.getByRole("button", { name: "Prepare environment" }).click();
+    await expect(page.getByRole("alert")).toContainText(
+      "No internet connection. Connect and press Retry; the download continues where it stopped.",
+    );
+    const retry = page.getByRole("button", { name: "Retry" });
+    await expect(retry).toBeVisible();
+    await retry.click();
+    await expect(page.getByText("The processing environment is ready.")).toBeVisible();
   });
 });
