@@ -9,6 +9,7 @@ import { canProcess, jobStateLabel } from "../processing";
 import { taskCounts, tasksAsOf } from "../publish";
 import { CycleTasksView } from "./CycleTasks";
 import { ImportMeetingModal } from "./ImportMeetingModal";
+import { Modal } from "./Modal";
 import { ProjectSettingsModal } from "./ProjectSettingsModal";
 
 export type MeetingWithCycle = MeetingSummary;
@@ -127,9 +128,12 @@ export function MeetingRowCard(props: {
   onDelete: (meetingId: string) => void;
 }) {
   const { meeting: m, recordingMeetingId, onOpen, onProcess, onRecover, onDelete } = props;
+  const [confirmReprocess, setConfirmReprocess] = useState(false);
   const headline = m.shortTitle?.trim() || m.title;
   const showSubtitle = Boolean(m.shortTitle?.trim() && m.shortTitle.trim() !== m.title);
   const safeUrl = isSafeHttpUrl(m.reportUrl) ? m.reportUrl : null;
+  const isReprocess = m.job === "done";
+  const publishedLock = isReprocess && Boolean(m.reportUrl);
 
   return (
     <li className="cycle-row">
@@ -178,14 +182,52 @@ export function MeetingRowCard(props: {
           className="btn btn-small btn-stop"
           type="button"
           disabled={!canProcess(m, recordingMeetingId)}
-          onClick={() => onProcess(m.id)}
+          title={
+            publishedLock
+              ? "Published meetings cannot be reprocessed because the draft is locked."
+              : undefined
+          }
+          onClick={() => {
+            if (isReprocess) {
+              setConfirmReprocess(true);
+            } else {
+              onProcess(m.id);
+            }
+          }}
         >
-          Process
+          {isReprocess ? "Reprocess" : "Process"}
         </button>
         <button className="btn btn-small btn-ghost" type="button" onClick={() => onDelete(m.id)}>
           Delete
         </button>
       </div>
+      {confirmReprocess && (
+        <Modal title="Reprocess meeting?" onClose={() => setConfirmReprocess(false)}>
+          <p className="section-hint">
+            Reprocessing <strong>{headline}</strong> will overwrite the existing draft and any edits
+            made to it. Continue?
+          </p>
+          <div className="actions">
+            <button
+              type="button"
+              className="btn btn-small btn-ghost"
+              onClick={() => setConfirmReprocess(false)}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-small btn-stop"
+              onClick={() => {
+                setConfirmReprocess(false);
+                onProcess(m.id);
+              }}
+            >
+              Reprocess
+            </button>
+          </div>
+        </Modal>
+      )}
     </li>
   );
 }

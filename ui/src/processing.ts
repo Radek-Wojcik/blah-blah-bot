@@ -80,6 +80,7 @@ export function isJobActive(state: JobState | null | undefined): boolean {
 export function canProcess(meeting: MeetingSummary, recordingMeetingId: string | null): boolean {
   if (meeting.state === "recording" || meeting.state === "recoverable") return false;
   if (recordingMeetingId !== null && recordingMeetingId === meeting.id) return false;
+  if (meeting.job === "done" && Boolean(meeting.reportUrl)) return false;
   const job = meeting.job ?? null;
   return job === null || job === "done";
 }

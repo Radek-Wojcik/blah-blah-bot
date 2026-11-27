@@ -651,6 +651,69 @@ describe("ProjectDetailView, ProjectSettingsModal, and ImportMeetingModal", () =
     const doneList = host.querySelector('ul[aria-label="Done tasks"]')!;
     expect(doneList.querySelectorAll("li").length).toBeGreaterThan(0);
   });
+
+  it("labels done meetings Reprocess with confirmation and disables published ones", async () => {
+    const backend = createMockBackend({ clockRate: 0, jobStepMs: 5000 });
+    const processSpy = vi.spyOn(backend, "processMeeting");
+    const listSpy = vi.spyOn(backend, "listMeetings").mockResolvedValue([
+      {
+        id: "m-done-unlocked",
+        title: "Unpublished done",
+        startedUnixMs: 1000,
+        durationMs: 60_000,
+        state: "stopped",
+        trackCount: 1,
+        screenshotCount: 0,
+        job: "done",
+        cycleId: "NOMAD",
+        reportUrl: null,
+      },
+      {
+        id: "m-done-published",
+        title: "Published done",
+        startedUnixMs: 2000,
+        durationMs: 60_000,
+        state: "stopped",
+        trackCount: 1,
+        screenshotCount: 0,
+        job: "done",
+        cycleId: "NOMAD",
+        reportUrl: "https://github.com/org/repo/blob/main/report.md",
+      },
+    ]);
+
+    await act(async () => {
+      root.render(
+        <BackendProvider value={backend}>
+          <ProjectDetailView cycleId="NOMAD" onBack={vi.fn()} onOpenMeeting={vi.fn()} />
+        </BackendProvider>,
+      );
+    });
+    await flush();
+    expect(listSpy).toHaveBeenCalled();
+
+    const rows = Array.from(host.querySelectorAll('ul[aria-label="Meetings list"] > li'));
+    expect(rows).toHaveLength(2);
+    const unlockedBtn = findButton("Reprocess", rows[0]);
+    const publishedBtn = findButton("Reprocess", rows[1]);
+    expect(unlockedBtn.disabled).toBe(false);
+    expect(publishedBtn.disabled).toBe(true);
+
+    await act(async () => {
+      unlockedBtn.click();
+    });
+    await flush();
+
+    const dialog = host.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain("overwrite the existing draft");
+    expect(processSpy).not.toHaveBeenCalled();
+
+    await act(async () => {
+      findButton("Reprocess", dialog).click();
+    });
+    await flush();
+    expect(processSpy).toHaveBeenCalledWith("m-done-unlocked");
+  });
 });
 
 describe("native file dialogs", () => {
