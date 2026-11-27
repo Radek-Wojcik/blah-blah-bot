@@ -37,13 +37,14 @@ pub const EVENT_SETUP_PROGRESS: &str = "setup-progress";
 const MAX_CRASHES: u32 = 3;
 /// Pause between attempts while a job waits on a schedule or non-GPU blocker.
 const WAIT_POLL: Duration = Duration::from_secs(5);
-/// Faster poll interval while any job waits on the GPU gate so idle counters update every second.
+/// Faster poll interval while a job counts down an idle GPU period, so the counter updates
+/// every second.
 const GPU_WAIT_POLL: Duration = Duration::from_secs(1);
 /// Minimum time between two queue events caused by progress lines.
 const EVENT_THROTTLE: Duration = Duration::from_millis(250);
 
-fn next_driver_poll(waiting_on_gpu: bool, earliest_schedule_wait: Option<Duration>) -> Duration {
-    let base = if waiting_on_gpu {
+fn next_driver_poll(counting_down: bool, earliest_schedule_wait: Option<Duration>) -> Duration {
+    let base = if counting_down {
         GPU_WAIT_POLL
     } else {
         WAIT_POLL
@@ -455,6 +456,8 @@ pub struct Processing {
     pulls: PullLedger,
     cycle_repos: RepoList,
     last_event: Mutex<Instant>,
+    /// The last queue state sent to the UI, as JSON; unchanged states are not sent again.
+    last_queue_json: Mutex<String>,
     driver_running: Arc<AtomicBool>,
     models_busy: Arc<AtomicBool>,
     /// The processing environment is being created (`prepare_worker_env`).
@@ -578,6 +581,7 @@ impl Processing {
             pulls: PullLedger::default(),
             cycle_repos,
             last_event: Mutex::new(Instant::now() - EVENT_THROTTLE),
+            last_queue_json: Mutex::new(String::new()),
             driver_running: Arc::default(),
             models_busy: Arc::default(),
             env_busy: Arc::default(),
@@ -622,6 +626,7 @@ impl Processing {
             pulls: PullLedger::default(),
             cycle_repos: Arc::new(Vec::new),
             last_event: Mutex::new(Instant::now() - EVENT_THROTTLE),
+            last_queue_json: Mutex::new(String::new()),
             driver_running: Arc::default(),
             models_busy: Arc::default(),
             env_busy: Arc::default(),
@@ -1145,7 +1150,7 @@ impl Processing {
                 wake_lock = Some(recorder::SystemWakeLock::acquire());
             }
             let mut progressed = false;
-            let mut waiting_on_gpu = false;
+            let mut counting_down = false;
             let mut earliest_schedule_wait: Option<Duration> = None;
             for id in ids {
                 self.prepare_step(&id);
@@ -1168,8 +1173,9 @@ impl Processing {
                         );
                         progressed = true;
                     }
-                    Ok(StepOutcome::Waiting { .. }) => {
-                        waiting_on_gpu = true;
+                    Ok(StepOutcome::Waiting { countdown, .. }) => {
+                        // Only the idle countdown changes every second; other waits poll slowly.
+                        counting_down |= countdown;
                     }
                     Ok(StepOutcome::Scheduled {
                         scheduled_unix_ms, ..
@@ -1191,12 +1197,12 @@ impl Processing {
             if !self.has_runnable() {
                 self.reset_gpu_override_on_idle();
             }
-            self.emit_queue();
+            self.emit_queue_if_changed();
             if !progressed {
                 if !self.has_scheduled_or_running() {
                     wake_lock = None;
                 }
-                let wait = next_driver_poll(waiting_on_gpu, earliest_schedule_wait);
+                let wait = next_driver_poll(counting_down, earliest_schedule_wait);
                 self.wait_driver_poll(wait);
             }
         }
@@ -1315,8 +1321,32 @@ impl Processing {
 
     fn emit_queue(&self) {
         if let Ok(state) = self.queue_state() {
+            if let Ok(json) = serde_json::to_string(&state) {
+                if let Ok(mut last) = self.last_queue_json.lock() {
+                    *last = json;
+                }
+            }
             self.hooks.emit_queue(&state);
         }
+    }
+
+    /// Send the queue state only when it differs from the last one sent. The driver calls this
+    /// on every pass; a waiting job changes the state each second, so the counter still moves.
+    fn emit_queue_if_changed(&self) {
+        let Ok(state) = self.queue_state() else {
+            return;
+        };
+        let Ok(json) = serde_json::to_string(&state) else {
+            return;
+        };
+        let unchanged = self.last_queue_json.lock().is_ok_and(|last| *last == json);
+        if unchanged {
+            return;
+        }
+        if let Ok(mut last) = self.last_queue_json.lock() {
+            *last = json;
+        }
+        self.hooks.emit_queue(&state);
     }
 
     fn emit_queue_throttled(&self) {
@@ -2128,7 +2158,7 @@ mod tests {
     }
 
     #[test]
-    fn driver_poll_uses_one_second_while_waiting_on_gpu_gate() {
+    fn driver_poll_uses_one_second_only_while_counting_down_an_idle_gpu() {
         assert_eq!(next_driver_poll(true, None), Duration::from_secs(1));
         assert_eq!(next_driver_poll(false, None), Duration::from_secs(5));
         assert_eq!(

@@ -138,7 +138,7 @@ impl Guard {
 
         let idle = s.t_ms.saturating_sub(since);
         if idle < self.policy.idle_ms {
-            return GateDecision::Wait(format!(
+            return GateDecision::Countdown(format!(
                 "Waiting for the GPU to stay idle ({} of {} s)",
                 idle / 1000,
                 self.policy.idle_ms / 1000
@@ -289,7 +289,7 @@ mod tests {
             };
             assert_eq!(
                 g.evaluate(Some(&sample), Stage::Asr),
-                GateDecision::Wait(format!("Waiting for the GPU to stay idle ({sec} of 5 s)"))
+                GateDecision::Countdown(format!("Waiting for the GPU to stay idle ({sec} of 5 s)"))
             );
         }
         let ready = GpuSample {

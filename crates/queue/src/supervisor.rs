@@ -55,6 +55,9 @@ pub enum GateDecision {
     Go,
     /// The stage must wait; the text is shown to the user.
     Wait(String),
+    /// The stage waits for a short idle period that counts down (shown with a live counter).
+    /// The driver polls more often while a job is in this state.
+    Countdown(String),
 }
 
 /// Decides whether a GPU stage may start now. Evaluated between stages, never during one.
@@ -81,8 +84,13 @@ pub enum StepOutcome {
     Ran { stage: Stage },
     /// A stage ran and failed; the job is blocked until retried.
     Failed { stage: Stage, error: String },
-    /// The GPU is not available for this stage yet.
-    Waiting { stage: Stage, reason: String },
+    /// The GPU is not available for this stage yet. `countdown` is true while a short idle
+    /// period counts down; the driver then polls every second.
+    Waiting {
+        stage: Stage,
+        reason: String,
+        countdown: bool,
+    },
     /// The job is scheduled for a future timestamp and will not start yet.
     Scheduled {
         meeting_id: String,
@@ -404,14 +412,23 @@ impl Supervisor {
         };
 
         if !forced && stage.needs_gpu(kind) {
-            if let GateDecision::Wait(reason) = self.gate.check(stage) {
+            let blocked = match self.gate.check(stage) {
+                GateDecision::Go => None,
+                GateDecision::Wait(reason) => Some((reason, false)),
+                GateDecision::Countdown(reason) => Some((reason, true)),
+            };
+            if let Some((reason, countdown)) = blocked {
                 self.set_waiting(meeting_id, Some(reason.clone()));
                 self.emit(QueueEvent::Waiting {
                     meeting_id: meeting_id.to_string(),
                     stage,
                     reason: reason.clone(),
                 });
-                return Ok(StepOutcome::Waiting { stage, reason });
+                return Ok(StepOutcome::Waiting {
+                    stage,
+                    reason,
+                    countdown,
+                });
             }
         }
         self.set_waiting(meeting_id, None);
@@ -864,7 +881,8 @@ mod tests {
             out,
             StepOutcome::Waiting {
                 stage: Stage::Asr,
-                reason: "GPU busy".into()
+                reason: "GPU busy".into(),
+                countdown: false,
             }
         );
         assert!(runner.calls.lock().unwrap().is_empty());
