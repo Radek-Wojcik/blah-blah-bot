@@ -28,3 +28,4 @@ Each record states the context, the decision, its consequences and the alternati
 | [0022](0022-meeting-detection.md) | Meeting detection: rules, sensitivity and the default | Accepted |
 | [0024](0024-installer-signing.md) | Installer signing | Proposed |
 | [0025](0025-model-revision-pinning.md) | Model revision pinning | Accepted |
+| [0026](0026-bundled-worker-and-first-run-downloads.md) | Bundled worker and first-run downloads | Proposed |
