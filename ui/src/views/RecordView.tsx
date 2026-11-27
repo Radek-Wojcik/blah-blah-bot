@@ -10,7 +10,7 @@ import {
   notifySettingsChanged,
   onSettingsChanged,
 } from "../hotkeys";
-import type { Settings } from "../ipc/types";
+import type { HotkeyStatus, Settings } from "../ipc/types";
 
 /**
  * Dedicated Main UI recording screen with source selection, live audio levels,
@@ -21,6 +21,14 @@ export function RecordView() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [savingHotkey, setSavingHotkey] = useState(false);
   const [hotkeyError, setHotkeyError] = useState<string | null>(null);
+  const [hotkeyStatus, setHotkeyStatus] = useState<HotkeyStatus | null>(null);
+
+  const loadHotkeyStatus = useCallback(() => {
+    void backend
+      .hotkeyStatus()
+      .then((st) => setHotkeyStatus(st))
+      .catch(() => {});
+  }, [backend]);
 
   const loadSettings = useCallback(() => {
     let cancelled = false;
@@ -37,7 +45,9 @@ export function RecordView() {
 
   useEffect(() => {
     const cancel = loadSettings();
+    loadHotkeyStatus();
     const unsub = onSettingsChanged(() => {
+      loadHotkeyStatus();
       void backend
         .getSettings()
         .then((s) => setSettings(s))
@@ -47,7 +57,7 @@ export function RecordView() {
       cancel();
       unsub();
     };
-  }, [backend, loadSettings]);
+  }, [backend, loadSettings, loadHotkeyStatus]);
 
   const recordHotkey = settings?.recordHotkey ?? DEFAULT_RECORD_HOTKEY;
   const screenshotHotkey = settings?.screenshotHotkey ?? DEFAULT_SCREENSHOT_HOTKEY;
@@ -60,6 +70,7 @@ export function RecordView() {
       const updated: Settings = { ...latest, [field]: next };
       await backend.saveSettings(updated);
       setSettings(updated);
+      loadHotkeyStatus();
       notifySettingsChanged();
     } catch (err) {
       setHotkeyError(errorMessage(err));
@@ -106,6 +117,7 @@ export function RecordView() {
                 label="Record / Stop"
                 value={recordHotkey}
                 otherHotkey={screenshotHotkey}
+                registrationError={hotkeyStatus?.recordError ?? null}
                 disabled={savingHotkey}
                 onChange={(next) => void updateHotkey("recordHotkey", next)}
               />
@@ -114,6 +126,7 @@ export function RecordView() {
                 label="Region screenshot"
                 value={screenshotHotkey}
                 otherHotkey={recordHotkey}
+                registrationError={hotkeyStatus?.screenshotError ?? null}
                 disabled={savingHotkey}
                 onChange={(next) => void updateHotkey("screenshotHotkey", next)}
               />

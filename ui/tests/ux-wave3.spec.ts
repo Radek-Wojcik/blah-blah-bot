@@ -75,7 +75,7 @@ test.describe("wave 3 UX overhaul flows on the mock backend", () => {
     await page.getByRole("button", { name: "Record", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Record", level: 2 })).toBeVisible();
     await expect(page.getByRole("complementary", { name: "Recording tips" })).toContainText(
-      "Ctrl+Shift+R",
+      "Ctrl+Alt+Shift+F9",
     );
 
     const eq = page.getByRole("img", { name: /Audio waveform/ });
@@ -196,8 +196,8 @@ test.describe("wave 3 UX overhaul flows on the mock backend", () => {
     page,
   }) => {
     await page.goto(`${MAIN}&page=settings&tab=preferences`);
-    const recHotkey = page.getByLabel("Record / Stop hotkey", { exact: true });
-    await expect(recHotkey).toHaveText("Ctrl+Shift+R");
+    const recHotkey = page.locator("#pref-record-hotkey");
+    await expect(recHotkey).toHaveText("Ctrl+Alt+Shift+F9");
     await recHotkey.click();
     await expect(recHotkey).toHaveAttribute("data-hotkey-capturing", "true");
     await page.keyboard.press("Control+F9");
@@ -207,7 +207,7 @@ test.describe("wave 3 UX overhaul flows on the mock backend", () => {
 
     // Record tab reflects the updated hotkey and allows direct capture.
     await page.getByRole("button", { name: "Record", exact: true }).click();
-    await expect(page.getByLabel("Record / Stop", { exact: true })).toHaveText("Ctrl+F9");
+    await expect(page.locator("#record-view-record-hotkey")).toHaveText("Ctrl+F9");
 
     // Mouse side buttons navigate Back (button 3) and Forward (button 4).
     await page.evaluate(() => {

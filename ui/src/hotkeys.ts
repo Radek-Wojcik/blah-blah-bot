@@ -1,5 +1,5 @@
-export const DEFAULT_RECORD_HOTKEY = "Ctrl+Shift+R";
-export const DEFAULT_SCREENSHOT_HOTKEY = "Ctrl+Shift+S";
+export const DEFAULT_RECORD_HOTKEY = "Ctrl+Alt+Shift+F9";
+export const DEFAULT_SCREENSHOT_HOTKEY = "Ctrl+Alt+Shift+F10";
 
 export const ALTGR_WARNING =
   "This is AltGr on many keyboards and blocks typing letters like ś, ą, ę.";
@@ -106,7 +106,11 @@ export function normalizeHotkey(hotkey: string): string {
   return ordered.join("+");
 }
 
-export function isAltGrLetterCombo(hotkey: string): boolean {
+/**
+ * True for Ctrl+Alt (with or without Shift) plus a printable key: on many layouts that is AltGr
+ * and types a character (Polish ś, ą, ę; German @, {; and so on).
+ */
+export function isAltGrCombo(hotkey: string): boolean {
   const norm = normalizeHotkey(hotkey);
   if (!norm) return false;
   const parts = norm.split("+");
@@ -115,10 +119,32 @@ export function isAltGrLetterCombo(hotkey: string): boolean {
   return (
     mods.has("Ctrl") &&
     mods.has("Alt") &&
-    !mods.has("Shift") &&
     !mods.has("Super") &&
-    /^[A-Z]$/.test(key)
+    /^[A-Z0-9`\-=[\]\\;',./]$/.test(key)
   );
+}
+
+const MODIFIER_HELP = "Include Ctrl, Alt or Super (Shift alone works only with F1-F24).";
+
+function isFunctionKey(key: string): boolean {
+  return /^F([1-9]|1[0-9]|2[0-4])$/.test(key);
+}
+
+/**
+ * Same rule as the application: a global hotkey needs Ctrl, Alt or Super; Shift alone is only
+ * allowed with an F-key. Returns an error message, or null when the hotkey is acceptable
+ * (an empty string means "not set").
+ */
+export function validateHotkey(hotkey: string): string | null {
+  const norm = normalizeHotkey(hotkey);
+  if (!norm) return null;
+  const parts = norm.split("+");
+  const key = parts[parts.length - 1];
+  const mods = new Set(parts.slice(0, -1));
+  if (mods.size === 0 || mods.has("Ctrl") || mods.has("Alt") || mods.has("Super")) {
+    return mods.size === 0 ? MODIFIER_HELP : null;
+  }
+  return isFunctionKey(key) ? null : MODIFIER_HELP;
 }
 
 export function formatHotkeyDisplay(hotkey: string): string {
@@ -138,6 +164,7 @@ export type CaptureOutcome =
   | { kind: "cancel" }
   | { kind: "clear" }
   | { kind: "ignore" }
+  | { kind: "leave" }
   | { kind: "error"; message: string };
 
 export function captureKeyDown(e: CaptureKeyLike, otherHotkey?: string): CaptureOutcome {
@@ -156,6 +183,16 @@ export function captureKeyDown(e: CaptureKeyLike, otherHotkey?: string): Capture
   if (MODIFIER_CODES.has(e.code) || e.key === "AltGraph") {
     return { kind: "ignore" };
   }
+  // Tab and Shift+Tab move focus out of the field; they are never recorded.
+  if (
+    (e.code === "Tab" || e.key === "Tab") &&
+    !e.ctrlKey &&
+    !e.altKey &&
+    !e.metaKey &&
+    !(typeof e.getModifierState === "function" && e.getModifierState("AltGraph"))
+  ) {
+    return { kind: "leave" };
+  }
 
   const key = keyFromCode(e.code);
   if (!key) {
@@ -168,11 +205,8 @@ export function captureKeyDown(e: CaptureKeyLike, otherHotkey?: string): Capture
   const shift = e.shiftKey;
   const meta = e.metaKey;
 
-  if (!ctrl && !alt && !shift && !meta) {
-    return {
-      kind: "error",
-      message: "Include at least one modifier key (Ctrl, Alt, Shift, or Super).",
-    };
+  if (!ctrl && !alt && !meta && !(shift && isFunctionKey(key))) {
+    return { kind: "error", message: MODIFIER_HELP };
   }
 
   const parts: string[] = [];

@@ -1,5 +1,6 @@
-import { useState } from "react";
-import { ALTGR_WARNING, captureKeyDown, formatHotkeyDisplay, isAltGrLetterCombo } from "../hotkeys";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useOptionalBackend } from "../backend-context";
+import { ALTGR_WARNING, captureKeyDown, formatHotkeyDisplay, isAltGrCombo } from "../hotkeys";
 
 export interface HotkeyCaptureProps {
   id: string;
@@ -7,8 +8,12 @@ export interface HotkeyCaptureProps {
   value: string;
   otherHotkey?: string;
   disabled?: boolean;
+  /** Registration failure of the saved shortcut (taken by another application), if any. */
+  registrationError?: string | null;
   onChange: (next: string) => void;
 }
+
+const CAPTURE_HINT = "Press the new shortcut. Escape cancels, Backspace clears.";
 
 function previewModifiers(e: React.KeyboardEvent<HTMLButtonElement>): string {
   const altGraph = e.getModifierState("AltGraph");
@@ -26,31 +31,63 @@ export function HotkeyCapture({
   value,
   otherHotkey,
   disabled = false,
+  registrationError = null,
   onChange,
 }: HotkeyCaptureProps) {
+  const backend = useOptionalBackend();
   const [capturing, setCapturing] = useState(false);
   const [preview, setPreview] = useState<string>("Press shortcut…");
   const [error, setError] = useState<string | null>(null);
+  const capturingRef = useRef(false);
 
-  const stopCapture = () => {
-    setCapturing(false);
+  // While recording a shortcut the global hotkeys are unregistered, so pressing the current
+  // combination is captured instead of triggering its action.
+  const startCapture = useCallback(() => {
+    if (capturingRef.current) return;
+    capturingRef.current = true;
+    setCapturing(true);
+    void backend?.suspendHotkeys().catch(() => {});
+  }, [backend]);
+
+  const stopCapture = useCallback(() => {
     setPreview("Press shortcut…");
-  };
+    setCapturing(false);
+    if (!capturingRef.current) return;
+    capturingRef.current = false;
+    void backend?.resumeHotkeys().catch(() => {});
+  }, [backend]);
+
+  // Leaving the screen mid-capture must not leave the hotkeys unregistered.
+  useEffect(
+    () => () => {
+      if (capturingRef.current) {
+        capturingRef.current = false;
+        void backend?.resumeHotkeys().catch(() => {});
+      }
+    },
+    [backend],
+  );
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
     if (!capturing) {
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
         setError(null);
-        setCapturing(true);
+        startCapture();
       }
+      return;
+    }
+
+    const outcome = captureKeyDown(e.nativeEvent, otherHotkey);
+    if (outcome.kind === "leave") {
+      // Let the browser move focus; blur ends the capture without recording anything.
+      stopCapture();
       return;
     }
 
     e.preventDefault();
     e.stopPropagation();
 
-    const outcome = captureKeyDown(e.nativeEvent, otherHotkey);
     switch (outcome.kind) {
       case "captured":
         setError(null);
@@ -81,11 +118,24 @@ export function HotkeyCapture({
     setPreview(previewModifiers(e));
   };
 
-  const showAltGr = !capturing && isAltGrLetterCombo(value);
+  const showAltGr = !capturing && isAltGrCombo(value);
+  const warningId = `${id}-warning`;
+  const errorId = `${id}-error`;
+  const failureId = `${id}-failure`;
+  const describedBy =
+    [
+      showAltGr ? warningId : null,
+      error ? errorId : null,
+      registrationError && !capturing ? failureId : null,
+    ]
+      .filter(Boolean)
+      .join(" ") || undefined;
 
   return (
     <div className="hotkey-field">
-      <label htmlFor={id}>{label}</label>
+      <label id={`${id}-label`} htmlFor={id}>
+        {label}
+      </label>
       <div className="hotkey-capture-row">
         <button
           id={id}
@@ -93,6 +143,8 @@ export function HotkeyCapture({
           className={
             capturing ? "btn btn-small hotkey-btn hotkey-capturing" : "btn btn-small hotkey-btn"
           }
+          aria-labelledby={`${id}-label ${id}`}
+          aria-describedby={describedBy}
           data-hotkey-capturing={capturing ? "true" : undefined}
           disabled={disabled}
           onClick={() => {
@@ -100,7 +152,7 @@ export function HotkeyCapture({
               stopCapture();
             } else {
               setError(null);
-              setCapturing(true);
+              startCapture();
             }
           }}
           onKeyDown={handleKeyDown}
@@ -115,7 +167,7 @@ export function HotkeyCapture({
           <button
             type="button"
             className="btn btn-small btn-ghost"
-            aria-label="Clear shortcut"
+            aria-label={`Clear ${label}`}
             disabled={disabled}
             onClick={() => {
               setError(null);
@@ -127,14 +179,22 @@ export function HotkeyCapture({
           </button>
         )}
       </div>
+      <div className="visually-hidden" aria-live="polite">
+        {capturing ? CAPTURE_HINT : ""}
+      </div>
       {showAltGr && (
-        <p className="hotkey-warning" role="status">
+        <p id={warningId} className="hotkey-warning" role="status">
           {ALTGR_WARNING}
         </p>
       )}
       {error && (
-        <p className="error" role="alert">
+        <p id={errorId} className="error" role="alert">
           {error}
+        </p>
+      )}
+      {registrationError && !capturing && (
+        <p id={failureId} className="error" role="alert">
+          {registrationError}
         </p>
       )}
     </div>

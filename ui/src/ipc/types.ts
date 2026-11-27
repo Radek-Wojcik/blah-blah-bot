@@ -92,6 +92,12 @@ export interface RecordingLevels {
   bars: number[];
 }
 
+/** Why a configured global hotkey is not active (taken by another application, or invalid). */
+export interface HotkeyStatus {
+  recordError: string | null;
+  screenshotError: string | null;
+}
+
 export type MouseButtonsMode = "normal" | "swapped" | "off";
 
 export interface Settings {

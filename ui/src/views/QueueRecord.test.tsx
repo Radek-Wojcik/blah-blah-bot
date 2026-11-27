@@ -62,8 +62,8 @@ describe("RecordView", () => {
 
     expect(host.querySelector(".recorder-panel-full")).not.toBeNull();
     expect(host.querySelector(".ticker")).toBeNull();
-    expect(host.textContent).toContain("Ctrl+Shift+R");
-    expect(host.textContent).toContain("Ctrl+Shift+S");
+    expect(host.textContent).toContain("Ctrl+Alt+Shift+F9");
+    expect(host.textContent).toContain("Ctrl+Alt+Shift+F10");
 
     // Open briefing button calls openBriefing for selected project.
     const openBriefingBtn = Array.from(host.querySelectorAll("button")).find(

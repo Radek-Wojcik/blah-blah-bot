@@ -4,15 +4,53 @@ import {
   DEFAULT_RECORD_HOTKEY,
   DEFAULT_SCREENSHOT_HOTKEY,
   formatHotkeyDisplay,
-  isAltGrLetterCombo,
+  isAltGrCombo,
+  validateHotkey,
   notifySettingsChanged,
   onSettingsChanged,
 } from "./hotkeys";
 
 describe("hotkeys", () => {
-  it("uses Ctrl+Shift+R and Ctrl+Shift+S as defaults", () => {
-    expect(DEFAULT_RECORD_HOTKEY).toBe("Ctrl+Shift+R");
-    expect(DEFAULT_SCREENSHOT_HOTKEY).toBe("Ctrl+Shift+S");
+  it("uses Ctrl+Alt+Shift+F9 and Ctrl+Alt+Shift+F10 as defaults, valid and without AltGr clash", () => {
+    expect(DEFAULT_RECORD_HOTKEY).toBe("Ctrl+Alt+Shift+F9");
+    expect(DEFAULT_SCREENSHOT_HOTKEY).toBe("Ctrl+Alt+Shift+F10");
+    expect(validateHotkey(DEFAULT_RECORD_HOTKEY)).toBeNull();
+    expect(validateHotkey(DEFAULT_SCREENSHOT_HOTKEY)).toBeNull();
+    expect(isAltGrCombo(DEFAULT_RECORD_HOTKEY)).toBe(false);
+    expect(isAltGrCombo(DEFAULT_SCREENSHOT_HOTKEY)).toBe(false);
+  });
+
+  it("rejects Shift alone (except with F-keys) and lets Tab leave without recording", () => {
+    const base = { ctrlKey: false, altKey: false, shiftKey: false, metaKey: false };
+    const shiftS = captureKeyDown({ ...base, code: "KeyS", key: "S", shiftKey: true });
+    expect(shiftS.kind).toBe("error");
+    expect(captureKeyDown({ ...base, code: "Space", key: " ", shiftKey: true }).kind).toBe("error");
+    expect(captureKeyDown({ ...base, code: "Tab", key: "Tab", shiftKey: true })).toEqual({
+      kind: "leave",
+    });
+    expect(captureKeyDown({ ...base, code: "Tab", key: "Tab" })).toEqual({ kind: "leave" });
+    expect(captureKeyDown({ ...base, code: "F9", key: "F9", shiftKey: true })).toEqual({
+      kind: "captured",
+      hotkey: "Shift+F9",
+    });
+    expect(captureKeyDown({ ...base, code: "KeyR", key: "r", metaKey: true })).toEqual({
+      kind: "captured",
+      hotkey: "Super+R",
+    });
+    expect(captureKeyDown({ ...base, code: "Tab", key: "Tab", ctrlKey: true })).toEqual({
+      kind: "captured",
+      hotkey: "Ctrl+Tab",
+    });
+  });
+
+  it("validates hotkeys like the application does", () => {
+    expect(validateHotkey("")).toBeNull();
+    expect(validateHotkey("Ctrl+S")).toBeNull();
+    expect(validateHotkey("Super+R")).toBeNull();
+    expect(validateHotkey("Shift+F9")).toBeNull();
+    expect(validateHotkey("Shift+S")).not.toBeNull();
+    expect(validateHotkey("Shift+Tab")).not.toBeNull();
+    expect(validateHotkey("F9")).not.toBeNull();
   });
 
   it("captures letter, digit, F-key, arrow, punctuation, and numpad shortcuts", () => {
@@ -140,7 +178,7 @@ describe("hotkeys", () => {
       }),
     ).toEqual({
       kind: "error",
-      message: "Include at least one modifier key (Ctrl, Alt, Shift, or Super).",
+      message: "Include Ctrl, Alt or Super (Shift alone works only with F1-F24).",
     });
 
     expect(
@@ -155,13 +193,18 @@ describe("hotkeys", () => {
   });
 
   it("detects AltGr letter combos and formats display", () => {
-    expect(isAltGrLetterCombo("Ctrl+Alt+S")).toBe(true);
-    expect(isAltGrLetterCombo("Ctrl+Alt+R")).toBe(true);
-    expect(isAltGrLetterCombo("Ctrl+Shift+S")).toBe(false);
-    expect(isAltGrLetterCombo("Ctrl+Alt+F9")).toBe(false);
-    expect(isAltGrLetterCombo("")).toBe(false);
+    expect(isAltGrCombo("Ctrl+Alt+S")).toBe(true);
+    expect(isAltGrCombo("Ctrl+Alt+R")).toBe(true);
+    expect(isAltGrCombo("Ctrl+Alt+Shift+S")).toBe(true);
+    expect(isAltGrCombo("Ctrl+Alt+7")).toBe(true);
+    expect(isAltGrCombo("Ctrl+Alt+;")).toBe(true);
+    expect(isAltGrCombo("Ctrl+Shift+S")).toBe(false);
+    expect(isAltGrCombo("Ctrl+Alt+F9")).toBe(false);
+    expect(isAltGrCombo("Ctrl+Alt+Space")).toBe(false);
+    expect(isAltGrCombo("Ctrl+Alt+Super+R")).toBe(false);
+    expect(isAltGrCombo("")).toBe(false);
 
-    expect(formatHotkeyDisplay("Ctrl+Shift+R")).toBe("Ctrl+Shift+R");
+    expect(formatHotkeyDisplay("Ctrl+Alt+Shift+F9")).toBe("Ctrl+Alt+Shift+F9");
     expect(formatHotkeyDisplay("")).toBe("Not set");
   });
 

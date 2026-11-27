@@ -593,7 +593,7 @@ describe("Keep audio after processing (global setting)", () => {
 
     // Capture a new Record / Stop hotkey
     const recBtn = host.querySelector<HTMLButtonElement>("#pref-record-hotkey")!;
-    expect(recBtn.textContent).toBe("Ctrl+Shift+R");
+    expect(recBtn.textContent).toBe("Ctrl+Alt+Shift+F9");
     await act(async () => {
       recBtn.click();
     });
