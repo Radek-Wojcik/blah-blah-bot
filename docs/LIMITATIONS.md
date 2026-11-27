@@ -13,7 +13,7 @@ What this build does not do, and what has not been measured. Numbers come from t
 ## Recording
 
 - Sound from the speakers that the microphone picks up appears in both tracks; echo is not removed (G10).
-- **USB microphone discontinuity flags in soak test.** On the USB microphone track the audio engine flagged 194 discontinuities in a 10 hour soak test, about one every 3 minutes, although the audio was continuous and its length exact. The cause is unexplained and the zero-loss target is not met for the microphone. Application tracks had none (G5).
+- **USB microphone discontinuity flags in soak test.** On the USB microphone track the audio engine flagged 194 discontinuities in a 10 hour soak test, about one every 3 minutes, although the audio was continuous and its length exact. The cause is unexplained and the zero-loss target is not met for the microphone. Application tracks had none (G5). Two 15 minute runs on 2026-11-27 showed the same rate (5 flags each, 0.33 per minute) with and without the capture tuning (`BBB_MIC_TUNING=buffer100,mmcss`), so the tuning is not enabled by default; with no silence filled and an exact length in every run, this looks like the audio driver or the USB clock adjustment, not lost audio (`benchmarks/results/stage8-mic-tuning.json`).
 - Per-application capture was measured with test processes. Real Teams and Discord calls are not captured by hand, and the behavior of the new Teams client is unknown (G3).
 - Region screenshots on several monitors with mixed scaling are tested with synthetic frames only (G7).
 
@@ -50,7 +50,7 @@ These targets are missed in the Stage 8 regression run ([stage8-regression.md](.
 
 ## Scale
 
-- Measured: a 2 hour recording processed in 6.1 minutes, and a 10 hour transcript extracted in 51.4 minutes. The 10 hour estimate for transcription, speaker separation and extraction together, about 86 minutes, is a sum of separately measured stages. The 10 hour end-to-end run is not done, and vision, publishing and model loading are not included (G11).
+- Measured: a 2 hour recording processed in 6.1 minutes, and a 10 hour transcript extracted in 51.4 minutes. The 10 hour estimate for transcription, speaker separation and extraction together, about 86 minutes, is a sum of separately measured stages. The 10 hour end-to-end run (synthetic audio) took 1.86 hours with a peak of 9.5 GB, above the 0.97 hour estimate because the extraction found more items than in the Stage 4 sample; that run is now the baseline. Running three extraction requests at once on the GPU was measured on 2026-11-27: 15 % less time per 1000 words, but decision recall and precision fell by about 6 points, so it stays off by default. Vision, publishing and model loading are not included (G11).
 
 ## Quality assurance
 

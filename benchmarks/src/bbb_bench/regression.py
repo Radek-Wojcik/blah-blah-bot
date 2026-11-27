@@ -723,10 +723,11 @@ THRESHOLDS: tuple[Threshold, ...] = (
         4.0,
         "hours",
         _ten_hours,
-        ("p9-long-estimate",),
+        ("stage8-e2e-10h",),
         ("stage8-e2e-10h",),
         kind="perf",
-        note="baseline is the Stage 0 estimate; the fresh value is the ten hour run",
+        note="baseline is the recorded ten hour run (1.858 h), re-baselined from the "
+        "Stage 0 estimate; the fresh value is a new ten hour run",
     ),
     Threshold(
         "peak-vram",
