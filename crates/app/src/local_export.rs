@@ -14,8 +14,22 @@ use crate::processing_commands::meeting_dir;
 use crate::settings::{CycleRepoSetting, Settings};
 use crate::state::AppState;
 
-/// Default local save directory under the user's documents or data directory.
+/// Default local save directory under `Documents\Blah Blah Bot\notes` (falling back to the
+/// data directory when no user profile folder is available).
 pub fn default_local_save_dir(data_dir: &Path) -> PathBuf {
+    default_local_save_dir_with(std::env::var_os("USERPROFILE").as_deref(), data_dir)
+}
+
+pub fn default_local_save_dir_with(
+    user_profile: Option<&std::ffi::OsStr>,
+    data_dir: &Path,
+) -> PathBuf {
+    if let Some(home) = user_profile.filter(|s| !s.is_empty()) {
+        return PathBuf::from(home)
+            .join("Documents")
+            .join("Blah Blah Bot")
+            .join("notes");
+    }
     if let Some(parent) = data_dir.parent() {
         parent.join("notes")
     } else {
@@ -686,5 +700,38 @@ mod tests {
             assert_eq!(err.code, "invalid", "expected invalid for {dest:?}");
         }
         assert!(!dir.path().join("note.txt").exists());
+    }
+
+    #[test]
+    fn default_local_save_dir_uses_documents_and_preserves_configured_dir() {
+        let data_dir = Path::new("C:/Users/Alice/AppData/Roaming/BlahBlahBot");
+        let default_dir =
+            default_local_save_dir_with(Some(std::ffi::OsStr::new("C:/Users/Alice")), data_dir);
+        assert_eq!(
+            default_dir,
+            PathBuf::from("C:/Users/Alice")
+                .join("Documents")
+                .join("Blah Blah Bot")
+                .join("notes")
+        );
+
+        let fallback = default_local_save_dir_with(None, data_dir);
+        assert_eq!(
+            fallback,
+            PathBuf::from("C:/Users/Alice/AppData/Roaming/notes")
+        );
+
+        // An already-configured folder in ProjectPrefs or Settings stays untouched.
+        let store = Store::open_in_memory().unwrap();
+        store
+            .set_project_prefs(&store::ProjectPrefs {
+                cycle_id: "NOMAD".into(),
+                local_save_enabled: true,
+                local_save_dir: "D:/CustomNotes".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let prefs = store.get_project_prefs("NOMAD").unwrap();
+        assert_eq!(prefs.local_save_dir, "D:/CustomNotes");
     }
 }
