@@ -203,21 +203,34 @@ fn discord_mention(person: &Participant) -> Option<String> {
 }
 
 fn assignee_label(item: &Item, participants: &[Participant], discord: bool) -> String {
-    match &item.assignee {
-        None => "@?".to_string(),
-        Some(id) => {
+    let mark = if item.certainty.assignee == CertaintyLevel::Stated {
+        ""
+    } else {
+        "?"
+    };
+    let outside = item
+        .assignee_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty());
+    match (&item.assignee, outside) {
+        (Some(id), _) => {
             let person = participants.iter().find(|p| &p.id == id);
-            let mark = if item.certainty.assignee == CertaintyLevel::Stated {
-                ""
-            } else {
-                "?"
-            };
             if let Some(mention) = person.filter(|_| discord).and_then(discord_mention) {
                 return format!("{mention}{mark}");
             }
             let name = person.map_or(id.as_str(), |p| p.name.as_str());
             format!("@{name}{mark}")
         }
+        (None, Some(name)) => {
+            let safe_name = if discord {
+                defuse_discord_mentions(name)
+            } else {
+                name.to_string()
+            };
+            format!("@{safe_name}{mark}")
+        }
+        (None, None) => "@?".to_string(),
     }
 }
 
@@ -620,6 +633,31 @@ mod tests {
         assert_eq!(
             item_line(&stranger, &p, Variant::Chat),
             "- Ping (@zed, due ?)"
+        );
+    }
+
+    #[test]
+    fn an_outside_assignee_name_is_shown_and_a_blank_one_is_not() {
+        let p = people();
+        let mut named = task("1", "Ping", None, None, Inferred, Unknown);
+        named.assignee_name = Some("Marta Outside".into());
+        assert_eq!(
+            item_line(&named, &p, Variant::Markdown),
+            "- [ ] Ping (@Marta Outside?, due ?)"
+        );
+        named.certainty.assignee = Stated;
+        assert_eq!(
+            item_line(&named, &p, Variant::Chat),
+            "- Ping (@Marta Outside, due ?)"
+        );
+        named.assignee_name = Some("   ".into());
+        assert_eq!(item_line(&named, &p, Variant::Chat), "- Ping (@?, due ?)");
+        // A participant id wins over a name.
+        named.assignee = Some("alex".into());
+        named.assignee_name = Some("Marta Outside".into());
+        assert_eq!(
+            item_line(&named, &p, Variant::Chat),
+            "- Ping (@Alex Example, due ?)"
         );
     }
 

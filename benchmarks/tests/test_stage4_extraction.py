@@ -544,6 +544,7 @@ class FakeModel:
                         "type": type_,
                         "text": text,
                         "assignee": assignee,
+                        "assignee_name": None,
                         "due": due,
                         "certainty": {
                             "assignee": "stated" if assignee else "unknown",

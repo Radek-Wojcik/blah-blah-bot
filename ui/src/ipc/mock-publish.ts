@@ -755,6 +755,11 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
         const people = cycle?.participants ?? [];
         for (const item of draft.items.filter((i) => i.type === "task")) {
           const login = people.find((p) => p.id === item.assignee)?.github ?? null;
+          if (item.assignee === null && item.assigneeName?.trim()) {
+            notes.push(
+              `task ${item.id} is assigned to "${item.assigneeName.trim()}" (not in project people): the GitHub issue will be created unassigned`,
+            );
+          }
           summary.issues.push({
             itemId: item.id,
             title: item.text,

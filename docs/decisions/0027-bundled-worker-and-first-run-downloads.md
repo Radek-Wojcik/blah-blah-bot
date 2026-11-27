@@ -1,4 +1,4 @@
-# 0026. Bundled worker and first-run downloads
+# 0027. Bundled worker and first-run downloads
 
 **Status:** Proposed
 
