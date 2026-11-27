@@ -138,7 +138,7 @@ impl Guard {
 
         let idle = s.t_ms.saturating_sub(since);
         if idle < self.policy.idle_ms {
-            return GateDecision::Wait(format!(
+            return GateDecision::Countdown(format!(
                 "Waiting for the GPU to stay idle ({} of {} s)",
                 idle / 1000,
                 self.policy.idle_ms / 1000
@@ -271,6 +271,35 @@ mod tests {
         let i = first_go(&t, Stage::Asr).expect("starts");
         assert!(t.samples[i].t_ms - t.samples[0].t_ms >= 10_000);
         assert!(i > 0, "never starts on the very first reading");
+    }
+
+    #[test]
+    fn idle_wait_counter_advances_each_second() {
+        let mut g = Guard::new(GuardPolicy {
+            idle_ms: 5_000,
+            ..GuardPolicy::default()
+        });
+        for sec in 0..5u64 {
+            let sample = GpuSample {
+                t_ms: sec * 1000,
+                util_percent: 10,
+                free_mib: 10_000,
+                total_mib: 12_000,
+                processes: Vec::new(),
+            };
+            assert_eq!(
+                g.evaluate(Some(&sample), Stage::Asr),
+                GateDecision::Countdown(format!("Waiting for the GPU to stay idle ({sec} of 5 s)"))
+            );
+        }
+        let ready = GpuSample {
+            t_ms: 5_000,
+            util_percent: 10,
+            free_mib: 10_000,
+            total_mib: 12_000,
+            processes: Vec::new(),
+        };
+        assert_eq!(g.evaluate(Some(&ready), Stage::Asr), GateDecision::Go);
     }
 
     #[test]

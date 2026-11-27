@@ -177,8 +177,18 @@ export function createTauriBackend(): Backend {
       invoke("voice_profile_sample_clip", { participantId }),
     enrollVoiceProfile: (name, cycleId, audioPath) =>
       invoke("enroll_voice_profile", { name, cycleId, audioPath }),
+    addProfileToProject: (participantId, cycleId) =>
+      invoke("add_profile_to_project", { participantId, cycleId }),
+    removeProfileFromProject: (participantId, cycleId) =>
+      invoke("remove_profile_from_project", { participantId, cycleId }),
+    mergeParticipants: (keepId, dropId) => invoke("merge_participants", { keepId, dropId }),
+    undoVoiceDecision: (id, voiceId, unlinkCycleId = null) =>
+      invoke("undo_voice_decision", { id, voiceId, unlinkCycleId }),
     getSettings: () => invoke("get_settings"),
     saveSettings: (settings) => invoke("save_settings", { settings }),
+    suspendHotkeys: () => invoke("suspend_hotkeys"),
+    resumeHotkeys: () => invoke("resume_hotkeys"),
+    hotkeyStatus: () => invoke("hotkey_status"),
     bridgeStatus: () => invoke("bridge_status"),
     startPairing: () => invoke("start_pairing"),
     cancelPairing: () => invoke("cancel_pairing"),

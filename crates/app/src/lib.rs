@@ -189,9 +189,7 @@ pub fn run() {
             }
 
             // A taken hotkey must not stop the application from starting.
-            if let Err(e) = hotkeys::register(&handle, &settings) {
-                tracing::warn!(error = %e, "hotkeys not registered");
-            }
+            hotkeys::register_initial(&handle, &settings);
             build_tray(&handle)?;
             start_ticker(handle.clone());
             show_main(&handle);
@@ -223,6 +221,9 @@ pub fn run() {
             commands::take_screenshot,
             commands::get_settings,
             commands::save_settings,
+            commands::suspend_hotkeys,
+            commands::resume_hotkeys,
+            commands::hotkey_status,
             commands::save_last_sources,
             browser::bridge_status,
             browser::start_pairing,
@@ -278,6 +279,10 @@ pub fn run() {
             speaker_commands::list_all_voice_profiles,
             speaker_commands::voice_profile_sample_clip,
             speaker_commands::enroll_voice_profile,
+            speaker_commands::add_profile_to_project,
+            speaker_commands::remove_profile_from_project,
+            speaker_commands::merge_participants,
+            speaker_commands::undo_voice_decision,
             processing_commands::set_cloud_key,
             processing_commands::clear_cloud_key,
             processing_commands::cloud_key_present,

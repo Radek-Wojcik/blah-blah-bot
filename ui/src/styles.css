@@ -533,6 +533,48 @@ select {
   gap: 12px;
   margin-bottom: var(--gap);
 }
+.page-head-start {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.hotkey-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.hotkey-capture-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.hotkey-btn {
+  font-family: var(--font-mono);
+  min-width: 140px;
+  text-align: left;
+}
+.hotkey-capturing {
+  border-color: var(--cyan);
+  box-shadow: 0 0 0 1px var(--cyan);
+}
+.hotkey-warning {
+  margin: 0;
+  color: var(--amber, #f5b942);
+  font-size: 0.8em;
+}
+.record-hotkeys {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 10px 0;
+}
 .page-head h2 {
   margin: 0;
   font-size: 1.5em;
@@ -1441,11 +1483,45 @@ body.overlay-body::after {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: var(--gap);
+  padding: 1rem;
   background: rgba(5, 6, 11, 0.78);
+  overflow: auto;
 }
 .modal {
   width: min(100%, 420px);
+  max-height: calc(100vh - 2rem);
+  display: flex;
+  flex-direction: column;
+}
+.modal > .panel-body.modal-panel-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+  max-height: 100%;
+  overflow: hidden;
+}
+.modal-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
+}
+.modal-footer {
+  flex: 0 0 auto;
+  padding-top: 12px;
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.modal-content > .actions:last-child,
+.modal-content > form > .actions:last-child,
+.modal-content > div > .actions:last-child {
+  position: sticky;
+  bottom: 0;
+  padding-top: 10px;
+  margin-top: 12px;
+  background: linear-gradient(to bottom, transparent, var(--panel) 24%);
 }
 .modal-title {
   margin: 0 0 8px;
@@ -1672,6 +1748,7 @@ textarea {
   font: inherit;
   color: inherit;
 }
+/* Dialogs that do not use the Modal component keep the body scrollable inside the viewport. */
 .modal > .panel-body {
   max-height: calc(100vh - 2 * var(--gap));
   overflow-y: auto;
@@ -2206,6 +2283,18 @@ textarea {
   font-size: 0.85rem;
   padding: 0.3em 0.4em;
 }
+.item-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.assignee-unlisted {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  font-size: 0.8rem;
+}
 .field-with-mark {
   display: inline-flex;
   align-items: center;
@@ -2272,9 +2361,53 @@ textarea {
 .report-tools {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px 14px;
   margin-bottom: 10px;
+}
+.report-tools .pane-toggle {
+  margin: 0;
+  align-items: center;
+}
+.report-tools-right {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+.report-format-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.75em;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+.report-format-field select {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 0.3em 0.55em;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  text-transform: none;
+  letter-spacing: normal;
+  min-width: 0;
+}
+.report-format-field select:hover {
+  border-color: var(--cyan);
+}
+.report-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin-bottom: 10px;
+}
+.report-status .valid-note {
+  margin: 0;
 }
 .report-pre {
   margin: 0;
@@ -2979,10 +3112,189 @@ textarea {
   align-items: start;
 }
 
+.settings-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px 16px;
+  margin-bottom: 12px;
+}
+
+.settings-card-head .sub-head {
+  margin: 0;
+}
+
+.settings-card-sub {
+  margin: 4px 0 0;
+}
+
+.settings-subcard {
+  border: 1px dashed var(--line);
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.015);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings-save-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px 14px;
+}
+
+/* Compact detection settings */
+.detect-head-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.detect-preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.detect-preset-row .field-label {
+  margin: 0;
+}
+
+.segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.detect-preset-hint {
+  flex: 1 1 220px;
+  color: var(--muted);
+  font-size: 0.8em;
+}
+
+.detect-apps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.detect-app-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0.35em 0.6em;
+  border-left: 2px solid var(--line);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.detect-app-name {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.detect-app-state {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detect-app-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.detect-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.detect-add-field {
+  display: flex;
+  flex: 1 1 180px;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 0.75em;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.detect-add-field input {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 0.4em 0.6em;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.detect-add-field input:hover {
+  border-color: var(--cyan);
+}
+
 .recorder-panel {
   display: flex;
   flex-direction: column;
   gap: var(--gap);
+}
+
+.widget-shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.widget-shell > .grow {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.recorder-panel.recorder-panel-compact {
+  height: 100%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  gap: clamp(6px, 1.8vmin, 10px);
+}
+
+.recorder-panel-compact .panel > .panel-body {
+  padding: clamp(8px, 2vmin, 12px);
+}
+
+.recorder-panel-compact .recorder-config-grid {
+  gap: 8px 12px;
+}
+
+.recorder-panel-compact .panel.recorder-sources {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.recorder-sources-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .recorder-panel-full {
@@ -3085,6 +3397,7 @@ textarea {
 
 /* WaveformEq */
 .waveform-eq {
+  position: relative;
   display: flex;
   align-items: flex-end;
   gap: 3px;
@@ -3104,6 +3417,89 @@ textarea {
 .waveform-eq-bar:nth-child(2n) {
   background: var(--cyan);
   box-shadow: 0 0 8px var(--cyan);
+}
+
+.waveform-eq-peak {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--yellow);
+  box-shadow: 0 0 6px var(--yellow);
+  pointer-events: none;
+  transition: bottom 0.08s linear;
+}
+
+/* Queue controls: Show finished toggle, slider + number field, English date/time picker */
+.page-head-controls {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.queue-show-finished {
+  margin-left: 0;
+  cursor: pointer;
+}
+
+.range-number-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.range-slider {
+  flex: 1 1 auto;
+  min-width: 80px;
+  accent-color: var(--cyan);
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.range-number-input {
+  flex: 0 0 5.5em;
+  width: 5.5em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.range-number-unit {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.english-dt-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.english-dt-select {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 0.4em 0.5em;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  min-width: 0;
+}
+
+.english-dt-select:hover {
+  border-color: var(--cyan);
+}
+
+.english-dt-sep {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  text-transform: none;
+  letter-spacing: normal;
 }
 
 /* UnsavedBar */
@@ -3259,4 +3655,15 @@ textarea {
     flex-direction: row;
     flex-wrap: wrap;
   }
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }

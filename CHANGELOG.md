@@ -4,9 +4,21 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased] / 1.0.0 (stabilization)
 
 Draft notes for 1.0.0. Nothing here is released yet.
+
+### Stabilization
+
+Summary of fixes merged on `stage/8-release` toward 1.0.0:
+
+- Sample clip playback: allowed `blob:` in `media-src` in the Tauri CSP so voice sample clips play in the UI.
+- Extraction and draft editing for non-participant assignees: added `assignee_name` for task owners outside the project participant list, preserved outside assignees in briefing merges, added "Add to project people" and clear actions in the draft editor, raised inferred certainty for resolved names, and rejected underscore speaker labels.
+- Global voice profiles across projects: added per-project badges, kept `cycle.yaml`, speaker merges, and renames consistent across projects, reset speaker undo state, and hid own-project suggestions.
+- Hotkeys and navigation: added interactive hotkey capture (pausing global hotkeys while capturing, requiring Ctrl/Alt/Super, rolling back on save failure, reporting registration errors), migrated default hotkeys (`Ctrl+Alt+Shift+F9` / `Ctrl+Alt+Shift+F10`), and added mouse side-button navigation and a `BackButton` (including Settings back navigation).
+- Recording levels and processing queue: switched live recording meters to dBFS with peak hold and decay on silence; polled idle GPU countdowns every second while waiting, tidied the queue view, rejected empty queue numeric fields, and kept dialogs keyboard-safe.
+- Optional recorder and worker tuning: added opt-in 100 ms microphone buffer and MMCSS registration (`BBB_MIC_TUNING`), opt-in worker batching and parallel extraction knobs, and indexed diarization turn lookup.
+- Installer hardening (**pending manual verification**): hardened NSIS PE/version metadata, added writable install-directory checks, guarded the uninstall hook in update mode, added an optional signing hook, and switched NSIS compression to `zlib` with `webviewInstallMode: skip`. Clean-machine installation and Windows Defender scanning are still pending manual verification; the installer remains unsigned and triggers SmartScreen/Defender warnings.
 
 ### Added
 
@@ -29,6 +41,7 @@ Draft notes for 1.0.0. Nothing here is released yet.
 
 ### Changed
 
+- Global hotkeys: the defaults are now Ctrl+Alt+Shift+F9 (Record / Stop) and Ctrl+Alt+Shift+F10 (region screenshot); the old Ctrl+Alt+R / Ctrl+Alt+S defaults are migrated once, unless that would give both hotkeys the same shortcut. Both can be recorded by pressing the keys in Settings > Preferences or on the Record tab; the shortcut needs Ctrl, Alt or Super (Shift alone only with F1-F24), global hotkeys are paused while a shortcut is being recorded, and a hotkey that another application has taken is reported on the Record tab.
 - Redesigned main shell with a navigation sidebar, updated Record view, and tabbed Settings (`AI Models`, `Connectors`, `Preferences`, `Processing`, `Voice Profiles`, `Detection & Extension`).
 - Fluid centered layout for wide screens.
 - The interface says "project" everywhere it said "cycle" (recorder panel, Preferences, speaker header, report mode help, publishing messages); the old Cycles, Cycle editor, Briefing, Publishing, Processing and report gate screens, which nothing opened any more, are removed. Every option they offered lives in Project settings, the project page and the Settings tabs.

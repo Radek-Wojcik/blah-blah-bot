@@ -85,17 +85,28 @@ export interface RecordingState {
   screenshotCount: number;
 }
 
-/** Live 12-bar audio energy levels emitted while recording. */
+/** Live 12-bar audio energy levels emitted while recording (dB-normalized 0..1). */
 export interface RecordingLevels {
   peak: number;
   rms: number;
   bars: number[];
+  /** Latched peak-hold marker level (0..1). */
+  peakHold?: number;
 }
+
+/** Why a configured global hotkey is not active (taken by another application, or invalid). */
+export interface HotkeyStatus {
+  recordError: string | null;
+  screenshotError: string | null;
+}
+
+export type MouseButtonsMode = "normal" | "swapped" | "off";
 
 export interface Settings {
   recordingsDir: string;
   recordHotkey: string;
   screenshotHotkey: string;
+  mouseButtons?: MouseButtonsMode;
   localSaveEnabled?: boolean;
   localSaveDir?: string;
   lastSourceKeys?: string[];
@@ -346,6 +357,8 @@ export interface JobView {
   scheduledUnixMs?: number | null;
   /** Estimated remaining seconds for the active job. */
   etaSeconds?: number | null;
+  /** Completion timestamp (Unix ms) when the job is `done`. */
+  finishedUnixMs?: number | null;
 }
 
 export interface QueueGpuOverride {
@@ -455,10 +468,13 @@ export interface ProcessingSettings {
 
 export type ModelKey = "whisper-turbo" | "whisper-large-v3" | "diarization" | "vision";
 
+export type ModelCacheStatus = "ready" | "older" | "missing";
+
 export interface ModelStatus {
   key: ModelKey;
   label: string;
   cached: boolean;
+  status?: ModelCacheStatus;
   gated: boolean;
   sizeMb: number | null;
 }
@@ -558,7 +574,10 @@ export interface VoiceView {
   /** Cosine similarity of the match, 0 to 1. */
   score?: number | null;
   suggestedParticipantId?: string | null;
+  suggestedParticipantName?: string | null;
+  suggestedFromProjects?: string[];
   assignedParticipantId?: string | null;
+  assignedParticipantName?: string | null;
   /** True once the user decided (or accepted the automatic match). */
   confirmed: boolean;
   /** The voice this one was declared to be the same person as. */
@@ -581,6 +600,7 @@ export interface ParticipantView {
 
 export interface VoicesData {
   meetingId: string;
+  cycleId?: string | null;
   voices: VoiceView[];
   participants: ParticipantView[];
   allConfirmed: boolean;
@@ -853,6 +873,8 @@ export interface DraftItem {
   text: string;
   /** A participant id of the cycle. */
   assignee: string | null;
+  /** Spoken name of a named person not in the cycle's participants. */
+  assigneeName: string | null;
   /** `YYYY-MM-DD`. */
   due: string | null;
   certainty: { assignee: CertaintyLevel; due: CertaintyLevel };
@@ -1410,10 +1432,16 @@ export interface ImportMeetingInput {
   processNow: boolean;
 }
 
+export interface DetectedVisionModel {
+  modelPath: string;
+  mmprojPath?: string | null;
+}
+
 export interface DetectedModels {
   llamaServerPath: string | null;
   llmModels: string[];
   visionModels: string[];
+  visionPairs?: DetectedVisionModel[];
   defaultLocalSaveDir: string;
 }
 

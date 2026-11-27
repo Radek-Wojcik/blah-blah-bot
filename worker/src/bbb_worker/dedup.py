@@ -44,13 +44,20 @@ def close_in_time(a: dict[str, Any], b: dict[str, Any]) -> bool:
     )
 
 
+def _owner_key(item: dict[str, Any]) -> str | None:
+    if item["assignee"] is not None:
+        return item["assignee"].casefold()
+    name = item.get("assignee_name")
+    return name.strip().casefold() if isinstance(name, str) and name.strip() else None
+
+
 def conflicting(a: dict[str, Any], b: dict[str, Any]) -> bool:
     """Two different non-null assignees or due dates make two different tasks ("send the report"
     for Alex and for Bea). A null on either side does not conflict: the other value is kept."""
-    return any(
-        a[field] is not None and b[field] is not None and a[field] != b[field]
-        for field in ("assignee", "due")
-    )
+    oa, ob = _owner_key(a), _owner_key(b)
+    if oa is not None and ob is not None and oa != ob:
+        return True
+    return a["due"] is not None and b["due"] is not None and a["due"] != b["due"]
 
 
 def is_duplicate(a: dict[str, Any], b: dict[str, Any]) -> bool:
@@ -64,7 +71,9 @@ def is_duplicate(a: dict[str, Any], b: dict[str, Any]) -> bool:
 
 
 def _completeness(item: dict[str, Any]) -> tuple[bool, int, float, int]:
-    filled = (item["assignee"] is not None) + (item["due"] is not None)
+    name = item.get("assignee_name")
+    has_owner = item["assignee"] is not None or (isinstance(name, str) and bool(name.strip()))
+    filled = has_owner + (item["due"] is not None)
     return (item["source"]["verified"], filled, item["source"]["match"], len(item["text"]))
 
 
@@ -93,6 +102,21 @@ def merge_group(group: list[dict[str, Any]]) -> dict[str, Any]:
     }
     for other in ranked[1:]:
         _merge_field(winner, other, "assignee")
+        if winner["assignee"] is not None:
+            winner["assignee_name"] = None
+        elif winner.get("assignee_name") is None and other.get("assignee_name") is not None:
+            winner["assignee_name"] = other["assignee_name"]
+            winner["certainty"]["assignee"] = best_certainty(
+                winner["certainty"]["assignee"], other["certainty"]["assignee"]
+            )
+        elif (
+            winner.get("assignee_name") is not None
+            and other.get("assignee_name") is not None
+            and winner["assignee_name"].casefold() == other["assignee_name"].casefold()
+        ):
+            winner["certainty"]["assignee"] = best_certainty(
+                winner["certainty"]["assignee"], other["certainty"]["assignee"]
+            )
         _merge_field(winner, other, "due")
         if winner["relates_to"] is None:
             winner["relates_to"] = other["relates_to"]

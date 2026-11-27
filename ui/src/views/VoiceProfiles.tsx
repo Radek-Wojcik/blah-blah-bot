@@ -10,6 +10,7 @@ import type { EditableTabProps } from "./Settings";
 type Confirm =
   | { kind: "reset"; profile: GlobalVoiceProfile }
   | { kind: "delete"; profile: GlobalVoiceProfile }
+  | { kind: "merge"; keep: GlobalVoiceProfile; drop: GlobalVoiceProfile }
   | { kind: "all" };
 
 function useSampleClipPlayer(onError: (msg: string) => void) {
@@ -36,6 +37,12 @@ function useSampleClipPlayer(onError: (msg: string) => void) {
       if (wasPlaying) return;
       const mine = tokenRef.current;
       setPlayingId(profileId);
+      let reported = false;
+      const reportError = (msg: string) => {
+        if (reported) return;
+        reported = true;
+        onError(msg);
+      };
       try {
         const bytes = await backend.voiceProfileSampleClip(profileId);
         if (tokenRef.current !== mine) return;
@@ -51,13 +58,16 @@ function useSampleClipPlayer(onError: (msg: string) => void) {
           if (tokenRef.current === mine) stop();
         };
         audio.onerror = () => {
-          if (tokenRef.current === mine) stop();
+          if (tokenRef.current === mine) {
+            stop();
+            reportError("Sample clip could not be played.");
+          }
         };
         await Promise.resolve(audio.play());
       } catch (e) {
         if (tokenRef.current === mine) {
           stop();
-          onError(`Sample clip could not be played: ${errorMessage(e)}`);
+          reportError(`Sample clip could not be played: ${errorMessage(e)}`);
         }
       }
     },
@@ -132,6 +142,7 @@ export function VoiceProfiles({ onDirtyChange, registerHandle }: Partial<Editabl
     player.stop();
     if (c.kind === "reset") void act(backend.resetProfile(c.profile.id));
     else if (c.kind === "delete") void act(backend.deleteParticipant(c.profile.id));
+    else if (c.kind === "merge") void act(backend.mergeParticipants(c.keep.id, c.drop.id));
     else void act(backend.deleteVoiceData());
   };
 
@@ -337,6 +348,15 @@ export function VoiceProfiles({ onDirtyChange, registerHandle }: Partial<Editabl
           <ul className="people" aria-label="Voice profiles">
             {(profiles ?? []).map((p) => {
               const isPlaying = player.playingId === p.id;
+              const nameKey = p.name.trim().toLowerCase();
+              const isDuplicateName =
+                (profiles ?? []).filter((other) => other.name.trim().toLowerCase() === nameKey)
+                  .length > 1;
+              const availableProjects = cycles.filter((c) => c.valid && !p.projects.includes(c.id));
+              const mergeCandidates = (profiles ?? []).filter(
+                (other) =>
+                  other.id !== p.id && !other.projects.some((proj) => p.projects.includes(proj)),
+              );
               return (
                 <li key={p.id} className="person">
                   {renaming?.id === p.id ? (
@@ -391,12 +411,28 @@ export function VoiceProfiles({ onDirtyChange, registerHandle }: Partial<Editabl
                                 className="badge badge-recovered"
                                 style={{ marginLeft: 4 }}
                               >
-                                {proj}
+                                {proj}{" "}
+                                <button
+                                  type="button"
+                                  className="btn btn-small btn-ghost"
+                                  style={{ padding: "0 4px", minWidth: "auto" }}
+                                  aria-label={`Remove ${proj} from ${p.name}`}
+                                  onClick={() =>
+                                    void act(backend.removeProfileFromProject(p.id, proj))
+                                  }
+                                >
+                                  ×
+                                </button>
                               </span>
                             ))
                           ) : (
                             <span className="badge" style={{ marginLeft: 4 }}>
                               Global
+                            </span>
+                          )}
+                          {isDuplicateName && (
+                            <span className="badge" style={{ marginLeft: 4 }}>
+                              Possible duplicate name
                             </span>
                           )}
                         </span>
@@ -407,6 +443,41 @@ export function VoiceProfiles({ onDirtyChange, registerHandle }: Partial<Editabl
                         </span>
                       </div>
                       <div className="person-actions">
+                        {availableProjects.length > 0 && (
+                          <select
+                            aria-label={`Add ${p.name} to project`}
+                            value=""
+                            onChange={(e) => {
+                              const cid = e.target.value;
+                              if (cid) void act(backend.addProfileToProject(p.id, cid));
+                            }}
+                          >
+                            <option value="">+ Add to project</option>
+                            {availableProjects.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.name} ({c.id})
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        {mergeCandidates.length > 0 && (
+                          <select
+                            aria-label={`Same person as ${p.name}`}
+                            value=""
+                            onChange={(e) => {
+                              const target = (profiles ?? []).find((x) => x.id === e.target.value);
+                              if (target) setConfirm({ kind: "merge", keep: p, drop: target });
+                            }}
+                          >
+                            <option value="">Same person as…</option>
+                            {mergeCandidates.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.name} ({c.projects.length > 0 ? c.projects.join(", ") : "Global"}
+                                )
+                              </option>
+                            ))}
+                          </select>
+                        )}
                         {p.hasSampleClip && (
                           <button
                             type="button"
@@ -475,6 +546,7 @@ export function VoiceProfiles({ onDirtyChange, registerHandle }: Partial<Editabl
               <h3 id="voice-confirm-title" className="modal-title">
                 {confirm.kind === "reset" && "Reset this voice?"}
                 {confirm.kind === "delete" && "Delete this participant?"}
+                {confirm.kind === "merge" && "Merge these voice profiles?"}
                 {confirm.kind === "all" && "Delete all voice data?"}
               </h3>
               <p className="modal-text">
@@ -482,6 +554,8 @@ export function VoiceProfiles({ onDirtyChange, registerHandle }: Partial<Editabl
                   `The learned voice of ${confirm.profile.name} is forgotten, so ${confirm.profile.name} is no longer recognized automatically. The name is kept.`}
                 {confirm.kind === "delete" &&
                   `${confirm.profile.name} and their voice profile are deleted. Voices in meetings that were named after them become unnamed. This cannot be undone.`}
+                {confirm.kind === "merge" &&
+                  `Merge ${confirm.drop.name} into ${confirm.keep.name}? Their voice samples, project memberships, and meeting assignments will be combined into ${confirm.keep.name}. This cannot be undone.`}
                 {confirm.kind === "all" &&
                   "This removes all voice profiles, all stored voice embeddings of your meetings and all sample clips. Participant names are kept, but nobody is recognized automatically until you name voices again. This cannot be undone."}
               </p>
@@ -497,6 +571,7 @@ export function VoiceProfiles({ onDirtyChange, registerHandle }: Partial<Editabl
                 <button type="button" className="btn btn-record" onClick={runConfirm}>
                   {confirm.kind === "reset" && "Reset voice"}
                   {confirm.kind === "delete" && "Delete participant"}
+                  {confirm.kind === "merge" && "Merge profiles"}
                   {confirm.kind === "all" && "Delete all voice data"}
                 </button>
               </div>

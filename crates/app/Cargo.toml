@@ -42,5 +42,10 @@ publishers = { path = "../publishers", features = ["test-support"] }
 # Embeds the built UI instead of loading the dev server. Enabled for release builds.
 custom-protocol = ["tauri/custom-protocol"]
 
+[package.metadata.tauri-winres]
+OriginalFilename = "app.exe"
+InternalName = "app"
+Comments = "Local meeting recorder with transcripts, speakers and reports"
+
 [lints]
 workspace = true

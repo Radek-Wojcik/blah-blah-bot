@@ -46,6 +46,8 @@ pub struct TaskItem {
     pub github: Option<String>,
     /// Participant id of the assignee of a meeting item.
     pub participant: Option<String>,
+    /// Spoken name of a named person not in `cycle.yaml`.
+    pub assignee_name: Option<String>,
     /// `YYYY-MM-DD`; anything else is treated as no due date.
     pub due: Option<String>,
     /// The issue number: of an issue, or the one a meeting item points to.
@@ -65,6 +67,7 @@ impl TaskItem {
             origin: TaskOrigin::Issue,
             github: issue.assignee.clone(),
             participant: None,
+            assignee_name: None,
             due: None,
             issue: Some(issue.number),
             relates_to: None,
@@ -143,6 +146,7 @@ pub fn meeting_tasks(dir: &Path) -> (Vec<TaskItem>, Vec<String>) {
                 origin: TaskOrigin::Meeting,
                 github: None,
                 participant: item.assignee.clone(),
+                assignee_name: item.assignee_name.clone(),
                 due: item.due.clone().filter(|d| is_iso_date(d)),
                 issue: item.relates_to.as_deref().and_then(issue_number),
                 relates_to: item.relates_to.clone(),
@@ -192,10 +196,18 @@ pub fn merge_tasks(
     let mut seen: HashSet<(String, String)> = HashSet::new();
     let mut done = Vec::new();
     for task in meeting {
-        let key = (
-            normalize_text(&task.text),
-            task.participant.clone().unwrap_or_default(),
-        );
+        let owner = task
+            .participant
+            .clone()
+            .filter(|p| !p.is_empty())
+            .or_else(|| {
+                task.assignee_name
+                    .as_deref()
+                    .map(normalize_text)
+                    .filter(|n| !n.is_empty())
+            })
+            .unwrap_or_default();
+        let key = (normalize_text(&task.text), owner);
         if !seen.insert(key) {
             continue;
         }
@@ -216,6 +228,9 @@ pub fn merge_tasks(
                     }
                     if issue.github.is_none() && issue.participant.is_none() {
                         issue.participant = task.participant;
+                        if issue.participant.is_none() {
+                            issue.assignee_name = task.assignee_name;
+                        }
                     }
                     if issue.meeting.is_none() {
                         issue.meeting = task.meeting;
@@ -297,9 +312,14 @@ fn owner_of(task: &TaskItem, people: &[Participant]) -> Owner {
             return Owner::Person(at);
         }
     }
-    match (task.github.as_deref(), task.participant.as_deref()) {
-        (Some(login), _) if !login.is_empty() => Owner::Other(format!("@{login}")),
-        (_, Some(id)) if !id.is_empty() => Owner::Other(id.to_string()),
+    match (
+        task.github.as_deref(),
+        task.participant.as_deref(),
+        task.assignee_name.as_deref(),
+    ) {
+        (Some(login), _, _) if !login.is_empty() => Owner::Other(format!("@{login}")),
+        (_, Some(id), _) if !id.is_empty() => Owner::Other(id.to_string()),
+        (_, _, Some(name)) if !name.is_empty() => Owner::Other(name.to_string()),
         _ => Owner::Nobody,
     }
 }
@@ -432,6 +452,7 @@ mod tests {
             origin: TaskOrigin::Meeting,
             github: None,
             participant: who.map(String::from),
+            assignee_name: None,
             due: due.map(String::from),
             issue: None,
             relates_to: None,
@@ -452,6 +473,31 @@ mod tests {
 
     fn ids(group: &TaskGroup) -> Vec<&str> {
         group.tasks.iter().map(|t| t.id.as_str()).collect()
+    }
+
+    #[test]
+    fn the_same_task_for_different_outside_assignees_is_kept_twice() {
+        let mut a = task("m1/1", "Send the invoice", None, None);
+        a.assignee_name = Some("Marta Outside".into());
+        let mut b = task("m1/2", "Send the invoice", None, None);
+        b.assignee_name = Some("Piotr Outside".into());
+        let mut again = task("m0/1", "send  the invoice", None, None);
+        again.assignee_name = Some("marta outside".into());
+        let merged = merge_tasks(&[], true, vec![a, b, again], &[]);
+        assert_eq!(merged.open.len(), 2);
+    }
+
+    #[test]
+    fn a_meeting_task_lends_its_outside_assignee_to_an_unassigned_issue() {
+        let mut t = task("m1/1", "Wiring", None, None);
+        t.assignee_name = Some("Marta Outside".into());
+        t.issue = Some(5);
+        let merged = merge_tasks(&[issue(5, "Wiring", None)], true, vec![t], &[]);
+        assert_eq!(merged.open.len(), 1);
+        assert_eq!(
+            merged.open[0].assignee_name.as_deref(),
+            Some("Marta Outside")
+        );
     }
 
     #[test]

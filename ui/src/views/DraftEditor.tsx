@@ -50,12 +50,11 @@ type Pane = "items" | "report";
  */
 export function DraftEditor(props: {
   meetingId: string;
-  onBack: () => void;
   /** Opens the transcript at a time in the meeting. */
   onOpenTranscript: (atMs: number) => void;
   onOpenQueue: () => void;
 }) {
-  const { meetingId, onBack, onOpenTranscript, onOpenQueue } = props;
+  const { meetingId, onOpenTranscript, onOpenQueue } = props;
   const backend = useBackend();
   const [view, setView] = useState<DraftView | null>(null);
   const [noDraft, setNoDraft] = useState(false);
@@ -163,9 +162,6 @@ export function DraftEditor(props: {
       <span className="head-actions">
         <button className="btn btn-small" onClick={() => onOpenTranscript(0)}>
           Transcript
-        </button>
-        <button className="btn btn-small btn-ghost" onClick={onBack}>
-          Back to meetings
         </button>
       </span>
     </div>
@@ -618,12 +614,50 @@ function ItemCard(props: {
   onError: (message: string | null) => void;
 }) {
   const { item, draft, people, movable, locked, sourceOpen } = props;
+  const backend = useBackend();
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(item.text);
+  const [addingPerson, setAddingPerson] = useState(false);
   // Set when Escape or a save already ended the edit, so the blur that follows does nothing.
   const finished = useRef(false);
   const targets = moveTargets(draft, item);
   const unverified = isUnverified(item);
+
+  const addToProjectPeople = async (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const target = trimmed.toLowerCase();
+    const existing = people.find((p) => p.name.trim().toLowerCase() === target);
+    setAddingPerson(true);
+    try {
+      if (existing) {
+        await props.onUpdate({ assignee: existing.id });
+        return;
+      }
+      const created = await backend.createParticipant(trimmed, draft.cycle);
+      await props.onUpdate({ assignee: created.cycleParticipantId ?? created.id });
+    } catch (e) {
+      if (
+        (isIpcError(e) && e.code === "duplicate") ||
+        errorMessage(e).toLowerCase().includes("duplicate")
+      ) {
+        try {
+          const listed = await backend.listParticipants(draft.cycle);
+          const match = listed.find((p) => p.name.trim().toLowerCase() === target);
+          if (match) {
+            await props.onUpdate({ assignee: match.cycleParticipantId ?? match.id });
+            return;
+          }
+        } catch (err) {
+          props.onError(errorMessage(err));
+          return;
+        }
+      }
+      props.onError(errorMessage(e));
+    } finally {
+      setAddingPerson(false);
+    }
+  };
 
   const begin = () => {
     finished.current = false;
@@ -725,28 +759,52 @@ function ItemCard(props: {
 
       {item.type === "task" && (
         <div className="item-fields">
-          <label>
-            Assignee
-            <span className="field-with-mark">
-              <select
-                aria-label={`Assignee of: ${item.text}`}
-                value={item.assignee ?? ""}
-                disabled={locked}
-                onChange={(e) => void props.onUpdate({ assignee: e.target.value || null })}
-              >
-                <option value="">Unassigned</option>
-                {item.assignee !== null && !people.some((p) => p.id === item.assignee) && (
-                  <option value={item.assignee}>{item.assignee}</option>
-                )}
-                {people.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-              <Mark level={item.certainty.assignee} />
-            </span>
-          </label>
+          <div className="item-field">
+            <label>
+              Assignee
+              <span className="field-with-mark">
+                <select
+                  aria-label={`Assignee of: ${item.text}`}
+                  value={item.assignee ?? ""}
+                  disabled={locked}
+                  onChange={(e) => void props.onUpdate({ assignee: e.target.value || null })}
+                >
+                  <option value="">Unassigned</option>
+                  {item.assignee !== null && !people.some((p) => p.id === item.assignee) && (
+                    <option value={item.assignee}>{item.assignee}</option>
+                  )}
+                  {people.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+                <Mark level={item.certainty.assignee} />
+              </span>
+            </label>
+            {item.assignee === null && item.assigneeName && (
+              <span className="assignee-unlisted">
+                <span>{item.assigneeName} (not in project people)</span>
+                <button
+                  type="button"
+                  className="btn btn-small btn-ghost"
+                  disabled={locked || addingPerson}
+                  onClick={() => void addToProjectPeople(item.assigneeName!)}
+                >
+                  Add to project people
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-small btn-ghost"
+                  aria-label={`Clear the assignee name of: ${item.text}`}
+                  disabled={locked || addingPerson}
+                  onClick={() => void props.onUpdate({ assignee: null })}
+                >
+                  Clear
+                </button>
+              </span>
+            )}
+          </div>
           <label>
             Due
             <span className="field-with-mark">
@@ -1093,24 +1151,10 @@ function ReportPane({ meetingId, view }: { meetingId: string; view: DraftView })
   const exportMarkdown = () => void note.save(noteFileName(view.draft.cycle, view.draft.date));
   return (
     <section className="report-pane" aria-label="Report">
-      <div className="report-tools">
-        <label className="inline-field">
-          Format
-          <select
-            aria-label="Report format"
-            value={variant}
-            onChange={(e) => setVariant(e.target.value as RenderVariant)}
-          >
-            {VARIANTS.map((v) => (
-              <option key={v.value} value={v.value}>
-                {v.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <span className="chip">{MODE_LABELS[view.draft.mode]}</span>
-        <span className="pane-toggle" role="group" aria-label="Report view">
+      <div className="report-tools" role="toolbar" aria-label="Report toolbar">
+        <span className="report-tools-left pane-toggle" role="group" aria-label="Report view">
           <button
+            type="button"
             className={rendered ? "btn btn-small btn-ghost" : "btn btn-small btn-stop"}
             aria-pressed={!rendered}
             onClick={() => setRendered(false)}
@@ -1118,6 +1162,7 @@ function ReportPane({ meetingId, view }: { meetingId: string; view: DraftView })
             Text
           </button>
           <button
+            type="button"
             className={rendered ? "btn btn-small btn-stop" : "btn btn-small btn-ghost"}
             aria-pressed={rendered}
             onClick={() => setRendered(true)}
@@ -1125,29 +1170,50 @@ function ReportPane({ meetingId, view }: { meetingId: string; view: DraftView })
             Preview
           </button>
         </span>
-        {copied && <span role="status">{copied}</span>}
-        {note.savedPath && (
-          <span className="valid-note" role="status">
-            Saved note to {note.savedPath}
-          </span>
-        )}
-        {note.error && (
-          <span className="error" role="alert">
-            {note.error}
-          </span>
-        )}
-        <button className="btn btn-small" onClick={copy}>
-          Copy
-        </button>
-        <button
-          className="btn btn-small btn-record"
-          type="button"
-          disabled={note.saving}
-          onClick={exportMarkdown}
-        >
-          {note.saving ? "Saving…" : "Download note (.md)"}
-        </button>
+        <div className="report-tools-right">
+          <label className="report-format-field">
+            <span>Format</span>
+            <select
+              aria-label="Report format"
+              value={variant}
+              onChange={(e) => setVariant(e.target.value as RenderVariant)}
+            >
+              {VARIANTS.map((v) => (
+                <option key={v.value} value={v.value}>
+                  {v.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <span className="chip">{MODE_LABELS[view.draft.mode]}</span>
+          <button type="button" className="btn btn-small" onClick={copy}>
+            Copy
+          </button>
+          <button
+            className="btn btn-small btn-record"
+            type="button"
+            disabled={note.saving}
+            onClick={exportMarkdown}
+          >
+            {note.saving ? "Saving…" : "Download note (.md)"}
+          </button>
+        </div>
       </div>
+      {(copied || note.savedPath || note.error) && (
+        <div className="report-status">
+          {copied && <span role="status">{copied}</span>}
+          {note.savedPath && (
+            <span className="valid-note" role="status">
+              Saved note to {note.savedPath}
+            </span>
+          )}
+          {note.error && (
+            <span className="error" role="alert">
+              {note.error}
+            </span>
+          )}
+        </div>
+      )}
       {rendered ? (
         <MarkdownView
           source={text}

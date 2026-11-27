@@ -25,7 +25,7 @@
         "title": "Recorder",
         "url": "index.html?view=widget",
         "width": 340,
-        "height": 420,
+        "height": 540,
         "decorations": false,
         "resizable": false,
         "alwaysOnTop": true,
@@ -34,25 +34,29 @@
         "shadow": true
       }
     ],
-    "security": { "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: http://asset.localhost; base-uri 'none'; form-action 'none'; object-src 'none'" }
+    "security": { "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: http://asset.localhost; media-src 'self' blob:; base-uri 'none'; form-action 'none'; object-src 'none'" }
   },
   "bundle": {
     "active": true,
     "targets": ["nsis"],
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
     "publisher": "Radoslaw Wojcik",
+    "homepage": "https://github.com/Radek-Wojcik/blah-blah-bot",
     "copyright": "Copyright (c) 2026 Radoslaw Wojcik",
     "license": "MIT",
     "category": "Productivity",
     "shortDescription": "Local meeting recorder with transcripts, speakers and reports",
     "longDescription": "Records a meeting on this computer, transcribes it, tells the speakers apart and drafts a report. Models run locally; nothing leaves the machine unless you publish a report.",
     "windows": {
-      "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
+      "webviewInstallMode": { "type": "skip" },
       "nsis": {
         "installMode": "currentUser",
         "languages": ["English"],
         "displayLanguageSelector": false,
-        "compression": "lzma",
+        "compression": "zlib",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "template": "nsis/installer.nsi",
         "installerHooks": "nsis/hooks.nsh"
       }
     }

@@ -102,6 +102,8 @@ pub struct RecordingLevelsDto {
     pub peak: f32,
     pub rms: f32,
     pub bars: [f32; 12],
+    #[serde(default)]
+    pub peak_hold: f32,
 }
 
 impl Default for RecordingLevelsDto {
@@ -110,6 +112,7 @@ impl Default for RecordingLevelsDto {
             peak: 0.0,
             rms: 0.0,
             bars: [0.0; 12],
+            peak_hold: 0.0,
         }
     }
 }
@@ -120,6 +123,7 @@ impl From<recorder::AudioLevels> for RecordingLevelsDto {
             peak: levels.peak,
             rms: levels.rms,
             bars: levels.bars,
+            peak_hold: levels.peak_hold,
         }
     }
 }

@@ -53,6 +53,7 @@ import type {
   ReportMode,
   SaveCycleResult,
   SegmentEdit,
+  HotkeyStatus,
   Settings,
   SetupPathCheck,
   SetupPathKind,
@@ -107,6 +108,12 @@ export interface Backend {
 
   getSettings(): Promise<Settings>;
   saveSettings(settings: Settings): Promise<void>;
+  /** Unregister the global hotkeys while the user records a new shortcut. Idempotent. */
+  suspendHotkeys(): Promise<void>;
+  /** Register the saved hotkeys again after a capture; a no-op when not suspended. */
+  resumeHotkeys(): Promise<void>;
+  /** Which configured hotkeys are not active, with the reason. */
+  hotkeyStatus(): Promise<HotkeyStatus>;
 
   /** The bridge to the Chrome extension: server, pairing code, paired extensions, tab streams. */
   bridgeStatus(): Promise<BridgeStatus>;
@@ -400,6 +407,18 @@ export interface Backend {
     cycleId: string | null,
     audioPath: string,
   ): Promise<GlobalVoiceProfile>;
+  /** Link an existing voice profile to a project/cycle. */
+  addProfileToProject(participantId: string, cycleId: string): Promise<GlobalVoiceProfile>;
+  /** Unlink a voice profile from a project/cycle (keeps global profile & samples intact). */
+  removeProfileFromProject(participantId: string, cycleId: string): Promise<GlobalVoiceProfile>;
+  /** Merge two voice profiles (`dropId` into `keepId`). */
+  mergeParticipants(keepId: string, dropId: string): Promise<GlobalVoiceProfile>;
+  /** Undo a naming decision on a voice, optionally unlinking from `unlinkCycleId`. */
+  undoVoiceDecision(
+    meetingId: string,
+    voiceId: string,
+    unlinkCycleId?: string | null,
+  ): Promise<VoicesData>;
 
   onRecordingState(cb: (state: RecordingState) => void): Promise<Unsubscribe>;
   onRecordingLevels(cb: (levels: RecordingLevels) => void): Promise<Unsubscribe>;

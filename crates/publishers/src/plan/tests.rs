@@ -132,6 +132,20 @@ fn an_explicit_publication_queues_the_commit_the_issues_and_the_post_in_order() 
 }
 
 #[test]
+fn a_task_for_somebody_outside_the_project_is_noted_and_the_issue_stays_unassigned() {
+    let mut case = Case::new(cycle(None, None));
+    let mut outside = task("i5", "Send the invoice", None, None);
+    outside.assignee_name = Some("Marta Outside".into());
+    case.draft.items.push(outside);
+    let plan = case.explicit(&GITHUB);
+    assert!(keys(&plan).contains(&"issue:i5"));
+    assert!(plan
+        .notes
+        .iter()
+        .any(|n| n.contains("i5") && n.contains("Marta Outside") && n.contains("unassigned")));
+}
+
+#[test]
 fn payloads_carry_what_the_operation_needs_and_no_secret() {
     let case = Case::new(with_discord(PublishMode::OnApproval));
     let plan = case.explicit(&BOTH);

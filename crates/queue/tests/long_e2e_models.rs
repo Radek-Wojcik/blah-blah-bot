@@ -449,7 +449,7 @@ fn a_long_synthetic_meeting_goes_through_the_whole_pipeline() {
                 }));
             }
             StepOutcome::Finished => break,
-            StepOutcome::Waiting { stage, reason } => {
+            StepOutcome::Waiting { stage, reason, .. } => {
                 let since = *waiting_since.get_or_insert_with(|| {
                     println!("  stage {:<14} waits: {reason}", stage.as_str());
                     Instant::now()

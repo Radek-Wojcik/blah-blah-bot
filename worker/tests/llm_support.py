@@ -107,15 +107,17 @@ def raw_item(
     *,
     type: str = "task",
     assignee: str | None = None,
+    assignee_name: str | None = None,
     due: str | None = None,
     section: str | None = None,
     relates_to: str | None = None,
 ) -> dict[str, Any]:
-    stated = "stated" if assignee else "unknown"
+    stated = "stated" if (assignee or assignee_name) else "unknown"
     return {
         "type": type,
         "text": text,
         "assignee": assignee,
+        "assignee_name": assignee_name,
         "due": due,
         "certainty": {"assignee": stated, "due": "stated" if due else "unknown"},
         "section": section,
