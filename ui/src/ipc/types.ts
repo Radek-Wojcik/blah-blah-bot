@@ -958,6 +958,8 @@ export interface BriefingTask {
   url: string | null;
   /** The folder of the meeting a task was raised in. */
   meeting: string | null;
+  /** Date (`YYYY-MM-DD`) of the meeting whose approved status proposal closed this task. */
+  closedByMeeting?: string | null;
 }
 
 export type BriefingGroupKind = "participant" | "other" | "unassigned";

@@ -106,6 +106,16 @@ pub struct SyncOutcome {
     pub warnings: Vec<String>,
 }
 
+/// Local completion state of a project task (`task_completions` table).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskCompletion {
+    pub cycle_id: String,
+    pub task_key: String,
+    pub done: bool,
+    pub closed_by_meeting: Option<String>,
+    pub updated_unix_ms: i64,
+}
+
 /// Per-project local preferences stored in the local database (never committed to Git).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectPrefs {
@@ -504,8 +514,65 @@ impl Store {
             "DELETE FROM project_prefs WHERE cycle_id = ?1",
             params![cycle_id],
         )?;
+        tx.execute(
+            "DELETE FROM task_completions WHERE cycle_id = ?1",
+            params![cycle_id],
+        )?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// Marks a project task done (`done = true`) or removes its local completion (`done = false`).
+    pub fn set_task_done(
+        &self,
+        cycle_id: &str,
+        task_key: &str,
+        done: bool,
+        closed_by_meeting: Option<&str>,
+        updated_unix_ms: i64,
+    ) -> Result<()> {
+        if cycle_id.trim().is_empty() || task_key.trim().is_empty() {
+            return Err(StoreError::Invalid(
+                "cycle_id and task_key cannot be empty".into(),
+            ));
+        }
+        if done {
+            self.conn.execute(
+                "INSERT INTO task_completions
+                    (cycle_id, task_key, done, closed_by_meeting, updated_unix_ms)
+                 VALUES (?1, ?2, 1, ?3, ?4)
+                 ON CONFLICT(cycle_id, task_key) DO UPDATE SET
+                    done = 1,
+                    closed_by_meeting = excluded.closed_by_meeting,
+                    updated_unix_ms = excluded.updated_unix_ms",
+                params![cycle_id, task_key, closed_by_meeting, updated_unix_ms],
+            )?;
+        } else {
+            self.conn.execute(
+                "DELETE FROM task_completions WHERE cycle_id = ?1 AND task_key = ?2",
+                params![cycle_id, task_key],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Returns every task marked done in `cycle_id`.
+    pub fn list_task_completions(&self, cycle_id: &str) -> Result<Vec<TaskCompletion>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT cycle_id, task_key, done, closed_by_meeting, updated_unix_ms
+             FROM task_completions
+             WHERE cycle_id = ?1 AND done = 1",
+        )?;
+        let rows = stmt.query_map(params![cycle_id], |r| {
+            Ok(TaskCompletion {
+                cycle_id: r.get(0)?,
+                task_key: r.get(1)?,
+                done: r.get::<_, i64>(2)? != 0,
+                closed_by_meeting: r.get(3)?,
+                updated_unix_ms: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 }
 
@@ -1050,5 +1117,27 @@ mod tests {
         // Delete meetings when requested.
         s.delete_cycle_data("OTHER", true).unwrap();
         assert!(s.get_meeting("m2").unwrap().is_none());
+    }
+
+    #[test]
+    fn set_task_done_and_list_task_completions_round_trip() {
+        let s = store();
+        s.set_task_done("NOMAD", "2026-11-10/t1", true, None, 100)
+            .unwrap();
+        s.set_task_done("NOMAD", "#12", true, Some("2026-11-12"), 200)
+            .unwrap();
+        let list = s.list_task_completions("NOMAD").unwrap();
+        assert_eq!(list.len(), 2);
+        assert!(list.iter().any(|c| c.task_key == "2026-11-10/t1" && c.done));
+        assert!(list
+            .iter()
+            .any(|c| c.task_key == "#12" && c.closed_by_meeting.as_deref() == Some("2026-11-12")));
+
+        // Unticking removes the completion row.
+        s.set_task_done("NOMAD", "2026-11-10/t1", false, None, 300)
+            .unwrap();
+        let after = s.list_task_completions("NOMAD").unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].task_key, "#12");
     }
 }

@@ -168,6 +168,8 @@ pub struct BriefingTask {
     pub url: Option<String>,
     /// The folder of the meeting a task was raised in.
     pub meeting: Option<String>,
+    /// Date (`YYYY-MM-DD`) of the meeting whose approved status proposal closed this task.
+    pub closed_by_meeting: Option<String>,
 }
 
 impl From<&TaskEntry> for BriefingTask {
@@ -184,6 +186,7 @@ impl From<&TaskEntry> for BriefingTask {
             issue: t.issue,
             url: t.url.clone(),
             meeting: t.meeting.clone(),
+            closed_by_meeting: None,
         }
     }
 }
@@ -348,6 +351,113 @@ pub fn build_briefing(
     })
 }
 
+/// Applies local `task_completions` records to a built briefing: moves ticked open tasks into
+/// `done` and attaches `closed_by_meeting` where present.
+pub fn apply_task_completions(briefing: &mut Briefing, completions: &[store::TaskCompletion]) {
+    if completions.is_empty() {
+        return;
+    }
+    let by_key: std::collections::HashMap<&str, &store::TaskCompletion> = completions
+        .iter()
+        .filter(|c| c.done)
+        .map(|c| (c.task_key.as_str(), c))
+        .collect();
+    if by_key.is_empty() {
+        return;
+    }
+
+    for task in &mut briefing.done {
+        if let Some(c) = by_key.get(task.id.as_str()) {
+            if task.closed_by_meeting.is_none() {
+                task.closed_by_meeting = c.closed_by_meeting.clone();
+            }
+        }
+    }
+
+    for group in &mut briefing.groups {
+        let mut remaining = Vec::with_capacity(group.tasks.len());
+        for mut task in std::mem::take(&mut group.tasks) {
+            if let Some(c) = by_key.get(task.id.as_str()) {
+                task.closed_by_meeting = c.closed_by_meeting.clone();
+                briefing.done.push(task);
+            } else {
+                remaining.push(task);
+            }
+        }
+        group.tasks = remaining;
+        group.overdue_count = group.tasks.iter().filter(|t| t.overdue).count();
+    }
+    briefing.groups.retain(|g| !g.tasks.is_empty());
+    briefing.open_count = briefing.groups.iter().map(|g| g.tasks.len()).sum();
+    briefing.overdue_count = briefing.groups.iter().map(|g| g.overdue_count).sum();
+}
+
+/// Marks a task done (or open) in `task_completions`. When marking a GitHub issue done on a
+/// project whose GitHub target allows publishing (`publish != Off` and `issues != false`), also
+/// enqueues a `SetIssueState` op in the outbox.
+#[tauri::command]
+pub fn set_task_done(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    cycle_id: String,
+    task_key: String,
+    done: bool,
+) -> IpcResult<()> {
+    let now = now_unix_ms() as i64;
+    state.with_store(|s| s.set_task_done(&cycle_id, &task_key, done, None, now))?;
+
+    if done {
+        if let Some(number) = task_key.trim().strip_prefix('#').and_then(|n| n.parse::<u64>().ok())
+        {
+            let repos = state.cycle_repos();
+            if let Ok(Some(located)) = cycles::locate(&repos, &cycle_id) {
+                if let Some(cycle) = &located.entry.cycle {
+                    if let Some(gh) = &cycle.targets.github {
+                        let allows_issues = gh.issues;
+                        let publish_enabled = gh.publish != cycle_store::PublishMode::Off;
+                        if allows_issues && publish_enabled {
+                            let meeting_id = state
+                                .with_store(|s| s.list_meetings_by_cycle(&cycle_id))
+                                .ok()
+                                .and_then(|ms| ms.into_iter().next().map(|m| m.id));
+                            if let Some(mid) = meeting_id {
+                                let payload = publishers::plan::StatusPayload {
+                                    cycle: cycle_id.clone(),
+                                    date: format_utc_date(now as u64),
+                                    proposal_id: format!("task-{number}"),
+                                    number,
+                                    open: false,
+                                    reason: "Marked done in project tasks".into(),
+                                    quote: None,
+                                    time_ms: None,
+                                    anchor: None,
+                                };
+                                let op = store::NewOp {
+                                    meeting_id: mid,
+                                    target: store::OutboxTarget::Issues,
+                                    kind: store::OutboxKind::SetIssueState,
+                                    op_key: format!("status:task-{number}"),
+                                    payload: serde_json::to_string(&payload)
+                                        .unwrap_or_else(|_| "{}".into()),
+                                    after_op_key: None,
+                                };
+                                if state.with_store(|s| s.enqueue_op(&op, now)).is_ok() {
+                                    state.publishing().wake();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Err(e) = app.emit(EVENT_CYCLES, ()) {
+        tracing::warn!(error = %e, "could not emit the cycles change");
+    }
+    Ok(())
+}
+
 /// Event for the main window: show the briefing of the cycle in the payload.
 pub const EVENT_OPEN: &str = "open-briefing";
 
@@ -366,11 +476,14 @@ pub async fn get_briefing(
     let repos = state.cycle_repos();
     let source = state.briefing().clone();
     let id = cycle_id.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    let mut result = tauri::async_runtime::spawn_blocking(move || {
         build_briefing(source.as_ref(), &repos, &id, refresh, now_unix_ms())
     })
     .await
     .map_err(|e| IpcError::new("internal", format!("the background task failed: {e}")))??;
+    if let Ok(completions) = state.with_store(|s| s.list_task_completions(&cycle_id)) {
+        apply_task_completions(&mut result, &completions);
+    }
     if result.pull == Some("updated") {
         // New commits may have changed the participants.
         if let Err(e) = cycles::sync_cycle(&state.cycle_repos(), state.inner(), &cycle_id) {
@@ -803,5 +916,33 @@ mod tests {
         assert_eq!(b.overdue_count, 1);
         assert_eq!(b.state_as_of.as_deref(), Some("2026-11-12"));
         assert!(b.from_cache);
+    }
+
+    #[test]
+    fn apply_task_completions_moves_done_tasks_and_sets_closed_by_meeting() {
+        let lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        set_people(&lab.repo());
+        let mut b = build_briefing(&FixedSource, lab.repos(), "NOMAD", false, NOW_MS).unwrap();
+        assert_eq!(b.open_count, 1);
+        assert_eq!(b.done.len(), 0);
+        let task_id = b.groups[0].tasks[0].id.clone();
+
+        apply_task_completions(
+            &mut b,
+            &[store::TaskCompletion {
+                cycle_id: "NOMAD".into(),
+                task_key: task_id.clone(),
+                done: true,
+                closed_by_meeting: Some("2026-11-12".into()),
+                updated_unix_ms: 1000,
+            }],
+        );
+        assert_eq!(b.open_count, 0);
+        assert_eq!(b.overdue_count, 0);
+        assert!(b.groups.is_empty());
+        assert_eq!(b.done.len(), 1);
+        assert_eq!(b.done[0].id, task_id);
+        assert_eq!(b.done[0].closed_by_meeting.as_deref(), Some("2026-11-12"));
     }
 }

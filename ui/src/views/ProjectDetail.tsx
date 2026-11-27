@@ -208,17 +208,37 @@ function sortTasksByUrgency(briefing: Briefing): TaskWithOwner[] {
   });
 }
 
-function TaskRow({ item, today, done }: { item: TaskWithOwner; today: string; done?: boolean }) {
+function TaskRow({
+  item,
+  today,
+  done,
+  onToggleDone,
+}: {
+  item: TaskWithOwner;
+  today: string;
+  done?: boolean;
+  onToggleDone?: (taskKey: string, nextDone: boolean) => void;
+}) {
   const { task, assignee } = item;
   const safeUrl = isSafeHttpUrl(task.url) ? task.url : null;
+  const closedText = done && task.closedByMeeting ? `Closed by meeting ${task.closedByMeeting}` : null;
   return (
     <li className={task.overdue && !done ? "cycle-row brief-overdue" : "cycle-row"}>
+      <label className="check" style={{ marginRight: "0.5rem" }}>
+        <input
+          type="checkbox"
+          checked={Boolean(done)}
+          aria-label={`Mark "${task.text}" done`}
+          onChange={(e) => onToggleDone?.(task.id, e.target.checked)}
+        />
+      </label>
       <div className="cycle-main">
         <span className={done ? "cycle-name brief-done-text" : "cycle-name"}>{task.text}</span>
         <span className="person-meta">
           {assignee}
           {" · "}
           {done ? sourceLabel(task) : `${dueLabel(task, today)} · ${sourceLabel(task)}`}
+          {closedText && ` · ${closedText}`}
         </span>
       </div>
       {safeUrl && (
@@ -235,10 +255,26 @@ function TaskRow({ item, today, done }: { item: TaskWithOwner; today: string; do
   );
 }
 
-function CycleIssueRow({ task, done }: { task: CycleTask; done: boolean }) {
+function CycleIssueRow({
+  task,
+  done,
+  onToggleDone,
+}: {
+  task: CycleTask;
+  done: boolean;
+  onToggleDone?: (taskKey: string, nextDone: boolean) => void;
+}) {
   const safeUrl = isSafeHttpUrl(task.url) ? task.url : null;
   return (
     <li className="cycle-row">
+      <label className="check" style={{ marginRight: "0.5rem" }}>
+        <input
+          type="checkbox"
+          checked={done}
+          aria-label={`Mark issue #${task.number} done`}
+          onChange={(e) => onToggleDone?.(`#${task.number}`, e.target.checked)}
+        />
+      </label>
       <div className="cycle-main">
         <span className={done ? "cycle-name brief-done-text" : "cycle-name"}>
           <span className={done ? "badge badge-job-done" : "badge badge-job-running"}>
@@ -357,6 +393,19 @@ export function ProjectDetailView({
   const topTasks = sortedTasks.slice(0, 5);
   const extraTasks = sortedTasks.slice(5);
   const status = briefing ? statusLine(briefing, refreshing) : null;
+
+  const toggleTaskDone = useCallback(
+    (taskKey: string, nextDone: boolean) => {
+      void backend
+        .setTaskDone(cycleId, taskKey, nextDone)
+        .then(() => {
+          loadBriefing(false);
+          reloadTasks();
+        })
+        .catch((e) => setError(errorMessage(e)));
+    },
+    [backend, cycleId, loadBriefing, reloadTasks],
+  );
 
   const actOnMeeting = (p: Promise<unknown>) => {
     setError(null);
@@ -541,7 +590,12 @@ export function ProjectDetailView({
                   {tasks.open.length > 0 && (
                     <ul className="cycle-rows" aria-label="Open GitHub issues">
                       {tasks.open.map((t) => (
-                        <CycleIssueRow key={t.number} task={t} done={false} />
+                        <CycleIssueRow
+                          key={t.number}
+                          task={t}
+                          done={false}
+                          onToggleDone={toggleTaskDone}
+                        />
                       ))}
                     </ul>
                   )}
@@ -550,7 +604,12 @@ export function ProjectDetailView({
                       <summary>Done ({tasks.done.length})</summary>
                       <ul className="cycle-rows" aria-label="Done GitHub issues">
                         {tasks.done.map((t) => (
-                          <CycleIssueRow key={t.number} task={t} done />
+                          <CycleIssueRow
+                            key={t.number}
+                            task={t}
+                            done
+                            onToggleDone={toggleTaskDone}
+                          />
                         ))}
                       </ul>
                     </details>
@@ -568,7 +627,12 @@ export function ProjectDetailView({
                 {briefing && topTasks.length > 0 && (
                   <ul className="cycle-rows" aria-label="Top action items">
                     {topTasks.map((item) => (
-                      <TaskRow key={item.task.id} item={item} today={briefing.today} />
+                      <TaskRow
+                        key={item.task.id}
+                        item={item}
+                        today={briefing.today}
+                        onToggleDone={toggleTaskDone}
+                      />
                     ))}
                   </ul>
                 )}
@@ -580,7 +644,12 @@ export function ProjectDetailView({
                     </summary>
                     <ul className="cycle-rows" aria-label="More action items">
                       {extraTasks.map((item) => (
-                        <TaskRow key={item.task.id} item={item} today={briefing.today} />
+                        <TaskRow
+                          key={item.task.id}
+                          item={item}
+                          today={briefing.today}
+                          onToggleDone={toggleTaskDone}
+                        />
                       ))}
                     </ul>
                   </details>
@@ -596,6 +665,7 @@ export function ProjectDetailView({
                           item={{ task: t, assignee: "Completed" }}
                           today={briefing.today}
                           done
+                          onToggleDone={toggleTaskDone}
                         />
                       ))}
                     </ul>

@@ -301,6 +301,7 @@ pub fn run() {
             cycle_commands::report_defaults,
             briefing::get_briefing,
             briefing::open_briefing,
+            briefing::set_task_done,
             publish_commands::publishing_secrets,
             publish_commands::set_github_token,
             publish_commands::clear_github_token,

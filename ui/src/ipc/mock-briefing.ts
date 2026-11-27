@@ -156,6 +156,16 @@ function groupRaw(tasks: RawTask[], people: CycleParticipant[]): BriefingGroup[]
 
 export function createMockBriefing(cycles: CycleStore) {
   const openers = new Set<(cycleId: string) => void>();
+  const completions = new Map<string, Map<string, string | null>>();
+
+  const cycleCompletions = (cycleId: string) => {
+    let map = completions.get(cycleId);
+    if (!map) {
+      map = new Map();
+      completions.set(cycleId, map);
+    }
+    return map;
+  };
   return {
     /**
      * The recorder window asks the main window to show a briefing. The mock has one page per
@@ -196,6 +206,21 @@ export function createMockBriefing(cycles: CycleStore) {
       }
       const demo = cycleId === "NOMAD";
       const groups = groupRaw(demo ? NOMAD_OPEN : [], details.cycle.participants);
+      const doneList = demo ? groupRaw(NOMAD_DONE, details.cycle.participants).flatMap((g) => g.tasks) : [];
+      const doneKeys = cycleCompletions(cycleId);
+      for (const g of groups) {
+        const remaining = [];
+        for (const t of g.tasks) {
+          if (doneKeys.has(t.id)) {
+            doneList.push({ ...t, closedByMeeting: doneKeys.get(t.id) ?? null });
+          } else {
+            remaining.push(t);
+          }
+        }
+        g.tasks = remaining;
+        g.overdueCount = g.tasks.filter((t) => t.overdue).length;
+      }
+      const activeGroups = groups.filter((g) => g.tasks.length > 0);
       const warnings = details.issues
         .slice(0, 1)
         .map(
@@ -206,10 +231,10 @@ export function createMockBriefing(cycles: CycleStore) {
         cycleId,
         cycleName: details.cycle.name,
         today: MOCK_TODAY,
-        groups,
-        openCount: groups.reduce((n, g) => n + g.tasks.length, 0),
-        overdueCount: groups.reduce((n, g) => n + g.overdueCount, 0),
-        done: demo ? groupRaw(NOMAD_DONE, details.cycle.participants).flatMap((g) => g.tasks) : [],
+        groups: activeGroups,
+        openCount: activeGroups.reduce((n, g) => n + g.tasks.length, 0),
+        overdueCount: activeGroups.reduce((n, g) => n + g.overdueCount, 0),
+        done: doneList,
         // The demo cycle has one more open topic here than in the cycle store, which the
         // publishing mock shares and whose topic list its tests fix.
         topics: [
@@ -224,6 +249,14 @@ export function createMockBriefing(cycles: CycleStore) {
         error,
         warnings,
       };
+    },
+    setTaskDone: async (cycleId: string, taskKey: string, done: boolean): Promise<void> => {
+      const map = cycleCompletions(cycleId);
+      if (done) {
+        map.set(taskKey, null);
+      } else {
+        map.delete(taskKey);
+      }
     },
   };
 }

@@ -87,6 +87,7 @@ export function createTauriBackend(): Backend {
     pullCycleRepo: (repoId) => invoke("pull_cycle_repo", { repoId }),
     reportDefaults: (cycleId) => invoke("report_defaults", { cycleId }),
     getBriefing: (cycleId, refresh) => invoke("get_briefing", { cycleId, refresh }),
+    setTaskDone: (cycleId, taskKey, done) => invoke("set_task_done", { cycleId, taskKey, done }),
     openBriefing: (cycleId) => invoke("open_briefing", { cycleId }),
     getDraft: (meetingId) => invoke("get_draft", { meetingId }),
     updateDraftItem: (meetingId, itemId, patch) =>

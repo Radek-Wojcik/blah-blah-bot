@@ -230,6 +230,8 @@ export interface Backend {
    * pull the answer is the state of the last successful pull, with its date.
    */
   getBriefing(cycleId: string, refresh: boolean): Promise<Briefing>;
+  /** Marks a project task done or open in local storage (and closes GitHub issue via outbox if applicable). */
+  setTaskDone(cycleId: string, taskKey: string, done: boolean): Promise<void>;
   /** Show the main window on the briefing of a cycle (for the recorder window). */
   openBriefing(cycleId: string): Promise<void>;
 

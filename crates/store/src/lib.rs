@@ -12,7 +12,7 @@ mod outbox;
 mod publications;
 mod voices;
 
-pub use cycles::{LlmChoice, LlmKind, ProjectPrefs, ReportSettings, SyncOutcome};
+pub use cycles::{LlmChoice, LlmKind, ProjectPrefs, ReportSettings, SyncOutcome, TaskCompletion};
 pub use jobs::{JobRow, StageRow, StageStatus};
 pub use outbox::{
     retry_delay_ms, Failure, NewOp, OpState, OutboxKind, OutboxOp, OutboxTarget, BACKOFF_BASE_MS,

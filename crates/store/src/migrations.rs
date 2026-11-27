@@ -304,6 +304,16 @@ fn ensure_ux_schema(conn: &Connection) -> Result<()> {
             [],
         )?;
     }
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS task_completions (
+            cycle_id TEXT NOT NULL,
+            task_key TEXT NOT NULL,
+            done INTEGER NOT NULL DEFAULT 1,
+            closed_by_meeting TEXT,
+            updated_unix_ms INTEGER NOT NULL,
+            PRIMARY KEY (cycle_id, task_key)
+        );",
+    )?;
     Ok(())
 }
 
@@ -580,5 +590,23 @@ mod tests {
         assert_eq!(s.get_project_prefs("NOMAD").unwrap(), saved);
         // Opening again is harmless.
         ensure_ux_schema(&s.conn).unwrap();
+    }
+
+    #[test]
+    fn ensure_ux_schema_creates_task_completions_idempotently() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        for sql in &MIGRATIONS[..7] {
+            conn.execute_batch(sql).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 7).unwrap();
+        let s = Store::init(conn).unwrap();
+        s.set_task_done("NOMAD", "2026-11-10/t1", true, Some("2026-11-12"), 1000)
+            .unwrap();
+        ensure_ux_schema(&s.conn).unwrap();
+        let list = s.list_task_completions("NOMAD").unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].task_key, "2026-11-10/t1");
+        assert_eq!(list[0].closed_by_meeting.as_deref(), Some("2026-11-12"));
     }
 }

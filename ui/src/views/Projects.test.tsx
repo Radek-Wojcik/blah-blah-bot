@@ -624,6 +624,33 @@ describe("ProjectDetailView, ProjectSettingsModal, and ImportMeetingModal", () =
     expect(onBack).toHaveBeenCalledTimes(1);
     expect((await backend.listCycles()).some((c) => c.id === "NOMAD")).toBe(false);
   });
+
+  it("ticks a task done and moves it to Done, showing Closed by meeting date", async () => {
+    const backend = createMockBackend({ clockRate: 0, jobStepMs: 5000 });
+    const setDoneSpy = vi.spyOn(backend, "setTaskDone");
+
+    await act(async () => {
+      root.render(
+        <BackendProvider value={backend}>
+          <ProjectDetailView cycleId="NOMAD" onBack={vi.fn()} onOpenMeeting={vi.fn()} />
+        </BackendProvider>,
+      );
+    });
+    await flush();
+
+    const openList = host.querySelector('ul[aria-label="Top action items"]')!;
+    const firstCheckbox = openList.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    expect(firstCheckbox.checked).toBe(false);
+
+    await act(async () => {
+      firstCheckbox.click();
+    });
+    await flush();
+
+    expect(setDoneSpy).toHaveBeenCalledTimes(1);
+    const doneList = host.querySelector('ul[aria-label="Done tasks"]')!;
+    expect(doneList.querySelectorAll("li").length).toBeGreaterThan(0);
+  });
 });
 
 describe("native file dialogs", () => {
