@@ -7,7 +7,7 @@ import type { QueueState } from "../ipc/types";
 import { Main } from "./Main";
 import { Modal } from "./Modal";
 import { ProcessPrompt } from "./ProcessPrompt";
-import { formatEta, QueueView, startOfLocalDayMs } from "./Queue";
+import { formatEta, nextLocalMidnightMs, QueueView, startOfLocalDayMs } from "./Queue";
 import { RecordView } from "./RecordView";
 import { Widget } from "./Widget";
 
@@ -492,6 +492,63 @@ describe("QueueView", () => {
 
     expect(toggle.checked).toBe(true);
     expect(host.querySelector('article[aria-label="Finished yesterday meeting"]')).not.toBeNull();
+  });
+
+  it("says why nothing is shown when every finished job is from an earlier day", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    const doneTemplate = (await backend.queueState()).jobs.find((j) => j.state === "done")!;
+    vi.spyOn(backend, "queueState").mockResolvedValue({
+      gpuOverride: null,
+      jobs: [
+        {
+          ...doneTemplate,
+          meetingId: "old",
+          title: "Old meeting",
+          finishedUnixMs: startOfLocalDayMs() - 60_000,
+        },
+      ],
+    });
+    await act(async () => {
+      root.render(
+        <BackendProvider value={backend}>
+          <QueueView />
+        </BackendProvider>,
+      );
+    });
+    await flush(6);
+    expect(host.querySelector(".empty")?.textContent).toContain('Turn on "Show finished"');
+    expect(host.querySelector('article[aria-label="Old meeting"]')).toBeNull();
+  });
+
+  it("rejects an empty idle-seconds field instead of sending 0", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    const setOverrideSpy = vi.spyOn(backend, "setQueueGpuOverride");
+    await act(async () => {
+      root.render(
+        <BackendProvider value={backend}>
+          <QueueView />
+        </BackendProvider>,
+      );
+    });
+    await flush(6);
+    const idleInput = host.querySelectorAll<HTMLInputElement>('input[type="number"]')[1];
+    await setInputValue(idleInput, "");
+    const apply = Array.from(host.querySelectorAll("button")).find(
+      (b) => b.textContent === "Apply override",
+    )!;
+    await act(async () => {
+      apply.click();
+    });
+    await flush();
+    expect(setOverrideSpy).not.toHaveBeenCalled();
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain(
+      "Wait for idle seconds must be between 0 and 3600.",
+    );
+  });
+
+  it("computes the next local midnight", () => {
+    const noon = new Date(2026, 10, 27, 12, 0, 0).getTime();
+    expect(nextLocalMidnightMs(noon)).toBe(new Date(2026, 10, 28, 0, 0, 0).getTime());
   });
 
   it("keeps GPU override sliders and number inputs synchronized", async () => {

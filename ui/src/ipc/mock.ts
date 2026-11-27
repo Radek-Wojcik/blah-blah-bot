@@ -371,6 +371,8 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     ...j,
     scheduledUnixMs: null,
     etaSeconds: j.state === "running" ? 42 : null,
+    // A finished demo job reports when it finished, like the real queue does.
+    finishedUnixMs: j.state === "done" ? Date.now() : null,
   }));
   let gpuOverride: QueueGpuOverride | null = null;
   const transcripts = new Map<string, TranscriptData>([["m5", demoTranscript("m5")]]);
@@ -563,6 +565,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         ...j,
         stages,
         state: finished ? "done" : "running",
+        finishedUnixMs: finished ? (j.finishedUnixMs ?? Date.now()) : null,
         waitingReason: null,
         progress,
         scheduledUnixMs: finished ? null : (j.scheduledUnixMs ?? null),

@@ -2,13 +2,20 @@ import { useEffect, useId, useState } from "react";
 import { useBackend } from "../backend-context";
 import { EnglishDateTimePicker } from "../components/EnglishDateTimePicker";
 import { HelpPopover } from "../components/HelpPopover";
-import { RangeNumberField } from "../components/RangeNumberField";
+import { parseFormNumber, RangeNumberField } from "../components/RangeNumberField";
 import { errorMessage, useQueue } from "../hooks";
 import type { JobView, ProcessingSettings, QueueGpuOverride, StageView } from "../ipc/types";
 import { jobStateLabel, percent, stageLabel, stageSkipText, stageStatusLabel } from "../processing";
 
 const DEFAULT_MAX_UTIL = 40;
 const DEFAULT_IDLE_SECONDS = 30;
+
+/** The next local midnight after `nowMs`, in Unix milliseconds. */
+export function nextLocalMidnightMs(nowMs = Date.now()): number {
+  const d = new Date(nowMs);
+  d.setHours(24, 0, 0, 0);
+  return d.getTime();
+}
 
 /** Local midnight (00:00:00.000) of the day containing `nowMs`. */
 export function startOfLocalDayMs(nowMs = Date.now()): number {
@@ -56,6 +63,7 @@ function formatScheduledLabel(unixMs: number): string {
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
+    hourCycle: "h23",
   });
 }
 
@@ -91,9 +99,20 @@ export function QueueView(props: { onOpenDraft?: (meetingId: string) => void }) 
     }
   };
 
+  // The day is fixed at mount and moves forward at local midnight, so jobs finished before today
+  // drop out even when nothing else re-renders the view.
+  const [today, setToday] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setTimeout(() => setToday(Date.now()), nextLocalMidnightMs(today) - today + 50);
+    return () => clearTimeout(timer);
+  }, [today]);
+
   const allJobs = queue?.jobs ?? [];
-  const hiddenFinishedCount = allJobs.filter((j) => isFinishedBeforeToday(j)).length;
-  const visibleJobs = showFinished ? allJobs : allJobs.filter((j) => !isFinishedBeforeToday(j));
+  const now = today;
+  const hiddenFinishedCount = allJobs.filter((j) => isFinishedBeforeToday(j, now)).length;
+  const visibleJobs = showFinished
+    ? allJobs
+    : allJobs.filter((j) => !isFinishedBeforeToday(j, now));
 
   return (
     <>
@@ -182,8 +201,8 @@ function GpuOverridePanel(props: {
     e.preventDefault();
     setStatus(null);
     setValidationError(null);
-    const maxUtil = Number(maxUtilValue);
-    const idleSec = Number(idleSecValue);
+    const maxUtil = parseFormNumber(maxUtilValue);
+    const idleSec = parseFormNumber(idleSecValue);
     if (!Number.isFinite(maxUtil) || maxUtil < 1 || maxUtil > 100) {
       setValidationError("Max GPU utilization must be between 1% and 100%.");
       return;

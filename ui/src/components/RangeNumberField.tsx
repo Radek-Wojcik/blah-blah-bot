@@ -13,13 +13,21 @@ export interface RangeNumberFieldProps {
   sliderAriaLabel?: string;
 }
 
+/** Parse a form number; an empty or non-numeric field is NaN, never 0. */
+export function parseFormNumber(text: string): number {
+  const trimmed = text.trim();
+  return trimmed === "" ? Number.NaN : Number(trimmed);
+}
+
 /**
  * Synchronized range slider and compact number input sharing the same validation bounds.
+ * While the number field is empty or not a number the slider keeps its last position.
  */
 export function RangeNumberField(props: RangeNumberFieldProps) {
   const { id, label, unit, min, max, step = 1, value, onChange, help, sliderAriaLabel } = props;
-  const parsed = Number(value);
-  const sliderValue = Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : min;
+  const parsed = parseFormNumber(value);
+  const numeric = Number.isFinite(parsed);
+  const sliderValue = numeric ? Math.min(max, Math.max(min, parsed)) : min;
 
   return (
     <div className="field-block">
@@ -36,6 +44,7 @@ export function RangeNumberField(props: RangeNumberFieldProps) {
           max={max}
           step={step}
           value={sliderValue}
+          aria-valuetext={numeric ? `${parsed}${unit ? ` ${unit}` : ""}` : "no value"}
           onChange={(e) => onChange(e.target.value)}
         />
         <input
@@ -48,7 +57,11 @@ export function RangeNumberField(props: RangeNumberFieldProps) {
           value={value}
           onChange={(e) => onChange(e.target.value)}
         />
-        {unit && <span className="range-number-unit">{unit}</span>}
+        {unit && (
+          <span className="range-number-unit" aria-hidden="true">
+            {unit}
+          </span>
+        )}
       </div>
     </div>
   );

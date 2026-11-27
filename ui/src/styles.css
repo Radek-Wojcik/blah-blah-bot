@@ -1473,7 +1473,8 @@ body.overlay-body::after {
   border-top: 1px solid var(--line);
 }
 .modal-content > .actions:last-child,
-.modal-content > form > .actions:last-child {
+.modal-content > form > .actions:last-child,
+.modal-content > div > .actions:last-child {
   position: sticky;
   bottom: 0;
   padding-top: 10px;
@@ -1704,6 +1705,11 @@ body.overlay-body::after {
 textarea {
   font: inherit;
   color: inherit;
+}
+/* Dialogs that do not use the Modal component keep the body scrollable inside the viewport. */
+.modal > .panel-body {
+  max-height: calc(100vh - 2 * var(--gap));
+  overflow-y: auto;
 }
 .modal-wide {
   width: min(100%, 560px);

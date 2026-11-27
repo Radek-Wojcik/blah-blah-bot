@@ -37,6 +37,12 @@ function daysInMonth(year: number, month1To12: number): number {
 function parseLocalValue(value: string): ParsedParts | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value);
   if (!m) return null;
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  const hour = Number(m[4]);
+  const minute = Number(m[5]);
+  if (month < 1 || month > 12 || hour > 23 || minute > 59) return null;
+  if (day < 1 || day > daysInMonth(Number(m[1]), month)) return null;
   return {
     year: m[1],
     month: m[2],
@@ -83,10 +89,8 @@ export function EnglishDateTimePicker(props: EnglishDateTimePickerProps) {
   const minutes = Array.from({ length: 60 }, (_, i) => PAD2(i));
 
   const updatePart = (field: keyof ParsedParts, nextVal: string) => {
-    if (!nextVal) {
-      onChange("");
-      return;
-    }
+    // The placeholder entries are disabled; an empty value never clears a date by accident.
+    if (!nextVal) return;
     const next: ParsedParts = { ...(parsed ?? defaultParts()), [field]: nextVal };
     const maxD = daysInMonth(Number(next.year), Number(next.month));
     if (Number(next.day) > maxD) {
@@ -103,7 +107,9 @@ export function EnglishDateTimePicker(props: EnglishDateTimePickerProps) {
         value={parsed?.year ?? ""}
         onChange={(e) => updatePart("year", e.target.value)}
       >
-        <option value="">Year</option>
+        <option value="" disabled>
+          Year
+        </option>
         {years.map((y) => (
           <option key={y} value={String(y)}>
             {y}
@@ -116,7 +122,9 @@ export function EnglishDateTimePicker(props: EnglishDateTimePickerProps) {
         value={parsed?.month ?? ""}
         onChange={(e) => updatePart("month", e.target.value)}
       >
-        <option value="">Month</option>
+        <option value="" disabled>
+          Month
+        </option>
         {ENGLISH_MONTHS.map((name, idx) => (
           <option key={name} value={PAD2(idx + 1)}>
             {name}
@@ -129,7 +137,9 @@ export function EnglishDateTimePicker(props: EnglishDateTimePickerProps) {
         value={parsed?.day ?? ""}
         onChange={(e) => updatePart("day", e.target.value)}
       >
-        <option value="">Day</option>
+        <option value="" disabled>
+          Day
+        </option>
         {days.map((d) => (
           <option key={d} value={d}>
             {d}
@@ -145,7 +155,9 @@ export function EnglishDateTimePicker(props: EnglishDateTimePickerProps) {
         value={parsed?.hour ?? ""}
         onChange={(e) => updatePart("hour", e.target.value)}
       >
-        <option value="">HH</option>
+        <option value="" disabled>
+          HH
+        </option>
         {hours.map((h) => (
           <option key={h} value={h}>
             {h}
@@ -161,7 +173,9 @@ export function EnglishDateTimePicker(props: EnglishDateTimePickerProps) {
         value={parsed?.minute ?? ""}
         onChange={(e) => updatePart("minute", e.target.value)}
       >
-        <option value="">MM</option>
+        <option value="" disabled>
+          MM
+        </option>
         {minutes.map((m) => (
           <option key={m} value={m}>
             {m}
