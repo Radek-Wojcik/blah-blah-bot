@@ -9,6 +9,7 @@ mod commands;
 mod cycle_commands;
 mod cycles;
 mod detection;
+mod downloads;
 mod draft_commands;
 mod hotkeys;
 mod ipc;
@@ -256,6 +257,9 @@ pub fn run() {
             setup_commands::find_gguf_models,
             setup_commands::check_setup_path,
             setup_commands::prepare_worker_env,
+            setup_commands::cancel_setup_task,
+            setup_commands::download_llama_server,
+            setup_commands::download_language_model,
             setup_commands::set_first_run_done,
             setup_commands::dismiss_legacy_venv_notice,
             project_commands::get_project_prefs,

@@ -73,6 +73,7 @@ dependencies = [
  "recorder",
  "serde",
  "serde_json",
+ "sha2",
  "speakers",
  "store",
  "tauri",
@@ -86,6 +87,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "ureq",
  "windows-native-keyring-store",
 ]
 

@@ -5,10 +5,11 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-/// Returns `true` when the bundle resource guard must run: release builds or any build with
-/// `TAURI_CONFIG` set.
-pub fn should_enforce(profile: &str, tauri_config: Option<&str>) -> bool {
-    profile == "release" || tauri_config.is_some_and(|v| !v.trim().is_empty())
+/// Returns `true` when the bundle resource guard must run: any build with `TAURI_CONFIG` set
+/// or with `BBB_INSTALLER_BUILD=1`. Plain `cargo run --release` does not enforce staging.
+pub fn should_enforce(tauri_config: Option<&str>, installer_build: Option<&str>) -> bool {
+    tauri_config.is_some_and(|v| !v.trim().is_empty())
+        || installer_build.is_some_and(|v| v.trim() == "1")
 }
 
 fn normalize_rel(raw: &str) -> String {
@@ -257,10 +258,13 @@ mod tests {
     }
 
     #[test]
-    fn bundle_guard_enforces_on_release_or_tauri_config() {
-        assert!(!should_enforce("debug", None));
-        assert!(!should_enforce("debug", Some("   ")));
-        assert!(should_enforce("release", None));
-        assert!(should_enforce("debug", Some("{}")));
+    fn bundle_guard_enforces_on_tauri_config_or_installer_build() {
+        assert!(!should_enforce(None, None));
+        assert!(!should_enforce(Some("   "), None));
+        assert!(!should_enforce(None, Some("0")));
+        assert!(!should_enforce(None, Some("")));
+        assert!(should_enforce(Some("{}"), None));
+        assert!(should_enforce(None, Some("1")));
+        assert!(should_enforce(Some("{}"), Some("1")));
     }
 }

@@ -473,6 +473,11 @@ pub struct Processing {
     models_busy: Arc<AtomicBool>,
     /// The processing environment is being created (`prepare_worker_env`).
     env_busy: Arc<AtomicBool>,
+    env_cancel: Arc<AtomicBool>,
+    llama_busy: Arc<AtomicBool>,
+    llama_cancel: Arc<AtomicBool>,
+    llm_busy: Arc<AtomicBool>,
+    llm_cancel: Arc<AtomicBool>,
 }
 
 impl Processing {
@@ -610,6 +615,11 @@ impl Processing {
             driver_running: Arc::default(),
             models_busy: Arc::default(),
             env_busy: Arc::default(),
+            env_cancel: Arc::default(),
+            llama_busy: Arc::default(),
+            llama_cancel: Arc::default(),
+            llm_busy: Arc::default(),
+            llm_cancel: Arc::default(),
         });
         if let Ok(mut t) = progress_target.lock() {
             *t = Some(Arc::downgrade(&this));
@@ -657,6 +667,11 @@ impl Processing {
             driver_running: Arc::default(),
             models_busy: Arc::default(),
             env_busy: Arc::default(),
+            env_cancel: Arc::default(),
+            llama_busy: Arc::default(),
+            llama_cancel: Arc::default(),
+            llm_busy: Arc::default(),
+            llm_cancel: Arc::default(),
         });
         let weak = Arc::downgrade(&this);
         this.supervisor.set_listener(move |_| {
@@ -782,8 +797,40 @@ impl Processing {
         &self.env_busy
     }
 
-    pub(crate) fn emit_setup_progress(&self, payload: serde_json::Value) {
-        self.hooks.emit_setup_progress(payload);
+    pub(crate) fn env_cancel(&self) -> &Arc<AtomicBool> {
+        &self.env_cancel
+    }
+
+    pub(crate) fn llama_busy(&self) -> &Arc<AtomicBool> {
+        &self.llama_busy
+    }
+
+    pub(crate) fn llama_cancel(&self) -> &Arc<AtomicBool> {
+        &self.llama_cancel
+    }
+
+    pub(crate) fn llm_busy(&self) -> &Arc<AtomicBool> {
+        &self.llm_busy
+    }
+
+    pub(crate) fn llm_cancel(&self) -> &Arc<AtomicBool> {
+        &self.llm_cancel
+    }
+
+    pub(crate) fn cancel_setup_tasks(&self) {
+        self.env_cancel.store(true, Ordering::SeqCst);
+        self.llama_cancel.store(true, Ordering::SeqCst);
+        self.llm_cancel.store(true, Ordering::SeqCst);
+    }
+
+    pub(crate) fn downloads_dir(&self) -> PathBuf {
+        self.local_data_dir.join("downloads")
+    }
+
+    pub(crate) fn emit_setup_event(&self, event: setup::SetupProgressEvent) {
+        if let Ok(payload) = serde_json::to_value(event) {
+            self.hooks.emit_setup_progress(payload);
+        }
     }
 
     /// Records that the first-run setup was completed (or is to be run again).
@@ -1411,6 +1458,15 @@ impl Processing {
         let spawned = std::thread::Builder::new()
             .name("model-download".into())
             .spawn(move || {
+                let started = Instant::now();
+                this.emit_setup_event(setup::SetupProgressEvent {
+                    task: setup::SetupTask::SpeechModels,
+                    phase: setup::SetupPhase::Started,
+                    downloaded_bytes: None,
+                    total_bytes: None,
+                    elapsed_secs: 0,
+                    message: "Downloading speech models".to_string(),
+                });
                 let mut cfg = this.worker_config();
                 cfg.hf_token = secrets::get(secrets::HF_TOKEN);
                 let refs: Vec<&str> = keys.iter().map(String::as_str).collect();
@@ -1425,16 +1481,44 @@ impl Processing {
                                 "fraction": fraction,
                                 "message": message,
                             }));
+                            this.emit_setup_event(setup::SetupProgressEvent {
+                                task: setup::SetupTask::SpeechModels,
+                                phase: setup::SetupPhase::Progress,
+                                downloaded_bytes: None,
+                                total_bytes: None,
+                                elapsed_secs: started.elapsed().as_secs(),
+                                message: message.to_string(),
+                            });
                         }
                     })
                 });
-                if let Err(e) = result {
-                    tracing::error!(error = %e.message, "model download failed");
-                    this.hooks.emit_models_progress(serde_json::json!({
-                        "key": refs.first().copied().unwrap_or(""),
-                        "fraction": 0.0,
-                        "message": format!("Failed: {}", e.message),
-                    }));
+                match result {
+                    Ok(()) => {
+                        this.emit_setup_event(setup::SetupProgressEvent {
+                            task: setup::SetupTask::SpeechModels,
+                            phase: setup::SetupPhase::Done,
+                            downloaded_bytes: None,
+                            total_bytes: None,
+                            elapsed_secs: started.elapsed().as_secs(),
+                            message: "Speech models are ready".to_string(),
+                        });
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e.message, "model download failed");
+                        this.hooks.emit_models_progress(serde_json::json!({
+                            "key": refs.first().copied().unwrap_or(""),
+                            "fraction": 0.0,
+                            "message": format!("Failed: {}", e.message),
+                        }));
+                        this.emit_setup_event(setup::SetupProgressEvent {
+                            task: setup::SetupTask::SpeechModels,
+                            phase: setup::SetupPhase::Failed,
+                            downloaded_bytes: None,
+                            total_bytes: None,
+                            elapsed_secs: started.elapsed().as_secs(),
+                            message: e.message,
+                        });
+                    }
                 }
                 this.models_busy.store(false, Ordering::SeqCst);
                 this.hooks.emit_models_changed();

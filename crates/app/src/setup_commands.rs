@@ -6,18 +6,21 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use queue::worker::{self, JobOptions};
-use serde::Serialize;
 use store::LlmKind;
 use tauri::State;
 
+use crate::downloads::{
+    self, DownloadError, DownloadPhase, CUDART_ZIP, GEMMA_12B_Q4_K_M, LLAMA_CPP_ZIP,
+};
 use crate::ipc::{IpcError, IpcResult};
 use crate::processing::Processing;
 use crate::secrets;
 use crate::setup::{
     self, DetectEnv, GgufFile, JobNeeds, LlamaResolution, PathCheck, PathKind, PathProblem, Probe,
-    SetupItem, SetupStatus,
+    SetupItem, SetupPhase, SetupProgressEvent, SetupStatus, SetupTask, UvSyncOutcome,
 };
 use crate::state::AppState;
 
@@ -218,23 +221,12 @@ pub fn check_setup_path(kind: PathKind, path: String) -> PathCheck {
     setup::validate_path(kind, &path).into()
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SetupProgress {
-    /// The item the progress belongs to (`workerEnv`).
-    key: &'static str,
-    /// A line of output of the installer; the last line when `done`.
-    line: String,
-    /// Not known for the environment: the installer does not report a fraction.
-    fraction: Option<f64>,
-    done: bool,
-    ok: Option<bool>,
-    error: Option<String>,
-}
+/// Minimum interval between progress events emitted during a file download.
+const DOWNLOAD_EVENT_THROTTLE: Duration = Duration::from_millis(200);
 
 /// Creates or updates the processing environment (`uv sync --frozen`) in the background and
-/// reports it with `setup-progress` events; the last one has `done: true`. Needs the network on
-/// the first run (several GB). Running it again continues an interrupted run.
+/// reports it with `setup-progress` events. Needs the network on the first run (several GB).
+/// Running it again continues an interrupted or cancelled run.
 #[tauri::command]
 pub fn prepare_worker_env(state: State<'_, AppState>) -> IpcResult<()> {
     let processing: Arc<Processing> = state.processing().clone();
@@ -265,37 +257,72 @@ pub fn prepare_worker_env(state: State<'_, AppState>) -> IpcResult<()> {
             "the environment is already being prepared",
         ));
     }
+    let cancel = processing.env_cancel().clone();
+    cancel.store(false, Ordering::SeqCst);
     let env_dir = processing.env_dir().to_path_buf();
     let uv_cache_dir = processing.uv_cache_dir().to_path_buf();
     let spawned = std::thread::Builder::new()
         .name("worker-env".into())
         .spawn(move || {
-            let emit = |line: &str, done: bool, ok: Option<bool>, error: Option<String>| {
-                if let Ok(payload) = serde_json::to_value(SetupProgress {
-                    key: setup::KEY_WORKER_ENV,
-                    line: line.to_string(),
-                    fraction: done.then_some(1.0).filter(|_| ok == Some(true)),
-                    done,
-                    ok,
-                    error,
-                }) {
-                    processing.emit_setup_progress(payload);
-                }
-            };
-            emit("Preparing the processing environment", false, None, None);
-            let result = setup::run_uv_sync(&uv, &worker_dir, &env_dir, &uv_cache_dir, |line| {
-                emit(line, false, None, None);
+            let started = Instant::now();
+            processing.emit_setup_event(SetupProgressEvent {
+                task: SetupTask::UvSync,
+                phase: SetupPhase::Started,
+                downloaded_bytes: None,
+                total_bytes: None,
+                elapsed_secs: 0,
+                message: "Preparing the processing environment".to_string(),
             });
+            let result = setup::run_uv_sync(
+                &uv,
+                &worker_dir,
+                &env_dir,
+                &uv_cache_dir,
+                &cancel,
+                |update| {
+                    processing.emit_setup_event(SetupProgressEvent {
+                        task: SetupTask::UvSync,
+                        phase: SetupPhase::Progress,
+                        downloaded_bytes: update.downloaded_bytes,
+                        total_bytes: update.total_bytes,
+                        elapsed_secs: update.elapsed_secs,
+                        message: update.message,
+                    });
+                },
+            );
+            let elapsed_secs = started.elapsed().as_secs();
             match result {
-                Ok(()) => emit(
-                    "The processing environment is ready",
-                    true,
-                    Some(true),
-                    None,
-                ),
+                Ok(UvSyncOutcome::Done) => {
+                    processing.emit_setup_event(SetupProgressEvent {
+                        task: SetupTask::UvSync,
+                        phase: SetupPhase::Done,
+                        downloaded_bytes: None,
+                        total_bytes: None,
+                        elapsed_secs,
+                        message: "The processing environment is ready".to_string(),
+                    });
+                }
+                Ok(UvSyncOutcome::Cancelled) => {
+                    processing.emit_setup_event(SetupProgressEvent {
+                        task: SetupTask::UvSync,
+                        phase: SetupPhase::Cancelled,
+                        downloaded_bytes: None,
+                        total_bytes: None,
+                        elapsed_secs,
+                        message: "Environment preparation was cancelled; you can resume later"
+                            .to_string(),
+                    });
+                }
                 Err(e) => {
                     tracing::error!(error = %e, "preparing the processing environment failed");
-                    emit(&e, true, Some(false), Some(e.clone()));
+                    processing.emit_setup_event(SetupProgressEvent {
+                        task: SetupTask::UvSync,
+                        phase: SetupPhase::Failed,
+                        downloaded_bytes: None,
+                        total_bytes: None,
+                        elapsed_secs,
+                        message: e,
+                    });
                 }
             }
             processing.env_busy().store(false, Ordering::SeqCst);
@@ -303,6 +330,228 @@ pub fn prepare_worker_env(state: State<'_, AppState>) -> IpcResult<()> {
     if spawned.is_err() {
         state.processing().env_busy().store(false, Ordering::SeqCst);
         return Err(IpcError::new("internal", "could not start the set-up"));
+    }
+    Ok(())
+}
+
+/// Cancels any running setup task (environment preparation or pinned download).
+#[tauri::command]
+pub fn cancel_setup_task(state: State<'_, AppState>) {
+    state.processing().cancel_setup_tasks();
+}
+
+/// Downloads the pinned `llama-server` and CUDA runtime archives into Local AppData, emitting
+/// `setup-progress` events. Resumes from `.part` files on retry.
+#[tauri::command]
+pub fn download_llama_server(state: State<'_, AppState>) -> IpcResult<()> {
+    let processing: Arc<Processing> = state.processing().clone();
+    if processing.llama_busy().swap(true, Ordering::SeqCst) {
+        return Err(IpcError::new(
+            "busy",
+            "llama-server is already being downloaded",
+        ));
+    }
+    let cancel = processing.llama_cancel().clone();
+    cancel.store(false, Ordering::SeqCst);
+    let download_dir = processing.downloads_dir();
+    let spawned = std::thread::Builder::new()
+        .name("download-llama-server".into())
+        .spawn(move || {
+            let started = Instant::now();
+            let total_bytes = LLAMA_CPP_ZIP.size + CUDART_ZIP.size;
+            processing.emit_setup_event(SetupProgressEvent {
+                task: SetupTask::LlamaServer,
+                phase: SetupPhase::Started,
+                downloaded_bytes: Some(0),
+                total_bytes: Some(total_bytes),
+                elapsed_secs: 0,
+                message: "Starting llama-server download".to_string(),
+            });
+
+            let pins = [
+                (&LLAMA_CPP_ZIP, 0u64, "Downloading llama-server"),
+                (&CUDART_ZIP, LLAMA_CPP_ZIP.size, "Downloading CUDA runtime"),
+            ];
+            let mut outcome: Result<(), DownloadError> = Ok(());
+            for (pin, offset, label) in pins {
+                let mut last_emit = Instant::now() - DOWNLOAD_EVENT_THROTTLE;
+                let res = downloads::download_pin(pin, &download_dir, &cancel, |p| {
+                    let phase = match p.phase {
+                        DownloadPhase::Progress => SetupPhase::Progress,
+                        DownloadPhase::Verifying => SetupPhase::Verifying,
+                    };
+                    if phase == SetupPhase::Progress
+                        && last_emit.elapsed() < DOWNLOAD_EVENT_THROTTLE
+                    {
+                        return;
+                    }
+                    last_emit = Instant::now();
+                    let message = if phase == SetupPhase::Verifying {
+                        format!("Verifying {}", pin.file_name)
+                    } else {
+                        label.to_string()
+                    };
+                    processing.emit_setup_event(SetupProgressEvent {
+                        task: SetupTask::LlamaServer,
+                        phase,
+                        downloaded_bytes: Some(offset + p.downloaded_bytes),
+                        total_bytes: Some(total_bytes),
+                        elapsed_secs: started.elapsed().as_secs(),
+                        message,
+                    });
+                });
+                if let Err(err) = res {
+                    outcome = Err(err);
+                    break;
+                }
+            }
+
+            let elapsed_secs = started.elapsed().as_secs();
+            match outcome {
+                Ok(()) => {
+                    processing.emit_setup_event(SetupProgressEvent {
+                        task: SetupTask::LlamaServer,
+                        phase: SetupPhase::Done,
+                        downloaded_bytes: Some(total_bytes),
+                        total_bytes: Some(total_bytes),
+                        elapsed_secs,
+                        message: "llama-server archives downloaded and verified".to_string(),
+                    });
+                }
+                Err(DownloadError::Cancelled) => {
+                    processing.emit_setup_event(SetupProgressEvent {
+                        task: SetupTask::LlamaServer,
+                        phase: SetupPhase::Cancelled,
+                        downloaded_bytes: None,
+                        total_bytes: Some(total_bytes),
+                        elapsed_secs,
+                        message: "llama-server download was cancelled; you can resume later"
+                            .to_string(),
+                    });
+                }
+                Err(DownloadError::Failed(msg)) => {
+                    tracing::error!(error = %msg, "llama-server download failed");
+                    processing.emit_setup_event(SetupProgressEvent {
+                        task: SetupTask::LlamaServer,
+                        phase: SetupPhase::Failed,
+                        downloaded_bytes: None,
+                        total_bytes: Some(total_bytes),
+                        elapsed_secs,
+                        message: msg,
+                    });
+                }
+            }
+            processing.llama_busy().store(false, Ordering::SeqCst);
+        });
+    if spawned.is_err() {
+        state
+            .processing()
+            .llama_busy()
+            .store(false, Ordering::SeqCst);
+        return Err(IpcError::new(
+            "internal",
+            "could not start the llama-server download",
+        ));
+    }
+    Ok(())
+}
+
+/// Downloads the pinned default language model (Gemma 4 12B Q4_K_M GGUF) into Local AppData,
+/// emitting `setup-progress` events. Resumes from `.part` on retry.
+#[tauri::command]
+pub fn download_language_model(state: State<'_, AppState>) -> IpcResult<()> {
+    let processing: Arc<Processing> = state.processing().clone();
+    if processing.llm_busy().swap(true, Ordering::SeqCst) {
+        return Err(IpcError::new(
+            "busy",
+            "the language model is already being downloaded",
+        ));
+    }
+    let cancel = processing.llm_cancel().clone();
+    cancel.store(false, Ordering::SeqCst);
+    let download_dir = processing.downloads_dir();
+    let spawned = std::thread::Builder::new()
+        .name("download-language-model".into())
+        .spawn(move || {
+            let started = Instant::now();
+            let total_bytes = GEMMA_12B_Q4_K_M.size;
+            processing.emit_setup_event(SetupProgressEvent {
+                task: SetupTask::LanguageModel,
+                phase: SetupPhase::Started,
+                downloaded_bytes: Some(0),
+                total_bytes: Some(total_bytes),
+                elapsed_secs: 0,
+                message: "Starting language model download".to_string(),
+            });
+
+            let mut last_emit = Instant::now() - DOWNLOAD_EVENT_THROTTLE;
+            let res = downloads::download_pin(&GEMMA_12B_Q4_K_M, &download_dir, &cancel, |p| {
+                let phase = match p.phase {
+                    DownloadPhase::Progress => SetupPhase::Progress,
+                    DownloadPhase::Verifying => SetupPhase::Verifying,
+                };
+                if phase == SetupPhase::Progress && last_emit.elapsed() < DOWNLOAD_EVENT_THROTTLE {
+                    return;
+                }
+                last_emit = Instant::now();
+                let message = if phase == SetupPhase::Verifying {
+                    format!("Verifying {}", GEMMA_12B_Q4_K_M.file_name)
+                } else {
+                    "Downloading language model".to_string()
+                };
+                processing.emit_setup_event(SetupProgressEvent {
+                    task: SetupTask::LanguageModel,
+                    phase,
+                    downloaded_bytes: Some(p.downloaded_bytes),
+                    total_bytes: p.total_bytes,
+                    elapsed_secs: p.elapsed_secs,
+                    message,
+                });
+            });
+
+            let elapsed_secs = started.elapsed().as_secs();
+            match res {
+                Ok(_) => {
+                    processing.emit_setup_event(SetupProgressEvent {
+                        task: SetupTask::LanguageModel,
+                        phase: SetupPhase::Done,
+                        downloaded_bytes: Some(total_bytes),
+                        total_bytes: Some(total_bytes),
+                        elapsed_secs,
+                        message: "Language model downloaded and verified".to_string(),
+                    });
+                }
+                Err(DownloadError::Cancelled) => {
+                    processing.emit_setup_event(SetupProgressEvent {
+                        task: SetupTask::LanguageModel,
+                        phase: SetupPhase::Cancelled,
+                        downloaded_bytes: None,
+                        total_bytes: Some(total_bytes),
+                        elapsed_secs,
+                        message: "Language model download was cancelled; you can resume later"
+                            .to_string(),
+                    });
+                }
+                Err(DownloadError::Failed(msg)) => {
+                    tracing::error!(error = %msg, "language model download failed");
+                    processing.emit_setup_event(SetupProgressEvent {
+                        task: SetupTask::LanguageModel,
+                        phase: SetupPhase::Failed,
+                        downloaded_bytes: None,
+                        total_bytes: Some(total_bytes),
+                        elapsed_secs,
+                        message: msg,
+                    });
+                }
+            }
+            processing.llm_busy().store(false, Ordering::SeqCst);
+        });
+    if spawned.is_err() {
+        state.processing().llm_busy().store(false, Ordering::SeqCst);
+        return Err(IpcError::new(
+            "internal",
+            "could not start the language model download",
+        ));
     }
     Ok(())
 }

@@ -31,12 +31,13 @@ fn load_config_json(manifest_dir: &Path, tauri_config: Option<&str>) -> Result<S
 
 fn main() {
     println!("cargo:rerun-if-env-changed=TAURI_CONFIG");
+    println!("cargo:rerun-if-env-changed=BBB_INSTALLER_BUILD");
     println!("cargo:rerun-if-changed=tauri.conf.json");
     println!("cargo:rerun-if-changed=tauri.bundle.conf.json");
 
-    let profile = std::env::var("PROFILE").unwrap_or_default();
     let tauri_config = std::env::var("TAURI_CONFIG").ok();
-    if bundle_guard::should_enforce(&profile, tauri_config.as_deref()) {
+    let installer_build = std::env::var("BBB_INSTALLER_BUILD").ok();
+    if bundle_guard::should_enforce(tauri_config.as_deref(), installer_build.as_deref()) {
         let manifest_dir = PathBuf::from(
             std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR must be set"),
         );

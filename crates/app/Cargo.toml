@@ -30,6 +30,8 @@ publishers = { path = "../publishers" }
 keyring-core = "1"
 recorder = { path = "../recorder" }
 bridge = { path = "../bridge" }
+sha2 = "0.10"
+ureq = { version = "3.5", default-features = false, features = ["native-tls-no-default"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-native-keyring-store = "1"

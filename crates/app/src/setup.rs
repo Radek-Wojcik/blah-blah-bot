@@ -16,7 +16,8 @@ use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Component, Path, PathBuf, Prefix};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -1170,6 +1171,175 @@ pub fn env_ready(env_dir: &Path) -> bool {
             || env_dir.join("bin").join("python").is_file())
 }
 
+/// Task identifier in the `setup-progress` Tauri event contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum SetupTask {
+    #[serde(rename = "uv-sync")]
+    UvSync,
+    #[serde(rename = "llama-server")]
+    LlamaServer,
+    #[serde(rename = "language-model")]
+    LanguageModel,
+    #[serde(rename = "speech-models")]
+    SpeechModels,
+}
+
+/// Lifecycle phase in the `setup-progress` Tauri event contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SetupPhase {
+    Started,
+    Progress,
+    Verifying,
+    Done,
+    Failed,
+    Cancelled,
+}
+
+/// Payload emitted on the `setup-progress` Tauri event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupProgressEvent {
+    pub task: SetupTask,
+    pub phase: SetupPhase,
+    pub downloaded_bytes: Option<u64>,
+    pub total_bytes: Option<u64>,
+    pub elapsed_secs: u64,
+    pub message: String,
+}
+
+/// Parsed progress update from a single line of `uv` output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UvProgressUpdate {
+    pub downloaded_bytes: Option<u64>,
+    pub total_bytes: Option<u64>,
+    pub elapsed_secs: u64,
+    pub message: String,
+}
+
+/// Outcome of [`run_uv_sync`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UvSyncOutcome {
+    Done,
+    Cancelled,
+}
+
+fn strip_ansi(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next();
+            for next in chars.by_ref() {
+                if next.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn parse_size_unit(unit: &str) -> Option<f64> {
+    match unit {
+        "B" => Some(1.0),
+        "KB" | "kB" => Some(1_000.0),
+        "KiB" => Some(1_024.0),
+        "MB" => Some(1_000_000.0),
+        "MiB" => Some(1_048_576.0),
+        "GB" => Some(1_000_000_000.0),
+        "GiB" => Some(1_073_741_824.0),
+        _ => None,
+    }
+}
+
+fn parse_size_str(raw: &str) -> Option<u64> {
+    let trimmed = raw
+        .trim()
+        .trim_matches(|c: char| matches!(c, '(' | ')' | '[' | ']' | ',' | ';'));
+    if trimmed.is_empty() {
+        return None;
+    }
+    let split_idx = trimmed.find(|c: char| !(c.is_ascii_digit() || c == '.'))?;
+    let (num_part, unit_part) = trimmed.split_at(split_idx);
+    if num_part.is_empty() {
+        return None;
+    }
+    let value: f64 = num_part.parse().ok()?;
+    let mult = parse_size_unit(unit_part.trim())?;
+    if !value.is_finite() || value < 0.0 {
+        return None;
+    }
+    Some((value * mult).round() as u64)
+}
+
+fn parse_trailing_size(segment: &str) -> Option<u64> {
+    let tokens: Vec<&str> = segment.split_whitespace().collect();
+    let last = *tokens.last()?;
+    if let Some(v) = parse_size_str(last) {
+        return Some(v);
+    }
+    if tokens.len() >= 2 {
+        let combined = format!("{}{}", tokens[tokens.len() - 2], last);
+        return parse_size_str(&combined);
+    }
+    None
+}
+
+fn parse_leading_size(segment: &str) -> Option<u64> {
+    let tokens: Vec<&str> = segment.split_whitespace().collect();
+    let first = *tokens.first()?;
+    if let Some(v) = parse_size_str(first) {
+        return Some(v);
+    }
+    if tokens.len() >= 2 {
+        let combined = format!("{first}{}", tokens[1]);
+        return parse_size_str(&combined);
+    }
+    None
+}
+
+fn extract_uv_byte_counts(line: &str) -> (Option<u64>, Option<u64>) {
+    for (idx, _) in line.match_indices('/') {
+        let left = &line[..idx];
+        let right = &line[idx + 1..];
+        if let (Some(done), Some(total)) = (parse_trailing_size(left), parse_leading_size(right)) {
+            return (Some(done), Some(total));
+        }
+    }
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    for (i, token) in tokens.iter().enumerate() {
+        if let Some(total) = parse_size_str(token) {
+            return (None, Some(total));
+        }
+        if let Some(next) = tokens.get(i + 1) {
+            let combined = format!("{token}{next}");
+            if let Some(total) = parse_size_str(&combined) {
+                return (None, Some(total));
+            }
+        }
+    }
+    (None, None)
+}
+
+/// Parses one line of `uv sync` output into a progress update, extracting byte counts when
+/// present and ignoring empty lines.
+pub fn parse_uv_progress_line(raw: &str, elapsed_secs: u64) -> Option<UvProgressUpdate> {
+    let clean = strip_ansi(raw).trim().to_string();
+    if clean.is_empty() {
+        return None;
+    }
+    let (downloaded_bytes, total_bytes) = extract_uv_byte_counts(&clean);
+    Some(UvProgressUpdate {
+        downloaded_bytes,
+        total_bytes,
+        elapsed_secs,
+        message: clean,
+    })
+}
+
 fn uv_sync_command(uv: &Path, worker_dir: &Path, env_dir: &Path, cache_dir: &Path) -> Command {
     let mut cmd = Command::new(uv);
     cmd.args(["sync", "--frozen", "--project"])
@@ -1177,7 +1347,7 @@ fn uv_sync_command(uv: &Path, worker_dir: &Path, env_dir: &Path, cache_dir: &Pat
         .env("UV_PROJECT_ENVIRONMENT", env_dir)
         .env("UV_CACHE_DIR", cache_dir)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(windows)]
     {
@@ -1187,42 +1357,63 @@ fn uv_sync_command(uv: &Path, worker_dir: &Path, env_dir: &Path, cache_dir: &Pat
     cmd
 }
 
-/// Runs `uv sync --frozen` for the worker, handing every line of its output to `on_line`.
+/// Runs `uv sync --frozen` for the worker, streaming stdout and stderr lines into `on_progress`.
+/// Stops the child process and returns [`UvSyncOutcome::Cancelled`] when `cancel` is set.
 /// Needs the network on the first run. Stopped after two hours.
 pub fn run_uv_sync(
     uv: &Path,
     worker_dir: &Path,
     env_dir: &Path,
     cache_dir: &Path,
-    mut on_line: impl FnMut(&str),
-) -> Result<(), String> {
+    cancel: &Arc<AtomicBool>,
+    mut on_progress: impl FnMut(UvProgressUpdate),
+) -> Result<UvSyncOutcome, String> {
+    if cancel.load(Ordering::SeqCst) {
+        return Ok(UvSyncOutcome::Cancelled);
+    }
     let mut cmd = uv_sync_command(uv, worker_dir, env_dir, cache_dir);
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("uv could not be started ({}): {e}", uv.display()))?;
-    let stderr = child.stderr.take().expect("piped");
     let (tx, rx) = mpsc::channel::<String>();
-    std::thread::spawn(move || {
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            if tx.send(line).is_err() {
-                break;
+    if let Some(stdout) = child.stdout.take() {
+        let tx_out = tx.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                if tx_out.send(line).is_err() {
+                    break;
+                }
             }
-        }
-    });
+        });
+    }
+    if let Some(stderr) = child.stderr.take() {
+        std::thread::spawn(move || {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                if tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+    } else {
+        drop(tx);
+    }
     let started = Instant::now();
     let mut tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
     loop {
+        if cancel.load(Ordering::SeqCst) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(UvSyncOutcome::Cancelled);
+        }
         match rx.recv_timeout(Duration::from_millis(200)) {
             Ok(line) => {
-                let line = line.trim().to_string();
-                if line.is_empty() {
-                    continue;
+                if let Some(update) = parse_uv_progress_line(&line, started.elapsed().as_secs()) {
+                    if tail.len() == 6 {
+                        tail.pop_front();
+                    }
+                    tail.push_back(update.message.clone());
+                    on_progress(update);
                 }
-                on_line(&line);
-                if tail.len() == 6 {
-                    tail.pop_front();
-                }
-                tail.push_back(line);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -1233,9 +1424,14 @@ pub fn run_uv_sync(
             return Err("creating the environment took longer than two hours and was stopped; run it again to continue".into());
         }
     }
+    if cancel.load(Ordering::SeqCst) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Ok(UvSyncOutcome::Cancelled);
+    }
     let status = child.wait().map_err(|e| e.to_string())?;
     if status.success() {
-        Ok(())
+        Ok(UvSyncOutcome::Done)
     } else {
         Err(format!(
             "creating the environment failed: {}",
@@ -1886,9 +2082,69 @@ mod tests {
         let d = scratch("nouv");
         let gone = d.path().join(exe("uv"));
         let cache = d.path().join("uv-cache");
-        let err = run_uv_sync(&gone, d.path(), d.path(), &cache, |_| {}).unwrap_err();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let err = run_uv_sync(&gone, d.path(), d.path(), &cache, &cancel, |_| {}).unwrap_err();
         assert!(err.contains("could not be started"), "{err}");
         assert!(probe_llama_version(&gone, Duration::from_secs(1)).is_err());
+    }
+
+    #[test]
+    fn parse_uv_progress_line_extracts_byte_counts_and_messages() {
+        assert_eq!(parse_uv_progress_line("   \t ", 5), None);
+
+        let pair = parse_uv_progress_line("Downloading torch 120.5 MiB / 2.40 GiB", 42).unwrap();
+        assert_eq!(pair.elapsed_secs, 42);
+        assert_eq!(pair.message, "Downloading torch 120.5 MiB / 2.40 GiB");
+        assert_eq!(pair.downloaded_bytes, Some((120.5 * 1_048_576.0) as u64));
+        assert_eq!(
+            pair.total_bytes,
+            Some((2.40 * 1_073_741_824.0_f64).round() as u64)
+        );
+
+        let single = parse_uv_progress_line("Downloading numpy (16.5MiB)", 7).unwrap();
+        assert_eq!(single.downloaded_bytes, None);
+        assert_eq!(
+            single.total_bytes,
+            Some((16.5 * 1_048_576.0_f64).round() as u64)
+        );
+
+        let ansi =
+            parse_uv_progress_line("\x1b[32mResolved 120 packages in 1.2s\x1b[0m", 3).unwrap();
+        assert_eq!(ansi.message, "Resolved 120 packages in 1.2s");
+        assert_eq!(ansi.downloaded_bytes, None);
+        assert_eq!(ansi.total_bytes, None);
+
+        let pre_cancelled = Arc::new(AtomicBool::new(true));
+        let d = scratch("uv-cancel");
+        let res = run_uv_sync(
+            &d.path().join(exe("uv")),
+            d.path(),
+            d.path(),
+            &d.path().join("cache"),
+            &pre_cancelled,
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(res, UvSyncOutcome::Cancelled);
+    }
+
+    #[test]
+    fn setup_progress_event_matches_ui_json_contract() {
+        let ev = SetupProgressEvent {
+            task: SetupTask::UvSync,
+            phase: SetupPhase::Progress,
+            downloaded_bytes: Some(1024),
+            total_bytes: None,
+            elapsed_secs: 12,
+            message: "Downloading torch".to_string(),
+        };
+        let json = serde_json::to_value(&ev).unwrap();
+        assert_eq!(json["task"], "uv-sync");
+        assert_eq!(json["phase"], "progress");
+        assert_eq!(json["downloadedBytes"], 1024);
+        assert!(json["totalBytes"].is_null());
+        assert_eq!(json["elapsedSecs"], 12);
+        assert_eq!(json["message"], "Downloading torch");
     }
 
     #[test]
