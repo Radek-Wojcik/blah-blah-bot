@@ -358,6 +358,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
   // The steps of a setup scenario are slower than a queue tick so that their progress can be seen.
   const setupMs = world.active ? Math.max(stepMs / 4, 60) : stepMs / 4;
   let activeSetupTask: { task: SetupTask; timers: ReturnType<typeof setTimeout>[] } | null = null;
+  let activeModelDownloads: Array<{ key: string; stop: () => void }> = [];
   const activeSetupItemKey = (): string | null => {
     if (!activeSetupTask) return null;
     if (activeSetupTask.task === "uv-sync") return "workerEnv";
@@ -373,6 +374,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       world.llamaCandidates,
       world.workerEnv,
       activeSetupItemKey(),
+      world.legacyVenvNotice,
     );
   let jobs: JobView[] = demoJobs().map((j) => ({
     ...j,
@@ -1297,22 +1299,46 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       });
     },
     cancelSetupTask: async () => {
-      if (activeSetupTask === null) return;
-      const { task, timers } = activeSetupTask;
-      timers.forEach((t) => clearTimeout(t));
-      activeSetupTask = null;
-      setupListeners.forEach((l) =>
-        l.cb({
-          task,
-          phase: "cancelled",
-          downloadedBytes: null,
-          totalBytes: null,
-          elapsedSecs: 0,
-          message: "Cancelled.",
-        }),
-      );
+      if (activeSetupTask !== null) {
+        const { task, timers } = activeSetupTask;
+        timers.forEach((t) => clearTimeout(t));
+        activeSetupTask = null;
+        setupListeners.forEach((l) =>
+          l.cb({
+            task,
+            phase: "cancelled",
+            downloadedBytes: null,
+            totalBytes: null,
+            elapsedSecs: 0,
+            message: "Cancelled.",
+          }),
+        );
+      }
+      if (activeModelDownloads.length > 0) {
+        const running = activeModelDownloads;
+        activeModelDownloads = [];
+        running.forEach((entry) => entry.stop());
+        const keys = running.map((entry) => entry.key);
+        keys.forEach((key) => {
+          progressListeners.forEach((l) => l.cb({ key, fraction: 0, message: "Cancelled." }));
+        });
+        if (keys.some((key) => key === "whisper-turbo" || key === "diarization")) {
+          setupListeners.forEach((l) =>
+            l.cb({
+              task: "speech-models",
+              phase: "cancelled",
+              downloadedBytes: null,
+              totalBytes: null,
+              elapsedSecs: 0,
+              message: "Speech model download was cancelled.",
+            }),
+          );
+        }
+        modelsListeners.forEach((l) => l.cb());
+      }
     },
     setFirstRunDone: async (done = true) => void (processing.firstRunDone = done),
+    dismissLegacyVenvNotice: async () => void (world.legacyVenvNotice = null),
     downloadModels: async (keys) => {
       for (const key of keys) {
         const model = models.find((m) => m.key === key);
@@ -1327,7 +1353,12 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         if ((world.downloadFailures[key] ?? 0) > 0) {
           // Like the real application: the failure arrives as an event, not as a rejection.
           world.downloadFailures[key] -= 1;
-          setTimeout(() => {
+          const entry = {
+            key,
+            stop: () => clearTimeout(failTimer),
+          };
+          const failTimer = setTimeout(() => {
+            activeModelDownloads = activeModelDownloads.filter((d) => d !== entry);
             progressListeners.forEach((l) =>
               l.cb({
                 key,
@@ -1337,22 +1368,29 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
             );
             modelsListeners.forEach((l) => l.cb());
           }, setupMs);
+          activeModelDownloads.push(entry);
           continue;
         }
         let step = 0;
-        const timer = setInterval(() => {
+        const entry = {
+          key,
+          stop: () => clearInterval(dlTimer),
+        };
+        const dlTimer = setInterval(() => {
           step += 1;
           const fraction = Math.min(1, step / 5);
           progressListeners.forEach((l) =>
             l.cb({ key, fraction, message: `Downloading ${Math.round(fraction * 100)}%` }),
           );
           if (fraction >= 1) {
-            clearInterval(timer);
+            clearInterval(dlTimer);
+            activeModelDownloads = activeModelDownloads.filter((d) => d !== entry);
             const model = models.find((m) => m.key === key);
             if (model) model.cached = true;
             modelsListeners.forEach((l) => l.cb());
           }
         }, setupMs);
+        activeModelDownloads.push(entry);
       }
     },
     getSettings: async () => ({

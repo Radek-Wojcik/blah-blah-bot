@@ -67,6 +67,7 @@ export function createTauriBackend(): Backend {
     downloadLanguageModel: () => invoke("download_language_model"),
     cancelSetupTask: () => invoke("cancel_setup_task"),
     setFirstRunDone: (done) => invoke("set_first_run_done", { done: done ?? true }),
+    dismissLegacyVenvNotice: () => invoke("dismiss_legacy_venv_notice"),
     setCloudKey: (key) => invoke("set_cloud_key", { key }),
     clearCloudKey: () => invoke("clear_cloud_key"),
     cloudKeyPresent: () => invoke("cloud_key_present"),

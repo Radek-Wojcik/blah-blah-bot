@@ -91,6 +91,13 @@
   border-left-color: var(--magenta);
   color: var(--text);
 }
+.setup-legacy-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
 .setup-note {
   color: var(--muted);
   font-size: 0.9em;

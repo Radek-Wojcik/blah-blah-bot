@@ -198,6 +198,8 @@ export interface Backend {
   cancelSetupTask(): Promise<void>;
   /** Marks the first-run setup as completed (default) or to be shown again. */
   setFirstRunDone(done?: boolean): Promise<void>;
+  /** Dismisses the one-time notice about a legacy Roaming `worker-venv` folder. */
+  dismissLegacyVenvNotice(): Promise<void>;
 
   /** API keys are write-only: `ProcessingSettings.llm.cloudKeySet` / `externalKeySet` tell they are stored. */
   setCloudKey(key: string): Promise<void>;

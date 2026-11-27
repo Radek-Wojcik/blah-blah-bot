@@ -52,4 +52,11 @@ describe("setup readiness (mock)", () => {
     await b.setFirstRunDone();
     expect((await b.getProcessingSettings()).firstRunDone).toBe(true);
   });
+
+  it("exposes and dismisses the legacy venv notice", async () => {
+    const b = createMockBackend({ clockRate: 0, setup: "legacy-venv" });
+    expect((await b.setupStatus()).legacyVenvNotice).toBeTruthy();
+    await b.dismissLegacyVenvNotice();
+    expect((await b.setupStatus()).legacyVenvNotice).toBeUndefined();
+  });
 });

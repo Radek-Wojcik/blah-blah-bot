@@ -9,11 +9,19 @@ export const OFFLINE_MESSAGE =
 export type TaskAction = "start" | "cancel" | "retry" | "none";
 
 const NETWORK_ERROR_RE =
-  /offline|no internet|no network|network error|connection refused|connection reset|dns|timed?\s*out|unreachable|failed to connect|could not resolve/i;
+  /offline|no internet|no network|network error|connection refused|connection reset|dns|timed?\s*out|unreachable|failed to connect|could not resolve|could not reach|connection to .+ was interrupted|download from .+ was interrupted|secure connection to .+ failed/i;
 
 /** Whether a setup task is currently running and can be cancelled. */
 export function isTaskActive(phase: SetupPhase | null | undefined): boolean {
   return phase === "started" || phase === "progress" || phase === "verifying";
+}
+
+/** True when a backend error indicates that a setup task is already running. */
+export function isBusyError(e: unknown): boolean {
+  if (typeof e === "object" && e !== null && "code" in e) {
+    return (e as { code: unknown }).code === "busy";
+  }
+  return false;
 }
 
 /** Which primary button to show for a setup task based on its phase and readiness. */
@@ -22,9 +30,16 @@ export function taskActionForPhase(
   ready: boolean,
 ): TaskAction {
   if (isTaskActive(phase)) return "cancel";
-  if (phase === "failed" || phase === "cancelled") return "retry";
-  if (ready || phase === "done") return "none";
+  if (ready) return "none";
+  if (phase === "failed" || phase === "cancelled" || phase === "done") return "retry";
   return "start";
+}
+
+/** Ensures a cancelled status sentence ends with terminal punctuation. */
+export function formatCancelledMessage(message: string | undefined): string {
+  const trimmed = (message ?? "").trim();
+  if (trimmed === "") return "Cancelled.";
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }
 
 /** Percentage (0..100) when both downloaded and total byte counts are known. */

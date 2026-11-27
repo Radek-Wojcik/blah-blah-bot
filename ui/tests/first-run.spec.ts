@@ -20,7 +20,11 @@ test.describe("first-run wizard on the mock backend", () => {
   test("a fresh installation goes through every step to a ready setup", async ({ page }) => {
     await page.goto(url("fresh"));
     await expect(title(page, "Welcome")).toBeVisible();
-    await expect(page.getByText("Plan for tens of gigabytes")).toBeVisible();
+    await expect(
+      page.getByText(
+        "This takes 10-30 minutes and needs about 8 GB of free space. Keep the PC on.",
+      ),
+    ).toBeVisible();
     await next(page);
 
     // Processing environment, with progress.
@@ -286,5 +290,46 @@ test.describe("first-run wizard on the mock backend", () => {
     await expect(retry).toBeVisible();
     await retry.click();
     await expect(page.getByText("The processing environment is ready.")).toBeVisible();
+  });
+
+  test("cancelling a speech model download shows one progress bar and Retry", async ({ page }) => {
+    await page.goto(url("fresh", 1600));
+    await goTo(page, /Speech models/);
+    await page.getByRole("button", { name: /^Download Whisper turbo/ }).click();
+    await expect(page.getByRole("progressbar")).toHaveCount(1);
+    const cancel = page.getByRole("button", { name: /^Cancel download of Whisper turbo/ });
+    await expect(cancel).toBeVisible();
+    await cancel.click();
+    await expect(page.getByText(/Cancelled\. Press Retry to continue/)).toBeVisible();
+    await expect(page.getByRole("progressbar")).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: /^Retry download of Whisper turbo/ }),
+    ).toBeVisible();
+  });
+
+  test("returning to the wizard mid-download keeps the running state", async ({ page }) => {
+    await page.goto(url("fresh", 2400));
+    await goTo(page, /llama-server/);
+    await page.getByRole("button", { name: "Download llama-server" }).click();
+    await expect(page.getByRole("progressbar", { name: "Downloading llama-server" })).toBeVisible();
+    await leaveSetup(page);
+
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("tab", { name: "Processing" }).click();
+    await page.getByRole("button", { name: "Run setup again" }).click();
+    await goTo(page, /llama-server/);
+    await expect(page.getByRole("progressbar", { name: "Downloading llama-server" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Cancel" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Download llama-server" })).toHaveCount(0);
+  });
+
+  test("legacy venv notice is shown and can be dismissed", async ({ page }) => {
+    await page.goto(url("legacy-venv"));
+    const notice = page.getByText(
+      "An old Python environment from the previous version is still in your Roaming folder. The app does not delete it. You can delete it yourself.",
+    );
+    await expect(notice).toBeVisible();
+    await page.getByRole("button", { name: "Dismiss" }).click();
+    await expect(notice).toHaveCount(0);
   });
 });

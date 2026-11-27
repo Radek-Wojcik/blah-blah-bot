@@ -32,8 +32,10 @@ import type {
 import { percent } from "../processing";
 import {
   SETUP_TIME_NOTE,
+  formatCancelledMessage,
   formatFailureMessage,
   formatSetupProgress,
+  isBusyError,
   isTaskActive,
   progressPercent,
   taskActionForPhase,
@@ -68,6 +70,7 @@ interface Ctx {
 interface Downloads {
   progress: Record<string, Progress>;
   failed: Record<string, string>;
+  cancelled: Record<string, string>;
   start: (key: string) => void;
 }
 
@@ -87,12 +90,13 @@ interface SetupTasks {
 function useDownloads(backend: Backend, reload: () => Promise<void>): Downloads {
   const [progress, setProgress] = useState<Record<string, Progress>>({});
   const [failed, setFailed] = useState<Record<string, string>>({});
+  const [cancelled, setCancelled] = useState<Record<string, string>>({});
   useEffect(() => {
-    let cancelled = false;
+    let unmounted = false;
     const offs: Array<() => void> = [];
     const keep = (p: Promise<() => void>) =>
       void p.then((u) => {
-        if (cancelled) u();
+        if (unmounted) u();
         else offs.push(u);
       });
     keep(
@@ -101,8 +105,15 @@ function useDownloads(backend: Backend, reload: () => Promise<void>): Downloads 
         if (failure !== null) {
           setFailed((cur) => ({ ...cur, [p.key]: failure }));
           setProgress((cur) => omit(cur, p.key));
+          setCancelled((cur) => omit(cur, p.key));
+        } else if (/^cancelled\b/i.test(p.message.trim())) {
+          setCancelled((cur) => ({ ...cur, [p.key]: formatCancelledMessage(p.message) }));
+          setProgress((cur) => omit(cur, p.key));
+          setFailed((cur) => omit(cur, p.key));
         } else {
           setProgress((cur) => ({ ...cur, [p.key]: { fraction: p.fraction, message: p.message } }));
+          setFailed((cur) => omit(cur, p.key));
+          setCancelled((cur) => omit(cur, p.key));
         }
       }),
     );
@@ -113,20 +124,29 @@ function useDownloads(backend: Backend, reload: () => Promise<void>): Downloads 
       }),
     );
     return () => {
-      cancelled = true;
+      unmounted = true;
       offs.forEach((u) => u());
     };
   }, [backend, reload]);
 
   const start = (key: string) => {
     setFailed((cur) => omit(cur, key));
+    setCancelled((cur) => omit(cur, key));
     setProgress((cur) => ({ ...cur, [key]: { fraction: 0, message: "Starting" } }));
     backend.downloadModels([key]).catch((e) => {
+      if (isBusyError(e)) {
+        setProgress((cur) => ({
+          ...cur,
+          [key]: cur[key] ?? { fraction: 0, message: "Already running..." },
+        }));
+        void reload();
+        return;
+      }
       setFailed((cur) => ({ ...cur, [key]: errorMessage(e) }));
       setProgress((cur) => omit(cur, key));
     });
   };
-  return { progress, failed, start };
+  return { progress, failed, cancelled, start };
 }
 
 function omit<T>(record: Record<string, T>, key: string): Record<string, T> {
@@ -193,6 +213,31 @@ function useSetupTasks(backend: Backend, reload: () => Promise<void>): SetupTask
             ? backend.downloadLlamaServer()
             : backend.downloadLanguageModel();
       run.catch((e) => {
+        if (isBusyError(e)) {
+          setTasks((cur) => {
+            const prev = cur[task];
+            if (isTaskActive(prev.latest?.phase)) {
+              return { ...cur, [task]: { ...prev, error: null } };
+            }
+            return {
+              ...cur,
+              [task]: {
+                ...prev,
+                latest: {
+                  task,
+                  phase: "progress",
+                  downloadedBytes: prev.latest?.downloadedBytes ?? null,
+                  totalBytes: prev.latest?.totalBytes ?? null,
+                  elapsedSecs: prev.latest?.elapsedSecs ?? 0,
+                  message: "Already running...",
+                },
+                error: null,
+              },
+            };
+          });
+          void reload();
+          return;
+        }
         const msg = errorMessage(e);
         setTasks((cur) => ({
           ...cur,
@@ -211,7 +256,7 @@ function useSetupTasks(backend: Backend, reload: () => Promise<void>): SetupTask
         }));
       });
     },
-    [backend],
+    [backend, reload],
   );
 
   const cancel = useCallback(() => {
@@ -306,6 +351,7 @@ export function FirstRun(props: {
     void act(backend.setFirstRunDone(true).then(onClose));
   };
 
+  const anyWorking = status?.items.some((i) => i.state === "working") ?? false;
   const ctx: Ctx = {
     backend,
     status,
@@ -315,7 +361,7 @@ export function FirstRun(props: {
     change,
     act,
     downloads,
-    setupTasks,
+    setupTasks: { ...setupTasks, anyActive: setupTasks.anyActive || anyWorking },
     go,
     onOpenSettings: onOpenSettings
       ? () => void backend.setFirstRunDone(true).then(onOpenSettings)
@@ -369,6 +415,21 @@ export function FirstRun(props: {
               <p className="notice setup-reason" role="alert">
                 Processing could not start: {reason}
               </p>
+            )}
+            {status?.legacyVenvNotice && (
+              <div className="notice setup-legacy-notice" role="status">
+                <p>
+                  An old Python environment from the previous version is still in your Roaming
+                  folder. The app does not delete it. You can delete it yourself.
+                </p>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-small"
+                  onClick={() => void act(backend.dismissLegacyVenvNotice().then(reload))}
+                >
+                  Dismiss
+                </button>
+              </div>
             )}
             {step === "welcome" && <WelcomeStep />}
             {step === "env" && <EnvStep ctx={ctx} />}
@@ -488,7 +549,11 @@ function SetupTaskPanel(props: {
   const pct = state.latest
     ? progressPercent(state.latest.downloadedBytes, state.latest.totalBytes)
     : null;
-  const statusText = state.latest ? formatSetupProgress(state.latest) : null;
+  const statusText = state.latest
+    ? formatSetupProgress(state.latest)
+    : working
+      ? "Working..."
+      : null;
 
   return (
     <>
@@ -511,7 +576,7 @@ function SetupTaskPanel(props: {
       )}
       {phase === "cancelled" && (
         <p className="notice" role="status">
-          {state.latest?.message || "Cancelled."} Press Retry to continue where it stopped.
+          {formatCancelledMessage(state.latest?.message)} Press Retry to continue where it stopped.
         </p>
       )}
       {(phase === "failed" || state.error) && (
@@ -555,10 +620,6 @@ function WelcomeStep() {
         language model for reports and, if you want it, screenshot analysis. You can skip any part
         and come back later from Settings.
       </p>
-      <p className="notice">
-        Disk space: the environment and the models are large. Plan for tens of gigabytes of free
-        space, and more for the language model file you choose. Processing uses the GPU for a while.
-      </p>
       <p className="notice">{SETUP_TIME_NOTE}</p>
     </>
   );
@@ -596,9 +657,13 @@ function ModelRow(props: { ctx: Ctx; modelKey: string; blockedBy?: string }) {
   const model = ctx.models.find((m) => m.key === modelKey);
   const progress = ctx.downloads.progress[modelKey];
   const failure = ctx.downloads.failed[modelKey];
-  const anyBusy = Object.keys(ctx.downloads.progress).length > 0;
+  const cancelledMsg = ctx.downloads.cancelled[modelKey];
+  const item = itemOf(ctx.status, modelKey === "vision" ? "vision" : `model:${modelKey}`);
+  const working = item?.state === "working";
+  const anyBusy = Object.keys(ctx.downloads.progress).length > 0 || working;
   const hintId = useId();
   if (!model) return null;
+  const retry = Boolean(failure || cancelledMsg);
   return (
     <li className="model">
       <div className="model-main">
@@ -611,27 +676,43 @@ function ModelRow(props: { ctx: Ctx; modelKey: string; blockedBy?: string }) {
         )}
         {failure && (
           <small className="error" role="alert">
-            Download failed: {failure}
+            Download failed: {formatFailureMessage(failure)}
+          </small>
+        )}
+        {!failure && !model.cached && !progress && !working && cancelledMsg && (
+          <small className="setup-note" role="status">
+            {cancelledMsg} Press Retry to continue where it stopped.
           </small>
         )}
       </div>
       {model.cached ? (
         <span className="badge badge-recovered">Downloaded</span>
-      ) : progress ? (
+      ) : progress || working ? (
         <div className="model-progress">
-          <ProgressBar label={`Download of ${model.label}`} fraction={progress.fraction} />
-          <small>{progress.message}</small>
+          <ProgressBar
+            label={`Download of ${model.label}`}
+            fraction={progress ? progress.fraction : null}
+          />
+          <small>{progress ? progress.message : "Working..."}</small>
+          <button
+            type="button"
+            className="btn btn-ghost btn-small"
+            aria-label={`Cancel download of ${model.label}`}
+            onClick={ctx.setupTasks.cancel}
+          >
+            Cancel
+          </button>
         </div>
       ) : (
         <button
           type="button"
           className="btn btn-small"
-          aria-label={`${failure ? "Retry download of" : "Download"} ${model.label}`}
+          aria-label={`${retry ? "Retry download of" : "Download"} ${model.label}`}
           aria-describedby={blockedBy && !model.cached ? hintId : undefined}
           disabled={anyBusy || !!blockedBy}
           onClick={() => ctx.downloads.start(modelKey)}
         >
-          {failure ? "Retry" : "Download"}
+          {retry ? "Retry" : "Download"}
         </button>
       )}
     </li>
@@ -644,10 +725,9 @@ function ModelsStep({ ctx }: { ctx: Ctx }) {
   const tokenSet = settings?.hfTokenSet ?? false;
   const speechTask = setupTasks.tasks["speech-models"];
   const speechPhase = speechTask.latest?.phase ?? null;
-  const speechActive = isTaskActive(speechPhase);
-  const speechPct = speechTask.latest
-    ? progressPercent(speechTask.latest.downloadedBytes, speechTask.latest.totalBytes)
-    : null;
+  const hasRowCancelled = Boolean(
+    ctx.downloads.cancelled["whisper-turbo"] || ctx.downloads.cancelled.diarization,
+  );
   const store = () => {
     const value = token;
     setToken("");
@@ -664,27 +744,10 @@ function ModelsStep({ ctx }: { ctx: Ctx }) {
           blockedBy={tokenSet ? undefined : "Store a Hugging Face token below first."}
         />
       </ul>
-      {speechActive && speechTask.latest && (
-        <div className="setup-run" data-setup-task="speech-models">
-          <ProgressBar label="Downloading speech models" percentValue={speechPct} />
-          <p className="setup-progress-text" role="status" aria-live="polite">
-            {formatSetupProgress(speechTask.latest)}
-          </p>
-          <div className="actions">
-            <button type="button" className="btn btn-ghost btn-small" onClick={setupTasks.cancel}>
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-      {speechPhase === "cancelled" && (
+      {speechPhase === "cancelled" && !hasRowCancelled && (
         <p className="notice" role="status">
-          {speechTask.latest?.message || "Cancelled."} Press Download to continue where it stopped.
-        </p>
-      )}
-      {(speechPhase === "failed" || speechTask.error) && (
-        <p className="error" role="alert">
-          {speechTask.error ?? formatFailureMessage(speechTask.latest?.message ?? "")}
+          {formatCancelledMessage(speechTask.latest?.message)} Press Download to continue where it
+          stopped.
         </p>
       )}
       {stepItems(status, "models")

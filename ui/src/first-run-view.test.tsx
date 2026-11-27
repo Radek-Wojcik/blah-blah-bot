@@ -129,7 +129,7 @@ describe("first-run wizard", () => {
     await show(backendFor("download-fails"), { initialStep: "models" });
     await click(/^Download Whisper/);
     await until(() => alerts().includes("Download failed:"), "failure");
-    expect(alerts()).toContain("network error");
+    expect(alerts()).toContain("No internet connection");
     await click(/^Retry download of Whisper/);
     await until(() => text().includes("Downloaded"), "retry done");
     expect(alerts()).not.toContain("Download failed");

@@ -505,6 +505,8 @@ export interface SetupStatus {
   items: SetupItem[];
   /** `llama-server` programs found on this machine, the configured one first. */
   llamaCandidates: string[];
+  /** One-time notice when a legacy Roaming `worker-venv` folder still exists on disk. */
+  legacyVenvNotice?: string;
 }
 
 export interface GgufFile {

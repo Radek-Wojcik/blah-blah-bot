@@ -3,10 +3,12 @@ import type { SetupProgress } from "../ipc/types";
 import {
   OFFLINE_MESSAGE,
   SETUP_TIME_NOTE,
+  formatCancelledMessage,
   formatElapsed,
   formatFailureMessage,
   formatMb,
   formatSetupProgress,
+  isBusyError,
   isNetworkFailure,
   isTaskActive,
   progressPercent,
@@ -118,6 +120,20 @@ describe("network failure detection and setup note", () => {
     expect(formatFailureMessage("   ")).toBe("The setup task failed.");
     expect(SETUP_TIME_NOTE).toContain("Keep the PC on.");
   });
+
+  it("matches exact network failure strings from Rust downloads.rs", () => {
+    const messages = [
+      "could not reach github.com; check your internet connection and retry",
+      "connection to github.com was interrupted; you can retry to resume",
+      "secure connection to huggingface.co failed; check your network or system clock",
+      "download from huggingface.co was interrupted; you can retry to resume",
+      "download from github.com timed out; you can retry",
+    ];
+    for (const msg of messages) {
+      expect(isNetworkFailure(msg)).toBe(true);
+      expect(formatFailureMessage(msg)).toBe(OFFLINE_MESSAGE);
+    }
+  });
 });
 
 describe("phase-to-button logic", () => {
@@ -138,8 +154,22 @@ describe("phase-to-button logic", () => {
     expect(taskActionForPhase("progress", false)).toBe("cancel");
     expect(taskActionForPhase("verifying", false)).toBe("cancel");
     expect(taskActionForPhase("failed", false)).toBe("retry");
+    expect(taskActionForPhase("failed", true)).toBe("none");
     expect(taskActionForPhase("cancelled", false)).toBe("retry");
-    expect(taskActionForPhase("done", false)).toBe("none");
+    expect(taskActionForPhase("cancelled", true)).toBe("none");
+    expect(taskActionForPhase("done", false)).toBe("retry");
     expect(taskActionForPhase("done", true)).toBe("none");
+  });
+
+  it("detects busy IPC errors and ensures cancelled text ends with a period", () => {
+    expect(isBusyError({ code: "busy", message: "already running" })).toBe(true);
+    expect(isBusyError({ code: "internal", message: "busy" })).toBe(false);
+    expect(isBusyError(new Error("busy"))).toBe(false);
+    expect(isBusyError(null)).toBe(false);
+    expect(formatCancelledMessage(undefined)).toBe("Cancelled.");
+    expect(formatCancelledMessage("Cancelled.")).toBe("Cancelled.");
+    expect(
+      formatCancelledMessage("Environment preparation was cancelled; you can resume later"),
+    ).toBe("Environment preparation was cancelled; you can resume later.");
   });
 });
