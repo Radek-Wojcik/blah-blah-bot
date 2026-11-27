@@ -392,9 +392,10 @@ pub fn apply_task_completions(briefing: &mut Briefing, completions: &[store::Tas
     briefing.overdue_count = briefing.groups.iter().map(|g| g.overdue_count).sum();
 }
 
-/// Marks a task done (or open) in `task_completions`. When marking a GitHub issue done on a
-/// project whose GitHub target allows publishing (`publish != Off` and `issues != false`), also
-/// enqueues a `SetIssueState` op in the outbox.
+/// Marks a task done (or open) in `task_completions`. The completion stays local: closing
+/// the GitHub issue is left to the publish flow (an approved status change), so that a click
+/// here never publishes anything, locks the draft of a meeting or skips the public-repo
+/// confirmation.
 #[tauri::command]
 pub fn set_task_done(
     app: AppHandle,
@@ -405,55 +406,6 @@ pub fn set_task_done(
 ) -> IpcResult<()> {
     let now = now_unix_ms() as i64;
     state.with_store(|s| s.set_task_done(&cycle_id, &task_key, done, None, now))?;
-
-    if done {
-        if let Some(number) = task_key
-            .trim()
-            .strip_prefix('#')
-            .and_then(|n| n.parse::<u64>().ok())
-        {
-            let repos = state.cycle_repos();
-            if let Ok(Some(located)) = cycles::locate(&repos, &cycle_id) {
-                if let Some(cycle) = &located.entry.cycle {
-                    if let Some(gh) = &cycle.targets.github {
-                        let allows_issues = gh.issues;
-                        let publish_enabled = gh.publish != cycle_store::PublishMode::Off;
-                        if allows_issues && publish_enabled {
-                            let meeting_id = state
-                                .with_store(|s| s.list_meetings_by_cycle(&cycle_id))
-                                .ok()
-                                .and_then(|ms| ms.into_iter().next().map(|m| m.id));
-                            if let Some(mid) = meeting_id {
-                                let payload = publishers::plan::StatusPayload {
-                                    cycle: cycle_id.clone(),
-                                    date: format_utc_date(now as u64),
-                                    proposal_id: format!("task-{number}"),
-                                    number,
-                                    open: false,
-                                    reason: "Marked done in project tasks".into(),
-                                    quote: None,
-                                    time_ms: None,
-                                    anchor: None,
-                                };
-                                let op = store::NewOp {
-                                    meeting_id: mid,
-                                    target: store::OutboxTarget::Issues,
-                                    kind: store::OutboxKind::SetIssueState,
-                                    op_key: format!("status:task-{number}"),
-                                    payload: serde_json::to_string(&payload)
-                                        .unwrap_or_else(|_| "{}".into()),
-                                    after_op_key: None,
-                                };
-                                if state.with_store(|s| s.enqueue_op(&op, now)).is_ok() {
-                                    state.publishing().wake();
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     if let Err(e) = app.emit(EVENT_CYCLES, ()) {
         tracing::warn!(error = %e, "could not emit the cycles change");

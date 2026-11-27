@@ -16,6 +16,8 @@ export interface MeetingSummary {
   shortTitle?: string | null;
   /** Published report URL when the meeting has been published. */
   reportUrl?: string | null;
+  /** The draft is read-only (published, or operations are queued in the outbox). */
+  publishLocked?: boolean;
   /** Project/cycle ID associated with this meeting, or null when standalone. */
   cycleId?: string | null;
 }

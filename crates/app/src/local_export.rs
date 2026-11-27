@@ -16,7 +16,13 @@ use crate::state::AppState;
 
 /// Default local save directory under `Documents\Blah Blah Bot\notes` (falling back to the
 /// data directory when no user profile folder is available).
+///
+/// With `BBB_DATA_DIR` set (end-to-end runs and tests) the notes stay next to the data, never
+/// in the real Documents folder of the user.
 pub fn default_local_save_dir(data_dir: &Path) -> PathBuf {
+    if std::env::var_os("BBB_DATA_DIR").is_some_and(|v| !v.is_empty()) {
+        return data_dir.join("notes");
+    }
     default_local_save_dir_with(std::env::var_os("USERPROFILE").as_deref(), data_dir)
 }
 

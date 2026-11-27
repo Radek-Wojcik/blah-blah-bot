@@ -84,12 +84,19 @@ pub fn delete_project(
     delete_folder: bool,
 ) -> IpcResult<()> {
     let root = state.recordings_root().ok();
-    state.update_settings(|s| {
+    let recording = state.recorder.is_recording();
+    let jobs = state.processing().job_states();
+    let data_dir = state.data_dir().to_path_buf();
+    // Settings and database change first, under their locks; the folder goes last and
+    // outside every lock (the Shell call can take long or ask the user).
+    let folder = state.update_settings(|s| {
         state.with_store_ipc(|store| {
+            cycles::ensure_project_idle(store, &cycle_id, recording, &jobs)?;
             cycles::delete_project(
                 s,
                 store,
                 root.as_deref(),
+                &data_dir,
                 &cycle_id,
                 delete_meetings,
                 delete_folder,
@@ -98,6 +105,17 @@ pub fn delete_project(
     })?;
     changed(&app);
     crate::commands::emit_meetings_changed(&app);
+    if let Some(folder) = folder {
+        cycles::move_to_recycle_bin(&folder).map_err(|e| {
+            IpcError::new(
+                e.code,
+                format!(
+                    "the project was removed but its folder was kept: {}",
+                    e.message
+                ),
+            )
+        })?;
+    }
     Ok(())
 }
 

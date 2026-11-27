@@ -28,6 +28,13 @@ export function DeleteProjectSection({
   const expectedName = projectName.trim() || cycleId;
   const confirmed = typedName.trim() === expectedName;
 
+  const resetForm = () => {
+    setTypedName("");
+    setDeleteMeetings(false);
+    setDeleteFolder(false);
+    setError(null);
+  };
+
   const handleDelete = async () => {
     if (!confirmed || busy) return;
     setError(null);
@@ -54,9 +61,8 @@ export function DeleteProjectSection({
             type="button"
             className="btn btn-small btn-stop"
             onClick={() => {
+              resetForm();
               setConfirmOpen(true);
-              setTypedName("");
-              setError(null);
             }}
           >
             Delete project
@@ -104,7 +110,10 @@ export function DeleteProjectSection({
               type="button"
               className="btn btn-small btn-ghost"
               disabled={busy}
-              onClick={() => setConfirmOpen(false)}
+              onClick={() => {
+                resetForm();
+                setConfirmOpen(false);
+              }}
             >
               Cancel
             </button>

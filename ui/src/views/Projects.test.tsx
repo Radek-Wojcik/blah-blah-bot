@@ -631,7 +631,48 @@ describe("ProjectDetailView, ProjectSettingsModal, and ImportMeetingModal", () =
     expect((await backend.listCycles()).some((c) => c.id === "NOMAD")).toBe(false);
   });
 
-  it("ticks a task done and moves it to Done, showing Closed by meeting date", async () => {
+  it("keeps the delete section outside the preferences form and resets it on cancel", async () => {
+    const backend = createMockBackend({ clockRate: 0, jobStepMs: 5000 });
+    await act(async () => {
+      root.render(
+        <BackendProvider value={backend}>
+          <ProjectDetailView cycleId="NOMAD" onBack={vi.fn()} onOpenMeeting={vi.fn()} />
+        </BackendProvider>,
+      );
+    });
+    await flush();
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('button[aria-label="Project settings"]')!.click();
+    });
+    await flush();
+
+    const dangerZone = host.querySelector("fieldset.danger-zone")!;
+    expect(dangerZone.closest("form")).toBeNull();
+
+    await act(async () => {
+      findButton("Delete project").click();
+    });
+    await flush();
+    const boxes = () =>
+      Array.from(
+        host.querySelectorAll<HTMLInputElement>('fieldset.danger-zone input[type="checkbox"]'),
+      );
+    await act(async () => {
+      for (const box of boxes()) box.click();
+    });
+    expect(boxes().every((b) => b.checked)).toBe(true);
+
+    await act(async () => {
+      findButton("Cancel").click();
+    });
+    await act(async () => {
+      findButton("Delete project").click();
+    });
+    await flush();
+    expect(boxes().every((b) => !b.checked)).toBe(true);
+  });
+
+  it("ticks a task done and moves it to Done", async () => {
     const backend = createMockBackend({ clockRate: 0, jobStepMs: 5000 });
     const setDoneSpy = vi.spyOn(backend, "setTaskDone");
 

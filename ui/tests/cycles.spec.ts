@@ -694,7 +694,7 @@ test.describe("speakers of a project on the mock backend", () => {
   });
 });
 
-test.describe("WP-09 project integrations and reprocess UX", () => {
+test.describe("project integrations and reprocess UX", () => {
   test("Integrations tab shows compact rows with details collapsed and fits on one screen", async ({
     page,
   }) => {

@@ -84,6 +84,10 @@ describe("canProcess", () => {
     );
     expect(canProcess(meeting({ job: undefined }), null)).toBe(true);
   });
+  it("blocks reprocessing when other publications lock the draft", () => {
+    expect(canProcess(meeting({ job: "done", publishLocked: true }), null)).toBe(false);
+    expect(canProcess(meeting({ job: "done", publishLocked: false }), null)).toBe(true);
+  });
   it("blocks queued, running, waiting and failed jobs", () => {
     for (const job of ["queued", "waiting", "running", "failed"] as const) {
       expect(canProcess(meeting({ job }), null)).toBe(false);

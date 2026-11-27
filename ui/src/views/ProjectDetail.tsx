@@ -142,7 +142,7 @@ export function MeetingRowCard(props: {
   const showSubtitle = Boolean(m.shortTitle?.trim() && m.shortTitle.trim() !== m.title);
   const safeUrl = isSafeHttpUrl(m.reportUrl) ? m.reportUrl : null;
   const isReprocess = m.job === "done";
-  const publishedLock = isReprocess && Boolean(m.reportUrl);
+  const publishedLock = isReprocess && (Boolean(m.reportUrl) || m.publishLocked === true);
 
   return (
     <li className="cycle-row">

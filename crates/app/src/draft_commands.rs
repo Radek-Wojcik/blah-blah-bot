@@ -842,9 +842,11 @@ pub fn set_status_decision(
         {
             let now = cycle_store::time::now_unix_ms() as i64;
             if p.decision == Decision::Approved && p.status == ProposedStatus::Done {
-                let _ = state.with_store(|s| {
+                if let Err(e) = state.with_store(|s| {
                     s.set_task_done(&v.draft.cycle, &p.target, true, Some(&v.draft.date), now)
-                });
+                }) {
+                    tracing::warn!(error = %e.message, "could not record the completed task");
+                }
             } else {
                 let was_closed_here = state
                     .with_store(|s| s.list_task_completions(&v.draft.cycle))
@@ -856,9 +858,11 @@ pub fn set_status_decision(
                         })
                     });
                 if was_closed_here {
-                    let _ = state.with_store(|s| {
+                    if let Err(e) = state.with_store(|s| {
                         s.set_task_done(&v.draft.cycle, &p.target, false, None, now)
-                    });
+                    }) {
+                        tracing::warn!(error = %e.message, "could not reopen the task");
+                    }
                 }
             }
         }

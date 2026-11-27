@@ -560,15 +560,18 @@ export function ProjectSettingsModal({
               {savingPrefs ? "Saving…" : "Save local preferences"}
             </button>
           </div>
-          <DeleteProjectSection
-            cycleId={cycleId}
-            projectName={cycle?.name ?? cycleId}
-            onDeleted={() => {
-              onDeleted?.();
-              if (!onDeleted) onClose();
-            }}
-          />
         </form>
+      )}
+
+      {tab === "local" && (
+        <DeleteProjectSection
+          cycleId={cycleId}
+          projectName={cycle?.name ?? cycleId}
+          onDeleted={() => {
+            onDeleted?.();
+            if (!onDeleted) onClose();
+          }}
+        />
       )}
 
       {tab !== "local" && cycle && details && (
@@ -1164,10 +1167,10 @@ export function ProjectSettingsModal({
                     type="button"
                     className="btn btn-small btn-ghost"
                     aria-label="Discord details"
-                    aria-expanded={openTargets.discord}
+                    aria-expanded={openTargets.discord && discordRef != null}
                     onClick={() => setOpenTargets((cur) => ({ ...cur, discord: !cur.discord }))}
                   >
-                    {openTargets.discord ? "Hide" : "Details"}
+                    {openTargets.discord && discordRef != null ? "Hide" : "Details"}
                   </button>
                 </div>
                 {openTargets.discord && discordRef && (
@@ -1327,10 +1330,10 @@ export function ProjectSettingsModal({
                     type="button"
                     className="btn btn-small btn-ghost"
                     aria-label="Notion details"
-                    aria-expanded={openTargets.notion}
+                    aria-expanded={openTargets.notion && notion != null}
                     onClick={() => setOpenTargets((cur) => ({ ...cur, notion: !cur.notion }))}
                   >
-                    {openTargets.notion ? "Hide" : "Details"}
+                    {openTargets.notion && notion != null ? "Hide" : "Details"}
                   </button>
                 </div>
                 {openTargets.notion && notion && (

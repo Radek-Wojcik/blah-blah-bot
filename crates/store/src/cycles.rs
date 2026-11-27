@@ -519,6 +519,12 @@ impl Store {
                 "UPDATE meetings SET cycle_id = NULL WHERE cycle_id = ?1",
                 params![cycle_id],
             )?;
+            // `publications.cycle_id` is NOT NULL: an empty id means "no project" (readers
+            // treat it as absent), so kept meetings do not point at the deleted project.
+            tx.execute(
+                "UPDATE publications SET cycle_id = '' WHERE cycle_id = ?1",
+                params![cycle_id],
+            )?;
         }
         tx.execute(
             "DELETE FROM project_people WHERE cycle_id = ?1",
@@ -1162,6 +1168,37 @@ mod tests {
         // Delete meetings when requested.
         s.delete_cycle_data("OTHER", true).unwrap();
         assert!(s.get_meeting("m2").unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_cycle_data_with_same_named_people_and_publication() {
+        let s = store();
+        s.set_report_settings("m1", &settings("NOMAD")).unwrap();
+        s.sync_cycle_participants("NOMAD", &[("ola", "Ola")])
+            .unwrap();
+        s.sync_cycle_participants("OTHER", &[("ola", "Ola")])
+            .unwrap();
+        s.put_publication(&crate::Publication {
+            meeting_id: "m1".into(),
+            cycle_id: "NOMAD".into(),
+            folder: None,
+            repo_key: None,
+            commit_sha: None,
+            report_url: Some("https://example.test/r".into()),
+            snapshot_dir: "snap".into(),
+            published_unix_ms: Some(1),
+        })
+        .unwrap();
+        s.set_task_done("NOMAD", "#1", true, None, 1).unwrap();
+
+        s.delete_cycle_data("NOMAD", false).unwrap();
+
+        assert!(s.participants_for_cycle("NOMAD").unwrap().is_empty());
+        assert_eq!(s.participants_for_cycle("OTHER").unwrap().len(), 1);
+        assert!(s.list_task_completions("NOMAD").unwrap().is_empty());
+        let publication = s.get_publication("m1").unwrap().unwrap();
+        assert_eq!(publication.cycle_id, "");
+        assert!(s.list_publications("NOMAD").unwrap().is_empty());
     }
 
     #[test]

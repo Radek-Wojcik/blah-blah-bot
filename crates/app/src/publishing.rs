@@ -873,8 +873,25 @@ impl Publishing {
                 format!("the cycle {cycle_id} is not in any registered repository"),
             )
         })?;
-        tasks_of(&located, cycle_id)
+        let mut dto = tasks_of(&located, cycle_id)?;
+        let completions = self.with_store(|s| s.list_task_completions(cycle_id))?;
+        apply_local_completions(&mut dto, &completions);
+        Ok(dto)
     }
+}
+
+/// Moves the open issues the user ticked off in the application (kept in
+/// `task_completions` under the key `#<number>`) to the done list.
+fn apply_local_completions(dto: &mut CycleTasksDto, completions: &[store::TaskCompletion]) {
+    let ticked = |number: u64| {
+        let key = format!("#{number}");
+        completions.iter().any(|c| c.done && c.task_key == key)
+    };
+    let (done_now, open): (Vec<_>, Vec<_>) = std::mem::take(&mut dto.open)
+        .into_iter()
+        .partition(|t| ticked(t.number));
+    dto.open = open;
+    dto.done.extend(done_now);
 }
 
 /// The tasks of a cycle from the issue cache next to its clone.
