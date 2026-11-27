@@ -4,16 +4,16 @@ What this build does not do, and what has not been measured. Numbers come from t
 
 ## Platform
 
-- **Windows only.** Recording uses Windows audio capture. Windows 10 was verified on build 19045 only; Windows 11 has not been tested, neither recording nor installation (G2).
-- **NVIDIA GPU of the 12 GB class.** Processing needs an NVIDIA GPU and waits when the driver gives no readings. Peak video memory was 8.5 GB for a 2 hour recording and 9.7 GB (absolute) for the extraction of a 10 hour transcript. Smaller cards have not been tried.
-- **Large first setup.** The Python environment is about 7.4 GB and models are downloaded on first use.
-- **Unsigned installer.** Windows SmartScreen warns about it ([INSTALL.md](INSTALL.md)). The clean-machine installation test has not been done for any version yet.
-- **Installer and publishing.** Only a per-user NSIS installer exists. Publishing to GitHub and Discord is not part of this build.
+- **Windows 10/11 only.** Recording uses Windows audio capture. Windows 10 was verified on build 19045 only; Windows 11 has not been tested, neither recording nor installation (G2).
+- **NVIDIA GPU required for best speed.** Processing targets a 12 GB-class NVIDIA GPU and waits when the driver gives no NVML readings. Peak video memory was 8.5 GB for a 2 hour recording and 9.7 GB (9,813 MiB in the Stage 8 regression run) for the extraction of a 10 hour transcript. Smaller cards and non-NVIDIA/CPU-only setups have not been tested.
+- **Large first-run downloads.** `llama-server` and the default language model (~8 GB), along with speech models and the Python environment (~7.4 GB), are downloaded on first run rather than bundled in the installer.
+- **Unsigned installer.** Windows SmartScreen and Windows Defender warnings are expected ([INSTALL.md](INSTALL.md)); an earlier unsigned build triggered a Defender heuristic warning (`Bearfoos.A!ml`). Clean-machine installation and a Defender scan of the updated `zlib` build remain pending manual verification.
+- **Per-user NSIS installer only.** Only a per-user NSIS installer exists (no machine-wide MSI).
 
 ## Recording
 
 - Sound from the speakers that the microphone picks up appears in both tracks; echo is not removed (G10).
-- On the microphone track the audio engine flagged 194 discontinuities in a 10 hour run, about one every 3 minutes, although the audio was continuous and its length exact. The cause is unexplained and the zero-loss target is not met for the microphone. Application tracks had none (G5).
+- **USB microphone discontinuity flags in soak test.** On the USB microphone track the audio engine flagged 194 discontinuities in a 10 hour soak test, about one every 3 minutes, although the audio was continuous and its length exact. The cause is unexplained and the zero-loss target is not met for the microphone. Application tracks had none (G5).
 - Per-application capture was measured with test processes. Real Teams and Discord calls are not captured by hand, and the behavior of the new Teams client is unknown (G3).
 - Region screenshots on several monitors with mixed scaling are tested with synthetic frames only (G7).
 
@@ -21,8 +21,8 @@ What this build does not do, and what has not been measured. Numbers come from t
 
 These targets are missed in the Stage 8 regression run ([stage8-regression.md](../benchmarks/results/stage8-regression.md)). The project owner accepted them for 1.0; the plan to improve them is in the "Post-1.0 improvements" section of the [roadmap](ROADMAP.md).
 
-- **Term recall is 35.1% (target 85%)** on the mixed set with the default settings: English technical terms spoken inside Polish sentences are often written phonetically or in Polish spelling. Correct terms in a cycle glossary help the report, but they do not reach transcription (G1, G9).
-- **Speaker separation error is 29.4% in the worst 2 to 4 speaker meeting (target 15%)**. Short turns and overlapping speech are the main source. Treat speaker labels as suggestions and use the voice samples to confirm them (G1).
+- **Term recall is ~35% (35.1%, target 85%)** on the mixed set with the default settings: English technical terms spoken inside Polish sentences are often written phonetically or in Polish spelling. Correct terms in a cycle glossary help the report, but they do not reach transcription (G1, G9).
+- **Speaker diarization error (DER) is ~29% (29.4% in the worst 2 to 4 speaker meeting, target 15%)**, accepted for 1.0. Short turns and overlapping speech are the main source. Treat speaker labels as suggestions and use the voice samples to confirm them (G1).
 
 ## Languages
 
