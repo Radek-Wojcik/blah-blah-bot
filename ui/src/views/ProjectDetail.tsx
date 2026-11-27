@@ -10,6 +10,7 @@ import { canProcess, jobStateLabel } from "../processing";
 import { taskCounts, tasksAsOf } from "../publish";
 import { CycleTasksView } from "./CycleTasks";
 import { ImportMeetingModal } from "./ImportMeetingModal";
+import { Modal } from "./Modal";
 import { ProjectSettingsModal } from "./ProjectSettingsModal";
 
 export type MeetingWithCycle = MeetingSummary;
@@ -124,13 +125,25 @@ export function MeetingRowCard(props: {
   recordingMeetingId: string | null;
   onOpen: (meetingId: string) => void;
   onProcess: (meetingId: string) => void;
+  onRequestReprocess?: (meeting: MeetingSummary) => void;
   onRecover: (meetingId: string) => void;
   onDelete: (meetingId: string) => void;
 }) {
-  const { meeting: m, recordingMeetingId, onOpen, onProcess, onRecover, onDelete } = props;
+  const {
+    meeting: m,
+    recordingMeetingId,
+    onOpen,
+    onProcess,
+    onRequestReprocess,
+    onRecover,
+    onDelete,
+  } = props;
+  const [confirmReprocess, setConfirmReprocess] = useState(false);
   const headline = m.shortTitle?.trim() || m.title;
   const showSubtitle = Boolean(m.shortTitle?.trim() && m.shortTitle.trim() !== m.title);
   const safeUrl = isSafeHttpUrl(m.reportUrl) ? m.reportUrl : null;
+  const isReprocess = m.job === "done";
+  const publishedLock = isReprocess && (Boolean(m.reportUrl) || m.publishLocked === true);
 
   return (
     <li className="cycle-row">
@@ -179,14 +192,53 @@ export function MeetingRowCard(props: {
           className="btn btn-small btn-stop"
           type="button"
           disabled={!canProcess(m, recordingMeetingId)}
-          onClick={() => onProcess(m.id)}
+          title={
+            publishedLock
+              ? "Published meetings cannot be reprocessed because the draft is locked."
+              : undefined
+          }
+          onClick={() => {
+            if (isReprocess) {
+              if (onRequestReprocess) onRequestReprocess(m);
+              else setConfirmReprocess(true);
+            } else {
+              onProcess(m.id);
+            }
+          }}
         >
-          Process
+          {isReprocess ? "Reprocess" : "Process"}
         </button>
         <button className="btn btn-small btn-ghost" type="button" onClick={() => onDelete(m.id)}>
           Delete
         </button>
       </div>
+      {confirmReprocess && (
+        <Modal title="Reprocess meeting?" onClose={() => setConfirmReprocess(false)}>
+          <p className="section-hint">
+            Reprocessing <strong>{headline}</strong> will overwrite the existing draft and any edits
+            made to it. Continue?
+          </p>
+          <div className="actions">
+            <button
+              type="button"
+              className="btn btn-small btn-ghost"
+              onClick={() => setConfirmReprocess(false)}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-small btn-stop"
+              onClick={() => {
+                setConfirmReprocess(false);
+                onProcess(m.id);
+              }}
+            >
+              Reprocess
+            </button>
+          </div>
+        </Modal>
+      )}
     </li>
   );
 }
@@ -209,17 +261,38 @@ function sortTasksByUrgency(briefing: Briefing): TaskWithOwner[] {
   });
 }
 
-function TaskRow({ item, today, done }: { item: TaskWithOwner; today: string; done?: boolean }) {
+function TaskRow({
+  item,
+  today,
+  done,
+  onToggleDone,
+}: {
+  item: TaskWithOwner;
+  today: string;
+  done?: boolean;
+  onToggleDone?: (taskKey: string, nextDone: boolean) => void;
+}) {
   const { task, assignee } = item;
   const safeUrl = isSafeHttpUrl(task.url) ? task.url : null;
+  const closedText =
+    done && task.closedByMeeting ? `Closed by meeting ${task.closedByMeeting}` : null;
   return (
     <li className={task.overdue && !done ? "cycle-row brief-overdue" : "cycle-row"}>
+      <label className="check" style={{ marginRight: "0.5rem" }}>
+        <input
+          type="checkbox"
+          checked={Boolean(done)}
+          aria-label={`Mark "${task.text}" done`}
+          onChange={(e) => onToggleDone?.(task.id, e.target.checked)}
+        />
+      </label>
       <div className="cycle-main">
         <span className={done ? "cycle-name brief-done-text" : "cycle-name"}>{task.text}</span>
         <span className="person-meta">
           {assignee}
           {" · "}
           {done ? sourceLabel(task) : `${dueLabel(task, today)} · ${sourceLabel(task)}`}
+          {closedText && ` · ${closedText}`}
         </span>
       </div>
       {safeUrl && (
@@ -236,10 +309,26 @@ function TaskRow({ item, today, done }: { item: TaskWithOwner; today: string; do
   );
 }
 
-function CycleIssueRow({ task, done }: { task: CycleTask; done: boolean }) {
+function CycleIssueRow({
+  task,
+  done,
+  onToggleDone,
+}: {
+  task: CycleTask;
+  done: boolean;
+  onToggleDone?: (taskKey: string, nextDone: boolean) => void;
+}) {
   const safeUrl = isSafeHttpUrl(task.url) ? task.url : null;
   return (
     <li className="cycle-row">
+      <label className="check" style={{ marginRight: "0.5rem" }}>
+        <input
+          type="checkbox"
+          checked={done}
+          aria-label={`Mark issue #${task.number} done`}
+          onChange={(e) => onToggleDone?.(`#${task.number}`, e.target.checked)}
+        />
+      </label>
       <div className="cycle-main">
         <span className={done ? "cycle-name brief-done-text" : "cycle-name"}>
           <span className={done ? "badge badge-job-done" : "badge badge-job-running"}>
@@ -297,6 +386,7 @@ export function ProjectDetailView({
   const [error, setError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [reprocessTarget, setReprocessTarget] = useState<MeetingSummary | null>(null);
   const [importedMap, setImportedMap] = useState<Map<string, string>>(() => new Map());
 
   const { cycleMap } = useMeetingCycles(meetings, importedMap);
@@ -358,6 +448,19 @@ export function ProjectDetailView({
   const topTasks = sortedTasks.slice(0, 5);
   const extraTasks = sortedTasks.slice(5);
   const status = briefing ? statusLine(briefing, refreshing) : null;
+
+  const toggleTaskDone = useCallback(
+    (taskKey: string, nextDone: boolean) => {
+      void backend
+        .setTaskDone(cycleId, taskKey, nextDone)
+        .then(() => {
+          loadBriefing(false);
+          reloadTasks();
+        })
+        .catch((e) => setError(errorMessage(e)));
+    },
+    [backend, cycleId, loadBriefing, reloadTasks],
+  );
 
   const actOnMeeting = (p: Promise<unknown>) => {
     setError(null);
@@ -542,7 +645,12 @@ export function ProjectDetailView({
                   {tasks.open.length > 0 && (
                     <ul className="cycle-rows" aria-label="Open GitHub issues">
                       {tasks.open.map((t) => (
-                        <CycleIssueRow key={t.number} task={t} done={false} />
+                        <CycleIssueRow
+                          key={t.number}
+                          task={t}
+                          done={false}
+                          onToggleDone={toggleTaskDone}
+                        />
                       ))}
                     </ul>
                   )}
@@ -551,7 +659,12 @@ export function ProjectDetailView({
                       <summary>Done ({tasks.done.length})</summary>
                       <ul className="cycle-rows" aria-label="Done GitHub issues">
                         {tasks.done.map((t) => (
-                          <CycleIssueRow key={t.number} task={t} done />
+                          <CycleIssueRow
+                            key={t.number}
+                            task={t}
+                            done
+                            onToggleDone={toggleTaskDone}
+                          />
                         ))}
                       </ul>
                     </details>
@@ -569,7 +682,12 @@ export function ProjectDetailView({
                 {briefing && topTasks.length > 0 && (
                   <ul className="cycle-rows" aria-label="Top action items">
                     {topTasks.map((item) => (
-                      <TaskRow key={item.task.id} item={item} today={briefing.today} />
+                      <TaskRow
+                        key={item.task.id}
+                        item={item}
+                        today={briefing.today}
+                        onToggleDone={toggleTaskDone}
+                      />
                     ))}
                   </ul>
                 )}
@@ -581,7 +699,12 @@ export function ProjectDetailView({
                     </summary>
                     <ul className="cycle-rows" aria-label="More action items">
                       {extraTasks.map((item) => (
-                        <TaskRow key={item.task.id} item={item} today={briefing.today} />
+                        <TaskRow
+                          key={item.task.id}
+                          item={item}
+                          today={briefing.today}
+                          onToggleDone={toggleTaskDone}
+                        />
                       ))}
                     </ul>
                   </details>
@@ -597,6 +720,7 @@ export function ProjectDetailView({
                           item={{ task: t, assignee: "Completed" }}
                           today={briefing.today}
                           done
+                          onToggleDone={toggleTaskDone}
                         />
                       ))}
                     </ul>
@@ -638,6 +762,7 @@ export function ProjectDetailView({
                 recordingMeetingId={recording.meetingId}
                 onOpen={onOpenMeeting}
                 onProcess={processMeeting}
+                onRequestReprocess={setReprocessTarget}
                 onRecover={(id) => actOnMeeting(backend.recoverMeeting(id))}
                 onDelete={(id) => actOnMeeting(backend.deleteMeeting(id))}
               />
@@ -654,6 +779,10 @@ export function ProjectDetailView({
             loadCycleDetails();
             loadBriefing(false);
             reloadTasks();
+          }}
+          onDeleted={() => {
+            setSettingsOpen(false);
+            onBack();
           }}
         />
       )}
@@ -672,6 +801,35 @@ export function ProjectDetailView({
             reloadMeetings();
           }}
         />
+      )}
+
+      {reprocessTarget && (
+        <Modal title="Reprocess meeting?" onClose={() => setReprocessTarget(null)}>
+          <p className="section-hint">
+            Reprocessing <strong>{reprocessTarget.shortTitle || reprocessTarget.title}</strong> will
+            overwrite the existing draft and any edits made to it. Continue?
+          </p>
+          <div className="actions">
+            <button
+              type="button"
+              className="btn btn-small btn-ghost"
+              onClick={() => setReprocessTarget(null)}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-small btn-stop"
+              onClick={() => {
+                const id = reprocessTarget.id;
+                setReprocessTarget(null);
+                processMeeting(id);
+              }}
+            >
+              Reprocess
+            </button>
+          </div>
+        </Modal>
       )}
     </>
   );

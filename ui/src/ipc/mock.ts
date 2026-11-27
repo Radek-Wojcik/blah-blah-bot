@@ -2252,6 +2252,17 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       if (result.saved) emitCycles();
       return result;
     },
+    deleteProject: async (cycleId, deleteMeetings) => {
+      cycles.deleteCycle(cycleId);
+      projectPrefs.delete(cycleId);
+      if (deleteMeetings) {
+        meetings = meetings.filter((m) => m.cycleId !== cycleId);
+      } else {
+        meetings = meetings.map((m) => (m.cycleId === cycleId ? { ...m, cycleId: null } : m));
+      }
+      emitCycles();
+      emitMeetings();
+    },
     setTargetRule: async (cycleId, target, mode) => {
       const targets = cycles.setTargetRule(cycleId, target, mode);
       emitCycles();

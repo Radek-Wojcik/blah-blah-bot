@@ -523,6 +523,12 @@ describe("ProjectDetailView, ProjectSettingsModal, and ImportMeetingModal", () =
     });
     await flush();
 
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('button[aria-label="GitHub details"]')!.click();
+      host.querySelector<HTMLButtonElement>('button[aria-label="Discord details"]')!.click();
+    });
+    await flush();
+
     // GitHub repository link editing & access test.
     const repoForm = host.querySelector<HTMLElement>(
       '[role="form"][aria-label="GitHub repository of team-cycles"]',
@@ -575,6 +581,218 @@ describe("ProjectDetailView, ProjectSettingsModal, and ImportMeetingModal", () =
     await flush();
     expect(clearSecretSpy).toHaveBeenCalledWith("cred:discord/nomad");
     expect(webhookGroup.textContent).toContain("No webhook stored");
+  });
+
+  it("deletes a project only after typing its name to confirm", async () => {
+    const backend = createMockBackend({ clockRate: 0, jobStepMs: 5000 });
+    const deleteSpy = vi.spyOn(backend, "deleteProject");
+    const onBack = vi.fn();
+
+    await act(async () => {
+      root.render(
+        <BackendProvider value={backend}>
+          <ProjectDetailView cycleId="NOMAD" onBack={onBack} onOpenMeeting={vi.fn()} />
+        </BackendProvider>,
+      );
+    });
+    await flush();
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('button[aria-label="Project settings"]')!.click();
+    });
+    await flush();
+
+    await act(async () => {
+      findButton("Delete project").click();
+    });
+    await flush();
+
+    const confirmBtn = findButton("Confirm delete project");
+    expect(confirmBtn.disabled).toBe(true);
+
+    const confirmInput = host.querySelector<HTMLInputElement>(
+      'input[aria-label="Confirm project name"]',
+    )!;
+    await setInputValue(confirmInput, "Wrong");
+    expect(findButton("Confirm delete project").disabled).toBe(true);
+
+    const cycle = await backend.getCycle("NOMAD");
+    await setInputValue(confirmInput, cycle.cycle.name);
+    expect(findButton("Confirm delete project").disabled).toBe(false);
+
+    await act(async () => {
+      findButton("Confirm delete project").click();
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(deleteSpy).toHaveBeenCalledWith("NOMAD", false, false);
+    expect(onBack).toHaveBeenCalledTimes(1);
+    expect((await backend.listCycles()).some((c) => c.id === "NOMAD")).toBe(false);
+  });
+
+  it("keeps the delete section outside the preferences form and resets it on cancel", async () => {
+    const backend = createMockBackend({ clockRate: 0, jobStepMs: 5000 });
+    await act(async () => {
+      root.render(
+        <BackendProvider value={backend}>
+          <ProjectDetailView cycleId="NOMAD" onBack={vi.fn()} onOpenMeeting={vi.fn()} />
+        </BackendProvider>,
+      );
+    });
+    await flush();
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('button[aria-label="Project settings"]')!.click();
+    });
+    await flush();
+
+    const dangerZone = host.querySelector("fieldset.danger-zone")!;
+    expect(dangerZone.closest("form")).toBeNull();
+
+    await act(async () => {
+      findButton("Delete project").click();
+    });
+    await flush();
+    const boxes = () =>
+      Array.from(
+        host.querySelectorAll<HTMLInputElement>('fieldset.danger-zone input[type="checkbox"]'),
+      );
+    await act(async () => {
+      for (const box of boxes()) box.click();
+    });
+    expect(boxes().every((b) => b.checked)).toBe(true);
+
+    await act(async () => {
+      findButton("Cancel").click();
+    });
+    await act(async () => {
+      findButton("Delete project").click();
+    });
+    await flush();
+    expect(boxes().every((b) => !b.checked)).toBe(true);
+  });
+
+  it("ticks a task done and moves it to Done", async () => {
+    const backend = createMockBackend({ clockRate: 0, jobStepMs: 5000 });
+    const setDoneSpy = vi.spyOn(backend, "setTaskDone");
+
+    await act(async () => {
+      root.render(
+        <BackendProvider value={backend}>
+          <ProjectDetailView cycleId="NOMAD" onBack={vi.fn()} onOpenMeeting={vi.fn()} />
+        </BackendProvider>,
+      );
+    });
+    await flush();
+
+    const openList = host.querySelector('ul[aria-label="Top action items"]')!;
+    const firstCheckbox = openList.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    expect(firstCheckbox.checked).toBe(false);
+
+    await act(async () => {
+      firstCheckbox.click();
+    });
+    await flush();
+
+    expect(setDoneSpy).toHaveBeenCalledTimes(1);
+    const doneList = host.querySelector('ul[aria-label="Done tasks"]')!;
+    expect(doneList.querySelectorAll("li").length).toBeGreaterThan(0);
+  });
+
+  it("labels done meetings Reprocess with confirmation and disables published ones", async () => {
+    const backend = createMockBackend({ clockRate: 0, jobStepMs: 5000 });
+    const processSpy = vi.spyOn(backend, "processMeeting");
+    const listSpy = vi.spyOn(backend, "listMeetings").mockResolvedValue([
+      {
+        id: "m-done-unlocked",
+        title: "Unpublished done",
+        startedUnixMs: 1000,
+        durationMs: 60_000,
+        state: "stopped",
+        trackCount: 1,
+        screenshotCount: 0,
+        job: "done",
+        cycleId: "NOMAD",
+        reportUrl: null,
+      },
+      {
+        id: "m-done-published",
+        title: "Published done",
+        startedUnixMs: 2000,
+        durationMs: 60_000,
+        state: "stopped",
+        trackCount: 1,
+        screenshotCount: 0,
+        job: "done",
+        cycleId: "NOMAD",
+        reportUrl: "https://github.com/org/repo/blob/main/report.md",
+      },
+    ]);
+
+    await act(async () => {
+      root.render(
+        <BackendProvider value={backend}>
+          <ProjectDetailView cycleId="NOMAD" onBack={vi.fn()} onOpenMeeting={vi.fn()} />
+        </BackendProvider>,
+      );
+    });
+    await flush();
+    expect(listSpy).toHaveBeenCalled();
+
+    const rows = Array.from(host.querySelectorAll('ul[aria-label="Meetings list"] > li'));
+    expect(rows).toHaveLength(2);
+    const unlockedBtn = findButton("Reprocess", rows[0]);
+    const publishedBtn = findButton("Reprocess", rows[1]);
+    expect(unlockedBtn.disabled).toBe(false);
+    expect(publishedBtn.disabled).toBe(true);
+
+    await act(async () => {
+      unlockedBtn.click();
+    });
+    await flush();
+
+    const dialog = host.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain("overwrite the existing draft");
+    expect(processSpy).not.toHaveBeenCalled();
+
+    await act(async () => {
+      findButton("Reprocess", dialog).click();
+    });
+    await flush();
+    expect(processSpy).toHaveBeenCalledWith("m-done-unlocked");
+  });
+
+  it("hides report mode, template and meeting types under collapsed Advanced with HelpPopovers", async () => {
+    const backend = createMockBackend({ clockRate: 0, jobStepMs: 5000 });
+    await act(async () => {
+      root.render(
+        <BackendProvider value={backend}>
+          <ProjectDetailView cycleId="NOMAD" onBack={vi.fn()} onOpenMeeting={vi.fn()} />
+        </BackendProvider>,
+      );
+    });
+    await flush();
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('button[aria-label="Project settings"]')!.click();
+    });
+    await flush();
+
+    await act(async () => {
+      findButton("Report & Templates").click();
+    });
+    await flush();
+
+    const adv = host.querySelector<HTMLDetailsElement>("details.advanced-section")!;
+    expect(adv).not.toBeNull();
+    expect(adv.open).toBe(false);
+
+    await act(async () => {
+      adv.querySelector("summary")!.click();
+    });
+    await flush();
+    expect(adv.open).toBe(true);
+    expect(adv.querySelectorAll("button.help-popover-btn").length).toBeGreaterThanOrEqual(3);
   });
 });
 

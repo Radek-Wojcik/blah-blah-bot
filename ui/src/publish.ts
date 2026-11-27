@@ -66,8 +66,8 @@ export const STATUS_WRITE_BACK_NOTE =
 export function autoWarning(target: PublishTargetName, mode: PublishMode): string | null {
   if (mode !== "auto") return null;
   return target === "github"
-    ? "Automatic: the report, the transcript, the screenshots and the issues are pushed and created as soon as the draft is complete. They cannot be taken back, and assignees are notified."
-    : "Automatic: the message is posted as soon as the draft is complete. It cannot be taken back, and the people it mentions are notified.";
+    ? "Automatic: pushes report, transcript, screenshots and issues on completion; cannot be taken back."
+    : "Automatic: posts the message and notifies mentions on completion; cannot be taken back.";
 }
 
 export const OP_STATE_LABELS: Record<OpState, string> = {

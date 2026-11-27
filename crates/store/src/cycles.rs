@@ -106,6 +106,16 @@ pub struct SyncOutcome {
     pub warnings: Vec<String>,
 }
 
+/// Local completion state of a project task (`task_completions` table).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskCompletion {
+    pub cycle_id: String,
+    pub task_key: String,
+    pub done: bool,
+    pub closed_by_meeting: Option<String>,
+    pub updated_unix_ms: i64,
+}
+
 /// Per-project local preferences stored in the local database (never committed to Git).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectPrefs {
@@ -489,6 +499,122 @@ impl Store {
 
         tx.commit()?;
         Ok(outcome)
+    }
+
+    /// Removes all database records belonging to a project (`cycle_id`). When `delete_meetings`
+    /// is true, meetings of the project are deleted (cascading to tracks, segments, jobs and
+    /// publications); otherwise they are kept as standalone meetings (`cycle_id = NULL`).
+    pub fn delete_cycle_data(&self, cycle_id: &str, delete_meetings: bool) -> Result<()> {
+        if cycle_id.trim().is_empty() {
+            return Err(StoreError::Invalid("cycle_id cannot be empty".into()));
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        if delete_meetings {
+            tx.execute(
+                "DELETE FROM meetings WHERE cycle_id = ?1",
+                params![cycle_id],
+            )?;
+        } else {
+            tx.execute(
+                "UPDATE meetings SET cycle_id = NULL WHERE cycle_id = ?1",
+                params![cycle_id],
+            )?;
+        }
+        // `publications.cycle_id` is NOT NULL: an empty id means "no project" (readers treat
+        // it as absent), so no publication (also an orphan) points at the deleted project.
+        tx.execute(
+            "UPDATE publications SET cycle_id = '' WHERE cycle_id = ?1",
+            params![cycle_id],
+        )?;
+        tx.execute(
+            "DELETE FROM project_people WHERE cycle_id = ?1",
+            params![cycle_id],
+        )?;
+        tx.execute(
+            "UPDATE participants
+             SET cycle_id = (
+                 SELECT cycle_id FROM project_people
+                 WHERE participant_id = participants.id
+                 ORDER BY created_unix_ms, cycle_id
+                 LIMIT 1
+             )
+             WHERE cycle_id = ?1
+               AND EXISTS (
+                   SELECT 1 FROM project_people pp WHERE pp.participant_id = participants.id
+               )",
+            params![cycle_id],
+        )?;
+        tx.execute(
+            "DELETE FROM participants
+             WHERE cycle_id = ?1
+               AND NOT EXISTS (
+                   SELECT 1 FROM project_people pp WHERE pp.participant_id = participants.id
+               )",
+            params![cycle_id],
+        )?;
+        tx.execute(
+            "DELETE FROM project_prefs WHERE cycle_id = ?1",
+            params![cycle_id],
+        )?;
+        tx.execute(
+            "DELETE FROM task_completions WHERE cycle_id = ?1",
+            params![cycle_id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Marks a project task done (`done = true`) or removes its local completion (`done = false`).
+    pub fn set_task_done(
+        &self,
+        cycle_id: &str,
+        task_key: &str,
+        done: bool,
+        closed_by_meeting: Option<&str>,
+        updated_unix_ms: i64,
+    ) -> Result<()> {
+        if cycle_id.trim().is_empty() || task_key.trim().is_empty() {
+            return Err(StoreError::Invalid(
+                "cycle_id and task_key cannot be empty".into(),
+            ));
+        }
+        if done {
+            self.conn.execute(
+                "INSERT INTO task_completions
+                    (cycle_id, task_key, done, closed_by_meeting, updated_unix_ms)
+                 VALUES (?1, ?2, 1, ?3, ?4)
+                 ON CONFLICT(cycle_id, task_key) DO UPDATE SET
+                    done = 1,
+                    closed_by_meeting = excluded.closed_by_meeting,
+                    updated_unix_ms = excluded.updated_unix_ms",
+                params![cycle_id, task_key, closed_by_meeting, updated_unix_ms],
+            )?;
+        } else {
+            self.conn.execute(
+                "DELETE FROM task_completions WHERE cycle_id = ?1 AND task_key = ?2",
+                params![cycle_id, task_key],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Returns every task marked done in `cycle_id`.
+    pub fn list_task_completions(&self, cycle_id: &str) -> Result<Vec<TaskCompletion>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT cycle_id, task_key, done, closed_by_meeting, updated_unix_ms
+             FROM task_completions
+             WHERE cycle_id = ?1 AND done = 1",
+        )?;
+        let rows = stmt.query_map(params![cycle_id], |r| {
+            Ok(TaskCompletion {
+                cycle_id: r.get(0)?,
+                task_key: r.get(1)?,
+                done: r.get::<_, i64>(2)? != 0,
+                closed_by_meeting: r.get(3)?,
+                updated_unix_ms: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 }
 
@@ -1011,6 +1137,109 @@ mod tests {
         };
         s.set_project_prefs(&deleting).unwrap();
         assert_eq!(s.get_project_prefs("NOMAD").unwrap(), deleting);
+    }
+
+    #[test]
+    fn delete_cycle_data_keeps_meetings_standalone_or_deletes_them() {
+        let s = store();
+        s.set_report_settings("m1", &settings("NOMAD")).unwrap();
+        s.set_report_settings("m2", &settings("OTHER")).unwrap();
+        s.sync_cycle_participants("NOMAD", &[("ola", "Ola")])
+            .unwrap();
+        s.set_project_prefs(&ProjectPrefs {
+            cycle_id: "NOMAD".into(),
+            local_save_enabled: true,
+            local_save_dir: "D:/Notes".into(),
+            llm_kind_override: None,
+            llm_model_override: None,
+            audio_retention: None,
+        })
+        .unwrap();
+
+        // Keep meetings as standalone.
+        s.delete_cycle_data("NOMAD", false).unwrap();
+        assert_eq!(s.list_meetings_by_cycle("NOMAD").unwrap().len(), 0);
+        assert!(s.get_meeting("m1").unwrap().is_some());
+        assert_eq!(s.get_report_settings("m1").unwrap().unwrap().cycle_id, None);
+        assert!(s.participants_for_cycle("NOMAD").unwrap().is_empty());
+        assert!(!s.get_project_prefs("NOMAD").unwrap().local_save_enabled);
+        assert_eq!(s.list_meetings_by_cycle("OTHER").unwrap().len(), 1);
+
+        // Delete meetings when requested.
+        s.delete_cycle_data("OTHER", true).unwrap();
+        assert!(s.get_meeting("m2").unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_cycle_data_with_same_named_people_and_publication() {
+        let s = store();
+        s.set_report_settings("m1", &settings("NOMAD")).unwrap();
+        s.sync_cycle_participants("NOMAD", &[("ola", "Ola")])
+            .unwrap();
+        s.sync_cycle_participants("OTHER", &[("ola", "Ola")])
+            .unwrap();
+        s.put_publication(&crate::Publication {
+            meeting_id: "m1".into(),
+            cycle_id: "NOMAD".into(),
+            folder: None,
+            repo_key: None,
+            commit_sha: None,
+            report_url: Some("https://example.test/r".into()),
+            snapshot_dir: "snap".into(),
+            published_unix_ms: Some(1),
+        })
+        .unwrap();
+        s.set_task_done("NOMAD", "#1", true, None, 1).unwrap();
+
+        s.delete_cycle_data("NOMAD", false).unwrap();
+
+        assert!(s.participants_for_cycle("NOMAD").unwrap().is_empty());
+        assert_eq!(s.participants_for_cycle("OTHER").unwrap().len(), 1);
+        assert!(s.list_task_completions("NOMAD").unwrap().is_empty());
+        let publication = s.get_publication("m1").unwrap().unwrap();
+        assert_eq!(publication.cycle_id, "");
+        assert!(s.list_publications("NOMAD").unwrap().is_empty());
+    }
+
+    #[test]
+    fn delete_cycle_data_clears_orphan_publications_even_when_deleting_meetings() {
+        let s = store();
+        // The meeting never had the project set; only its publication names it.
+        s.put_publication(&crate::Publication {
+            meeting_id: "m2".into(),
+            cycle_id: "NOMAD".into(),
+            folder: None,
+            repo_key: None,
+            commit_sha: None,
+            report_url: None,
+            snapshot_dir: "snap".into(),
+            published_unix_ms: None,
+        })
+        .unwrap();
+        s.delete_cycle_data("NOMAD", true).unwrap();
+        assert_eq!(s.get_publication("m2").unwrap().unwrap().cycle_id, "");
+    }
+
+    #[test]
+    fn set_task_done_and_list_task_completions_round_trip() {
+        let s = store();
+        s.set_task_done("NOMAD", "2026-11-10/t1", true, None, 100)
+            .unwrap();
+        s.set_task_done("NOMAD", "#12", true, Some("2026-11-12"), 200)
+            .unwrap();
+        let list = s.list_task_completions("NOMAD").unwrap();
+        assert_eq!(list.len(), 2);
+        assert!(list.iter().any(|c| c.task_key == "2026-11-10/t1" && c.done));
+        assert!(list
+            .iter()
+            .any(|c| c.task_key == "#12" && c.closed_by_meeting.as_deref() == Some("2026-11-12")));
+
+        // Unticking removes the completion row.
+        s.set_task_done("NOMAD", "2026-11-10/t1", false, None, 300)
+            .unwrap();
+        let after = s.list_task_completions("NOMAD").unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].task_key, "#12");
     }
 
     #[test]

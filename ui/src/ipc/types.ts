@@ -16,6 +16,8 @@ export interface MeetingSummary {
   shortTitle?: string | null;
   /** Published report URL when the meeting has been published. */
   reportUrl?: string | null;
+  /** The draft is read-only (published, or operations are queued in the outbox). */
+  publishLocked?: boolean;
   /** Project/cycle ID associated with this meeting, or null when standalone. */
   cycleId?: string | null;
 }
@@ -985,6 +987,8 @@ export interface BriefingTask {
   url: string | null;
   /** The folder of the meeting a task was raised in. */
   meeting: string | null;
+  /** Date (`YYYY-MM-DD`) of the meeting whose approved status proposal closed this task. */
+  closedByMeeting?: string | null;
 }
 
 export type BriefingGroupKind = "participant" | "other" | "unassigned";

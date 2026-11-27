@@ -1826,6 +1826,321 @@ pub fn delete_cycle_participant(
     Ok(())
 }
 
+/// Removes the `\\?\` prefix that `fs::canonicalize` adds on Windows, which the Shell API
+/// does not accept, but only from a local drive path (`\\?\C:\...`, any letter case, with a
+/// separator after the drive). `\\?\UNC\...`, `\\?\Volume{...}\...`, `\\?\C:foo` and
+/// everything else is returned unchanged. Works on path components, not on lossy text.
+pub fn strip_verbatim_prefix(path: &Path) -> PathBuf {
+    use std::path::{Component, Prefix};
+    let mut comps = path.components();
+    if let (Some(Component::Prefix(p)), Some(Component::RootDir)) =
+        (comps.next(), comps.clone().next())
+    {
+        if let Prefix::VerbatimDisk(letter) = p.kind() {
+            let mut out = PathBuf::from(format!("{}:\\", letter as char));
+            for c in comps.skip(1) {
+                out.push(c);
+            }
+            return out;
+        }
+    }
+    path.to_path_buf()
+}
+
+/// Whether the path is an ordinary local drive path (`C:\...`, after `strip_verbatim_prefix`).
+#[cfg(not(windows))]
+pub fn is_local_drive_path(_path: &Path) -> bool {
+    // Drive letters and network shares are a Windows notion: any absolute path is local.
+    true
+}
+
+/// Whether the path is an ordinary local drive path (`C:\...`, after `strip_verbatim_prefix`).
+#[cfg(windows)]
+pub fn is_local_drive_path(path: &Path) -> bool {
+    use std::path::{Component, Prefix};
+    let stripped = strip_verbatim_prefix(path);
+    let mut comps = stripped.components();
+    matches!(
+        (comps.next(), comps.next()),
+        (Some(Component::Prefix(p)), Some(Component::RootDir)) if matches!(p.kind(), Prefix::Disk(_))
+    )
+}
+
+/// Moves a local directory to the Windows Recycle Bin. It never deletes for good silently:
+/// when the Recycle Bin cannot take the folder (disabled, too big, a network share) Windows
+/// asks the user, and a refusal or any failure is returned as an error.
+#[cfg(windows)]
+pub fn move_to_recycle_bin(path: &Path) -> IpcResult<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::UI::Shell::{
+        SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT,
+        FOF_WANTNUKEWARNING, FO_DELETE, SHFILEOPSTRUCTW,
+    };
+
+    if !path.exists() {
+        return Ok(());
+    }
+    if !is_local_drive_path(path) {
+        return Err(IpcError::new(
+            "io",
+            format!(
+                "{} is not on a local drive and cannot be moved to the Recycle Bin; remove it by hand",
+                path.display()
+            ),
+        ));
+    }
+    let path = strip_verbatim_prefix(path);
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    wide.push(0);
+    wide.push(0);
+    let mut op = SHFILEOPSTRUCTW {
+        hwnd: Default::default(),
+        wFunc: FO_DELETE,
+        pFrom: PCWSTR(wide.as_ptr()),
+        pTo: PCWSTR::null(),
+        // `FOF_WANTNUKEWARNING` keeps the permanent-delete confirmation alive even with
+        // `FOF_NOCONFIRMATION`: nothing is destroyed without the user agreeing.
+        fFlags: (FOF_ALLOWUNDO
+            | FOF_NOCONFIRMATION
+            | FOF_SILENT
+            | FOF_NOERRORUI
+            | FOF_WANTNUKEWARNING)
+            .0 as u16,
+        fAnyOperationsAborted: false.into(),
+        hNameMappings: std::ptr::null_mut(),
+        lpszProgressTitle: PCWSTR::null(),
+    };
+    let rc = unsafe { SHFileOperationW(&mut op) };
+    if rc != 0 || op.fAnyOperationsAborted.as_bool() {
+        return Err(IpcError::new(
+            "io",
+            format!(
+                "could not move {} to the Recycle Bin (code {rc}); the folder was left in place",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub fn move_to_recycle_bin(path: &Path) -> IpcResult<()> {
+    if path.exists() {
+        std::fs::remove_dir_all(path).map_err(|e| {
+            IpcError::new("io", format!("could not remove {}: {e}", path.display()))
+        })?;
+    }
+    Ok(())
+}
+
+/// Whether the entry at `path` is a symlink or a Windows junction / reparse point.
+fn is_link(path: &Path) -> bool {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    if meta.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+/// Checks that `target` may be moved to the Recycle Bin: an absolute path to an existing
+/// directory strictly inside the application data folder, on a local drive, reached without
+/// a link (every folder from the data folder down is checked, a trailing separator is
+/// ignored). Folders the user chose (outside the data folder) are never removed by the
+/// application. Call it before changing anything.
+pub fn managed_delete_target(data_dir: &Path, target: &Path) -> IpcResult<PathBuf> {
+    let refuse = |why: &str| {
+        IpcError::new(
+            "invalid",
+            format!(
+                "the folder {} will not be removed by the application: {why}. Remove it by hand if you want it gone",
+                target.display()
+            ),
+        )
+    };
+    if !target.is_absolute() {
+        return Err(refuse("the path is not absolute"));
+    }
+    let data = std::fs::canonicalize(data_dir)
+        .map_err(|e| IpcError::new("io", format!("cannot resolve the data folder: {e}")))?;
+    // `components()` drops a trailing separator and `.` parts.
+    let normal: PathBuf = target.components().collect();
+    let real = std::fs::canonicalize(&normal)
+        .map_err(|e| IpcError::new("io", format!("cannot resolve {}: {e}", target.display())))?;
+    if !real.is_dir() {
+        return Err(refuse("it is not a folder"));
+    }
+    if real == data || !real.starts_with(&data) {
+        return Err(refuse("it is outside the application data folder"));
+    }
+    if !is_local_drive_path(&real) {
+        return Err(refuse("it is not on a local drive"));
+    }
+    // No link on the way: walk up from the target until the data folder.
+    let data_lexical: PathBuf = data_dir.components().collect();
+    let mut cur: Option<&Path> = Some(&normal);
+    let mut reached = false;
+    while let Some(dir) = cur {
+        // A link is refused first, also one that points back into the data folder; only
+        // the data folder as the caller spelled it may itself be a link.
+        if dir != data_lexical && is_link(dir) {
+            return Err(refuse("it is, or lies behind, a link or junction"));
+        }
+        if std::fs::canonicalize(dir).is_ok_and(|c| c == data) {
+            reached = true;
+            break;
+        }
+        cur = dir.parent();
+    }
+    if !reached {
+        // An alias of the data folder (a substituted drive, say): cannot be proven safe.
+        return Err(refuse("its path does not lead through the data folder"));
+    }
+    Ok(real)
+}
+
+/// Refuses to delete a project while something still works on it: a recording, a queued or
+/// running job of one of its meetings, or an outbox operation that is not finished.
+pub fn ensure_project_idle(store: &Store, cycle_id: &str, recording: bool) -> IpcResult<()> {
+    use store::MeetingState;
+    if recording {
+        return Err(IpcError::new(
+            "busy",
+            "a recording is in progress; stop it before deleting a project",
+        ));
+    }
+    for m in store.list_meetings_by_cycle(cycle_id)? {
+        if m.state == MeetingState::Recording {
+            return Err(IpcError::new(
+                "busy",
+                "a meeting of this project is being recorded",
+            ));
+        }
+        // Read from the store itself, so the answer holds while the caller keeps it locked.
+        let job_active = store
+            .get_job(&m.id)?
+            .is_some_and(|job| matches!(queue::next_step(&job), queue::Next::Run { .. }));
+        if job_active {
+            return Err(IpcError::new(
+                "busy",
+                "a meeting of this project is being processed; wait for it to finish",
+            ));
+        }
+        let sending = store
+            .list_ops(Some(&m.id))?
+            .iter()
+            .any(|o| matches!(o.state, store::OpState::Queued | store::OpState::Running));
+        if sending {
+            return Err(IpcError::new(
+                "busy",
+                "a meeting of this project is being published; wait for the outbox or cancel it",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Removes a project from the database and `settings.cycle_repos`, optionally deleting its
+/// meetings. Never touches any GitHub repo. Returns the folder the caller must move to the
+/// Recycle Bin (with [`move_to_recycle_bin`], outside any lock) once this succeeded: the
+/// folder is the last thing to go, so a failure earlier loses nothing.
+#[cfg(test)]
+pub fn delete_project(
+    settings: &mut Settings,
+    store: &Store,
+    recordings_root: Option<&Path>,
+    data_dir: &Path,
+    cycle_id: &str,
+    delete_meetings: bool,
+    delete_folder: bool,
+) -> IpcResult<Option<PathBuf>> {
+    let folder = plan_project_deletion(settings, data_dir, cycle_id, delete_folder)?;
+    finish_project_deletion(store, recordings_root, cycle_id, delete_meetings)?;
+    Ok(folder)
+}
+
+/// First half of the deletion: validates everything that can refuse (the repository can be
+/// read, the folder may be removed) and then changes `settings` only. The caller saves the
+/// settings before [`finish_project_deletion`], so a failing save happens before anything
+/// irreversible. Returns the folder to move to the Recycle Bin at the very end.
+pub fn plan_project_deletion(
+    settings: &mut Settings,
+    data_dir: &Path,
+    cycle_id: &str,
+    delete_folder: bool,
+) -> IpcResult<Option<PathBuf>> {
+    if cycle_id.trim().is_empty() {
+        return Err(IpcError::new("invalid", "project id cannot be empty"));
+    }
+    let mut folder: Option<PathBuf> = None;
+    if let Some(located) = locate(&settings.cycle_repos, cycle_id)? {
+        // A root whose cycles cannot be listed is not known to be empty: never remove it.
+        let others = located
+            .repo
+            .list_cycles()
+            .map_err(|e| {
+                IpcError::new(
+                    "io",
+                    format!("cannot read the project repository, nothing was deleted: {e}"),
+                )
+            })?
+            .into_iter()
+            .filter(|c| c.dir_name != cycle_id)
+            .count();
+        if others == 0 {
+            let root = located.repo.root().to_path_buf();
+            if delete_folder && root.exists() {
+                folder = Some(managed_delete_target(data_dir, &root)?);
+            }
+            let repo_id = located.setting.id.clone();
+            settings.cycle_repos.retain(|r| r.id != repo_id);
+        } else if delete_folder {
+            let cycle_dir = located.repo.cycle_dir(cycle_id)?;
+            if cycle_dir.exists() {
+                folder = Some(managed_delete_target(data_dir, &cycle_dir)?);
+            }
+        }
+    }
+    if settings
+        .last_report
+        .as_ref()
+        .is_some_and(|l| l.cycle_id == cycle_id)
+    {
+        settings.last_report = None;
+    }
+    Ok(folder)
+}
+
+/// Second half: removes the clips and the database records of the project.
+pub fn finish_project_deletion(
+    store: &Store,
+    recordings_root: Option<&Path>,
+    cycle_id: &str,
+    delete_meetings: bool,
+) -> IpcResult<()> {
+    if delete_meetings {
+        if let Some(root) = recordings_root {
+            for m in store.list_meetings_by_cycle(cycle_id)? {
+                if let Err(e) = queue::voices::remove_clip_files(store, &m.id, root) {
+                    tracing::warn!(error = %e, meeting = %m.id, "could not remove voice clips");
+                }
+            }
+        }
+    }
+    store.delete_cycle_data(cycle_id, delete_meetings)?;
+    Ok(())
+}
+
 // ----- tests -------------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -3155,5 +3470,379 @@ targets:
         let r = list_repos(&settings);
         assert!(!r[0].available);
         assert!(locate(&settings, "NOMAD").unwrap().is_none());
+    }
+
+    fn meeting_in(lab: &Lab, id: &str, cycle: &str) {
+        let m = Meeting {
+            id: id.into(),
+            title: "Standup".into(),
+            started_unix_ms: 100,
+            duration_ms: None,
+            state: MeetingState::Stopped,
+            dir: id.into(),
+        };
+        lab.store.create_meeting(&m).unwrap();
+        lab.store
+            .set_report_settings(
+                id,
+                &ReportSettings {
+                    cycle_id: Some(cycle.into()),
+                    report_mode: None,
+                    report_template: None,
+                    meeting_type: None,
+                    output_language: None,
+                },
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn delete_project_removes_settings_and_handles_meetings_and_folder() {
+        let mut lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        meeting_in(&lab, "m-del-1", "NOMAD");
+        lab.settings.last_report = Some(LastReport {
+            cycle_id: "NOMAD".into(),
+            mode: "fixed".into(),
+            template: None,
+            meeting_type: None,
+        });
+
+        let repo_root = PathBuf::from(&lab.settings.cycle_repos[0].path);
+        let folder = delete_project(
+            &mut lab.settings,
+            &lab.store,
+            None,
+            lab.dir.path(),
+            "NOMAD",
+            false,
+            true,
+        )
+        .unwrap();
+
+        assert!(lab.settings.cycle_repos.is_empty());
+        assert_eq!(lab.settings.last_report, None);
+        assert_eq!(
+            folder.map(|f| strip_verbatim_prefix(&f)),
+            Some(strip_verbatim_prefix(
+                &std::fs::canonicalize(&repo_root).unwrap()
+            ))
+        );
+        // The folder is returned for the caller, not removed here.
+        assert!(repo_root.exists());
+        // Meeting kept as standalone.
+        assert!(lab.store.get_meeting("m-del-1").unwrap().is_some());
+        assert_eq!(
+            lab.store
+                .get_report_settings("m-del-1")
+                .unwrap()
+                .unwrap()
+                .cycle_id,
+            None
+        );
+    }
+
+    #[test]
+    fn delete_project_with_other_cycles_returns_only_the_cycle_folder_and_can_delete_meetings() {
+        let mut lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        lab.make_cycle("OTHER");
+        meeting_in(&lab, "m-del-2", "NOMAD");
+        let folder = delete_project(
+            &mut lab.settings,
+            &lab.store,
+            None,
+            lab.dir.path(),
+            "NOMAD",
+            true,
+            true,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(folder.ends_with("NOMAD"));
+        assert_eq!(lab.settings.cycle_repos.len(), 1);
+        assert!(lab.store.get_meeting("m-del-2").unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_project_refuses_a_folder_outside_the_data_dir() {
+        let mut lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        let outside = test_tmp::TestDir::new("cycles-outside");
+        // A user folder registered as a local repository.
+        lab.settings.cycle_repos[0].path = outside.path().to_string_lossy().into_owned();
+        Repo::init_local(outside.path()).unwrap();
+        lab.make_cycle("NOMAD2");
+        meeting_in(&lab, "m-keep", "NOMAD2");
+
+        let err = delete_project(
+            &mut lab.settings,
+            &lab.store,
+            None,
+            lab.dir.path(),
+            "NOMAD2",
+            false,
+            true,
+        );
+        // Another cycle may remain, so only the cycle folder is a candidate, and it is
+        // outside the data folder too.
+        let err = err.unwrap_err();
+        assert_eq!(err.code, "invalid");
+        // Nothing changed.
+        assert_eq!(lab.settings.cycle_repos.len(), 1);
+        assert_eq!(
+            lab.store
+                .get_report_settings("m-keep")
+                .unwrap()
+                .unwrap()
+                .cycle_id
+                .as_deref(),
+            Some("NOMAD2")
+        );
+        assert!(outside.path().exists());
+    }
+
+    #[test]
+    fn managed_delete_target_rejects_the_data_dir_itself_and_outside_paths() {
+        let data = test_tmp::TestDir::new("cycles-data");
+        let other = test_tmp::TestDir::new("cycles-other");
+        let inside = data.path().join("projects").join("p");
+        std::fs::create_dir_all(&inside).unwrap();
+        assert!(managed_delete_target(data.path(), &inside).is_ok());
+        assert!(managed_delete_target(data.path(), data.path()).is_err());
+        assert!(managed_delete_target(data.path(), other.path()).is_err());
+        assert!(managed_delete_target(data.path(), &data.path().join("missing")).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn managed_delete_target_rejects_a_junction() {
+        let data = test_tmp::TestDir::new("cycles-junction");
+        let other = test_tmp::TestDir::new("cycles-junction-target");
+        let link = data.path().join("link");
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(other.path())
+            .output();
+        if status.map(|o| o.status.success()).unwrap_or(false) {
+            assert!(managed_delete_target(data.path(), &link).is_err());
+            // Remove the junction itself, never its target.
+            let _ = std::fs::remove_dir(&link);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn strip_verbatim_prefix_handles_drive_and_unc_paths() {
+        assert_eq!(
+            strip_verbatim_prefix(Path::new(r"\\?\C:\data\p")),
+            PathBuf::from(r"C:\data\p")
+        );
+        assert_eq!(
+            strip_verbatim_prefix(Path::new(r"\\?\UNC\srv\share")),
+            PathBuf::from(r"\\?\UNC\srv\share")
+        );
+        assert_eq!(
+            strip_verbatim_prefix(Path::new("plain")),
+            PathBuf::from("plain")
+        );
+    }
+
+    #[test]
+    fn delete_project_fails_when_the_repository_cannot_be_listed() {
+        let mut lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        // Break the repository: its folder disappears.
+        std::fs::remove_dir_all(&lab.settings.cycle_repos[0].path).unwrap();
+        let before = lab.settings.cycle_repos.clone();
+        let res = delete_project(
+            &mut lab.settings,
+            &lab.store,
+            None,
+            lab.dir.path(),
+            "NOMAD",
+            false,
+            true,
+        );
+        // Either the project is not found (nothing to remove) or the call fails; it must
+        // never ask to remove a folder.
+        match res {
+            Ok(folder) => assert!(folder.is_none()),
+            Err(_) => assert_eq!(lab.settings.cycle_repos, before),
+        }
+    }
+
+    #[test]
+    fn ensure_project_idle_blocks_recording_jobs_and_outbox() {
+        let lab = Lab::new();
+        meeting_in(&lab, "m-idle", "NOMAD");
+        assert!(ensure_project_idle(&lab.store, "NOMAD", false).is_ok());
+        assert_eq!(
+            ensure_project_idle(&lab.store, "NOMAD", true)
+                .unwrap_err()
+                .code,
+            "busy"
+        );
+        let stages: Vec<&str> = queue::STAGES.iter().map(|s| s.as_str()).collect();
+        // A job that still has a stage to run blocks, and it blocks only its own project.
+        lab.store.create_job("m-idle", &stages, "{}", 1).unwrap();
+        assert!(ensure_project_idle(&lab.store, "NOMAD", false).is_err());
+        assert!(ensure_project_idle(&lab.store, "OTHER", false).is_ok());
+        // A failed job waits for a retry from the queue and does not block.
+        lab.store
+            .set_stage_status(
+                "m-idle",
+                stages[0],
+                store::StageStatus::Failed,
+                Some("x"),
+                2,
+            )
+            .unwrap();
+        assert!(ensure_project_idle(&lab.store, "NOMAD", false).is_ok());
+        // A finished job does not block.
+        for stage in &stages {
+            lab.store
+                .set_stage_status("m-idle", stage, store::StageStatus::Done, None, 3)
+                .unwrap();
+        }
+        assert!(ensure_project_idle(&lab.store, "NOMAD", false).is_ok());
+        // A queued outbox operation blocks until it is done or cancelled.
+        let (op, _) = lab
+            .store
+            .enqueue_op(
+                &store::NewOp {
+                    meeting_id: "m-idle".into(),
+                    target: store::OutboxTarget::Issues,
+                    kind: store::OutboxKind::CreateIssue,
+                    op_key: "k".into(),
+                    payload: "{}".into(),
+                    after_op_key: None,
+                },
+                4,
+            )
+            .unwrap();
+        assert_eq!(
+            ensure_project_idle(&lab.store, "NOMAD", false)
+                .unwrap_err()
+                .code,
+            "busy"
+        );
+        lab.store.cancel_op(op.id, 5).unwrap();
+        assert!(ensure_project_idle(&lab.store, "NOMAD", false).is_ok());
+    }
+
+    #[cfg(windows)]
+    fn junction(link: &Path, target: &Path) -> bool {
+        std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn managed_delete_target_rejects_trailing_separator_and_intermediate_junctions() {
+        let data = test_tmp::TestDir::new("cycles-junction2");
+        // The junction lives INSIDE the data folder and points to a folder inside it too, so
+        // the "outside the data folder" rule cannot be what rejects it.
+        let real_dir = data.path().join("real");
+        std::fs::create_dir_all(real_dir.join("deep")).unwrap();
+        let link = data.path().join("link");
+        if !junction(&link, &real_dir) {
+            eprintln!("skipped: cannot create a junction here");
+            return;
+        }
+        let with_sep = PathBuf::from(format!("{}\\", link.display()));
+        assert!(managed_delete_target(data.path(), &with_sep).is_err());
+        assert!(managed_delete_target(data.path(), &link).is_err());
+        // An intermediate junction below the data folder.
+        assert!(managed_delete_target(data.path(), &link.join("deep")).is_err());
+        // The real folder itself is fine.
+        assert!(managed_delete_target(data.path(), &real_dir.join("deep")).is_ok());
+        let _ = std::fs::remove_dir(&link);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn managed_delete_target_rejects_a_junction_that_points_back_to_the_data_dir() {
+        let data = test_tmp::TestDir::new("cycles-junction3");
+        std::fs::create_dir_all(data.path().join("sub")).unwrap();
+        let link = data.path().join("link");
+        if !junction(&link, data.path()) {
+            eprintln!("skipped: cannot create a junction here");
+            return;
+        }
+        assert!(managed_delete_target(data.path(), &link.join("sub")).is_err());
+        let _ = std::fs::remove_dir(&link);
+    }
+
+    #[test]
+    fn managed_delete_target_requires_an_absolute_path() {
+        let data = test_tmp::TestDir::new("cycles-rel");
+        assert!(managed_delete_target(data.path(), Path::new("projects/p")).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn network_and_volume_paths_are_not_local_drive_paths() {
+        for p in [
+            r"\\?\unc\srv\share\p",
+            r"\\?\UNC\srv\share\p",
+            r"\\?\Volume{1234}\p",
+            r"\\srv\share\p",
+            r"\\?\C:foo",
+        ] {
+            assert!(!is_local_drive_path(Path::new(p)), "{p}");
+            assert_eq!(strip_verbatim_prefix(Path::new(p)), PathBuf::from(p));
+        }
+        assert!(is_local_drive_path(Path::new(r"\\?\c:\data\p")));
+        assert_eq!(
+            strip_verbatim_prefix(Path::new(r"\\?\c:\data\p")),
+            PathBuf::from(r"c:\data\p")
+        );
+    }
+
+    #[test]
+    fn a_refused_deletion_changes_nothing_and_a_planned_one_changes_only_settings() {
+        let mut lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        meeting_in(&lab, "m-plan", "NOMAD");
+        let folder =
+            plan_project_deletion(&mut lab.settings, lab.dir.path(), "NOMAD", true).unwrap();
+        assert!(folder.is_some());
+        assert!(lab.settings.cycle_repos.is_empty());
+        // The database is untouched until the second half runs.
+        assert_eq!(
+            lab.store
+                .get_report_settings("m-plan")
+                .unwrap()
+                .unwrap()
+                .cycle_id
+                .as_deref(),
+            Some("NOMAD")
+        );
+        finish_project_deletion(&lab.store, None, "NOMAD", false).unwrap();
+        assert_eq!(
+            lab.store
+                .get_report_settings("m-plan")
+                .unwrap()
+                .unwrap()
+                .cycle_id,
+            None
+        );
+    }
+
+    #[test]
+    fn ensure_project_idle_blocks_a_meeting_being_recorded() {
+        let lab = Lab::new();
+        meeting_in(&lab, "m-rec", "NOMAD");
+        lab.store
+            .set_meeting_state("m-rec", MeetingState::Recording, None)
+            .unwrap();
+        assert!(ensure_project_idle(&lab.store, "NOMAD", false).is_err());
     }
 }

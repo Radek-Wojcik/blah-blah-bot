@@ -534,7 +534,7 @@ pub fn add_proposal(
     comment: Option<String>,
 ) -> IpcResult<DraftView> {
     let target = target.trim();
-    if !target.starts_with('#') {
+    if !target.starts_with('#') && !target.contains('/') {
         let draft = DraftFiles::new(meeting_dir).load().map_err(draft_error)?;
         if let Some(located) = cycles::locate(repos, &draft.cycle)? {
             let topics = located.repo.load_topics(&draft.cycle)?;
@@ -833,6 +833,40 @@ pub fn set_status_decision(
     let dir = meeting_dir(&state, &meeting_id)?;
     idle(&state, &meeting_id)?;
     let view = set_decision(&state.cycle_repos(), &dir, &proposal_id, decision, comment);
+    if let Ok(ref v) = view {
+        if let Some(p) = v
+            .draft
+            .status_proposals
+            .iter()
+            .find(|p| p.id == proposal_id)
+        {
+            let now = cycle_store::time::now_unix_ms() as i64;
+            if p.decision == Decision::Approved && p.status == ProposedStatus::Done {
+                if let Err(e) = state.with_store(|s| {
+                    s.set_task_done(&v.draft.cycle, &p.target, true, Some(&v.draft.date), now)
+                }) {
+                    tracing::warn!(error = %e.message, "could not record the completed task");
+                }
+            } else {
+                let was_closed_here = state
+                    .with_store(|s| s.list_task_completions(&v.draft.cycle))
+                    .ok()
+                    .is_some_and(|list| {
+                        list.iter().any(|c| {
+                            c.task_key == p.target
+                                && c.closed_by_meeting.as_deref() == Some(v.draft.date.as_str())
+                        })
+                    });
+                if was_closed_here {
+                    if let Err(e) = state.with_store(|s| {
+                        s.set_task_done(&v.draft.cycle, &p.target, false, None, now)
+                    }) {
+                        tracing::warn!(error = %e.message, "could not reopen the task");
+                    }
+                }
+            }
+        }
+    }
     after(&app, &meeting_id, view)
 }
 

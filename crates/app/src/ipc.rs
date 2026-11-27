@@ -115,6 +115,9 @@ pub struct MeetingSummary {
     pub short_title: Option<String>,
     #[serde(default)]
     pub report_url: Option<String>,
+    /// The draft is read-only because the meeting was published or has outbox operations.
+    #[serde(default)]
+    pub publish_locked: bool,
 }
 
 impl From<store::MeetingSummary> for MeetingSummary {
@@ -131,6 +134,7 @@ impl From<store::MeetingSummary> for MeetingSummary {
             cycle_id: None,
             short_title: None,
             report_url: None,
+            publish_locked: false,
         }
     }
 }
@@ -192,6 +196,7 @@ pub fn enrich_meeting_summary(
         });
     summary.short_title = read_draft_short_title(&recordings_root.join(dir));
     summary.report_url = publication.and_then(|p| p.report_url);
+    summary.publish_locked = publishers::flow::is_locked(store, &summary.id).unwrap_or(false);
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -275,6 +275,7 @@ test.describe("publishing on the mock backend", () => {
       .click();
     await page.getByRole("button", { name: "Project settings" }).click();
     await page.getByRole("tab", { name: "Integrations" }).click();
+    await page.getByRole("button", { name: "Discord details" }).click();
     await expect(
       page
         .getByRole("radiogroup", { name: "Discord publishing rule" })
@@ -289,7 +290,9 @@ test.describe("publishing on the mock backend", () => {
     const auto = rule(page, "GitHub").getByRole("radio", { name: "Automatic" });
     await auto.click();
     await expect(auto).toBeChecked();
-    await expect(panel(page)).toContainText("Automatic: the report, the transcript");
+    await expect(panel(page)).toContainText(
+      "Automatic: pushes report, transcript, screenshots and issues on completion",
+    );
     await expect(panel(page)).toContainText("cannot be taken back");
     // What no rule changes is said next to the switch, and holds: nothing is approved by itself.
     await expect(panel(page)).toContainText(
@@ -310,6 +313,7 @@ test.describe("publishing on the mock backend", () => {
       .click();
     await page.getByRole("button", { name: "Project settings" }).click();
     await page.getByRole("tab", { name: "Integrations" }).click();
+    await page.getByRole("button", { name: "GitHub details" }).click();
     await expect(
       page
         .getByRole("radiogroup", { name: "GitHub publishing rule" })
@@ -395,6 +399,7 @@ test.describe("publishing on the mock backend", () => {
     await page.goto(`${MAIN}&page=project&cycle=NOMAD`);
     await page.getByRole("button", { name: "Project settings" }).click();
     await page.getByRole("tab", { name: "Integrations" }).click();
+    await page.getByRole("button", { name: "Discord details" }).click();
     const form = page.getByRole("form", { name: "Webhook for cred:discord/nomad" });
     await form.getByRole("button", { name: "Clear" }).click();
     await expect(form).toContainText("No webhook stored");
@@ -510,6 +515,7 @@ test.describe("token setup", () => {
     await page.goto(`${MAIN}&page=project&cycle=NOMAD`);
     await page.getByRole("button", { name: "Project settings" }).click();
     await page.getByRole("tab", { name: "Integrations" }).click();
+    await page.getByRole("button", { name: "Discord details" }).click();
     const form = page.getByRole("form", { name: "Webhook for cred:discord/nomad" });
     await expect(form).toContainText("Webhook stored: discord.com webhook 0000...0007");
     await form.getByLabel("Webhook for cred:discord/nomad").fill("https://example.org/hook");
@@ -535,6 +541,7 @@ test.describe("token setup", () => {
     await page.goto(`${MAIN}&page=project&cycle=SANDBOX`);
     await page.getByRole("button", { name: "Project settings" }).click();
     await page.getByRole("tab", { name: "Integrations" }).click();
+    await page.getByRole("button", { name: "GitHub details" }).click();
     const bad = page.getByRole("form", { name: "GitHub repository of local" });
     await bad.getByLabel("GitHub repository of local").fill("not a repository");
     await bad.getByRole("button", { name: "Save link" }).click();
@@ -557,6 +564,7 @@ test.describe("the rule of a target is chosen explicitly", () => {
       ["GitHub", "Commit meeting reports to the repository"],
       ["Discord", "Post a summary to a Discord channel"],
     ] as const) {
+      await page.getByRole("button", { name: `${target} details` }).click();
       const box = page.getByRole("checkbox", { name: label });
       await box.uncheck();
       await expect(group(page, target)).toHaveCount(0);

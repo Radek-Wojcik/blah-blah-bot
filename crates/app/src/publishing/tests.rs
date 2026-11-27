@@ -411,6 +411,14 @@ fn the_tasks_of_a_cycle_come_from_the_last_read_of_its_issues() {
         rig.publishing.cycle_tasks("NOPE").unwrap_err().code,
         "not_found"
     );
+
+    // A task ticked off in the application moves to the done list and stays there.
+    rig.publishing
+        .with_store(|s| s.set_task_done("NOMAD", "#7", true, None, 1))
+        .unwrap();
+    let ticked = rig.publishing.cycle_tasks("NOMAD").unwrap();
+    assert!(ticked.open.is_empty());
+    assert!(ticked.done.iter().any(|t| t.number == 7));
 }
 
 #[test]

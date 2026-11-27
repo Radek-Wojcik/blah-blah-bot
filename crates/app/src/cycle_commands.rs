@@ -4,7 +4,7 @@
 
 use cycle_store::Repo;
 use serde::Deserialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::cycles::{
     self, CycleDetails, CycleDto, CycleListItem, PullResult, RepoDto, ReportDefaults,
@@ -73,6 +73,79 @@ pub fn save_cycle(
         changed(&app);
     }
     Ok(result)
+}
+
+/// Async: the work (and the Shell call that moves the folder to the Recycle Bin, which can
+/// take long or ask the user) runs off the UI thread.
+#[tauri::command]
+pub async fn delete_project(
+    app: AppHandle,
+    cycle_id: String,
+    delete_meetings: bool,
+    delete_folder: bool,
+) -> IpcResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        delete_project_blocking(&app, &cycle_id, delete_meetings, delete_folder)
+    })
+    .await
+    .map_err(|e| IpcError::new("internal", format!("the deletion did not finish: {e}")))?
+}
+
+/// Lock order of the application is store, then settings (the publishing code takes them in
+/// that order), and the recorder's own lock before the store. So: the recorder is asked first,
+/// with nothing locked; then, in ONE store critical section, the project must be idle, the
+/// settings are changed and saved (a failing save stops everything before anything
+/// irreversible), and the database and clips go. The folder goes last, outside every lock.
+fn delete_project_blocking(
+    app: &AppHandle,
+    cycle_id: &str,
+    delete_meetings: bool,
+    delete_folder: bool,
+) -> IpcResult<()> {
+    let state = app.state::<AppState>();
+    let root = state.recordings_root()?;
+    let data_dir = state.data_dir().to_path_buf();
+    if state.recorder.is_recording() {
+        return Err(IpcError::new(
+            "busy",
+            "a recording is in progress; stop it before deleting a project",
+        ));
+    }
+    let (folder, finished) = state.with_store_ipc(|store| {
+        // Meetings being recorded, jobs and outbox operations are read from the locked store.
+        cycles::ensure_project_idle(store, cycle_id, false)?;
+        let folder = state.update_settings(|s| {
+            cycles::plan_project_deletion(s, &data_dir, cycle_id, delete_folder)
+        })?;
+        let finished =
+            cycles::finish_project_deletion(store, Some(root.as_path()), cycle_id, delete_meetings);
+        Ok((folder, finished))
+    })?;
+    changed(app);
+    crate::commands::emit_meetings_changed(app);
+    finished.map_err(|e| {
+        IpcError::new(
+            e.code,
+            format!(
+                "the project was removed from the list, but cleaning its data failed part way; its folder was kept: {}",
+                e.message
+            ),
+        )
+    })?;
+    if let Some(folder) = folder {
+        let moved = cycles::move_to_recycle_bin(&folder);
+        changed(app);
+        moved.map_err(|e| {
+            IpcError::new(
+                e.code,
+                format!(
+                    "the project was removed but its folder was kept: {}",
+                    e.message
+                ),
+            )
+        })?;
+    }
+    Ok(())
 }
 
 #[tauri::command]

@@ -30,7 +30,7 @@ export function RuleChoice(props: {
           </li>
         ))}
       </ul>
-      {warning && <span className="target-rule-warn">{warning}</span>}
+      {warning && <small className="target-rule-warn">{warning}</small>}
     </div>
   );
 }

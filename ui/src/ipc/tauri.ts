@@ -81,6 +81,8 @@ export function createTauriBackend(): Backend {
     getCycle: (cycleId) => invoke("get_cycle", { cycleId }),
     createCycle: (id, name, repoId) => invoke("create_cycle", { id, name, repoId }),
     saveCycle: (cycle) => invoke("save_cycle", { cycle }),
+    deleteProject: (cycleId, deleteMeetings, deleteFolder) =>
+      invoke("delete_project", { cycleId, deleteMeetings, deleteFolder }),
     listTemplates: (cycleId) => invoke("list_templates", { cycleId }),
     getTemplate: (cycleId, name) => invoke("get_template", { cycleId, name }),
     saveTemplate: (cycleId, template) => invoke("save_template", { cycleId, template }),
@@ -89,6 +91,7 @@ export function createTauriBackend(): Backend {
     pullCycleRepo: (repoId) => invoke("pull_cycle_repo", { repoId }),
     reportDefaults: (cycleId) => invoke("report_defaults", { cycleId }),
     getBriefing: (cycleId, refresh) => invoke("get_briefing", { cycleId, refresh }),
+    setTaskDone: (cycleId, taskKey, done) => invoke("set_task_done", { cycleId, taskKey, done }),
     openBriefing: (cycleId) => invoke("open_briefing", { cycleId }),
     getDraft: (meetingId) => invoke("get_draft", { meetingId }),
     updateDraftItem: (meetingId, itemId, patch) =>

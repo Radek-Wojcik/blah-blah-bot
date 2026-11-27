@@ -76,10 +76,17 @@ describe("canProcess", () => {
     job: null,
     ...patch,
   });
-  it("allows a meeting without a job and one that is done", () => {
+  it("allows a meeting without a job and one that is done unless locked by publication", () => {
     expect(canProcess(meeting({}), null)).toBe(true);
     expect(canProcess(meeting({ job: "done" }), null)).toBe(true);
+    expect(canProcess(meeting({ job: "done", reportUrl: "https://example.com/r" }), null)).toBe(
+      false,
+    );
     expect(canProcess(meeting({ job: undefined }), null)).toBe(true);
+  });
+  it("blocks reprocessing when other publications lock the draft", () => {
+    expect(canProcess(meeting({ job: "done", publishLocked: true }), null)).toBe(false);
+    expect(canProcess(meeting({ job: "done", publishLocked: false }), null)).toBe(true);
   });
   it("blocks queued, running, waiting and failed jobs", () => {
     for (const job of ["queued", "waiting", "running", "failed"] as const) {
