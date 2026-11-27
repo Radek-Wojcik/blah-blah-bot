@@ -111,8 +111,9 @@ NVIDIA CUDA runtime wheels (nvidia-cublas-cu12 12.8.4.1, nvidia-cuda-runtime-cu1
 
 Not redistributed, supplied or installed by the user:
     llama.cpp (llama-server)     MIT                 https://github.com/ggml-org/llama.cpp
-    Microsoft Edge WebView2 Runtime (Microsoft proprietary license). The installer downloads
-        Microsoft's bootstrapper when the runtime is missing; this project ships no part of it.
+    Microsoft Edge WebView2 Runtime (Microsoft proprietary license). Windows 10 and 11
+        provide the runtime (or the user installs it separately); this project ships and
+        downloads no part of it.
     NVIDIA GPU driver (NVIDIA license).
 
 
