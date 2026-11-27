@@ -215,4 +215,23 @@ describe("HotkeyCapture", () => {
     expect(btn.getAttribute("aria-describedby")).toBe("hk-x-error");
     expect(host.querySelector("#hk-x-error")?.getAttribute("role")).toBe("alert");
   });
+
+  it("Backspace clears, Escape cancels without a change, and a held key is ignored", async () => {
+    const { events, render, onChange } = renderWithBackend();
+    await render();
+    const btn = host.querySelector<HTMLButtonElement>("#hk-x")!;
+
+    await act(async () => btn.click());
+    await key(btn, { code: "KeyS", key: "s", ctrlKey: true, repeat: true });
+    expect(onChange).not.toHaveBeenCalled();
+    expect(btn.getAttribute("data-hotkey-capturing")).toBe("true");
+    await key(btn, { code: "Escape", key: "Escape" });
+    expect(onChange).not.toHaveBeenCalled();
+    expect(btn.getAttribute("data-hotkey-capturing")).toBeNull();
+
+    await act(async () => btn.click());
+    await key(btn, { code: "Backspace", key: "Backspace" });
+    expect(onChange).toHaveBeenCalledWith("");
+    expect(events.at(-1)).toBe(false);
+  });
 });

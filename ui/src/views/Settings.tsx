@@ -62,8 +62,9 @@ export function SettingsView(props: SettingsViewProps = {}) {
 
   if (prevInitialTab !== initialTab) {
     setPrevInitialTab(initialTab);
-    if (initialTab && !dirty) {
-      setTab(initialTab);
+    // Going back to the plain Settings route (no tab in it) shows the default tab again.
+    if (!dirty) {
+      setTab(initialTab ?? "models");
     }
   }
 

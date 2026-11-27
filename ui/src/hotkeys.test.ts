@@ -5,6 +5,7 @@ import {
   DEFAULT_SCREENSHOT_HOTKEY,
   formatHotkeyDisplay,
   isAltGrCombo,
+  normalizeHotkey,
   validateHotkey,
   notifySettingsChanged,
   onSettingsChanged,
@@ -216,5 +217,12 @@ describe("hotkeys", () => {
     unsub();
     notifySettingsChanged();
     expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes case and order of key names", () => {
+    expect(normalizeHotkey("ctrl+f9")).toBe(normalizeHotkey("Ctrl+F9"));
+    expect(normalizeHotkey("shift+alt+ctrl+pageup")).toBe("Ctrl+Alt+Shift+PageUp");
+    expect(normalizeHotkey("ctrl+numpadadd")).toBe("Ctrl+NumpadAdd");
+    expect(normalizeHotkey("win+r")).toBe("Super+R");
   });
 });

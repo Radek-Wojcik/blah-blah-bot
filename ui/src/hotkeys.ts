@@ -78,6 +78,19 @@ function keyFromCode(code: string): string | null {
   return CODE_TO_KEY[code] ?? null;
 }
 
+const NAMED_KEYS = new Map(
+  [...Object.values(CODE_TO_KEY), ...Array.from({ length: 10 }, (_, i) => `Numpad${i}`)].map(
+    (k) => [k.toLowerCase(), k],
+  ),
+);
+
+/** Canonical spelling of a key name: `f9` -> `F9`, `pageup` -> `PageUp`, `s` -> `S`. */
+function normalizeKeyName(part: string): string {
+  if (part.length === 1) return part.toUpperCase();
+  if (/^f([1-9]|1[0-9]|2[0-4])$/i.test(part)) return part.toUpperCase();
+  return NAMED_KEYS.get(part.toLowerCase()) ?? part;
+}
+
 export function normalizeHotkey(hotkey: string): string {
   const parts = hotkey
     .split("+")
@@ -94,7 +107,7 @@ export function normalizeHotkey(hotkey: string): string {
     else if (lower === "super" || lower === "meta" || lower === "win" || lower === "cmd") {
       mods.add("Super");
     } else {
-      key = part.length === 1 ? part.toUpperCase() : part;
+      key = normalizeKeyName(part);
     }
   }
   const ordered: string[] = [];
@@ -156,6 +169,7 @@ export type CaptureKeyLike = Pick<
   KeyboardEvent,
   "code" | "key" | "ctrlKey" | "altKey" | "shiftKey" | "metaKey"
 > & {
+  repeat?: boolean;
   getModifierState?: (keyArg: string) => boolean;
 };
 
@@ -192,6 +206,11 @@ export function captureKeyDown(e: CaptureKeyLike, otherHotkey?: string): Capture
     !(typeof e.getModifierState === "function" && e.getModifierState("AltGraph"))
   ) {
     return { kind: "leave" };
+  }
+
+  if (e.repeat) {
+    // A held key must not re-run the capture (it would repeat errors or save twice).
+    return { kind: "ignore" };
   }
 
   const key = keyFromCode(e.code);

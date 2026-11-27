@@ -9,7 +9,6 @@ import { buildTimeline, segmentAt, speakerColors } from "../processing";
 /** Transcript of one meeting: speakers, segments with screenshots in between, and the editor. */
 export function TranscriptView(props: {
   meetingId: string;
-  onBack?: () => void;
   onOpenSpeakers: () => void;
   /** A time in the meeting: the segment there is scrolled into view and highlighted. */
   highlightMs?: number | null;

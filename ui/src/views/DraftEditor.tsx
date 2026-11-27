@@ -50,7 +50,6 @@ type Pane = "items" | "report";
  */
 export function DraftEditor(props: {
   meetingId: string;
-  onBack?: () => void;
   /** Opens the transcript at a time in the meeting. */
   onOpenTranscript: (atMs: number) => void;
   onOpenQueue: () => void;

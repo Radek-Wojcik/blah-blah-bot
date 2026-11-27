@@ -166,7 +166,7 @@ export function Main() {
   }, [history, page, settingsDirty]);
 
   useEffect(() => {
-    if (mouseButtons === "off" || wizard !== null) return;
+    const navigationOff = mouseButtons === "off" || wizard !== null;
 
     const isBlocked = () =>
       document.querySelector('[role="dialog"], [role="alertdialog"]') !== null ||
@@ -180,8 +180,9 @@ export function Main() {
 
     const handleSideActivate = (e: MouseEvent) => {
       if (e.button !== 3 && e.button !== 4) return;
+      // Always swallow the side buttons so the web view never navigates by itself.
       e.preventDefault();
-      if (isBlocked()) return;
+      if (navigationOff || isBlocked()) return;
 
       const now = Date.now();
       const prev = lastSideClickRef.current;

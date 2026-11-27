@@ -168,7 +168,6 @@ export function MeetingDetailView({
       {tab === "draft" && (
         <DraftEditor
           meetingId={meetingId}
-          onBack={onBack}
           onOpenTranscript={(atMs) => {
             setJumpMs(atMs);
             selectTab("transcript");
@@ -180,16 +179,11 @@ export function MeetingDetailView({
         <TranscriptView
           meetingId={meetingId}
           highlightMs={jumpMs}
-          onBack={onBack}
           onOpenSpeakers={() => selectTab("speakers")}
         />
       )}
       {tab === "speakers" && (
-        <SpeakersView
-          meetingId={meetingId}
-          onBack={onBack}
-          onOpenTranscript={() => selectTab("transcript")}
-        />
+        <SpeakersView meetingId={meetingId} onOpenTranscript={() => selectTab("transcript")} />
       )}
     </>
   );
