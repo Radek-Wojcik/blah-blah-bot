@@ -596,27 +596,9 @@ impl Session {
                 let peak = s.ctx.take_peak();
                 // Fall off smoothly instead of jumping to zero between packets.
                 s.level = if peak >= s.level { peak } else { s.level * 0.7 };
-                let raw_levels = s.ctx.take_levels();
-                let mut next_bars = [0.0; LEVEL_BARS];
-                for (i, b) in next_bars.iter_mut().enumerate() {
-                    let prev = s.levels.bars[i];
-                    let cur = raw_levels.bars[i];
-                    *b = if cur >= prev { cur } else { prev * 0.7 };
-                }
-                s.levels = AudioLevels {
-                    peak: if raw_levels.peak >= s.levels.peak {
-                        raw_levels.peak
-                    } else {
-                        s.levels.peak * 0.7
-                    },
-                    rms: if raw_levels.rms >= s.levels.rms {
-                        raw_levels.rms
-                    } else {
-                        s.levels.rms * 0.7
-                    },
-                    bars: next_bars,
-                    peak_hold: raw_levels.peak_hold.max(s.levels.peak_hold * 0.85),
-                };
+                // Read-only: the capture thread owns the envelope and the reader only falls off
+                // while the stream is idle (see `capture::idle_fall`), so repeated reads agree.
+                s.levels = s.ctx.levels();
                 let (offset_ms, error) = s
                     .state
                     .lock()
