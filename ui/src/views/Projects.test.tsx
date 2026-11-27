@@ -523,6 +523,12 @@ describe("ProjectDetailView, ProjectSettingsModal, and ImportMeetingModal", () =
     });
     await flush();
 
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('button[aria-label="GitHub details"]')!.click();
+      host.querySelector<HTMLButtonElement>('button[aria-label="Discord details"]')!.click();
+    });
+    await flush();
+
     // GitHub repository link editing & access test.
     const repoForm = host.querySelector<HTMLElement>(
       '[role="form"][aria-label="GitHub repository of team-cycles"]',

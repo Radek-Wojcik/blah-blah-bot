@@ -142,6 +142,7 @@ test.describe("projects and project settings on the mock backend", () => {
     await modal.getByRole("button", { name: "Add participant" }).click();
     await modal.getByLabel("Participant 5 name").fill("No Id");
     await modal.getByRole("tab", { name: "Integrations" }).click();
+    await modal.getByRole("button", { name: "Discord details" }).click();
     await modal.getByLabel("Webhook credential reference").fill("https://discord.example/hook");
     await modal.getByRole("button", { name: "Save project settings" }).click();
     const problems = modal.getByRole("alert", { name: "Problems" });

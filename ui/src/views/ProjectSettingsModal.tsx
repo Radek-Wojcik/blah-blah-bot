@@ -106,6 +106,11 @@ export function ProjectSettingsModal({
     null,
   );
   const [storedWebhookRefs, setStoredWebhookRefs] = useState<Set<string>>(() => new Set());
+  const [openTargets, setOpenTargets] = useState<{
+    github: boolean;
+    discord: boolean;
+    notion: boolean;
+  }>({ github: false, discord: false, notion: false });
 
   const projectIdInputId = useId();
   const reportFolderInputId = useId();
@@ -981,149 +986,196 @@ export function ProjectSettingsModal({
               <fieldset>
                 <legend>GitHub</legend>
                 <div
-                  className="form"
-                  role="form"
-                  aria-label={`GitHub repository of ${details.repoId}`}
+                  className="integration-row"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "0.75rem",
+                  }}
                 >
-                  <label>
-                    GitHub repository of {details.repoId} (owner/name)
+                  <label className="check" style={{ margin: 0 }}>
                     <input
-                      value={githubRepoInput}
-                      placeholder="owner/name"
-                      autoComplete="off"
-                      onChange={(e) => {
-                        setGithubRepoInput(e.target.value);
-                        setRepoMsg(null);
-                      }}
+                      type="checkbox"
+                      checked={github != null}
+                      onChange={(e) =>
+                        setTargets({
+                          github: e.target.checked
+                            ? { path: "meetings", publish: DEFAULT_PUBLISH_RULE.github }
+                            : null,
+                        })
+                      }
                     />
-                    <small>
-                      Leave empty when the Git remote is already on github.com; it is read from the
-                      remote automatically.
-                    </small>
+                    Commit meeting reports to the repository
                   </label>
-                  <label>
-                    GitHub API address (optional)
-                    <input
-                      aria-label="GitHub API address"
-                      value={githubApiInput}
-                      placeholder="https://api.github.com"
-                      autoComplete="off"
-                      onChange={(e) => {
-                        setGithubApiInput(e.target.value);
-                        setRepoMsg(null);
-                      }}
-                    />
-                    <small>Only for GitHub Enterprise servers. Empty uses github.com.</small>
-                  </label>
-                  {repoMsg && (
-                    <p
-                      className={repoMsg.kind === "error" ? "error" : "secret-result"}
-                      role={repoMsg.kind === "error" ? "alert" : "status"}
-                    >
-                      {repoMsg.text}
-                    </p>
-                  )}
-                  <div className="actions">
-                    <button
-                      type="button"
-                      className="btn btn-small btn-ghost"
-                      disabled={repoBusy || repoLinkDirty}
-                      title={repoLinkDirty ? "Save the repository link before testing." : undefined}
-                      onClick={() => void testGithubLink()}
-                    >
-                      Test access
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-small"
-                      disabled={repoBusy || !repoLinkDirty}
-                      onClick={() => void saveGithubLink()}
-                    >
-                      Save link
-                    </button>
-                  </div>
-                </div>
-
-                <label className="check">
-                  <input
-                    type="checkbox"
-                    checked={github != null}
-                    onChange={(e) =>
-                      setTargets({
-                        github: e.target.checked
-                          ? { path: "meetings", publish: DEFAULT_PUBLISH_RULE.github }
-                          : null,
-                      })
+                  <button
+                    type="button"
+                    className="btn btn-small btn-ghost"
+                    aria-label="GitHub details"
+                    aria-expanded={openTargets.github}
+                    onClick={() =>
+                      setOpenTargets((cur) => ({ ...cur, github: !cur.github }))
                     }
-                  />
-                  Commit meeting reports to the repository
-                </label>
-                {github && (
-                  <>
-                    <div className="field-block">
-                      <div className="field-label-row">
-                        <label htmlFor={reportFolderInputId}>Folder for meeting reports</label>
-                        <HelpPopover
-                          title="Report folder"
-                          text="Relative folder inside the Git repository where Markdown reports are committed (use forward slashes)."
-                          recommended="meetings"
+                  >
+                    {openTargets.github ? "Hide" : "Details"}
+                  </button>
+                </div>
+                {openTargets.github && (
+                  <div className="form" style={{ marginTop: "0.75rem" }}>
+                    <div
+                      className="form"
+                      role="form"
+                      aria-label={`GitHub repository of ${details.repoId}`}
+                    >
+                      <label>
+                        GitHub repository of {details.repoId} (owner/name)
+                        <input
+                          value={githubRepoInput}
+                          placeholder="owner/name"
+                          autoComplete="off"
+                          onChange={(e) => {
+                            setGithubRepoInput(e.target.value);
+                            setRepoMsg(null);
+                          }}
                         />
+                        <small>
+                          Leave empty when the Git remote is already on github.com; it is read from
+                          the remote automatically.
+                        </small>
+                      </label>
+                      <label>
+                        GitHub API address (optional)
+                        <input
+                          aria-label="GitHub API address"
+                          value={githubApiInput}
+                          placeholder="https://api.github.com"
+                          autoComplete="off"
+                          onChange={(e) => {
+                            setGithubApiInput(e.target.value);
+                            setRepoMsg(null);
+                          }}
+                        />
+                        <small>Only for GitHub Enterprise servers. Empty uses github.com.</small>
+                      </label>
+                      {repoMsg && (
+                        <p
+                          className={repoMsg.kind === "error" ? "error" : "secret-result"}
+                          role={repoMsg.kind === "error" ? "alert" : "status"}
+                        >
+                          {repoMsg.text}
+                        </p>
+                      )}
+                      <div className="actions">
+                        <button
+                          type="button"
+                          className="btn btn-small btn-ghost"
+                          disabled={repoBusy || repoLinkDirty}
+                          title={
+                            repoLinkDirty ? "Save the repository link before testing." : undefined
+                          }
+                          onClick={() => void testGithubLink()}
+                        >
+                          Test access
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-small"
+                          disabled={repoBusy || !repoLinkDirty}
+                          onClick={() => void saveGithubLink()}
+                        >
+                          Save link
+                        </button>
                       </div>
-                      <input
-                        id={reportFolderInputId}
-                        value={github.path}
-                        onChange={(e) =>
-                          setTargets({ github: { ...github, path: e.target.value } })
-                        }
-                      />
-                      <FieldProblems issues={issues} path="targets.github.path" />
                     </div>
-                    <label className="check">
-                      <input
-                        type="checkbox"
-                        checked={github.issues !== false}
-                        onChange={(e) =>
-                          setTargets({
-                            github: { ...github, issues: e.target.checked ? undefined : false },
-                          })
-                        }
-                      />
-                      Create GitHub issues for tasks and write back approved status changes
-                    </label>
-                    <div className="field-group">
-                      <span className="field-label">When to publish</span>
-                      <RuleChoice
-                        name="GitHub"
-                        target="github"
-                        value={github.publish ?? DEFAULT_PUBLISH_RULE.github}
-                        onChange={(publish) => setTargets({ github: { ...github, publish } })}
-                      />
-                    </div>
-                  </>
+                    {github && (
+                      <>
+                        <div className="field-block">
+                          <div className="field-label-row">
+                            <label htmlFor={reportFolderInputId}>Folder for meeting reports</label>
+                            <HelpPopover
+                              title="Report folder"
+                              text="Relative folder inside the Git repository where Markdown reports are committed (use forward slashes)."
+                              recommended="meetings"
+                            />
+                          </div>
+                          <input
+                            id={reportFolderInputId}
+                            value={github.path}
+                            onChange={(e) =>
+                              setTargets({ github: { ...github, path: e.target.value } })
+                            }
+                          />
+                          <FieldProblems issues={issues} path="targets.github.path" />
+                        </div>
+                        <label className="check">
+                          <input
+                            type="checkbox"
+                            checked={github.issues !== false}
+                            onChange={(e) =>
+                              setTargets({
+                                github: { ...github, issues: e.target.checked ? undefined : false },
+                              })
+                            }
+                          />
+                          Create GitHub issues for tasks and write back approved status changes
+                        </label>
+                        <div className="field-group">
+                          <span className="field-label">When to publish</span>
+                          <RuleChoice
+                            name="GitHub"
+                            target="github"
+                            value={github.publish ?? DEFAULT_PUBLISH_RULE.github}
+                            onChange={(publish) => setTargets({ github: { ...github, publish } })}
+                          />
+                        </div>
+                      </>
+                    )}
+                  </div>
                 )}
               </fieldset>
 
               <fieldset>
                 <legend>Discord</legend>
-                <label className="check">
-                  <input
-                    type="checkbox"
-                    checked={discordRef != null}
-                    onChange={(e) =>
-                      setTargets({
-                        discord: e.target.checked
-                          ? {
-                              webhook: `cred:discord/${cycle.id.toLowerCase()}`,
-                              publish: DEFAULT_PUBLISH_RULE.discord,
-                            }
-                          : null,
-                      })
+                <div
+                  className="integration-row"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "0.75rem",
+                  }}
+                >
+                  <label className="check" style={{ margin: 0 }}>
+                    <input
+                      type="checkbox"
+                      checked={discordRef != null}
+                      onChange={(e) =>
+                        setTargets({
+                          discord: e.target.checked
+                            ? {
+                                webhook: `cred:discord/${cycle.id.toLowerCase()}`,
+                                publish: DEFAULT_PUBLISH_RULE.discord,
+                              }
+                            : null,
+                        })
+                      }
+                    />
+                    Post a summary to a Discord channel
+                  </label>
+                  <button
+                    type="button"
+                    className="btn btn-small btn-ghost"
+                    aria-label="Discord details"
+                    aria-expanded={openTargets.discord}
+                    onClick={() =>
+                      setOpenTargets((cur) => ({ ...cur, discord: !cur.discord }))
                     }
-                  />
-                  Post a summary to a Discord channel
-                </label>
-                {discordRef && (
-                  <>
+                  >
+                    {openTargets.discord ? "Hide" : "Details"}
+                  </button>
+                </div>
+                {openTargets.discord && discordRef && (
+                  <div className="form" style={{ marginTop: "0.75rem" }}>
                     <div className="field-block">
                       <div className="field-label-row">
                         <label htmlFor={webhookRefInputId}>Webhook credential reference</label>
@@ -1246,26 +1298,47 @@ export function ProjectSettingsModal({
                         onChange={(publish) => setTargets({ discord: { ...discordRef, publish } })}
                       />
                     </div>
-                  </>
+                  </div>
                 )}
               </fieldset>
 
               <fieldset>
                 <legend>Notion</legend>
-                <label className="check">
-                  <input
-                    type="checkbox"
-                    checked={notion != null}
-                    onChange={(e) =>
-                      setTargets({
-                        notion: e.target.checked ? { database: "", publish: "on-approval" } : null,
-                      })
+                <div
+                  className="integration-row"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "0.75rem",
+                  }}
+                >
+                  <label className="check" style={{ margin: 0 }}>
+                    <input
+                      type="checkbox"
+                      checked={notion != null}
+                      onChange={(e) =>
+                        setTargets({
+                          notion: e.target.checked ? { database: "", publish: "on-approval" } : null,
+                        })
+                      }
+                    />
+                    Add the report to a Notion database
+                  </label>
+                  <button
+                    type="button"
+                    className="btn btn-small btn-ghost"
+                    aria-label="Notion details"
+                    aria-expanded={openTargets.notion}
+                    onClick={() =>
+                      setOpenTargets((cur) => ({ ...cur, notion: !cur.notion }))
                     }
-                  />
-                  Add the report to a Notion database
-                </label>
-                {notion && (
-                  <>
+                  >
+                    {openTargets.notion ? "Hide" : "Details"}
+                  </button>
+                </div>
+                {openTargets.notion && notion && (
+                  <div className="form" style={{ marginTop: "0.75rem" }}>
                     <div className="field-block">
                       <div className="field-label-row">
                         <label htmlFor={notionDbInputId}>Database ID or cred: reference</label>
@@ -1302,7 +1375,7 @@ export function ProjectSettingsModal({
                         ))}
                       </select>
                     </label>
-                  </>
+                  </div>
                 )}
               </fieldset>
             </div>
