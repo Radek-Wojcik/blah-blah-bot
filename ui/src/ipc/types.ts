@@ -524,15 +524,18 @@ export interface SetupPathCheck {
   message: string | null;
 }
 
-/** Event `setup-progress` while the processing environment is prepared. */
+export type SetupTask = "uv-sync" | "llama-server" | "language-model" | "speech-models";
+
+export type SetupPhase = "started" | "progress" | "verifying" | "done" | "failed" | "cancelled";
+
+/** Event `setup-progress` emitted while a first-run setup task runs. */
 export interface SetupProgress {
-  key: string;
-  line: string;
-  fraction: number | null;
-  /** The last event of a run: `ok` and `error` tell how it ended. */
-  done: boolean;
-  ok: boolean | null;
-  error: string | null;
+  task: SetupTask;
+  phase: SetupPhase;
+  downloadedBytes: number | null;
+  totalBytes: number | null;
+  elapsedSecs: number;
+  message: string;
 }
 
 // ---------- Stage 3: speakers and voice profiles ----------

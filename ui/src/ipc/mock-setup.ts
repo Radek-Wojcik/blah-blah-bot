@@ -9,8 +9,10 @@ import type { GgufFile, ModelStatus, ProcessingSettings } from "./types";
  * - `no-vision`: ready, except that the screenshot model is not downloaded.
  * - `no-llama`: ready, except that no llama-server is configured or found.
  * - `download-fails`: fresh, and the first download of every model fails.
+ * - `setup-offline`: fresh, and the first run of each setup task fails with an offline error.
  */
-export type SetupScenario = "fresh" | "ready" | "no-vision" | "no-llama" | "download-fails";
+export type SetupScenario =
+  "fresh" | "ready" | "no-vision" | "no-llama" | "download-fails" | "setup-offline";
 
 export const SETUP_SCENARIOS: SetupScenario[] = [
   "fresh",
@@ -18,6 +20,7 @@ export const SETUP_SCENARIOS: SetupScenario[] = [
   "no-vision",
   "no-llama",
   "download-fails",
+  "setup-offline",
 ];
 
 /** The scenario named by a query value, or undefined. */
@@ -33,6 +36,10 @@ export interface SetupWorld {
   workerEnv: boolean;
   /** Attempts to prepare the environment that still fail before one succeeds. */
   envFailures: number;
+  /** Attempts to download llama-server that still fail before one succeeds. */
+  llamaFailures: number;
+  /** Attempts to download the default language model that still fail before one succeeds. */
+  llmFailures: number;
   llamaCandidates: string[];
   ggufs: GgufFile[];
   /** Downloads that still fail before one succeeds, per model key. */
@@ -61,6 +68,8 @@ export function idleWorld(): SetupWorld {
     active: false,
     workerEnv: true,
     envFailures: 0,
+    llamaFailures: 0,
+    llmFailures: 0,
     llamaCandidates: [],
     ggufs: [],
     downloadFailures: {},
@@ -86,6 +95,8 @@ export function applySetupScenario(
     active: true,
     workerEnv: false,
     envFailures: 0,
+    llamaFailures: 0,
+    llmFailures: 0,
     llamaCandidates: [DEMO_LLAMA],
     ggufs,
     downloadFailures: {},
@@ -94,7 +105,7 @@ export function applySetupScenario(
   processing.firstRunDone = false;
   processing.describeScreenshots = true;
   processing.skipReports = false;
-  if (scenario === "fresh" || scenario === "download-fails") {
+  if (scenario === "fresh" || scenario === "download-fails" || scenario === "setup-offline") {
     processing.hfTokenSet = false;
     processing.llamaServerPath = "";
     processing.llm!.managed.modelPath = "";
@@ -102,6 +113,11 @@ export function applySetupScenario(
     if (scenario === "download-fails") {
       world.workerEnv = true;
       world.downloadFailures = { "whisper-turbo": 1, diarization: 1, vision: 1 };
+    }
+    if (scenario === "setup-offline") {
+      world.envFailures = 1;
+      world.llamaFailures = 1;
+      world.llmFailures = 1;
     }
     return world;
   }

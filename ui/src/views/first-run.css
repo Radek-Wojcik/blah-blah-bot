@@ -123,6 +123,11 @@
   font-family: var(--font-mono);
   font-size: 0.8em;
 }
+.setup-progress-text {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
 .progress-busy {
   animation: setup-busy 1.4s ease-in-out infinite alternate;
 }

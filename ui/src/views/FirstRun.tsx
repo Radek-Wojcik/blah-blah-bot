@@ -25,9 +25,19 @@ import type {
   ModelStatus,
   ProcessingSettings,
   SetupItem,
+  SetupProgress,
   SetupStatus,
+  SetupTask,
 } from "../ipc/types";
 import { percent } from "../processing";
+import {
+  SETUP_TIME_NOTE,
+  formatFailureMessage,
+  formatSetupProgress,
+  isTaskActive,
+  progressPercent,
+  taskActionForPhase,
+} from "./firstRunProgress";
 import "./first-run.css";
 
 /** The URL of the page where the terms of the gated speaker model are accepted. */
@@ -50,7 +60,7 @@ interface Ctx {
   /** Runs an action; its error is shown at the foot of the step. */
   act: (p: Promise<unknown>) => Promise<void>;
   downloads: Downloads;
-  env: EnvRun;
+  setupTasks: SetupTasks;
   go: (step: StepId) => void;
   onOpenSettings?: () => void;
 }
@@ -61,12 +71,17 @@ interface Downloads {
   start: (key: string) => void;
 }
 
-interface EnvRun {
-  running: boolean;
+interface SetupTaskState {
+  latest: SetupProgress | null;
   lines: string[];
-  fraction: number | null;
   error: string | null;
-  start: () => void;
+}
+
+interface SetupTasks {
+  tasks: Record<SetupTask, SetupTaskState>;
+  anyActive: boolean;
+  start: (task: Exclude<SetupTask, "speech-models">) => void;
+  cancel: () => void;
 }
 
 function useDownloads(backend: Backend, reload: () => Promise<void>): Downloads {
@@ -120,22 +135,33 @@ function omit<T>(record: Record<string, T>, key: string): Record<string, T> {
   return next;
 }
 
-function useEnvRun(backend: Backend, reload: () => Promise<void>): EnvRun {
-  const [running, setRunning] = useState(false);
-  const [lines, setLines] = useState<string[]>([]);
-  const [fraction, setFraction] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
+const emptyTask = (): SetupTaskState => ({ latest: null, lines: [], error: null });
+
+const initialTasks = (): Record<SetupTask, SetupTaskState> => ({
+  "uv-sync": emptyTask(),
+  "llama-server": emptyTask(),
+  "language-model": emptyTask(),
+  "speech-models": emptyTask(),
+});
+
+function useSetupTasks(backend: Backend, reload: () => Promise<void>): SetupTasks {
+  const [tasks, setTasks] = useState<Record<SetupTask, SetupTaskState>>(initialTasks);
   useEffect(() => {
     let cancelled = false;
     let off: (() => void) | undefined;
     void backend
       .onSetupProgress((p) => {
-        if (p.key !== "workerEnv") return;
-        if (p.line) setLines((cur) => [...cur.slice(-5), p.line]);
-        setFraction(p.fraction);
-        if (p.done) {
-          setRunning(false);
-          setError(p.ok ? null : (p.error ?? "Preparing the environment failed."));
+        setTasks((cur) => {
+          const prev = cur[p.task];
+          const trimmed = p.message.trim();
+          const lines =
+            trimmed !== "" && prev.lines[prev.lines.length - 1] !== trimmed
+              ? [...prev.lines.slice(-5), trimmed]
+              : prev.lines;
+          const error = p.phase === "failed" ? formatFailureMessage(p.message) : null;
+          return { ...cur, [p.task]: { latest: p, lines, error } };
+        });
+        if (p.phase === "done" || p.phase === "failed" || p.phase === "cancelled") {
           void reload();
         }
       })
@@ -149,17 +175,51 @@ function useEnvRun(backend: Backend, reload: () => Promise<void>): EnvRun {
     };
   }, [backend, reload]);
 
-  const start = () => {
-    setError(null);
-    setLines([]);
-    setFraction(null);
-    setRunning(true);
-    backend.prepareWorkerEnv().catch((e) => {
-      setRunning(false);
-      setError(errorMessage(e));
-    });
-  };
-  return { running, lines, fraction, error, start };
+  const start = useCallback(
+    (task: Exclude<SetupTask, "speech-models">) => {
+      const started: SetupProgress = {
+        task,
+        phase: "started",
+        downloadedBytes: null,
+        totalBytes: null,
+        elapsedSecs: 0,
+        message: "Starting...",
+      };
+      setTasks((cur) => ({ ...cur, [task]: { latest: started, lines: [], error: null } }));
+      const run =
+        task === "uv-sync"
+          ? backend.prepareWorkerEnv()
+          : task === "llama-server"
+            ? backend.downloadLlamaServer()
+            : backend.downloadLanguageModel();
+      run.catch((e) => {
+        const msg = errorMessage(e);
+        setTasks((cur) => ({
+          ...cur,
+          [task]: {
+            ...cur[task],
+            latest: {
+              task,
+              phase: "failed",
+              downloadedBytes: null,
+              totalBytes: null,
+              elapsedSecs: 0,
+              message: msg,
+            },
+            error: formatFailureMessage(msg),
+          },
+        }));
+      });
+    },
+    [backend],
+  );
+
+  const cancel = useCallback(() => {
+    void backend.cancelSetupTask().catch(() => undefined);
+  }, [backend]);
+
+  const anyActive = Object.values(tasks).some((t) => isTaskActive(t.latest?.phase));
+  return { tasks, anyActive, start, cancel };
 }
 
 /**
@@ -216,7 +276,7 @@ export function FirstRun(props: {
   }, [backend]);
 
   const downloads = useDownloads(backend, reload);
-  const env = useEnvRun(backend, reload);
+  const setupTasks = useSetupTasks(backend, reload);
 
   // A new step starts at its heading, so keyboard and screen reader users notice the change.
   useEffect(() => {
@@ -255,7 +315,7 @@ export function FirstRun(props: {
     change,
     act,
     downloads,
-    env,
+    setupTasks,
     go,
     onOpenSettings: onOpenSettings
       ? () => void backend.setFirstRunDone(true).then(onOpenSettings)
@@ -373,22 +433,112 @@ function badgeClass(state: SetupItem["state"]): string {
   return "badge-job-failed";
 }
 
-function ProgressBar(props: { label: string; fraction: number | null }) {
-  const { label, fraction } = props;
+function ProgressBar(props: {
+  label: string;
+  fraction?: number | null;
+  percentValue?: number | null;
+}) {
+  const { label, fraction = null, percentValue } = props;
+  const pct =
+    percentValue !== undefined ? percentValue : fraction === null ? null : percent(fraction);
   return (
     <div
       className="progress"
       role="progressbar"
       aria-label={label}
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={fraction === null ? undefined : percent(fraction)}
+      aria-valuemin={pct === null ? undefined : 0}
+      aria-valuemax={pct === null ? undefined : 100}
+      aria-valuenow={pct === null ? undefined : pct}
     >
       <span
-        className={fraction === null ? "progress-fill progress-busy" : "progress-fill"}
-        style={{ width: fraction === null ? "40%" : `${percent(fraction)}%` }}
+        className={pct === null ? "progress-fill progress-busy" : "progress-fill"}
+        style={{ width: pct === null ? "40%" : `${pct}%` }}
       />
     </div>
+  );
+}
+
+function SetupTaskPanel(props: {
+  task: SetupTask;
+  progressLabel: string;
+  startLabel: string;
+  ready: boolean;
+  working?: boolean;
+  state: SetupTaskState;
+  anyActive: boolean;
+  onStart: () => void;
+  onCancel: () => void;
+  showLog?: boolean;
+}) {
+  const {
+    task,
+    progressLabel,
+    startLabel,
+    ready,
+    working = false,
+    state,
+    anyActive,
+    onStart,
+    onCancel,
+    showLog = false,
+  } = props;
+  const phase = state.latest?.phase ?? (working ? "started" : null);
+  const active = isTaskActive(phase);
+  const action = taskActionForPhase(phase, ready);
+  const pct = state.latest
+    ? progressPercent(state.latest.downloadedBytes, state.latest.totalBytes)
+    : null;
+  const statusText = state.latest ? formatSetupProgress(state.latest) : null;
+
+  return (
+    <>
+      {active && (
+        <div className="setup-run" data-setup-task={task}>
+          <ProgressBar label={progressLabel} percentValue={pct} />
+          {statusText && (
+            <p className="setup-progress-text" role="status" aria-live="polite">
+              {statusText}
+            </p>
+          )}
+          {showLog && state.lines.length > 0 && (
+            <ul className="setup-log" aria-label="Progress" aria-live="polite">
+              {state.lines.map((l, n) => (
+                <li key={n}>{l}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+      {phase === "cancelled" && (
+        <p className="notice" role="status">
+          {state.latest?.message || "Cancelled."} Press Retry to continue where it stopped.
+        </p>
+      )}
+      {(phase === "failed" || state.error) && (
+        <p className="error" role="alert">
+          {state.error ?? formatFailureMessage(state.latest?.message ?? "")}
+        </p>
+      )}
+      <div className="actions">
+        {action === "cancel" ? (
+          <button type="button" className="btn btn-ghost btn-small" onClick={onCancel}>
+            Cancel
+          </button>
+        ) : action === "retry" ? (
+          <button type="button" className="btn" disabled={anyActive} onClick={onStart}>
+            Retry
+          </button>
+        ) : action === "start" ? (
+          <button type="button" className="btn" disabled={anyActive} onClick={onStart}>
+            {startLabel}
+          </button>
+        ) : (
+          <button type="button" className="btn" disabled>
+            {startLabel}
+          </button>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -409,46 +559,34 @@ function WelcomeStep() {
         Disk space: the environment and the models are large. Plan for tens of gigabytes of free
         space, and more for the language model file you choose. Processing uses the GPU for a while.
       </p>
+      <p className="notice">{SETUP_TIME_NOTE}</p>
     </>
   );
 }
 
 function EnvStep({ ctx }: { ctx: Ctx }) {
-  const { status, env } = ctx;
+  const { status, setupTasks } = ctx;
   const item = itemOf(status, "workerEnv");
-  const busy = env.running || item?.state === "working";
   return (
     <>
       <p>
         Transcription runs in a separate Python environment. Preparing it downloads the needed
         packages once, which can take several minutes.
       </p>
+      <p className="notice">{SETUP_TIME_NOTE}</p>
       <ItemNote item={item} />
-      {busy && (
-        <div className="setup-run">
-          <ProgressBar label="Preparing the environment" fraction={env.fraction} />
-          <ul className="setup-log" aria-label="Progress" aria-live="polite">
-            {env.lines.map((l, n) => (
-              <li key={n}>{l}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-      {env.error && (
-        <p className="error" role="alert">
-          {env.error} Check the network connection and try again.
-        </p>
-      )}
-      <div className="actions">
-        <button
-          type="button"
-          className="btn"
-          disabled={busy || item?.state === "ok"}
-          onClick={env.start}
-        >
-          {env.error ? "Retry" : "Prepare environment"}
-        </button>
-      </div>
+      <SetupTaskPanel
+        task="uv-sync"
+        progressLabel="Preparing the environment"
+        startLabel="Prepare environment"
+        ready={item?.state === "ok"}
+        working={item?.state === "working"}
+        state={setupTasks.tasks["uv-sync"]}
+        anyActive={setupTasks.anyActive}
+        onStart={() => setupTasks.start("uv-sync")}
+        onCancel={setupTasks.cancel}
+        showLog
+      />
     </>
   );
 }
@@ -501,9 +639,15 @@ function ModelRow(props: { ctx: Ctx; modelKey: string; blockedBy?: string }) {
 }
 
 function ModelsStep({ ctx }: { ctx: Ctx }) {
-  const { backend, status, settings, act, reload } = ctx;
+  const { backend, status, settings, act, reload, setupTasks } = ctx;
   const [token, setToken] = useState("");
   const tokenSet = settings?.hfTokenSet ?? false;
+  const speechTask = setupTasks.tasks["speech-models"];
+  const speechPhase = speechTask.latest?.phase ?? null;
+  const speechActive = isTaskActive(speechPhase);
+  const speechPct = speechTask.latest
+    ? progressPercent(speechTask.latest.downloadedBytes, speechTask.latest.totalBytes)
+    : null;
   const store = () => {
     const value = token;
     setToken("");
@@ -520,6 +664,29 @@ function ModelsStep({ ctx }: { ctx: Ctx }) {
           blockedBy={tokenSet ? undefined : "Store a Hugging Face token below first."}
         />
       </ul>
+      {speechActive && speechTask.latest && (
+        <div className="setup-run" data-setup-task="speech-models">
+          <ProgressBar label="Downloading speech models" percentValue={speechPct} />
+          <p className="setup-progress-text" role="status" aria-live="polite">
+            {formatSetupProgress(speechTask.latest)}
+          </p>
+          <div className="actions">
+            <button type="button" className="btn btn-ghost btn-small" onClick={setupTasks.cancel}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {speechPhase === "cancelled" && (
+        <p className="notice" role="status">
+          {speechTask.latest?.message || "Cancelled."} Press Download to continue where it stopped.
+        </p>
+      )}
+      {(speechPhase === "failed" || speechTask.error) && (
+        <p className="error" role="alert">
+          {speechTask.error ?? formatFailureMessage(speechTask.latest?.message ?? "")}
+        </p>
+      )}
       {stepItems(status, "models")
         .filter(isProblem)
         .map((i) => (
@@ -570,7 +737,7 @@ function ModelsStep({ ctx }: { ctx: Ctx }) {
 }
 
 function LlamaStep({ ctx }: { ctx: Ctx }) {
-  const { backend, status, settings, change, act } = ctx;
+  const { backend, status, settings, change, act, setupTasks } = ctx;
   const item = itemOf(status, "llamaServer");
   const [found, setFound] = useState<string[] | null>(null);
   const candidates = found ?? status?.llamaCandidates ?? [];
@@ -603,6 +770,17 @@ function LlamaStep({ ctx }: { ctx: Ctx }) {
           In use: <code>{current}</code>
         </p>
       )}
+      <SetupTaskPanel
+        task="llama-server"
+        progressLabel="Downloading llama-server"
+        startLabel="Download llama-server"
+        ready={item?.state === "ok"}
+        working={item?.state === "working"}
+        state={setupTasks.tasks["llama-server"]}
+        anyActive={setupTasks.anyActive}
+        onStart={() => setupTasks.start("llama-server")}
+        onCancel={setupTasks.cancel}
+      />
       <fieldset className="backend-choice">
         <legend>llama-server found on this computer</legend>
         {candidates.length === 0 ? (
@@ -674,7 +852,7 @@ function LlamaStep({ ctx }: { ctx: Ctx }) {
 }
 
 function LlmStep({ ctx }: { ctx: Ctx }) {
-  const { backend, status, settings, change, act, onOpenSettings } = ctx;
+  const { backend, status, settings, change, act, onOpenSettings, setupTasks } = ctx;
   const item = itemOf(status, "llmModel");
   const [files, setFiles] = useState<GgufFile[] | null>(null);
   const [dir, setDir] = useState("");
@@ -723,6 +901,17 @@ function LlmStep({ ctx }: { ctx: Ctx }) {
           In use: <code>{current}</code>
         </p>
       )}
+      <SetupTaskPanel
+        task="language-model"
+        progressLabel="Downloading language model"
+        startLabel="Download default model"
+        ready={item?.state === "ok"}
+        working={item?.state === "working"}
+        state={setupTasks.tasks["language-model"]}
+        anyActive={setupTasks.anyActive}
+        onStart={() => setupTasks.start("language-model")}
+        onCancel={setupTasks.cancel}
+      />
       <form
         className="form"
         onSubmit={(e) => {
