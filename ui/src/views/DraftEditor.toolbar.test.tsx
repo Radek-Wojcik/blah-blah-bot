@@ -9,6 +9,7 @@ import { DraftEditor } from "./DraftEditor";
 
 let container: HTMLDivElement | null = null;
 let root: Root | null = null;
+let originalClipboard: PropertyDescriptor | undefined;
 
 afterEach(async () => {
   if (root) {
@@ -20,6 +21,12 @@ afterEach(async () => {
   container?.remove();
   container = null;
   vi.restoreAllMocks();
+  if (originalClipboard) {
+    Object.defineProperty(navigator, "clipboard", originalClipboard);
+  } else {
+    delete (navigator as unknown as { clipboard?: unknown }).clipboard;
+  }
+  originalClipboard = undefined;
 });
 
 async function flush() {
@@ -31,6 +38,7 @@ async function flush() {
 describe("DraftEditor report toolbar", () => {
   it("places all report controls in one toolbar container and status below it", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
+    originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: { writeText },

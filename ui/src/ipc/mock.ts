@@ -1667,6 +1667,12 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         "D:\\Models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf",
       ],
       visionModels: ["D:\\Models\\Qwen3-VL-4B-Instruct-Q4_K_M.gguf"],
+      visionPairs: [
+        {
+          modelPath: "D:\\Models\\Qwen3-VL-4B-Instruct-Q4_K_M.gguf",
+          mmprojPath: "D:\\Models\\mmproj-Qwen3-VL-4B-Instruct-F16.gguf",
+        },
+      ],
       defaultLocalSaveDir: "Documents\\BlahBlahBot\\notes",
     }),
     listAllVoiceProfiles: async (): Promise<GlobalVoiceProfile[]> => {

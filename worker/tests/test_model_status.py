@@ -81,3 +81,56 @@ def test_cli_models_status_emits_cached_and_states(
     assert payload["states"]["whisper-turbo"] == "ready"
     assert payload["states"]["vision"] == "older"
     assert payload["states"]["diarization"] == "missing"
+
+
+def _symlink_or_skip(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=target.is_dir())
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation is not permitted here")
+
+
+def test_cache_status_ignores_snapshot_symlink_escaping_cache(
+    isolated_cache: Path, tmp_path: Path
+) -> None:
+    spec = models.MODELS["vision"]
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    for name in spec.patterns or ("config.yaml",):
+        (outside / name).write_bytes(b"x")
+    snaps = isolated_cache / f"models--{spec.repo.replace('/', '--')}" / "snapshots"
+    snaps.mkdir(parents=True)
+    _symlink_or_skip(snaps / ("b" * 40), outside)
+
+    assert models.cache_status("vision") == "missing"
+
+
+def test_cache_status_ignores_file_symlink_escaping_cache(
+    isolated_cache: Path, tmp_path: Path
+) -> None:
+    spec = models.MODELS["vision"]
+    outside = tmp_path / "outside-files"
+    outside.mkdir()
+    snap = isolated_cache / f"models--{spec.repo.replace('/', '--')}" / "snapshots" / ("c" * 40)
+    snap.mkdir(parents=True)
+    for name in spec.patterns or ("config.yaml",):
+        (outside / name).write_bytes(b"x")
+        _symlink_or_skip(snap / name, outside / name)
+
+    assert models.cache_status("vision") == "missing"
+
+
+def test_cache_status_survives_oserror_for_one_model(
+    isolated_cache: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _populate_snapshot(isolated_cache, "whisper-turbo", "d" * 40)
+    real_iterdir = Path.iterdir
+
+    def flaky(self: Path):
+        if "faster-whisper-large-v3-turbo" in str(self):
+            raise PermissionError("denied")
+        return real_iterdir(self)
+
+    monkeypatch.setattr(Path, "iterdir", flaky)
+    assert models.cache_status("whisper-turbo") == "missing"
+    assert models.cache_status("vision") == "missing"

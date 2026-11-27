@@ -3271,7 +3271,8 @@ textarea {
 .recorder-panel.recorder-panel-compact {
   height: 100%;
   min-height: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   gap: clamp(6px, 1.8vmin, 10px);
 }
 

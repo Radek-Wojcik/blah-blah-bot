@@ -225,6 +225,22 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
     llm && setDraft({ ...draft, llm: { ...llm, ...patch } });
   const num = (v: string) => (v === "" ? 0 : Number(v));
 
+  const detectButton = (
+    <button
+      type="button"
+      className="btn"
+      disabled={detecting}
+      onClick={() => void handleAutoDetect()}
+    >
+      {detecting ? "Scanning disk…" : "Auto-detect models on disk"}
+    </button>
+  );
+  const detectMessageNode = detectMessage ? (
+    <p className="secret-result" role="status" style={{ marginBottom: 12 }}>
+      {detectMessage}
+    </p>
+  ) : null;
+
   return (
     <div className="settings-pane">
       <form
@@ -235,6 +251,22 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
           void save();
         }}
       >
+        {!llm && (
+          <div className="panel quiet">
+            <div className="panel-body">
+              <div className="settings-card-head">
+                <div>
+                  <h3 className="sub-head">Models on disk</h3>
+                  <p className="person-meta settings-card-sub">
+                    Find llama-server and local models already installed on this computer.
+                  </p>
+                </div>
+                {detectButton}
+              </div>
+              {detectMessageNode}
+            </div>
+          </div>
+        )}
         {llm && (
           <div className="panel quiet">
             <div className="panel-body">
@@ -245,20 +277,9 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
                     Configure which language model turns transcripts into notes.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  className="btn"
-                  disabled={detecting}
-                  onClick={() => void handleAutoDetect()}
-                >
-                  {detecting ? "Scanning disk…" : "Auto-detect models on disk"}
-                </button>
+                {detectButton}
               </div>
-              {detectMessage && (
-                <p className="secret-result" role="status" style={{ marginBottom: 12 }}>
-                  {detectMessage}
-                </p>
-              )}
+              {detectMessageNode}
 
               <div className="form">
                 <div className="field-block">
@@ -553,7 +574,7 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
           <div className="settings-card-head">
             <div>
               <div className="field-label-row">
-                <h3 className="sub-head">Speech models</h3>
+                <h3 className="sub-head">Downloadable models</h3>
                 <HelpPopover
                   title="Hugging Face gated models"
                   recommended="Accept model terms on Hugging Face and store a Read token in Connectors"
@@ -565,7 +586,9 @@ export function AiModelsTab({ onDirtyChange, registerHandle }: EditableTabProps)
                   </p>
                 </HelpPopover>
               </div>
-              <p className="person-meta settings-card-sub">Model downloads &amp; cache</p>
+              <p className="person-meta settings-card-sub">
+                Speech, speaker and vision models: download status &amp; cache
+              </p>
             </div>
           </div>
           {downloadError && (

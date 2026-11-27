@@ -222,6 +222,17 @@ describe("SettingsView", () => {
     expect(inputByLabel("Vision model path (GGUF)").value).toBe("E:\\Models\\detected-vision.gguf");
   });
 
+  it("keeps the Auto-detect button when the language model settings are missing", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    const original = await backend.getProcessingSettings();
+    const withoutLlm = { ...original, llm: undefined };
+    vi.spyOn(backend, "getProcessingSettings").mockResolvedValue(withoutLlm);
+
+    await mount(backend, "models");
+
+    expect(host.textContent).toContain("Auto-detect models on disk");
+  });
+
   it("persists Local Folder Auto-Save checkbox and pre-populated folder path in Preferences", async () => {
     const backend = createMockBackend({ clockRate: 0 });
     const saveSpy = vi.spyOn(backend, "saveSettings");
@@ -683,7 +694,12 @@ describe("Settings cards and compact Detection panel", () => {
     const modelHeadings = modelCards.map((c) =>
       c.querySelector("h3.sub-head")?.textContent?.trim(),
     );
-    expect(modelHeadings).toEqual(["Language model", "llama-server", "Vision", "Speech models"]);
+    expect(modelHeadings).toEqual([
+      "Language model",
+      "llama-server",
+      "Vision",
+      "Downloadable models",
+    ]);
 
     await clickTab("Processing");
     const procCards = Array.from(host.querySelectorAll(".panel.quiet"));

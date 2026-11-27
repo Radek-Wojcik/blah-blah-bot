@@ -112,12 +112,34 @@ def _repo_snapshots_dir(spec: ModelSpec, root: Path | None = None) -> Path:
     return base / f"models--{spec.repo.replace('/', '--')}" / "snapshots"
 
 
-def _snapshot_complete(folder: Path, patterns: tuple[str, ...] | None) -> bool:
-    if not folder.is_dir():
+def _inside(path: Path, root: Path) -> bool:
+    """True when `path` resolves to a location inside `root` (symlinks followed)."""
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except (OSError, ValueError, RuntimeError):
         return False
-    if patterns:
-        return all((folder / p).exists() for p in patterns)
-    return any(folder.iterdir())
+
+
+def _snapshot_complete(
+    folder: Path, patterns: tuple[str, ...] | None, root: Path | None = None
+) -> bool:
+    """Whether a snapshot folder holds the model files; never raises on unreadable entries.
+
+    With `root`, files whose symlinks resolve outside the cache are not counted.
+    """
+    try:
+        if folder.is_symlink() or not folder.is_dir():
+            return False
+        if patterns:
+            for p in patterns:
+                f = folder / p
+                if not f.exists() or (root is not None and not _inside(f, root)):
+                    return False
+            return True
+        return any(root is None or _inside(e, root) for e in folder.iterdir())
+    except OSError:
+        return False
 
 
 def asr_key(asr_model: str) -> str:
@@ -143,19 +165,19 @@ def local_path(key: str) -> Path:
         if not folder.is_dir():
             raise ModelMissing(
                 f"The model '{key}' ({spec.repo}) is not downloaded. "
-                "Download it in Settings > Processing or run the setup again."
+                "Download it in Settings > AI Models or run the setup again."
             ) from None
         if spec.patterns:
             missing = [p for p in spec.patterns if not (folder / p).exists()]
             if missing:
                 raise ModelMissing(
                     f"The model '{key}' is incomplete: missing {', '.join(missing)}. "
-                    "Download it again in Settings > Processing or run the setup again."
+                    "Download it again in Settings > AI Models or run the setup again."
                 ) from None
         elif not any(folder.iterdir()):
             raise ModelMissing(
                 f"The model '{key}' ({spec.repo}) is not downloaded. "
-                "Download it in Settings > Processing or run the setup again."
+                "Download it in Settings > AI Models or run the setup again."
             ) from None
         return folder
 
@@ -170,7 +192,7 @@ def local_path(key: str) -> Path:
     except Exception as e:
         raise ModelMissing(
             f"The model '{key}' ({spec.repo}) is not downloaded. "
-            "Download it in Settings > Processing or run the setup again."
+            "Download it in Settings > AI Models or run the setup again."
         ) from e
     folder = Path(path)
     if spec.patterns:
@@ -178,7 +200,7 @@ def local_path(key: str) -> Path:
         if missing:
             raise ModelMissing(
                 f"The model '{key}' is incomplete: missing {', '.join(missing)}. "
-                "Download it again in Settings > Processing or run the setup again."
+                "Download it again in Settings > AI Models or run the setup again."
             )
     return folder
 
@@ -187,7 +209,7 @@ def is_cached(key: str) -> bool:
     try:
         local_path(key)
         return True
-    except ModelMissing:
+    except (ModelMissing, OSError):
         return False
 
 
@@ -196,13 +218,22 @@ def cache_status(key: str) -> CacheStatus:
     if is_cached(key):
         return "ready"
     spec = MODELS[key]
-    snapshots = _repo_snapshots_dir(spec)
-    if snapshots.is_dir():
-        for entry in snapshots.iterdir():
-            if entry.name == spec.revision or not entry.is_dir():
+    root = _effective_cache_dir()
+    snapshots = _repo_snapshots_dir(spec, root)
+    try:
+        if snapshots.is_symlink() or not snapshots.is_dir():
+            return "missing"
+        entries = list(snapshots.iterdir())
+    except OSError:
+        return "missing"
+    for entry in entries:
+        try:
+            if entry.name == spec.revision or entry.is_symlink() or not entry.is_dir():
                 continue
-            if _snapshot_complete(entry, spec.patterns):
-                return "older"
+        except OSError:
+            continue
+        if _snapshot_complete(entry, spec.patterns, root):
+            return "older"
     return "missing"
 
 
@@ -215,7 +246,7 @@ def download(key: str, token: str | None) -> Path:
     if spec.gated and not token:
         raise ModelMissing(
             f"'{spec.repo}' is gated: accept its conditions on Hugging Face and add your "
-            "access token in Settings > Processing or in the setup."
+            "access token in Settings > AI Models or in the setup."
         )
 
     class Reporter(tqdm):  # type: ignore[misc]
