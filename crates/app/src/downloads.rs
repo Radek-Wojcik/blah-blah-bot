@@ -770,9 +770,9 @@ pub fn extract_zip_safe(zip_path: &Path, target_dir: &Path) -> Result<(), String
     extract_zip_checked(zip_path, target_dir, MAX_UNPACKED_BYTES, None)
         .map(|_| ())
         .map_err(|e| match e {
-        DownloadError::Cancelled => "extraction was cancelled".to_string(),
-        DownloadError::Failed(msg) => msg,
-    })
+            DownloadError::Cancelled => "extraction was cancelled".to_string(),
+            DownloadError::Failed(msg) => msg,
+        })
 }
 
 /// Like [`extract_zip_safe`], with a cap on the total unpacked size (zip-bomb guard) and an
@@ -985,7 +985,9 @@ pub fn extract_archives_atomic(
             if had_previous {
                 let _ = fs::rename(&backup, final_dir);
             }
-            return Err(fail(format!("could not finish extracting the archives: {e}")));
+            return Err(fail(format!(
+                "could not finish extracting the archives: {e}"
+            )));
         }
         Ok(())
     })();
@@ -1696,5 +1698,155 @@ mod tests {
         assert!(matches!(err, DownloadError::Cancelled));
         assert!(!dir.path().join("llama").join(".b1.extracting").exists());
         assert!(final_dir.join("keep.txt").is_file());
+    }
+
+    /// Serves a 200 response that announces `total` bytes, sends `first` and then goes silent
+    /// until `release` is dropped or set.
+    fn spawn_stalling_server(
+        total: usize,
+        first: Vec<u8>,
+    ) -> (
+        String,
+        std::sync::mpsc::Sender<()>,
+        std::thread::JoinHandle<()>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("local addr");
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let handle = std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+            let mut line = String::new();
+            while let Ok(n) = reader.read_line(&mut line) {
+                if n == 0 || line == "\r\n" {
+                    break;
+                }
+                line.clear();
+            }
+            let header =
+                format!("HTTP/1.1 200 OK\r\nContent-Length: {total}\r\nConnection: close\r\n\r\n");
+            let _ = stream.write_all(header.as_bytes());
+            let _ = stream.write_all(&first);
+            let _ = stream.flush();
+            let _ = release_rx.recv_timeout(Duration::from_secs(20));
+        });
+        (format!("http://{addr}/artifact.bin"), release_tx, handle)
+    }
+
+    #[test]
+    fn a_stalled_connection_fails_after_the_stall_timeout_and_keeps_the_part() {
+        let dir = TestDir::new("dl-stall");
+        let payload = make_payload(4000);
+        let pin = pin_for("stall.bin", &payload);
+        let (url, release, server) = spawn_stalling_server(payload.len(), payload[..1000].to_vec());
+        let policy = DownloadPolicy {
+            allow_loopback_http: true,
+            stall_timeout: Duration::from_millis(500),
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        let started = Instant::now();
+        let err = download_pin_from(&url, &pin, dir.path(), policy, &cancel, |_| {})
+            .expect_err("a silent server must not hang the download");
+        assert!(started.elapsed() < Duration::from_secs(10));
+        match err {
+            DownloadError::Failed(msg) => assert!(msg.contains("stalled"), "{msg}"),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+        assert!(dir.path().join("stall.bin.part").exists());
+        let _ = release.send(());
+        server.join().expect("server thread");
+    }
+
+    #[test]
+    fn cancel_is_honoured_while_the_server_is_silent() {
+        let dir = TestDir::new("dl-cancel-silent");
+        let payload = make_payload(4000);
+        let pin = pin_for("cancel.bin", &payload);
+        let (url, release, server) = spawn_stalling_server(payload.len(), payload[..1000].to_vec());
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
+        let canceller = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(400));
+            flag.store(true, Ordering::SeqCst);
+        });
+        let started = Instant::now();
+        let err = download_pin_from(&url, &pin, dir.path(), TEST_POLICY, &cancel, |_| {})
+            .expect_err("cancelled");
+        assert!(matches!(err, DownloadError::Cancelled));
+        assert!(started.elapsed() < Duration::from_secs(5));
+        canceller.join().expect("canceller");
+        let _ = release.send(());
+        server.join().expect("server thread");
+    }
+
+    #[test]
+    fn resolve_redirect_url_prefers_relative_forms_over_embedded_scheme_separators() {
+        let cur = "https://huggingface.co/a/b";
+        assert_eq!(
+            resolve_redirect_url(cur, "/path?next=https://x.example/y").expect("path"),
+            "https://huggingface.co/path?next=https://x.example/y"
+        );
+        assert_eq!(
+            resolve_redirect_url(cur, "//cdn-lfs.hf.co/f?u=http://a").expect("scheme-relative"),
+            "https://cdn-lfs.hf.co/f?u=http://a"
+        );
+    }
+
+    #[test]
+    fn extract_archives_atomic_restores_a_backup_left_by_an_interrupted_swap() {
+        let dir = TestDir::new("dl-atomic-recover");
+        let z = dir.path().join("1.zip");
+        write_test_zip(&z, &[("new.txt", b"n")]);
+        let root = dir.path().join("llama");
+        let final_dir = root.join("b1");
+        let backup = root.join(".b1.old");
+        fs::create_dir_all(&backup).expect("backup");
+        fs::write(backup.join("llama-server.exe"), b"working").expect("exe");
+        // A broken archive: the run fails, but the working install must be back in place.
+        let bad = dir.path().join("bad.zip");
+        fs::write(&bad, b"not a zip").expect("bad zip");
+        let cancel = Arc::new(AtomicBool::new(false));
+        extract_archives_atomic(&[bad], &final_dir, 10_000, &cancel).expect_err("bad archive");
+        assert!(final_dir.join("llama-server.exe").is_file());
+        assert!(!backup.exists());
+        extract_archives_atomic(&[z], &final_dir, 10_000, &cancel).expect("extract");
+        assert!(final_dir.join("new.txt").is_file());
+        assert!(!backup.exists());
+    }
+
+    #[test]
+    fn extract_archives_atomic_refuses_to_extract_over_an_unremovable_leftover() {
+        let dir = TestDir::new("dl-atomic-leftover");
+        let z = dir.path().join("1.zip");
+        write_test_zip(&z, &[("a.txt", b"a")]);
+        let root = dir.path().join("llama");
+        fs::create_dir_all(&root).expect("root");
+        // A file where the staging folder should be cannot be removed as a directory.
+        fs::write(root.join(".b1.extracting"), b"x").expect("leftover");
+        let cancel = Arc::new(AtomicBool::new(false));
+        let err = extract_archives_atomic(&[z], &root.join("b1"), 10_000, &cancel)
+            .expect_err("leftover staging must be an error");
+        match err {
+            DownloadError::Failed(msg) => assert!(msg.contains("leftover"), "{msg}"),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+        assert!(!root.join("b1").exists());
+    }
+
+    #[test]
+    fn extract_archives_atomic_applies_the_size_cap_across_all_archives() {
+        let dir = TestDir::new("dl-atomic-total-cap");
+        let (z1, z2) = (dir.path().join("1.zip"), dir.path().join("2.zip"));
+        write_test_zip(&z1, &[("a.bin", &[0u8; 600])]);
+        write_test_zip(&z2, &[("b.bin", &[0u8; 600])]);
+        let final_dir = dir.path().join("llama").join("b1");
+        let cancel = Arc::new(AtomicBool::new(false));
+        let err = extract_archives_atomic(&[z1.clone(), z2.clone()], &final_dir, 1000, &cancel)
+            .expect_err("total of both archives is above the cap");
+        assert!(matches!(err, DownloadError::Failed(_)));
+        assert!(!final_dir.exists());
+        extract_archives_atomic(&[z1, z2], &final_dir, 1200, &cancel).expect("within the cap");
     }
 }
