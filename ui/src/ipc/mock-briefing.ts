@@ -17,6 +17,7 @@ interface RawTask {
   source: "issue" | "meeting";
   github?: string;
   participant?: string;
+  assigneeName?: string;
   due?: string;
   issue?: number;
   meeting?: string;
@@ -130,6 +131,8 @@ function groupRaw(tasks: RawTask[], people: CycleParticipant[]): BriefingGroup[]
       return { kind: "other", participantId: null, name: `@${t.github}`, github: t.github };
     if (t.participant)
       return { kind: "other", participantId: null, name: t.participant, github: null };
+    if (t.assigneeName?.trim())
+      return { kind: "other", participantId: null, name: t.assigneeName.trim(), github: null };
     return { kind: "unassigned", participantId: null, name: "Unassigned", github: null };
   };
   const groups = new Map<string, BriefingGroup>();

@@ -202,8 +202,9 @@ function assigneeLabel(item: DraftItem, people: Person[]): string {
     const name = people.find((p) => p.id === item.assignee)?.name ?? item.assignee;
     return `@${name}${mark}`;
   }
-  if (item.assigneeName) {
-    return `@${item.assigneeName}${mark}`;
+  const outside = item.assigneeName?.trim();
+  if (outside) {
+    return `@${outside}${mark}`;
   }
   return "@?";
 }

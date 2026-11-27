@@ -189,6 +189,36 @@ describe("DraftEditor assigneeName", () => {
     expect(updateDraftItem).toHaveBeenCalledWith("m1", "i001", { assignee: "marek-1" });
   });
 
+  it("clears the assignee name with the Clear button", async () => {
+    const view = makeView(makeTask());
+    const backend = createMockBackend();
+    vi.spyOn(backend, "getDraft").mockResolvedValue(view);
+    const updateDraftItem = vi.spyOn(backend, "updateDraftItem").mockResolvedValue(view);
+
+    mountEditor(backend);
+    await flush();
+
+    clickButton("Clear");
+    await flush();
+
+    expect(updateDraftItem).toHaveBeenCalledWith("m1", "i001", { assignee: null });
+  });
+
+  it("keeps the Add button outside the assignee label", async () => {
+    const view = makeView(makeTask());
+    const backend = createMockBackend();
+    vi.spyOn(backend, "getDraft").mockResolvedValue(view);
+
+    mountEditor(backend);
+    await flush();
+
+    const add = [...host.querySelectorAll("button")].find(
+      (b) => b.textContent?.trim() === "Add to project people",
+    );
+    expect(add).toBeTruthy();
+    expect(add!.closest("label")).toBeNull();
+  });
+
   it("disables Add to project people when draft is locked", async () => {
     const view = makeView(makeTask(), { locked: true });
     const backend = createMockBackend();

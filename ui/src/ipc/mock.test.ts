@@ -285,6 +285,31 @@ describe("report rendering", () => {
     expect(line("i12")).toBe("- Record the next test with a high-speed camera.");
   });
 
+  it("shows an outside assignee name, ignores a blank one and prefers a participant id", () => {
+    const d = demoDraft("m5");
+    const task = { ...d.items.find((i) => i.id === "i04")!, assignee: null };
+    const line = (item: DraftItem) => itemLine(item, people, "chat");
+    expect(line({ ...task, assigneeName: " Marta Outside " })).toContain("(@Marta Outside?,");
+    expect(line({ ...task, assigneeName: "   " })).toContain("(@?,");
+    expect(line({ ...task, assignee: "jan", assigneeName: "Marta Outside" })).toContain(
+      "(@Jan Demo",
+    );
+  });
+
+  it("clears the outside assignee name when the assignee is set or cleared", async () => {
+    const b = backend();
+    const v = await b.getDraft("m5");
+    const withName = v.draft.items.find((i) => i.id === "i04")!;
+    withName.assigneeName = "Marta Outside";
+    const set = await b.updateDraftItem("m5", "i04", { assignee: "jan" });
+    expect(set.draft.items.find((i) => i.id === "i04")).toMatchObject({
+      assignee: "jan",
+      assigneeName: null,
+    });
+    const cleared = await b.updateDraftItem("m5", "i04", { assignee: null });
+    expect(cleared.draft.items.find((i) => i.id === "i04")!.assigneeName).toBeNull();
+  });
+
   it("renders the sections of the draft under the default template", async () => {
     const view = await backend().getDraft("m5");
     expect(view.reportMarkdown).toMatch(

@@ -632,12 +632,12 @@ function ItemCard(props: {
     if (!trimmed) return;
     const target = trimmed.toLowerCase();
     const existing = people.find((p) => p.name.trim().toLowerCase() === target);
-    if (existing) {
-      await props.onUpdate({ assignee: existing.id });
-      return;
-    }
     setAddingPerson(true);
     try {
+      if (existing) {
+        await props.onUpdate({ assignee: existing.id });
+        return;
+      }
       const created = await backend.createParticipant(trimmed, draft.cycle);
       await props.onUpdate({ assignee: created.cycleParticipantId ?? created.id });
     } catch (e) {
@@ -763,27 +763,29 @@ function ItemCard(props: {
 
       {item.type === "task" && (
         <div className="item-fields">
-          <label>
-            Assignee
-            <span className="field-with-mark">
-              <select
-                aria-label={`Assignee of: ${item.text}`}
-                value={item.assignee ?? ""}
-                disabled={locked}
-                onChange={(e) => void props.onUpdate({ assignee: e.target.value || null })}
-              >
-                <option value="">Unassigned</option>
-                {item.assignee !== null && !people.some((p) => p.id === item.assignee) && (
-                  <option value={item.assignee}>{item.assignee}</option>
-                )}
-                {people.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-              <Mark level={item.certainty.assignee} />
-            </span>
+          <div className="item-field">
+            <label>
+              Assignee
+              <span className="field-with-mark">
+                <select
+                  aria-label={`Assignee of: ${item.text}`}
+                  value={item.assignee ?? ""}
+                  disabled={locked}
+                  onChange={(e) => void props.onUpdate({ assignee: e.target.value || null })}
+                >
+                  <option value="">Unassigned</option>
+                  {item.assignee !== null && !people.some((p) => p.id === item.assignee) && (
+                    <option value={item.assignee}>{item.assignee}</option>
+                  )}
+                  {people.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+                <Mark level={item.certainty.assignee} />
+              </span>
+            </label>
             {item.assignee === null && item.assigneeName && (
               <span className="assignee-unlisted">
                 <span>{item.assigneeName} (not in project people)</span>
@@ -795,9 +797,18 @@ function ItemCard(props: {
                 >
                   Add to project people
                 </button>
+                <button
+                  type="button"
+                  className="btn btn-small btn-ghost"
+                  aria-label={`Clear the assignee name of: ${item.text}`}
+                  disabled={locked || addingPerson}
+                  onClick={() => void props.onUpdate({ assignee: null })}
+                >
+                  Clear
+                </button>
               </span>
             )}
-          </label>
+          </div>
           <label>
             Due
             <span className="field-with-mark">
