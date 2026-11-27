@@ -670,7 +670,10 @@ pub fn extract_zip_safe(zip_path: &Path, target_dir: &Path) -> Result<(), String
         let entry = archive
             .by_index(i)
             .map_err(|e| format!("could not read archive entry: {e}"))?;
-        let raw_name = entry.name();
+        let raw_name: String = entry
+            .name()
+            .map_err(|_| "archive contains an entry with an invalid name".to_string())?
+            .into_owned();
         if raw_name.is_empty()
             || raw_name.starts_with(['/', '\\'])
             || raw_name.contains([':', '\0'])
