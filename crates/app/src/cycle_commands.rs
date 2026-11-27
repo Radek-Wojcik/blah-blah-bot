@@ -123,7 +123,15 @@ fn delete_project_blocking(
     })?;
     changed(app);
     crate::commands::emit_meetings_changed(app);
-    finished?;
+    finished.map_err(|e| {
+        IpcError::new(
+            e.code,
+            format!(
+                "the project was removed from the list, but cleaning its data failed part way; its folder was kept: {}",
+                e.message
+            ),
+        )
+    })?;
     if let Some(folder) = folder {
         let moved = cycles::move_to_recycle_bin(&folder);
         changed(app);

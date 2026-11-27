@@ -333,8 +333,9 @@ pub async fn wizard_create_project_with_github(
     .await
     .map_err(|e| background_task_error(&e))?;
     let data_dir = state.data_dir().to_path_buf();
-    let result = state.update_settings(|settings| {
-        state.with_store_ipc(|store| finish_in(settings, store, store, &data_dir, req, attempt))
+    // Lock order of the application: store, then settings.
+    let result = state.with_store_ipc(|store| {
+        state.update_settings(|settings| finish_in(settings, store, store, &data_dir, req, attempt))
     })?;
     let _ = app.emit(EVENT_CYCLES, ());
     Ok(result)

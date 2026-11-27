@@ -1826,9 +1826,9 @@ pub fn delete_cycle_participant(
     Ok(())
 }
 
-/// Removes the `\?\` prefix that `fs::canonicalize` adds on Windows, which the Shell API
-/// does not accept, but only from a local drive path (`\?\C:\...`, any letter case, with a
-/// separator after the drive). `\?\UNC\...`, `\?\Volume{...}\...`, `\?\C:foo` and
+/// Removes the `\\?\` prefix that `fs::canonicalize` adds on Windows, which the Shell API
+/// does not accept, but only from a local drive path (`\\?\C:\...`, any letter case, with a
+/// separator after the drive). `\\?\UNC\...`, `\\?\Volume{...}\...`, `\\?\C:foo` and
 /// everything else is returned unchanged. Works on path components, not on lossy text.
 pub fn strip_verbatim_prefix(path: &Path) -> PathBuf {
     use std::path::{Component, Prefix};
@@ -1848,6 +1848,14 @@ pub fn strip_verbatim_prefix(path: &Path) -> PathBuf {
 }
 
 /// Whether the path is an ordinary local drive path (`C:\...`, after `strip_verbatim_prefix`).
+#[cfg(not(windows))]
+pub fn is_local_drive_path(_path: &Path) -> bool {
+    // Drive letters and network shares are a Windows notion: any absolute path is local.
+    true
+}
+
+/// Whether the path is an ordinary local drive path (`C:\...`, after `strip_verbatim_prefix`).
+#[cfg(windows)]
 pub fn is_local_drive_path(path: &Path) -> bool {
     use std::path::{Component, Prefix};
     let stripped = strip_verbatim_prefix(path);
@@ -1979,15 +1987,18 @@ pub fn managed_delete_target(data_dir: &Path, target: &Path) -> IpcResult<PathBu
         return Err(refuse("it is not on a local drive"));
     }
     // No link on the way: walk up from the target until the data folder.
+    let data_lexical: PathBuf = data_dir.components().collect();
     let mut cur: Option<&Path> = Some(&normal);
     let mut reached = false;
     while let Some(dir) = cur {
+        // A link is refused first, also one that points back into the data folder; only
+        // the data folder as the caller spelled it may itself be a link.
+        if dir != data_lexical && is_link(dir) {
+            return Err(refuse("it is, or lies behind, a link or junction"));
+        }
         if std::fs::canonicalize(dir).is_ok_and(|c| c == data) {
             reached = true;
             break;
-        }
-        if is_link(dir) {
-            return Err(refuse("it is, or lies behind, a link or junction"));
         }
         cur = dir.parent();
     }
@@ -3673,13 +3684,52 @@ targets:
                 .code,
             "busy"
         );
-        // A job that still has a stage to run blocks; without a job nothing does.
-        lab.store.create_job("m-idle", &["asr"], "{}", 1).unwrap();
+        let stages: Vec<&str> = queue::STAGES.iter().map(|s| s.as_str()).collect();
+        // A job that still has a stage to run blocks, and it blocks only its own project.
+        lab.store.create_job("m-idle", &stages, "{}", 1).unwrap();
         assert!(ensure_project_idle(&lab.store, "NOMAD", false).is_err());
-        lab.store.delete_job("m-idle").unwrap();
-        assert!(ensure_project_idle(&lab.store, "NOMAD", false).is_ok());
-        // A job of another project's meeting does not matter.
         assert!(ensure_project_idle(&lab.store, "OTHER", false).is_ok());
+        // A failed job waits for a retry from the queue and does not block.
+        lab.store
+            .set_stage_status(
+                "m-idle",
+                stages[0],
+                store::StageStatus::Failed,
+                Some("x"),
+                2,
+            )
+            .unwrap();
+        assert!(ensure_project_idle(&lab.store, "NOMAD", false).is_ok());
+        // A finished job does not block.
+        for stage in &stages {
+            lab.store
+                .set_stage_status("m-idle", stage, store::StageStatus::Done, None, 3)
+                .unwrap();
+        }
+        assert!(ensure_project_idle(&lab.store, "NOMAD", false).is_ok());
+        // A queued outbox operation blocks until it is done or cancelled.
+        let (op, _) = lab
+            .store
+            .enqueue_op(
+                &store::NewOp {
+                    meeting_id: "m-idle".into(),
+                    target: store::OutboxTarget::Issues,
+                    kind: store::OutboxKind::CreateIssue,
+                    op_key: "k".into(),
+                    payload: "{}".into(),
+                    after_op_key: None,
+                },
+                4,
+            )
+            .unwrap();
+        assert_eq!(
+            ensure_project_idle(&lab.store, "NOMAD", false)
+                .unwrap_err()
+                .code,
+            "busy"
+        );
+        lab.store.cancel_op(op.id, 5).unwrap();
+        assert!(ensure_project_idle(&lab.store, "NOMAD", false).is_ok());
     }
 
     #[cfg(windows)]
@@ -3713,6 +3763,20 @@ targets:
         assert!(managed_delete_target(data.path(), &link.join("deep")).is_err());
         // The real folder itself is fine.
         assert!(managed_delete_target(data.path(), &real_dir.join("deep")).is_ok());
+        let _ = std::fs::remove_dir(&link);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn managed_delete_target_rejects_a_junction_that_points_back_to_the_data_dir() {
+        let data = test_tmp::TestDir::new("cycles-junction3");
+        std::fs::create_dir_all(data.path().join("sub")).unwrap();
+        let link = data.path().join("link");
+        if !junction(&link, data.path()) {
+            eprintln!("skipped: cannot create a junction here");
+            return;
+        }
+        assert!(managed_delete_target(data.path(), &link.join("sub")).is_err());
         let _ = std::fs::remove_dir(&link);
     }
 

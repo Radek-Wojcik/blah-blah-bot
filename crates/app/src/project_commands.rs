@@ -714,8 +714,9 @@ pub fn wizard_create_project(
     req: WizardCreateProjectDto,
 ) -> IpcResult<CycleDto> {
     let data_dir = state.data_dir().to_path_buf();
-    let dto = state.update_settings(|settings| {
-        state.with_store_ipc(|store| {
+    // Lock order of the application: store, then settings.
+    let dto = state.with_store_ipc(|store| {
+        state.update_settings(|settings| {
             wizard_create_project_in(settings, store, store, &data_dir, req)
         })
     })?;
