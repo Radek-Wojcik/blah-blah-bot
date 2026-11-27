@@ -77,6 +77,8 @@ export function createTauriBackend(): Backend {
     getCycle: (cycleId) => invoke("get_cycle", { cycleId }),
     createCycle: (id, name, repoId) => invoke("create_cycle", { id, name, repoId }),
     saveCycle: (cycle) => invoke("save_cycle", { cycle }),
+    deleteProject: (cycleId, deleteMeetings, deleteFolder) =>
+      invoke("delete_project", { cycleId, deleteMeetings, deleteFolder }),
     listTemplates: (cycleId) => invoke("list_templates", { cycleId }),
     getTemplate: (cycleId, name) => invoke("get_template", { cycleId, name }),
     saveTemplate: (cycleId, template) => invoke("save_template", { cycleId, template }),

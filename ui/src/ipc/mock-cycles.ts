@@ -271,6 +271,7 @@ export interface CycleStore {
   getCycle(id: string): CycleDetails;
   createCycle(id: string, name: string, repoId?: string): CycleDetails;
   saveCycle(dto: CycleDto): SaveCycleResult;
+  deleteCycle(id: string): void;
   listTemplates(cycleId: string): TemplateSummary[];
   getTemplate(cycleId: string, name: string): TemplateDto;
   saveTemplate(cycleId: string, t: TemplateDto): TemplateCheck;
@@ -463,6 +464,16 @@ export function createCycleStore(): CycleStore {
       if (issues.length > 0) return { saved: false, issues, warnings: [], details: null };
       e.cycle = cycle;
       return { saved: true, issues: [], warnings: [], details: details(e) };
+    },
+    deleteCycle: (id) => {
+      const e = entries.get(id);
+      if (!e) return;
+      entries.delete(id);
+      const stillUsed = [...entries.values()].some((other) => other.repoId === e.repoId);
+      if (!stillUsed) {
+        const idx = repos.findIndex((r) => r.id === e.repoId);
+        if (idx >= 0) repos.splice(idx, 1);
+      }
     },
     listTemplates: (cycleId) => summaries(entryOf(cycleId)),
     getTemplate: (cycleId, name) => {

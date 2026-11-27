@@ -479,6 +479,34 @@ impl Store {
         tx.commit()?;
         Ok(outcome)
     }
+
+    /// Removes all database records belonging to a project (`cycle_id`). When `delete_meetings`
+    /// is true, meetings of the project are deleted (cascading to tracks, segments, jobs and
+    /// publications); otherwise they are kept as standalone meetings (`cycle_id = NULL`).
+    pub fn delete_cycle_data(&self, cycle_id: &str, delete_meetings: bool) -> Result<()> {
+        if cycle_id.trim().is_empty() {
+            return Err(StoreError::Invalid("cycle_id cannot be empty".into()));
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        if delete_meetings {
+            tx.execute("DELETE FROM meetings WHERE cycle_id = ?1", params![cycle_id])?;
+        } else {
+            tx.execute(
+                "UPDATE meetings SET cycle_id = NULL WHERE cycle_id = ?1",
+                params![cycle_id],
+            )?;
+        }
+        tx.execute(
+            "DELETE FROM participants WHERE cycle_id = ?1",
+            params![cycle_id],
+        )?;
+        tx.execute(
+            "DELETE FROM project_prefs WHERE cycle_id = ?1",
+            params![cycle_id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -991,5 +1019,36 @@ mod tests {
         };
         s.set_project_prefs(&deleting).unwrap();
         assert_eq!(s.get_project_prefs("NOMAD").unwrap(), deleting);
+    }
+
+    #[test]
+    fn delete_cycle_data_keeps_meetings_standalone_or_deletes_them() {
+        let s = store();
+        s.set_report_settings("m1", &settings("NOMAD")).unwrap();
+        s.set_report_settings("m2", &settings("OTHER")).unwrap();
+        s.sync_cycle_participants("NOMAD", &[("ola", "Ola")])
+            .unwrap();
+        s.set_project_prefs(&ProjectPrefs {
+            cycle_id: "NOMAD".into(),
+            local_save_enabled: true,
+            local_save_dir: "D:/Notes".into(),
+            llm_kind_override: None,
+            llm_model_override: None,
+            audio_retention: None,
+        })
+        .unwrap();
+
+        // Keep meetings as standalone.
+        s.delete_cycle_data("NOMAD", false).unwrap();
+        assert_eq!(s.list_meetings_by_cycle("NOMAD").unwrap().len(), 0);
+        assert!(s.get_meeting("m1").unwrap().is_some());
+        assert_eq!(s.get_report_settings("m1").unwrap().unwrap().cycle_id, None);
+        assert!(s.participants_for_cycle("NOMAD").unwrap().is_empty());
+        assert!(!s.get_project_prefs("NOMAD").unwrap().local_save_enabled);
+        assert_eq!(s.list_meetings_by_cycle("OTHER").unwrap().len(), 1);
+
+        // Delete meetings when requested.
+        s.delete_cycle_data("OTHER", true).unwrap();
+        assert!(s.get_meeting("m2").unwrap().is_none());
     }
 }

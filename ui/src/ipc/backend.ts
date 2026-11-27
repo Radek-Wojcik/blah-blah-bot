@@ -213,6 +213,8 @@ export interface Backend {
   createCycle(id: string, name: string, repoId?: string): Promise<CycleDetails>;
   /** An invalid cycle is not written: `saved` is false and `issues` says why. */
   saveCycle(cycle: CycleDto): Promise<SaveCycleResult>;
+  /** Deletes a project from the database and settings, optionally deleting meetings or recycling the folder. */
+  deleteProject(cycleId: string, deleteMeetings: boolean, deleteFolder: boolean): Promise<void>;
   listTemplates(cycleId: string): Promise<TemplateSummary[]>;
   getTemplate(cycleId: string, name: string): Promise<TemplateDto>;
   saveTemplate(cycleId: string, template: TemplateDto): Promise<TemplateCheck>;

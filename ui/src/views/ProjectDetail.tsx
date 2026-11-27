@@ -654,6 +654,10 @@ export function ProjectDetailView({
             loadBriefing(false);
             reloadTasks();
           }}
+          onDeleted={() => {
+            setSettingsOpen(false);
+            onBack();
+          }}
         />
       )}
 

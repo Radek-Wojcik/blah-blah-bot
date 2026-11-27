@@ -30,6 +30,7 @@ import type {
 import { DEFAULT_PUBLISH_RULE, parseWebhook } from "../publish";
 import { MODE_HELP, MODE_NAMES, REPORT_MODES } from "../report-gate";
 import { Modal } from "./Modal";
+import { DeleteProjectSection } from "./DeleteProjectSection";
 import { RuleChoice } from "./RuleChoice";
 import { TemplateEditor } from "./TemplateEditor";
 
@@ -61,13 +62,19 @@ export interface ProjectSettingsModalProps {
   cycleId: string;
   onClose: () => void;
   onSaved?: () => void;
+  onDeleted?: () => void;
 }
 
 /**
  * Combined modal for project settings: machine-local preferences (local auto-export & LLM
  * override) plus shared cycle configuration (participants, glossary, report defaults, targets).
  */
-export function ProjectSettingsModal({ cycleId, onClose, onSaved }: ProjectSettingsModalProps) {
+export function ProjectSettingsModal({
+  cycleId,
+  onClose,
+  onSaved,
+  onDeleted,
+}: ProjectSettingsModalProps) {
   const backend = useBackend();
   const [tab, setTab] = useState<SettingsTab>("local");
   const [prefs, setPrefs] = useState<ProjectPrefs | null>(null);
@@ -548,6 +555,14 @@ export function ProjectSettingsModal({ cycleId, onClose, onSaved }: ProjectSetti
               {savingPrefs ? "Saving…" : "Save local preferences"}
             </button>
           </div>
+          <DeleteProjectSection
+            cycleId={cycleId}
+            projectName={cycle?.name ?? cycleId}
+            onDeleted={() => {
+              onDeleted?.();
+              if (!onDeleted) onClose();
+            }}
+          />
         </form>
       )}
 

@@ -1631,6 +1631,118 @@ pub fn delete_cycle_participant(
     Ok(())
 }
 
+/// Moves a local directory to the Windows Recycle Bin (never hard-deletes).
+#[cfg(windows)]
+pub fn move_to_recycle_bin(path: &Path) -> IpcResult<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::UI::Shell::{
+        SHFileOperationW, FO_DELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT,
+        SHFILEOPSTRUCTW,
+    };
+
+    if !path.exists() {
+        return Ok(());
+    }
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    wide.push(0);
+    wide.push(0);
+    let mut op = SHFILEOPSTRUCTW {
+        hwnd: Default::default(),
+        wFunc: FO_DELETE,
+        pFrom: PCWSTR(wide.as_ptr()),
+        pTo: PCWSTR::null(),
+        fFlags: (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI).0 as u16,
+        fAnyOperationsAborted: false.into(),
+        hNameMappings: std::ptr::null_mut(),
+        lpszProgressTitle: PCWSTR::null(),
+    };
+    let rc = unsafe { SHFileOperationW(&mut op) };
+    if rc != 0 || op.fAnyOperationsAborted.as_bool() {
+        return Err(IpcError::new(
+            "io",
+            format!(
+                "could not move {} to the Recycle Bin (code {rc})",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub fn move_to_recycle_bin(path: &Path) -> IpcResult<()> {
+    if path.exists() {
+        std::fs::remove_dir_all(path)
+            .map_err(|e| IpcError::new("io", format!("could not remove {}: {e}", path.display())))?;
+    }
+    Ok(())
+}
+
+/// Removes a project from the database and `settings.cycle_repos`, optionally deleting its
+/// meetings and moving its local folder to the Recycle Bin. Never touches any GitHub repo.
+pub fn delete_project(
+    settings: &mut Settings,
+    store: &Store,
+    recordings_root: Option<&Path>,
+    cycle_id: &str,
+    delete_meetings: bool,
+    delete_folder: bool,
+) -> IpcResult<()> {
+    delete_project_with(
+        settings,
+        store,
+        recordings_root,
+        cycle_id,
+        delete_meetings,
+        delete_folder,
+        move_to_recycle_bin,
+    )
+}
+
+fn delete_project_with(
+    settings: &mut Settings,
+    store: &Store,
+    recordings_root: Option<&Path>,
+    cycle_id: &str,
+    delete_meetings: bool,
+    delete_folder: bool,
+    recycle: impl FnOnce(&Path) -> IpcResult<()>,
+) -> IpcResult<()> {
+    if cycle_id.trim().is_empty() {
+        return Err(IpcError::new("invalid", "project id cannot be empty"));
+    }
+    if let Some(located) = locate(&settings.cycle_repos, cycle_id)? {
+        let other_cycles = located
+            .repo
+            .list_cycles()
+            .map(|list| list.into_iter().filter(|c| c.dir_name != cycle_id).count())
+            .unwrap_or(0);
+        if other_cycles == 0 {
+            let repo_id = located.setting.id.clone();
+            let root = located.repo.root().to_path_buf();
+            settings.cycle_repos.retain(|r| r.id != repo_id);
+            if delete_folder && root.exists() {
+                recycle(&root)?;
+            }
+        } else if delete_folder {
+            let cycle_dir = located.repo.cycle_dir(cycle_id)?;
+            if cycle_dir.exists() {
+                recycle(&cycle_dir)?;
+            }
+        }
+    }
+    if delete_meetings {
+        if let Some(root) = recordings_root {
+            for m in store.list_meetings_by_cycle(cycle_id)? {
+                let _ = queue::voices::remove_clip_files(store, &m.id, root);
+            }
+        }
+    }
+    store.delete_cycle_data(cycle_id, delete_meetings)?;
+    Ok(())
+}
+
 fn cycle_and_id(info: &ParticipantInfo) -> IpcResult<(&str, &str)> {
     match (info.cycle_id.as_deref(), info.cycle_participant_id()) {
         (Some(c), Some(id)) => Ok((c, id)),
@@ -2970,5 +3082,61 @@ targets:
         let r = list_repos(&settings);
         assert!(!r[0].available);
         assert!(locate(&settings, "NOMAD").unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_project_removes_settings_and_handles_meetings_and_folder() {
+        let mut lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        let m = Meeting {
+            id: "m-del-1".into(),
+            title: "Standup".into(),
+            started_unix_ms: 100,
+            duration_ms: None,
+            state: MeetingState::Stopped,
+            dir: "m-del-1".into(),
+        };
+        lab.store.create_meeting(&m).unwrap();
+        lab.store
+            .set_report_settings(
+                "m-del-1",
+                &ReportSettings {
+                    cycle_id: Some("NOMAD".into()),
+                    report_mode: None,
+                    report_template: None,
+                    meeting_type: None,
+                    output_language: None,
+                },
+            )
+            .unwrap();
+
+        let repo_root = PathBuf::from(&lab.settings.cycle_repos[0].path);
+        let mut recycled: Option<PathBuf> = None;
+        delete_project_with(
+            &mut lab.settings,
+            &lab.store,
+            None,
+            "NOMAD",
+            false,
+            true,
+            |p| {
+                recycled = Some(p.to_path_buf());
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert!(lab.settings.cycle_repos.is_empty());
+        assert_eq!(recycled.as_deref(), Some(repo_root.as_path()));
+        // Meeting kept as standalone.
+        assert!(lab.store.get_meeting("m-del-1").unwrap().is_some());
+        assert_eq!(
+            lab.store
+                .get_report_settings("m-del-1")
+                .unwrap()
+                .unwrap()
+                .cycle_id,
+            None
+        );
     }
 }

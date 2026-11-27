@@ -576,6 +576,54 @@ describe("ProjectDetailView, ProjectSettingsModal, and ImportMeetingModal", () =
     expect(clearSecretSpy).toHaveBeenCalledWith("cred:discord/nomad");
     expect(webhookGroup.textContent).toContain("No webhook stored");
   });
+
+  it("deletes a project only after typing its name to confirm", async () => {
+    const backend = createMockBackend({ clockRate: 0, jobStepMs: 5000 });
+    const deleteSpy = vi.spyOn(backend, "deleteProject");
+    const onBack = vi.fn();
+
+    await act(async () => {
+      root.render(
+        <BackendProvider value={backend}>
+          <ProjectDetailView cycleId="NOMAD" onBack={onBack} onOpenMeeting={vi.fn()} />
+        </BackendProvider>,
+      );
+    });
+    await flush();
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('button[aria-label="Project settings"]')!.click();
+    });
+    await flush();
+
+    await act(async () => {
+      findButton("Delete project").click();
+    });
+    await flush();
+
+    const confirmBtn = findButton("Confirm delete project");
+    expect(confirmBtn.disabled).toBe(true);
+
+    const confirmInput = host.querySelector<HTMLInputElement>(
+      'input[aria-label="Confirm project name"]',
+    )!;
+    await setInputValue(confirmInput, "Wrong");
+    expect(findButton("Confirm delete project").disabled).toBe(true);
+
+    const cycle = await backend.getCycle("NOMAD");
+    await setInputValue(confirmInput, cycle.cycle.name);
+    expect(findButton("Confirm delete project").disabled).toBe(false);
+
+    await act(async () => {
+      findButton("Confirm delete project").click();
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(deleteSpy).toHaveBeenCalledWith("NOMAD", false, false);
+    expect(onBack).toHaveBeenCalledTimes(1);
+    expect((await backend.listCycles()).some((c) => c.id === "NOMAD")).toBe(false);
+  });
 });
 
 describe("native file dialogs", () => {

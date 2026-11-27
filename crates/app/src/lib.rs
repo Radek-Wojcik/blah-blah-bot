@@ -291,6 +291,7 @@ pub fn run() {
             cycle_commands::get_cycle,
             cycle_commands::create_cycle,
             cycle_commands::save_cycle,
+            cycle_commands::delete_project,
             cycle_commands::list_templates,
             cycle_commands::get_template,
             cycle_commands::save_template,

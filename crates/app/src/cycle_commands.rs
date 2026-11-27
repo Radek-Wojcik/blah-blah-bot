@@ -76,6 +76,32 @@ pub fn save_cycle(
 }
 
 #[tauri::command]
+pub fn delete_project(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    cycle_id: String,
+    delete_meetings: bool,
+    delete_folder: bool,
+) -> IpcResult<()> {
+    let root = state.recordings_root().ok();
+    state.update_settings(|s| {
+        state.with_store_ipc(|store| {
+            cycles::delete_project(
+                s,
+                store,
+                root.as_deref(),
+                &cycle_id,
+                delete_meetings,
+                delete_folder,
+            )
+        })
+    })?;
+    changed(&app);
+    crate::commands::emit_meetings_changed(&app);
+    Ok(())
+}
+
+#[tauri::command]
 pub fn list_templates(
     state: State<'_, AppState>,
     cycle_id: String,
