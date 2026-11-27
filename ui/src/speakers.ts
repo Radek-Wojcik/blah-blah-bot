@@ -94,11 +94,12 @@ export function voiceState(
     };
   }
   if (voice.decision === "suggested" && voice.suggestedParticipantId && !rejected) {
+    const inCurrentProject = participants.some((p) => p.id === voice.suggestedParticipantId);
     const name =
       voice.suggestedParticipantName ??
       participantName(participants, voice.suggestedParticipantId) ??
       "Unknown name";
-    const fromProjects = voice.suggestedFromProjects ?? [];
+    const fromProjects = inCurrentProject ? [] : (voice.suggestedFromProjects ?? []);
     const label =
       fromProjects.length > 0
         ? `Recognised from ${fromProjects.join(", ")}: ${name}?${score ? ` ${score}` : ""}`

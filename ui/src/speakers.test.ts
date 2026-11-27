@@ -208,4 +208,22 @@ describe("validateVoiceSettings", () => {
       participantId: "NOMAD:ola",
     });
   });
+
+  it("formats same-project Tier 1 suggestions with Suggested even if suggestedFromProjects is set", () => {
+    const s = voiceState(
+      voice("3", {
+        decision: "suggested",
+        score: 0.65,
+        suggestedParticipantId: "p2",
+        suggestedParticipantName: "Kasia Demo",
+        suggestedFromProjects: ["NOMAD"],
+      }),
+      people,
+    );
+    expect(s).toEqual({
+      kind: "suggested",
+      label: "Suggested: Kasia Demo? 65%",
+      participantId: "p2",
+    });
+  });
 });

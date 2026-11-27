@@ -458,6 +458,16 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     return n;
   };
   const sameName = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  const participantDisplayName = (pid: string | null | undefined): string | null => {
+    if (!pid) return null;
+    const local = participants.find((p) => p.id === pid);
+    if (local) return local.name;
+    const inCycle = splitKey(pid);
+    if (inCycle) {
+      return cycles.participants(inCycle.cycleId).find((p) => p.id === inCycle.id)?.name ?? null;
+    }
+    return null;
+  };
   /** Like the backend: a meeting whose voices are all decided loses its sample clips. */
   function voicesData(id: string): VoicesData {
     const list = voicesOf(id);
@@ -465,7 +475,12 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     if (allConfirmed) list.forEach((v) => (v.clips = []));
     return {
       meetingId: id,
-      voices: structuredClone(list),
+      cycleId: cycleOf(id),
+      voices: structuredClone(list).map((v) => ({
+        ...v,
+        assignedParticipantName:
+          v.assignedParticipantName ?? participantDisplayName(v.assignedParticipantId),
+      })),
       participants: participantsFor(undefined, id),
       allConfirmed,
     };
@@ -994,8 +1009,18 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       return voicesData(id);
     },
     confirmMatches: async (id) => {
-      for (const v of voicesOf(id))
-        if (v.decision === "auto" && !v.confirmed && v.assignedParticipantId) v.confirmed = true;
+      const cid = cycleOf(id);
+      const inCycle = participantsFor(undefined, id);
+      for (const v of voicesOf(id)) {
+        if (v.decision === "auto" && !v.confirmed && v.assignedParticipantId) {
+          if (cid && !inCycle.some((p) => p.id === v.assignedParticipantId)) {
+            const extra = extraProjects.get(v.assignedParticipantId) ?? new Set<string>();
+            extra.add(cid);
+            extraProjects.set(v.assignedParticipantId, extra);
+          }
+          v.confirmed = true;
+        }
+      }
       return voicesData(id);
     },
     voiceClip: async (id, voiceId, idx) => {
@@ -1696,14 +1721,12 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       extra.add(cycleId);
       extraProjects.set(participantId, extra);
       emitCycles();
-      const all = await await Promise.resolve(
-        cycles.listCycles().flatMap((c) =>
-          cycles.participants(c.id).map((p) => ({
-            id: keyOf(c.id, p.id),
-            name: p.name,
-            cycleId: c.id,
-          })),
-        ),
+      const all = cycles.listCycles().flatMap((c) =>
+        cycles.participants(c.id).map((p) => ({
+          id: keyOf(c.id, p.id),
+          name: p.name,
+          cycleId: c.id,
+        })),
       );
       const foundCycle = all.find((x) => x.id === participantId);
       const foundLocal = participants.find((x) => x.id === participantId);
@@ -1753,8 +1776,21 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     },
     mergeParticipants: async (keepId, dropId) => {
       if (keepId === dropId) fail("invalid", "cannot merge a participant with itself");
+      if (mergedDeleted.has(keepId) || mergedDeleted.has(dropId)) {
+        fail("not_found", "participant not found");
+      }
       const keepInCycle = splitKey(keepId);
       const dropInCycle = splitKey(dropId);
+      const keepLocal = participants.find((x) => x.id === keepId);
+      const dropLocal = participants.find((x) => x.id === dropId);
+      const keepCycleEntry = keepInCycle
+        ? cycles.participants(keepInCycle.cycleId).find((p) => p.id === keepInCycle.id)
+        : undefined;
+      const dropCycleEntry = dropInCycle
+        ? cycles.participants(dropInCycle.cycleId).find((p) => p.id === dropInCycle.id)
+        : undefined;
+      if (!keepLocal && !keepCycleEntry) fail("not_found", "participant not found");
+      if (!dropLocal && !dropCycleEntry) fail("not_found", "participant not found");
       const keepProjs = new Set<string>(extraProjects.get(keepId) ?? []);
       if (keepInCycle && !removedProjects.get(keepId)?.has(keepInCycle.cycleId)) {
         keepProjs.add(keepInCycle.cycleId);
@@ -1768,8 +1804,6 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
           fail("invalid", `cannot merge participants that both belong to project ${proj}`);
         }
       }
-      const keepLocal = participants.find((x) => x.id === keepId);
-      const dropLocal = participants.find((x) => x.id === dropId);
       const keepSt = stats.get(keepId) ?? {
         sampleCount: keepLocal?.sampleCount ?? 0,
         speechMs: keepLocal?.speechMs ?? 0,
@@ -1781,18 +1815,29 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       const totalSamples = Math.min(20, keepSt.sampleCount + dropSt.sampleCount);
       const totalSpeech = keepSt.speechMs + dropSt.speechMs;
       stats.set(keepId, { sampleCount: totalSamples, speechMs: totalSpeech });
+      stats.delete(dropId);
       if (keepLocal) {
         keepLocal.sampleCount = totalSamples;
         keepLocal.speechMs = totalSpeech;
       }
       const mergedProjs = new Set([...keepProjs, ...dropProjs]);
+      const keepRemoved = removedProjects.get(keepId);
+      if (keepRemoved) {
+        for (const proj of dropProjs) keepRemoved.delete(proj);
+      }
       extraProjects.set(keepId, mergedProjs);
+      extraProjects.delete(dropId);
+      removedProjects.delete(dropId);
       mergedDeleted.add(dropId);
+      participants = participants.filter((p) => p.id !== dropId);
+      for (const list of voices.values()) {
+        for (const v of list) {
+          if (v.assignedParticipantId === dropId) v.assignedParticipantId = keepId;
+          if (v.suggestedParticipantId === dropId) v.suggestedParticipantId = keepId;
+        }
+      }
       emitCycles();
-      const keepName =
-        (keepInCycle
-          ? cycles.participants(keepInCycle.cycleId).find((p) => p.id === keepInCycle.id)?.name
-          : participants.find((p) => p.id === keepId)?.name) ?? keepId;
+      const keepName = keepCycleEntry?.name ?? keepLocal!.name;
       return {
         id: keepId,
         name: keepName,

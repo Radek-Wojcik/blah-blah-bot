@@ -352,7 +352,7 @@ export function VoiceProfiles({ onDirtyChange, registerHandle }: Partial<Editabl
               const isDuplicateName =
                 (profiles ?? []).filter((other) => other.name.trim().toLowerCase() === nameKey)
                   .length > 1;
-              const availableProjects = cycles.filter((c) => !p.projects.includes(c.id));
+              const availableProjects = cycles.filter((c) => c.valid && !p.projects.includes(c.id));
               const mergeCandidates = (profiles ?? []).filter(
                 (other) =>
                   other.id !== p.id && !other.projects.some((proj) => p.projects.includes(proj)),
