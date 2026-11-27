@@ -407,18 +407,39 @@ const MODEL_INFO: [(&str, &str, bool); 4] = [
 
 /// Clears a "busy" flag when dropped, so a panic in a background thread (or a failed thread
 /// spawn) cannot leave a setup task stuck in the busy state until the application restarts.
-pub(crate) struct BusyGuard(Arc<AtomicBool>);
+pub(crate) struct BusyGuard {
+    flag: Arc<AtomicBool>,
+    /// Model keys published while the flag is set; cleared together with it.
+    keys: Option<Arc<Mutex<Vec<String>>>>,
+}
 
 impl BusyGuard {
     /// Takes over a flag that the caller has already set.
     pub(crate) fn new(flag: &Arc<AtomicBool>) -> Self {
-        Self(flag.clone())
+        Self {
+            flag: flag.clone(),
+            keys: None,
+        }
+    }
+
+    fn with_keys(flag: &Arc<AtomicBool>, keys: &Arc<Mutex<Vec<String>>>) -> Self {
+        Self {
+            flag: flag.clone(),
+            keys: Some(keys.clone()),
+        }
     }
 }
 
 impl Drop for BusyGuard {
     fn drop(&mut self) {
-        self.0.store(false, Ordering::SeqCst);
+        // Flag first: a stale key list is harmless while the flag is clear, whereas an empty
+        // list with the flag set would mark every model as downloading.
+        self.flag.store(false, Ordering::SeqCst);
+        if let Some(keys) = &self.keys {
+            if let Ok(mut k) = keys.lock() {
+                k.clear();
+            }
+        }
     }
 }
 
@@ -504,7 +525,7 @@ pub struct Processing {
     driver_running: Arc<AtomicBool>,
     models_busy: Arc<AtomicBool>,
     /// Keys of the models being downloaded while `models_busy` is set.
-    models_active: Mutex<Vec<String>>,
+    models_active: Arc<Mutex<Vec<String>>>,
     models_cancel: Arc<AtomicBool>,
     /// The processing environment is being created (`prepare_worker_env`).
     env_busy: Arc<AtomicBool>,
@@ -654,7 +675,7 @@ impl Processing {
             last_queue_json: Mutex::new(String::new()),
             driver_running: Arc::default(),
             models_busy: Arc::default(),
-            models_active: Mutex::default(),
+            models_active: Arc::default(),
             models_cancel: Arc::default(),
             env_busy: Arc::default(),
             env_cancel: Arc::default(),
@@ -713,7 +734,7 @@ impl Processing {
             last_queue_json: Mutex::new(String::new()),
             driver_running: Arc::default(),
             models_busy: Arc::default(),
-            models_active: Mutex::default(),
+            models_active: Arc::default(),
             models_cancel: Arc::default(),
             env_busy: Arc::default(),
             env_cancel: Arc::default(),
@@ -764,6 +785,8 @@ impl Processing {
 
     /// Reads the stored settings, applies `change` and saves the result while holding the
     /// settings lock, so concurrent updates cannot overwrite each other (no lost update).
+    /// Like `save_settings`, it keeps the stored `first_run_done` and
+    /// `legacy_venv_notice_dismissed`: those change only through their own methods.
     pub(crate) fn modify_settings(
         &self,
         change: impl FnOnce(&mut ProcessingSettings),
@@ -1581,13 +1604,21 @@ impl Processing {
         {
             return Err(IpcError::new("invalid", "unknown model"));
         }
+        if keys.is_empty() {
+            return Err(IpcError::new("invalid", "no model was selected"));
+        }
+        // Hold the key list while the flag is set, so a status probe that sees the flag also
+        // sees the keys.
+        let mut active = self
+            .models_active
+            .lock()
+            .map_err(|_| IpcError::new("internal", "model state lock poisoned"))?;
         if self.models_busy.swap(true, Ordering::SeqCst) {
             return Err(IpcError::new("busy", "a download is already running"));
         }
-        let busy_guard = BusyGuard::new(&self.models_busy);
-        if let Ok(mut active) = self.models_active.lock() {
-            *active = keys.clone();
-        }
+        let busy_guard = BusyGuard::with_keys(&self.models_busy, &self.models_active);
+        *active = keys.clone();
+        drop(active);
         let cancel = self.models_cancel.clone();
         cancel.store(false, Ordering::SeqCst);
         let this = self.clone();
@@ -1637,9 +1668,6 @@ impl Processing {
                     })
                 });
                 // Clear busy BEFORE emitting the terminal event so an immediate Retry is not refused.
-                if let Ok(mut active) = this.models_active.lock() {
-                    active.clear();
-                }
                 drop(busy_guard);
                 match result {
                     Ok(true) => {

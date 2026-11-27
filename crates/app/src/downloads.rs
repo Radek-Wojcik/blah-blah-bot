@@ -53,12 +53,15 @@ pub const ALLOWED_CDN_LFS_DOMAINS: &[&str] = &["hf.co", "huggingface.co"];
 pub struct DownloadPolicy {
     /// Only enabled in local tests using an ephemeral `127.0.0.1` HTTP server.
     pub allow_loopback_http: bool,
+    /// A download is aborted when no data arrives for this long.
+    pub stall_timeout: Duration,
 }
 
 impl DownloadPolicy {
     /// Strict production policy: HTTPS only and exact allowlisted hosts.
     pub const PRODUCTION: Self = Self {
         allow_loopback_http: false,
+        stall_timeout: Duration::from_secs(90),
     };
 }
 
@@ -262,9 +265,6 @@ fn validate_url_host(url: &str, policy: DownloadPolicy) -> Result<(String, bool)
 
 fn resolve_redirect_url(current_url: &str, location: &str) -> Result<String, DownloadError> {
     let loc = location.trim();
-    if loc.contains("://") {
-        return Ok(loc.to_string());
-    }
     if loc.starts_with("//") {
         // Scheme-relative reference (RFC 3986 section 4.2): keep the current scheme.
         let (scheme, _) = current_url.split_once("://").ok_or_else(|| {
@@ -283,6 +283,9 @@ fn resolve_redirect_url(current_url: &str, location: &str) -> Result<String, Dow
             ));
         }
         return Ok(format!("{scheme}://{authority}{loc}"));
+    }
+    if loc.contains("://") {
+        return Ok(loc.to_string());
     }
     Err(DownloadError::Failed(
         "download redirect target is not a valid URL".to_string(),
@@ -595,6 +598,15 @@ pub fn download_pin_from(
                 .map_err(|e| {
                     DownloadError::Failed(format!("could not open partial download file: {e}"))
                 })?;
+            // The file was hashed before the request; make sure it is still the same length.
+            if f.metadata().map(|m| m.len()).ok() != Some(existing_len) {
+                drop(f);
+                remove_file_in_dir(download_dir, &part_path);
+                return Err(DownloadError::Failed(
+                    "partial download changed during resume; the partial download was cleared and can be retried"
+                        .to_string(),
+                ));
+            }
             (f, h, hashed)
         }
         206 => {
@@ -620,24 +632,58 @@ pub fn download_pin_from(
         }
     };
 
+    // The body is read on a helper thread so this loop can notice cancellation and a stalled
+    // connection (a blocked socket read cannot be interrupted). When the loop gives up, the
+    // helper ends on its own once the connection closes or the body timeout expires.
     let mut reader = response.into_body().into_reader();
-    let mut buf = vec![0u8; CHUNK_SIZE];
+    let (tx, rx) = std::sync::mpsc::sync_channel::<io::Result<Vec<u8>>>(4);
+    std::thread::Builder::new()
+        .name("download-reader".into())
+        .spawn(move || loop {
+            let mut chunk = vec![0u8; CHUNK_SIZE];
+            match reader.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => {
+                    chunk.truncate(n);
+                    if tx.send(Ok(chunk)).is_err() {
+                        break;
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => {
+                    let _ = tx.send(Err(e));
+                    break;
+                }
+            }
+        })
+        .map_err(|_| DownloadError::Failed("could not start the download".to_string()))?;
+    let mut last_data = Instant::now();
     loop {
         if cancel.load(Ordering::SeqCst) {
             let _ = file.flush();
             return Err(DownloadError::Cancelled);
         }
-        let n = match reader.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-            Err(_) => {
+        let buf = match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(Ok(chunk)) => chunk,
+            Ok(Err(_)) => {
                 let _ = file.flush();
                 return Err(DownloadError::Failed(format!(
                     "download from {host} was interrupted; you can retry to resume"
                 )));
             }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if last_data.elapsed() > policy.stall_timeout {
+                    let _ = file.flush();
+                    return Err(DownloadError::Failed(format!(
+                        "download from {host} stalled; you can retry to resume"
+                    )));
+                }
+                continue;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         };
+        last_data = Instant::now();
+        let n = buf.len();
         file.write_all(&buf[..n]).map_err(|e| {
             DownloadError::Failed(format!("could not write to the download folder: {e}"))
         })?;
@@ -721,7 +767,9 @@ fn finalize_download(
 /// `..` traversal components, NUL bytes, and symlinks are rejected so nothing can be
 /// written outside `target_dir`.
 pub fn extract_zip_safe(zip_path: &Path, target_dir: &Path) -> Result<(), String> {
-    extract_zip_checked(zip_path, target_dir, MAX_UNPACKED_BYTES, None).map_err(|e| match e {
+    extract_zip_checked(zip_path, target_dir, MAX_UNPACKED_BYTES, None)
+        .map(|_| ())
+        .map_err(|e| match e {
         DownloadError::Cancelled => "extraction was cancelled".to_string(),
         DownloadError::Failed(msg) => msg,
     })
@@ -734,7 +782,7 @@ pub fn extract_zip_checked(
     target_dir: &Path,
     max_unpacked: u64,
     cancel: Option<&Arc<AtomicBool>>,
-) -> Result<(), DownloadError> {
+) -> Result<u64, DownloadError> {
     let is_cancelled = || cancel.is_some_and(|c| c.load(Ordering::SeqCst));
     extract_zip_inner(zip_path, target_dir, max_unpacked, &is_cancelled)
 }
@@ -744,7 +792,7 @@ fn extract_zip_inner(
     target_dir: &Path,
     max_unpacked: u64,
     is_cancelled: &dyn Fn() -> bool,
-) -> Result<(), DownloadError> {
+) -> Result<u64, DownloadError> {
     let fail = DownloadError::Failed;
     let file = File::open(zip_path).map_err(|e| {
         fail(format!(
@@ -763,6 +811,9 @@ fn extract_zip_inner(
     let mut rel_paths: Vec<Option<PathBuf>> = Vec::with_capacity(archive.len());
     let mut declared_total: u64 = 0;
     for i in 0..archive.len() {
+        if is_cancelled() {
+            return Err(DownloadError::Cancelled);
+        }
         let entry = archive
             .by_index(i)
             .map_err(|e| fail(format!("could not read archive entry: {e}")))?;
@@ -857,7 +908,7 @@ fn extract_zip_inner(
                 .map_err(|e| fail(format!("could not flush extracted file: {e}")))?;
         }
     }
-    Ok(())
+    Ok(written_total)
 }
 
 /// Extracts every archive of `zip_paths` into a staging folder next to `final_dir` (inside the
@@ -879,29 +930,70 @@ pub fn extract_archives_atomic(
         .ok_or_else(|| fail("extraction folder has no name".to_string()))?
         .to_string_lossy();
     let staging = parent.join(format!(".{name}.extracting"));
-    let _ = fs::remove_dir_all(&staging);
+    let backup = parent.join(format!(".{name}.old"));
+
+    // Recover from an interrupted swap: a backup without a live folder is the working install.
+    if backup.exists() {
+        if final_dir.exists() {
+            fs::remove_dir_all(&backup).map_err(|e| {
+                fail(format!(
+                    "could not remove the previous backup folder {}: {e}",
+                    backup.display()
+                ))
+            })?;
+        } else {
+            fs::rename(&backup, final_dir).map_err(|e| {
+                fail(format!(
+                    "could not restore the previous installation from {}: {e}",
+                    backup.display()
+                ))
+            })?;
+        }
+    }
+    if staging.exists() {
+        fs::remove_dir_all(&staging).map_err(|e| {
+            fail(format!(
+                "could not clear the leftover extraction folder {}: {e}",
+                staging.display()
+            ))
+        })?;
+    }
     fs::create_dir_all(&staging)
         .map_err(|e| fail(format!("could not create extraction folder: {e}")))?;
 
     let result = (|| {
+        let mut remaining = max_unpacked;
         for zip_path in zip_paths {
             if cancel.load(Ordering::SeqCst) {
                 return Err(DownloadError::Cancelled);
             }
-            extract_zip_checked(zip_path, &staging, max_unpacked, Some(cancel))?;
+            let used = extract_zip_checked(zip_path, &staging, remaining, Some(cancel))?;
+            remaining = remaining.saturating_sub(used);
         }
         if cancel.load(Ordering::SeqCst) {
             return Err(DownloadError::Cancelled);
         }
-        if final_dir.exists() {
-            fs::remove_dir_all(final_dir)
-                .map_err(|e| fail(format!("could not replace the previous extraction: {e}")))?;
+        let had_previous = final_dir.exists();
+        if had_previous {
+            fs::rename(final_dir, &backup).map_err(|e| {
+                fail(format!(
+                    "could not replace the previous installation (is llama-server still running?): {e}"
+                ))
+            })?;
         }
-        fs::rename(&staging, final_dir)
-            .map_err(|e| fail(format!("could not finish extracting the archives: {e}")))
+        if let Err(e) = fs::rename(&staging, final_dir) {
+            if had_previous {
+                let _ = fs::rename(&backup, final_dir);
+            }
+            return Err(fail(format!("could not finish extracting the archives: {e}")));
+        }
+        Ok(())
     })();
     if result.is_err() {
         let _ = fs::remove_dir_all(&staging);
+    } else if backup.exists() {
+        // Best effort: a locked file only leaves the backup for the next run to clear.
+        let _ = fs::remove_dir_all(&backup);
     }
     result
 }
@@ -1039,6 +1131,7 @@ mod tests {
 
     const TEST_POLICY: DownloadPolicy = DownloadPolicy {
         allow_loopback_http: true,
+        stall_timeout: Duration::from_secs(10),
     };
 
     fn spawn_raw_response_server(response: String) -> (String, std::thread::JoinHandle<()>) {

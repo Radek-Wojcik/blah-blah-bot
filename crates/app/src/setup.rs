@@ -740,7 +740,8 @@ pub struct Probe {
     pub models: Option<HashMap<String, bool>>,
     pub models_working: bool,
     /// Keys of the models being downloaded while `models_working` is set. Empty means
-    /// unknown: every model that is not cached is then reported as downloading.
+    /// unknown: every model is then reported as downloading, because the cache state is not
+    /// probed while a download runs.
     pub models_active_keys: Vec<String>,
     pub hf_token_set: bool,
     pub llama: LlamaResolution,
