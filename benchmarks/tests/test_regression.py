@@ -273,7 +273,7 @@ def test_full_pipeline_time_and_vram_combine_the_stage_files(tmp_path):
         base / "stage4-long-gemma-4-12b-q4.json",
         {"minutes_for_2h": 10.3, "peak_vram_absolute_mib": 9743},
     )
-    write_json(base / "p9-long-estimate.json", {"total_hours": 0.97})
+    write_json(base / "stage8-e2e-10h.json", {"total_hours": 0.97, "full_length": True})
     rows = rg.evaluate_thresholds(base, None)
     assert row(rows, "time-2h")["value"] == pytest.approx(16.4)
     assert row(rows, "peak-vram")["value"] == 9743

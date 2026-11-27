@@ -1,0 +1,9 @@
+{
+  "prototype": "stage8-e2e-10h",
+  "name": "baseline",
+  "kind": "recorded baseline (time-10h)",
+  "total_hours": 1.858,
+  "full_length": true,
+  "source": "ten hour end-to-end test run (6692 s, 1 passed, 9490 MiB peak), result file rebuilt from the log; same value as row time-10h of stage8-regression.json (2026-11-23)",
+  "note": "Owner decision 2026-11-25: re-baseline time-10h to the measured value instead of the Stage 0 estimate (0.97 h). Parallel extraction (3 slots) was measured on 2026-11-27 and rejected, see stage4-extraction-gemma-4-12b-q4-parallel3.json, so the pipeline speed is unchanged. Only total_hours is read from this file."
+}
