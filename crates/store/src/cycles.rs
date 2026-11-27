@@ -519,13 +519,13 @@ impl Store {
                 "UPDATE meetings SET cycle_id = NULL WHERE cycle_id = ?1",
                 params![cycle_id],
             )?;
-            // `publications.cycle_id` is NOT NULL: an empty id means "no project" (readers
-            // treat it as absent), so kept meetings do not point at the deleted project.
-            tx.execute(
-                "UPDATE publications SET cycle_id = '' WHERE cycle_id = ?1",
-                params![cycle_id],
-            )?;
         }
+        // `publications.cycle_id` is NOT NULL: an empty id means "no project" (readers treat
+        // it as absent), so no publication (also an orphan) points at the deleted project.
+        tx.execute(
+            "UPDATE publications SET cycle_id = '' WHERE cycle_id = ?1",
+            params![cycle_id],
+        )?;
         tx.execute(
             "DELETE FROM project_people WHERE cycle_id = ?1",
             params![cycle_id],
@@ -1199,6 +1199,25 @@ mod tests {
         let publication = s.get_publication("m1").unwrap().unwrap();
         assert_eq!(publication.cycle_id, "");
         assert!(s.list_publications("NOMAD").unwrap().is_empty());
+    }
+
+    #[test]
+    fn delete_cycle_data_clears_orphan_publications_even_when_deleting_meetings() {
+        let s = store();
+        // The meeting never had the project set; only its publication names it.
+        s.put_publication(&crate::Publication {
+            meeting_id: "m2".into(),
+            cycle_id: "NOMAD".into(),
+            folder: None,
+            repo_key: None,
+            commit_sha: None,
+            report_url: None,
+            snapshot_dir: "snap".into(),
+            published_unix_ms: None,
+        })
+        .unwrap();
+        s.delete_cycle_data("NOMAD", true).unwrap();
+        assert_eq!(s.get_publication("m2").unwrap().unwrap().cycle_id, "");
     }
 
     #[test]

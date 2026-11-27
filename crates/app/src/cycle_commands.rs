@@ -4,7 +4,7 @@
 
 use cycle_store::Repo;
 use serde::Deserialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::cycles::{
     self, CycleDetails, CycleDto, CycleListItem, PullResult, RepoDto, ReportDefaults,
@@ -75,38 +75,68 @@ pub fn save_cycle(
     Ok(result)
 }
 
+/// Async: the work (and the Shell call that moves the folder to the Recycle Bin, which can
+/// take long or ask the user) runs off the UI thread.
 #[tauri::command]
-pub fn delete_project(
+pub async fn delete_project(
     app: AppHandle,
-    state: State<'_, AppState>,
     cycle_id: String,
     delete_meetings: bool,
     delete_folder: bool,
 ) -> IpcResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        delete_project_blocking(&app, &cycle_id, delete_meetings, delete_folder)
+    })
+    .await
+    .map_err(|e| IpcError::new("internal", format!("the deletion did not finish: {e}")))?
+}
+
+/// Order: refuse while busy and change the settings (saved at once, so a failing save stops
+/// everything before anything irreversible), then the database and clips, and the folder
+/// last, outside every lock.
+fn delete_project_blocking(
+    app: &AppHandle,
+    cycle_id: &str,
+    delete_meetings: bool,
+    delete_folder: bool,
+) -> IpcResult<()> {
+    let state = app.state::<AppState>();
     let root = state.recordings_root().ok();
-    let recording = state.recorder.is_recording();
-    let jobs = state.processing().job_states();
     let data_dir = state.data_dir().to_path_buf();
-    // Settings and database change first, under their locks; the folder goes last and
-    // outside every lock (the Shell call can take long or ask the user).
     let folder = state.update_settings(|s| {
+        // Checked with the settings locked; a queue that cannot be read counts as busy.
+        let recording = state.recorder.is_recording();
+        let jobs: std::collections::HashMap<_, _> = state
+            .processing()
+            .queue_state()
+            .map_err(|e| {
+                IpcError::new(
+                    "busy",
+                    format!(
+                        "cannot tell whether a meeting is being processed: {}",
+                        e.message
+                    ),
+                )
+            })?
+            .jobs
+            .into_iter()
+            .map(|j| (j.meeting_id, j.state))
+            .collect();
         state.with_store_ipc(|store| {
-            cycles::ensure_project_idle(store, &cycle_id, recording, &jobs)?;
-            cycles::delete_project(
-                s,
-                store,
-                root.as_deref(),
-                &data_dir,
-                &cycle_id,
-                delete_meetings,
-                delete_folder,
-            )
-        })
+            cycles::ensure_project_idle(store, cycle_id, recording, &jobs)
+        })?;
+        cycles::plan_project_deletion(s, &data_dir, cycle_id, delete_folder)
     })?;
-    changed(&app);
-    crate::commands::emit_meetings_changed(&app);
+    let finished = state.with_store_ipc(|store| {
+        cycles::finish_project_deletion(store, root.as_deref(), cycle_id, delete_meetings)
+    });
+    changed(app);
+    crate::commands::emit_meetings_changed(app);
+    finished?;
     if let Some(folder) = folder {
-        cycles::move_to_recycle_bin(&folder).map_err(|e| {
+        let moved = cycles::move_to_recycle_bin(&folder);
+        changed(app);
+        moved.map_err(|e| {
             IpcError::new(
                 e.code,
                 format!(

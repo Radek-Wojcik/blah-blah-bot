@@ -1827,13 +1827,24 @@ pub fn delete_cycle_participant(
 }
 
 /// Removes the `\\?\` prefix that `fs::canonicalize` adds on Windows, which the Shell API
-/// does not accept. Network paths (`\\?\UNC\`) are returned unchanged.
+/// does not accept, but only from a local drive path (`\\?\C:\...`, any letter case).
+/// `\\?\UNC\...`, `\\?\Volume{...}\...` and everything else is returned unchanged.
 pub fn strip_verbatim_prefix(path: &Path) -> PathBuf {
     let text = path.to_string_lossy();
-    match text.strip_prefix(r"\\?\") {
-        Some(rest) if !rest.starts_with(r"UNC\") => PathBuf::from(rest),
-        _ => path.to_path_buf(),
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        let b = rest.as_bytes();
+        if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+            return PathBuf::from(rest);
+        }
     }
+    path.to_path_buf()
+}
+
+/// Whether the path is an ordinary local drive path (`C:\...`, after `strip_verbatim_prefix`).
+pub fn is_local_drive_path(path: &Path) -> bool {
+    let text = strip_verbatim_prefix(path).to_string_lossy().into_owned();
+    let b = text.as_bytes();
+    b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')
 }
 
 /// Moves a local directory to the Windows Recycle Bin. It never deletes for good silently:
@@ -1851,16 +1862,16 @@ pub fn move_to_recycle_bin(path: &Path) -> IpcResult<()> {
     if !path.exists() {
         return Ok(());
     }
-    let path = strip_verbatim_prefix(path);
-    if path.to_string_lossy().starts_with(r"\\") {
+    if !is_local_drive_path(path) {
         return Err(IpcError::new(
             "io",
             format!(
-                "{} is on a network share and cannot be moved to the Recycle Bin; remove it by hand",
+                "{} is not on a local drive and cannot be moved to the Recycle Bin; remove it by hand",
                 path.display()
             ),
         ));
     }
+    let path = strip_verbatim_prefix(path);
     let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
     wide.push(0);
     wide.push(0);
@@ -1923,9 +1934,11 @@ fn is_link(path: &Path) -> bool {
     false
 }
 
-/// Checks that `target` may be moved to the Recycle Bin: an existing directory strictly
-/// inside the application data folder, reached without a link. Folders the user chose
-/// (outside the data folder) are never removed by the application.
+/// Checks that `target` may be moved to the Recycle Bin: an absolute path to an existing
+/// directory strictly inside the application data folder, on a local drive, reached without
+/// a link (every folder from the data folder down is checked, a trailing separator is
+/// ignored). Folders the user chose (outside the data folder) are never removed by the
+/// application. Call it before changing anything.
 pub fn managed_delete_target(data_dir: &Path, target: &Path) -> IpcResult<PathBuf> {
     let refuse = |why: &str| {
         IpcError::new(
@@ -1936,18 +1949,34 @@ pub fn managed_delete_target(data_dir: &Path, target: &Path) -> IpcResult<PathBu
             ),
         )
     };
+    if !target.is_absolute() {
+        return Err(refuse("the path is not absolute"));
+    }
     let data = std::fs::canonicalize(data_dir)
         .map_err(|e| IpcError::new("io", format!("cannot resolve the data folder: {e}")))?;
-    if is_link(target) {
-        return Err(refuse("it is a link or junction"));
-    }
-    let real = std::fs::canonicalize(target)
+    // `components()` drops a trailing separator and `.` parts.
+    let normal: PathBuf = target.components().collect();
+    let real = std::fs::canonicalize(&normal)
         .map_err(|e| IpcError::new("io", format!("cannot resolve {}: {e}", target.display())))?;
     if !real.is_dir() {
         return Err(refuse("it is not a folder"));
     }
     if real == data || !real.starts_with(&data) {
         return Err(refuse("it is outside the application data folder"));
+    }
+    if !is_local_drive_path(&real) {
+        return Err(refuse("it is not on a local drive"));
+    }
+    // No link on the way: walk up from the target until the data folder.
+    let mut cur: Option<&Path> = Some(&normal);
+    while let Some(dir) = cur {
+        if std::fs::canonicalize(dir).is_ok_and(|c| c == data) {
+            break;
+        }
+        if is_link(dir) {
+            return Err(refuse("it is, or lies behind, a link or junction"));
+        }
+        cur = dir.parent();
     }
     Ok(real)
 }
@@ -1961,6 +1990,7 @@ pub fn ensure_project_idle(
     jobs: &std::collections::HashMap<String, crate::processing::JobState>,
 ) -> IpcResult<()> {
     use crate::processing::JobState;
+    use store::MeetingState;
     if recording {
         return Err(IpcError::new(
             "busy",
@@ -1968,6 +1998,12 @@ pub fn ensure_project_idle(
         ));
     }
     for m in store.list_meetings_by_cycle(cycle_id)? {
+        if m.state == MeetingState::Recording {
+            return Err(IpcError::new(
+                "busy",
+                "a meeting of this project is being recorded",
+            ));
+        }
         if matches!(
             jobs.get(&m.id),
             Some(JobState::Queued | JobState::Waiting | JobState::Running)
@@ -1995,6 +2031,7 @@ pub fn ensure_project_idle(
 /// meetings. Never touches any GitHub repo. Returns the folder the caller must move to the
 /// Recycle Bin (with [`move_to_recycle_bin`], outside any lock) once this succeeded: the
 /// folder is the last thing to go, so a failure earlier loses nothing.
+#[cfg(test)]
 pub fn delete_project(
     settings: &mut Settings,
     store: &Store,
@@ -2002,6 +2039,21 @@ pub fn delete_project(
     data_dir: &Path,
     cycle_id: &str,
     delete_meetings: bool,
+    delete_folder: bool,
+) -> IpcResult<Option<PathBuf>> {
+    let folder = plan_project_deletion(settings, data_dir, cycle_id, delete_folder)?;
+    finish_project_deletion(store, recordings_root, cycle_id, delete_meetings)?;
+    Ok(folder)
+}
+
+/// First half of the deletion: validates everything that can refuse (the repository can be
+/// read, the folder may be removed) and then changes `settings` only. The caller saves the
+/// settings before [`finish_project_deletion`], so a failing save happens before anything
+/// irreversible. Returns the folder to move to the Recycle Bin at the very end.
+pub fn plan_project_deletion(
+    settings: &mut Settings,
+    data_dir: &Path,
+    cycle_id: &str,
     delete_folder: bool,
 ) -> IpcResult<Option<PathBuf>> {
     if cycle_id.trim().is_empty() {
@@ -2043,6 +2095,16 @@ pub fn delete_project(
     {
         settings.last_report = None;
     }
+    Ok(folder)
+}
+
+/// Second half: removes the clips and the database records of the project.
+pub fn finish_project_deletion(
+    store: &Store,
+    recordings_root: Option<&Path>,
+    cycle_id: &str,
+    delete_meetings: bool,
+) -> IpcResult<()> {
     if delete_meetings {
         if let Some(root) = recordings_root {
             for m in store.list_meetings_by_cycle(cycle_id)? {
@@ -2053,7 +2115,7 @@ pub fn delete_project(
         }
     }
     store.delete_cycle_data(cycle_id, delete_meetings)?;
-    Ok(folder)
+    Ok(())
 }
 
 // ----- tests -------------------------------------------------------------------------------
@@ -3608,5 +3670,97 @@ targets:
         assert!(ensure_project_idle(&lab.store, "NOMAD", false, &jobs).is_ok());
         // A job of another project's meeting does not matter.
         assert!(ensure_project_idle(&lab.store, "OTHER", false, &jobs).is_ok());
+    }
+
+    #[cfg(windows)]
+    fn junction(link: &Path, target: &Path) -> bool {
+        std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn managed_delete_target_rejects_trailing_separator_and_intermediate_junctions() {
+        let data = test_tmp::TestDir::new("cycles-junction2");
+        let other = test_tmp::TestDir::new("cycles-junction2-target");
+        std::fs::create_dir_all(other.path().join("deep")).unwrap();
+        let link = data.path().join("link");
+        if !junction(&link, other.path()) {
+            return;
+        }
+        let with_sep = PathBuf::from(format!("{}\\", link.display()));
+        assert!(managed_delete_target(data.path(), &with_sep).is_err());
+        assert!(managed_delete_target(data.path(), &link.join("deep")).is_err());
+        let _ = std::fs::remove_dir(&link);
+    }
+
+    #[test]
+    fn managed_delete_target_requires_an_absolute_path() {
+        let data = test_tmp::TestDir::new("cycles-rel");
+        assert!(managed_delete_target(data.path(), Path::new("projects/p")).is_err());
+    }
+
+    #[test]
+    fn network_and_volume_paths_are_not_local_drive_paths() {
+        for p in [
+            r"\\?\unc\srv\share\p",
+            r"\\?\UNC\srv\share\p",
+            r"\\?\Volume{1234}\p",
+            r"\\srv\share\p",
+        ] {
+            assert!(!is_local_drive_path(Path::new(p)), "{p}");
+            assert_eq!(strip_verbatim_prefix(Path::new(p)), PathBuf::from(p));
+        }
+        assert!(is_local_drive_path(Path::new(r"\\?\c:\data\p")));
+        assert_eq!(
+            strip_verbatim_prefix(Path::new(r"\\?\c:\data\p")),
+            PathBuf::from(r"c:\data\p")
+        );
+    }
+
+    #[test]
+    fn a_refused_deletion_changes_nothing_and_a_planned_one_changes_only_settings() {
+        let mut lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        meeting_in(&lab, "m-plan", "NOMAD");
+        let folder =
+            plan_project_deletion(&mut lab.settings, lab.dir.path(), "NOMAD", true).unwrap();
+        assert!(folder.is_some());
+        assert!(lab.settings.cycle_repos.is_empty());
+        // The database is untouched until the second half runs.
+        assert_eq!(
+            lab.store
+                .get_report_settings("m-plan")
+                .unwrap()
+                .unwrap()
+                .cycle_id
+                .as_deref(),
+            Some("NOMAD")
+        );
+        finish_project_deletion(&lab.store, None, "NOMAD", false).unwrap();
+        assert_eq!(
+            lab.store
+                .get_report_settings("m-plan")
+                .unwrap()
+                .unwrap()
+                .cycle_id,
+            None
+        );
+    }
+
+    #[test]
+    fn ensure_project_idle_blocks_a_meeting_being_recorded() {
+        let lab = Lab::new();
+        meeting_in(&lab, "m-rec", "NOMAD");
+        lab.store
+            .set_meeting_state("m-rec", MeetingState::Recording, None)
+            .unwrap();
+        let jobs = std::collections::HashMap::new();
+        assert!(ensure_project_idle(&lab.store, "NOMAD", false, &jobs).is_err());
     }
 }
