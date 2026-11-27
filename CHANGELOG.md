@@ -29,6 +29,7 @@ Draft notes for 1.0.0. Nothing here is released yet.
 
 ### Changed
 
+- Global hotkeys: the defaults are now Ctrl+Alt+Shift+F9 (Record / Stop) and Ctrl+Alt+Shift+F10 (region screenshot); the old Ctrl+Alt+R / Ctrl+Alt+S defaults are migrated once, unless that would give both hotkeys the same shortcut. Both can be recorded by pressing the keys in Settings > Preferences or on the Record tab; the shortcut needs Ctrl, Alt or Super (Shift alone only with F1-F24), global hotkeys are paused while a shortcut is being recorded, and a hotkey that another application has taken is reported on the Record tab.
 - Redesigned main shell with a navigation sidebar, updated Record view, and tabbed Settings (`AI Models`, `Connectors`, `Preferences`, `Processing`, `Voice Profiles`, `Detection & Extension`).
 - Fluid centered layout for wide screens.
 - The interface says "project" everywhere it said "cycle" (recorder panel, Preferences, speaker header, report mode help, publishing messages); the old Cycles, Cycle editor, Briefing, Publishing, Processing and report gate screens, which nothing opened any more, are removed. Every option they offered lives in Project settings, the project page and the Settings tabs.

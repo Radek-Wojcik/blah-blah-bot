@@ -9,12 +9,11 @@ import { buildTimeline, segmentAt, speakerColors } from "../processing";
 /** Transcript of one meeting: speakers, segments with screenshots in between, and the editor. */
 export function TranscriptView(props: {
   meetingId: string;
-  onBack: () => void;
   onOpenSpeakers: () => void;
   /** A time in the meeting: the segment there is scrolled into view and highlighted. */
   highlightMs?: number | null;
 }) {
-  const { meetingId, onBack, onOpenSpeakers, highlightMs } = props;
+  const { meetingId, onOpenSpeakers, highlightMs } = props;
   const backend = useBackend();
   const [data, setData] = useState<TranscriptData | null>(null);
   const [title, setTitle] = useState<string>("");
@@ -91,9 +90,6 @@ export function TranscriptView(props: {
         <span className="head-actions">
           <button className="btn btn-small" onClick={onOpenSpeakers}>
             Name speakers
-          </button>
-          <button className="btn btn-small btn-ghost" onClick={onBack}>
-            Back to meetings
           </button>
         </span>
       </div>

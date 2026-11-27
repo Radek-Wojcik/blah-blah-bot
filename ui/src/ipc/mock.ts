@@ -23,6 +23,12 @@ import { applySetupScenario, type SetupScenario } from "./mock-setup";
 import { fail } from "./mock-util";
 import { createMockPicker, type MockPickResults } from "./mock-pick";
 import { isLocalHost, missingForKind, urlHost, validateLlmSettings } from "../llm";
+import {
+  DEFAULT_RECORD_HOTKEY,
+  DEFAULT_SCREENSHOT_HOTKEY,
+  normalizeHotkey,
+  validateHotkey,
+} from "../hotkeys";
 import { validateVoiceSettings } from "../speakers";
 import type {
   ActiveSource,
@@ -45,6 +51,7 @@ import type {
   RecordingLevels,
   RecordingState,
   ReportMode,
+  HotkeyStatus,
   Settings,
   SetupProgress,
   SourceInfo,
@@ -289,15 +296,27 @@ export interface MockOptions {
    * `offline` a lost connection. The wizard then falls back to a local-only project.
    */
   githubCreateFault?: "name-taken" | "offline";
+  /** Hotkeys simulated as already taken by another application. */
+  takenHotkeys?: string[];
+  /** Called when the UI suspends (true) or resumes (false) the global hotkeys. */
+  onHotkeysSuspended?: (suspended: boolean) => void;
 }
 
 /** In-memory backend that serves the fictional demo cycle. No audio devices, files or network. */
 export function createMockBackend(opts: MockOptions = {}): Backend {
   const startedAt = Date.now();
+  /** Mirrors the application: hotkeys are unregistered while the UI records a shortcut. */
+  let hotkeysSuspended = false;
+  const setSuspended = (next: boolean) => {
+    if (hotkeysSuspended === next) return;
+    hotkeysSuspended = next;
+    opts.onHotkeysSuspended?.(next);
+  };
   const settings: Settings = {
     recordingsDir: "Documents\\BlahBlahBot\\recordings",
-    recordHotkey: "Ctrl+Alt+R",
-    screenshotHotkey: "Ctrl+Alt+S",
+    recordHotkey: DEFAULT_RECORD_HOTKEY,
+    screenshotHotkey: DEFAULT_SCREENSHOT_HOTKEY,
+    mouseButtons: "normal",
     localSaveEnabled: false,
     localSaveDir: "",
     lastSourceKeys: [],
@@ -1220,12 +1239,53 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     }),
     // The repository list, the last report and the paired extensions are not saved from the
     // settings screen.
+    suspendHotkeys: async () => {
+      setSuspended(true);
+    },
+    resumeHotkeys: async () => {
+      setSuspended(false);
+    },
+    hotkeyStatus: async (): Promise<HotkeyStatus> => {
+      const taken = new Set((opts.takenHotkeys ?? []).map(normalizeHotkey));
+      const failure = (hotkey: string) =>
+        taken.has(normalizeHotkey(hotkey)) || validateHotkey(hotkey) !== null
+          ? `\`${hotkey}\` cannot be used as a hotkey (already taken or not a valid shortcut)`
+          : null;
+      return {
+        recordError: failure(settings.recordHotkey),
+        screenshotError: failure(settings.screenshotHotkey),
+      };
+    },
     saveSettings: async (s) => {
+      setSuspended(false);
+      for (const hk of [s.recordHotkey, s.screenshotHotkey]) {
+        const problem = validateHotkey(hk);
+        if (problem) fail("invalid", `\`${hk}\` ${problem}`);
+      }
+      const recNorm = normalizeHotkey(s.recordHotkey);
+      const scrNorm = normalizeHotkey(s.screenshotHotkey);
+      if (recNorm !== "" && scrNorm !== "" && recNorm === scrNorm) {
+        fail("invalid", "Record and region screenshot hotkeys must be different");
+      }
+      const taken = new Set((opts.takenHotkeys ?? []).map(normalizeHotkey));
+      if (recNorm !== "" && taken.has(recNorm)) {
+        fail(
+          "hotkey_in_use",
+          `\`${s.recordHotkey}\` cannot be used as a hotkey (already taken or not a valid shortcut)`,
+        );
+      }
+      if (scrNorm !== "" && taken.has(scrNorm)) {
+        fail(
+          "hotkey_in_use",
+          `\`${s.screenshotHotkey}\` cannot be used as a hotkey (already taken or not a valid shortcut)`,
+        );
+      }
       bridge.save(s.bridge);
       Object.assign(settings, {
         recordingsDir: s.recordingsDir,
         recordHotkey: s.recordHotkey,
         screenshotHotkey: s.screenshotHotkey,
+        ...(s.mouseButtons === undefined ? {} : { mouseButtons: s.mouseButtons }),
         ...(s.localSaveEnabled === undefined ? {} : { localSaveEnabled: s.localSaveEnabled }),
         ...(s.localSaveDir === undefined ? {} : { localSaveDir: s.localSaveDir }),
         ...(s.lastSourceKeys === undefined ? {} : { lastSourceKeys: [...s.lastSourceKeys] }),

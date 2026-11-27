@@ -53,6 +53,7 @@ import type {
   ReportMode,
   SaveCycleResult,
   SegmentEdit,
+  HotkeyStatus,
   Settings,
   SetupPathCheck,
   SetupPathKind,
@@ -107,6 +108,12 @@ export interface Backend {
 
   getSettings(): Promise<Settings>;
   saveSettings(settings: Settings): Promise<void>;
+  /** Unregister the global hotkeys while the user records a new shortcut. Idempotent. */
+  suspendHotkeys(): Promise<void>;
+  /** Register the saved hotkeys again after a capture; a no-op when not suspended. */
+  resumeHotkeys(): Promise<void>;
+  /** Which configured hotkeys are not active, with the reason. */
+  hotkeyStatus(): Promise<HotkeyStatus>;
 
   /** The bridge to the Chrome extension: server, pairing code, paired extensions, tab streams. */
   bridgeStatus(): Promise<BridgeStatus>;

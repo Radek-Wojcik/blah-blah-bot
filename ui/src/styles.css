@@ -533,6 +533,48 @@ select {
   gap: 12px;
   margin-bottom: var(--gap);
 }
+.page-head-start {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.hotkey-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.hotkey-capture-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.hotkey-btn {
+  font-family: var(--font-mono);
+  min-width: 140px;
+  text-align: left;
+}
+.hotkey-capturing {
+  border-color: var(--cyan);
+  box-shadow: 0 0 0 1px var(--cyan);
+}
+.hotkey-warning {
+  margin: 0;
+  color: var(--amber, #f5b942);
+  font-size: 0.8em;
+}
+.record-hotkeys {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 10px 0;
+}
 .page-head h2 {
   margin: 0;
   font-size: 1.5em;
@@ -3271,4 +3313,15 @@ textarea {
     flex-direction: row;
     flex-wrap: wrap;
   }
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
