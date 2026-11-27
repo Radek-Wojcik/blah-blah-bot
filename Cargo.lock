@@ -86,6 +86,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "windows",
  "windows-native-keyring-store",
 ]
 
