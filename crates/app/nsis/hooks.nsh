@@ -23,7 +23,7 @@ Function VerifyWritableInstDir
     ${If} $0 = 0
       RMDir "$INSTDIR"
     ${EndIf}
-    MessageBox MB_OK|MB_ICONEXCLAMATION /SD IDOK "The selected folder cannot be written to:$\r$\n$INSTDIR$\r$\n$\r$\nPlease choose a folder you have permission to write to, such as $LOCALAPPDATA\Programs\Blah Blah Bot, rather than Program Files."
+    MessageBox MB_OK|MB_ICONEXCLAMATION /SD IDOK "The selected folder cannot be written to:$\r$\n$INSTDIR$\r$\n$\r$\nPlease choose a folder you have permission to write to, such as $LOCALAPPDATA\${PRODUCTNAME}, rather than Program Files."
     Abort
 
   writable_done:
@@ -38,8 +38,11 @@ FunctionEnd
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL
-  Delete "$DESKTOP\Blah Blah Bot.lnk"
-  DeleteRegValue HKCU "${MANUPRODUCTKEY}" ""
-  DeleteRegKey /ifempty HKCU "${MANUPRODUCTKEY}"
-  DeleteRegKey /ifempty HKCU "Software\${MANUFACTURER}"
+  ; Keep the shortcut and registry data when this uninstall is part of an update.
+  ${If} $UpdateMode <> 1
+    Delete "$DESKTOP\Blah Blah Bot.lnk"
+    DeleteRegValue SHCTX "${MANUPRODUCTKEY}" ""
+    DeleteRegKey /ifempty SHCTX "${MANUPRODUCTKEY}"
+    DeleteRegKey /ifempty SHCTX "${MANUKEY}"
+  ${EndIf}
 !macroend

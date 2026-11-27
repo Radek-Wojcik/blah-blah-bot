@@ -47,8 +47,8 @@ This runs `MpCmdRun.exe -Scan -ScanType 3 -File <installer> -DisableRemediation`
 
 | Date | Version | Compression / WebView2 | Result | Notes |
 |---|---|---|---|---|
-| 2026-11-25 | 0.7.0 (pre-WP-02) | `lzma` / `downloadBootstrapper` | Flagged (`Trojan:Win32/Bearfoos.A!ml`) | Unsigned local build; prompted WP-02 changes |
-| — | 0.7.0 (post-WP-02) | `zlib` / `skip` | Pending | Re-verify after next full installer build |
+| 2026-11-25 | 0.7.0 | `lzma` / `downloadBootstrapper` | Flagged (`Trojan:Win32/Bearfoos.A!ml`) | Unsigned local build |
+| — | 0.7.0 | `zlib` / `skip` | Not yet scanned | Scan the next full installer build with `-Scan` and record the result here |
 
 ## Building the installer
 
@@ -69,12 +69,12 @@ Run this before every release, on a Windows 10 and a Windows 11 machine that has
 1. Copy the installer and `SHA256SUMS.txt` to the machine. Verify the checksum (above).
 2. Run the installer. Expect the SmartScreen prompt (above). Choose the current-user installation. Expect: no administrator prompt; the app appears in the Start menu.
 3. Also verify the writable-folder guard: try choosing a read-only folder such as `C:\Program Files\Blah Blah Bot` on the directory page (or via `/D=`) and confirm the installer refuses it with a plain-language message and returns to the directory page.
-4. Check the install folder (`%LOCALAPPDATA%\Programs\Blah Blah Bot`): `worker\`, `schemas\`, `bin\uv.exe`, `NOTICE.txt`, `LICENSE.txt` exist.
-4. Start the application. Expect the main window and a tray icon. Open Settings and confirm the Processing section opens.
-5. Start a processing job (or the setup, when the first-run wizard is present). Expect the environment to be created from the bundled `uv` without any tool installed on the machine, with visible progress. Without an NVIDIA GPU, expect the job to wait with a clear message instead of failing.
-6. Download the speech models (needs the user's own Hugging Face token for the gated diarization model).
-7. Uninstall from Settings, Apps. Expect the install folder to be removed. Application data and the worker environment are kept unless the uninstaller option to delete them is ticked; check what is left and note it.
-8. Record the result per machine in the release checklist: Windows version and build, date, pass or fail per step, and the exact text of any error.
+4. Check the install folder (`%LOCALAPPDATA%\Blah Blah Bot`): `worker\`, `schemas\`, `bin\uv.exe`, `NOTICE.txt`, `LICENSE.txt` exist.
+5. Start the application. Expect the main window and a tray icon. Open Settings and confirm the Processing section opens.
+6. Start a processing job (or the setup, when the first-run wizard is present). Expect the environment to be created from the bundled `uv` without any tool installed on the machine, with visible progress. Without an NVIDIA GPU, expect the job to wait with a clear message instead of failing.
+7. Download the speech models (needs the user's own Hugging Face token for the gated diarization model).
+8. Uninstall from Settings, Apps. Expect the install folder to be removed. Application data and the worker environment are kept unless the uninstaller option to delete them is ticked; check what is left and note it.
+9. Record the result per machine in the release checklist: Windows version and build, date, pass or fail per step, and the exact text of any error.
 
 Limits of the test: a virtual machine or Sandbox has no CUDA, so it covers installation, the first run, environment creation and the "no GPU, waiting" path, not GPU processing.
 
