@@ -571,6 +571,50 @@ describe("Keep audio after processing (global setting)", () => {
     await flush();
     expect(saveSpy.mock.calls[0][0].audioRetention).toEqual({ mode: "keep" });
   });
+
+  it("shows removable project badges, + Add to project, duplicate hint, and merge modal in Voice profiles", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    const p1 = await backend.enrollVoiceProfile("Dup Person", "NOMAD", "C:\\Audio\\d1.wav");
+    await backend.enrollVoiceProfile("Dup Person", null, "C:\\Audio\\d2.wav");
+    await mount(backend, "voices");
+
+    expect(host.textContent).toContain("Possible duplicate name");
+    const removeBtn = host.querySelector<HTMLButtonElement>(
+      `button[aria-label="Remove NOMAD from ${p1.name}"]`,
+    )!;
+    expect(removeBtn).not.toBeNull();
+    await act(async () => {
+      removeBtn.click();
+    });
+    await flush();
+
+    // After removing NOMAD, p1 falls back to Global and + Add to project has NOMAD.
+    const addSelect = host.querySelector<HTMLSelectElement>(
+      `select[aria-label="Add ${p1.name} to project"]`,
+    )!;
+    expect(addSelect).not.toBeNull();
+    expect(Array.from(addSelect.options).map((o) => o.value)).toContain("NOMAD");
+
+    // Merge selector opens confirmation modal.
+    const mergeSelect = host.querySelector<HTMLSelectElement>(
+      `select[aria-label="Same person as ${p1.name}"]`,
+    )!;
+    expect(mergeSelect).not.toBeNull();
+    const targetOpt = Array.from(mergeSelect.options).find((o) =>
+      o.textContent?.includes("Dup Person"),
+    )!;
+    await act(async () => {
+      mergeSelect.value = targetOpt.value;
+      mergeSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flush();
+    expect(host.textContent).toContain("Merge these voice profiles?");
+    await act(async () => {
+      buttonByText("Merge profiles").click();
+    });
+    await flush();
+    expect(host.textContent).not.toContain("Possible duplicate name");
+  });
 });
 
 describe("Settings cards and compact Detection panel", () => {

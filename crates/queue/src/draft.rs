@@ -314,6 +314,7 @@ pub fn update_item(draft: &mut Draft, id: &str, patch: &ItemPatch) -> Result<(),
     }
     if let Some(assignee) = &patch.assignee {
         item.assignee = assignee.clone();
+        item.assignee_name = None;
         item.certainty.assignee = decided(&item.assignee);
         touched = true;
     }
@@ -407,6 +408,7 @@ pub fn add_item(draft: &mut Draft, new: NewItem) -> Result<String, DraftError> {
             due: decided(&new.due),
         },
         assignee: new.assignee,
+        assignee_name: None,
         due: new.due,
         section: new.section,
         relates_to: None,

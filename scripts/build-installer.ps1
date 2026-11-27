@@ -35,6 +35,9 @@
 .PARAMETER SkipUiBuild
   Use the existing ui\dist and ui\node_modules.
 
+.PARAMETER Scan
+  Run Windows Defender (MpCmdRun.exe -Scan -ScanType 3 -DisableRemediation) on the built installer.
+
 .EXAMPLE
   scripts\build-installer.ps1
 #>
@@ -43,7 +46,8 @@ param(
     [string]$Tag,
     [string]$UvExe,
     [switch]$SkipUiBuild,
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$Scan
 )
 
 $ErrorActionPreference = "Stop"
@@ -87,6 +91,37 @@ function Get-RelativeFiles([string]$root) {
 
 function Get-RequiredVersion {
     (Get-Content -LiteralPath (Join-Path $repo "crates\app\tauri.conf.json") -Raw | ConvertFrom-Json).version
+}
+
+function Resolve-SignCommand([string]$raw) {
+    $trimmed = $raw.Trim()
+    if ($trimmed.StartsWith("{")) {
+        try {
+            $parsed = $trimmed | ConvertFrom-Json
+        } catch {
+            throw "BBB_SIGN_COMMAND looks like JSON but failed to parse: $_"
+        }
+        if (-not $parsed.cmd -or -not ($parsed.cmd -is [string]) -or [string]::IsNullOrWhiteSpace($parsed.cmd)) {
+            throw "BBB_SIGN_COMMAND JSON must contain a non-empty 'cmd' string"
+        }
+        $hasPlaceholder = $false
+        if ($null -ne $parsed.args -and -not ($parsed.args -is [System.Collections.IList])) {
+            throw "BBB_SIGN_COMMAND JSON 'args' must be an array of strings"
+        }
+        if ($parsed.args) {
+            foreach ($arg in $parsed.args) {
+                if ("$arg" -like "*%1*") { $hasPlaceholder = $true; break }
+            }
+        }
+        if (-not $hasPlaceholder) {
+            throw "BBB_SIGN_COMMAND JSON must contain 'args' with at least one '%1' placeholder"
+        }
+        return $parsed
+    }
+    if ($trimmed -notlike "*%1*") {
+        throw "BBB_SIGN_COMMAND must contain '%1' as the file placeholder (or be JSON with 'cmd' and 'args' containing '%1')"
+    }
+    return $trimmed
 }
 
 # ----- staging -------------------------------------------------------------------------------
@@ -260,6 +295,11 @@ try {
     $version = Get-RequiredVersion
     if (-not (Test-Path -LiteralPath (Join-Path $repo "CHANGELOG.md"))) { throw "CHANGELOG.md is missing" }
 
+    $signCommandValue = $null
+    if ($env:BBB_SIGN_COMMAND) {
+        $signCommandValue = Resolve-SignCommand $env:BBB_SIGN_COMMAND
+    }
+
     $env:TEMP = $testTmp
     $env:TMP = $testTmp
 
@@ -285,10 +325,10 @@ try {
         $env:CARGO_ENCODED_RUSTFLAGS = $flags -join [char]0x1f
 
         $configs = @("--config", "tauri.bundle.conf.json")
-        if ($env:BBB_SIGN_COMMAND) {
+        if ($null -ne $signCommandValue) {
             $signConfig = Join-Path $stage "tauri.sign.conf.json"
-            $json = @{ bundle = @{ windows = @{ signCommand = $env:BBB_SIGN_COMMAND } } } | ConvertTo-Json -Depth 5
-            Set-Content -LiteralPath $signConfig -Value $json -Encoding utf8
+            $json = @{ bundle = @{ windows = @{ signCommand = $signCommandValue } } } | ConvertTo-Json -Depth 5
+            [IO.File]::WriteAllText($signConfig, $json, (New-Object Text.UTF8Encoding($false)))
             $configs += @("--config", $signConfig)
             Write-Host "signing is on (BBB_SIGN_COMMAND is set)"
         }
@@ -320,6 +360,17 @@ try {
     Write-Host "content check passed"
 
     Write-Host ""
+    Write-Host "=== signature check" -ForegroundColor Cyan
+    $sig = Get-AuthenticodeSignature -LiteralPath $installer
+    Write-Host "signature status: $($sig.Status)"
+    if ($sig.SignerCertificate) {
+        Write-Host "signer: $($sig.SignerCertificate.Subject) ($($sig.SignerCertificate.Thumbprint))"
+    }
+    if ($env:BBB_SIGN_COMMAND -and $sig.Status -ne "Valid") {
+        throw "BBB_SIGN_COMMAND was set, but the installer signature status is $($sig.Status): $($sig.StatusMessage)"
+    }
+
+    Write-Host ""
     Write-Host "=== checksums" -ForegroundColor Cyan
     $sums = foreach ($f in Get-ChildItem -LiteralPath $outDir -Filter "*-setup.exe") {
         "{0}  {1}" -f (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLower(), $f.Name
@@ -327,6 +378,16 @@ try {
     # LF line endings and no BOM: `sha256sum -c` reads the file as it is.
     [IO.File]::WriteAllText((Join-Path $outDir "SHA256SUMS.txt"), (($sums -join "`n") + "`n"), (New-Object Text.UTF8Encoding($false)))
     $sums | ForEach-Object { Write-Host $_ }
+
+    if ($Scan) {
+        $mpCmd = (Get-Command MpCmdRun.exe -ErrorAction SilentlyContinue).Source
+        if (-not $mpCmd) { $mpCmd = Join-Path $env:ProgramFiles "Windows Defender\MpCmdRun.exe" }
+        if (-not (Test-Path -LiteralPath $mpCmd)) { throw "MpCmdRun.exe was not found for -Scan" }
+        Invoke-Native "Windows Defender scan" {
+            & $mpCmd -Scan -ScanType 3 -File $installer -DisableRemediation
+        }
+    }
+
     Write-Host ""
     Write-Host ("installer: {0} ({1:N1} MB)" -f $installer, ((Get-Item -LiteralPath $installer).Length / 1MB))
 } catch {

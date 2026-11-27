@@ -173,7 +173,9 @@ test.describe("main window on the mock backend", () => {
     await page.getByRole("tab", { name: "Preferences" }).click();
     await page.getByLabel("Record / Stop hotkey").fill("Ctrl+F9");
     await page.getByRole("button", { name: "Save preferences", exact: true }).click();
-    await expect(page.getByRole("status")).toHaveText("Preferences saved.");
+    await expect(page.getByRole("status").filter({ hasText: "Preferences saved." })).toHaveText(
+      "Preferences saved.",
+    );
   });
 
   test("layout adapts: sidebar becomes a top bar on narrow windows", async ({ page }) => {
@@ -648,8 +650,8 @@ test.describe("voice profiles on the mock backend", () => {
     await page.getByRole("button", { name: "Rename Jan Demo" }).click();
     await page.getByLabel("New name for Jan Demo").fill("Jan Example");
     await people.getByRole("button", { name: "Save", exact: true }).click();
-    await expect(people.getByText("Jan Example")).toBeVisible();
-    await expect(people.getByText("Jan Demo")).toHaveCount(0);
+    await expect(people.getByRole("button", { name: "Rename Jan Example" })).toBeVisible();
+    await expect(people.getByRole("button", { name: "Rename Jan Demo" })).toHaveCount(0);
   });
 
   test("renaming to an existing name shows the error", async ({ page }) => {
