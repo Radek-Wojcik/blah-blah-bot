@@ -996,5 +996,9 @@ describe("MeetingDetailView and DraftEditor markdown export", () => {
     });
     await flush();
     expect(host.querySelector('ul[aria-label="Detected voices"]')).not.toBeNull();
+
+    // Top-left BackButton is present and old far-right "Back to meetings" is removed.
+    expect(host.querySelector(".page-head-start .back-btn")?.textContent).toBe("Back");
+    expect(host.textContent).not.toContain("Back to meetings");
   });
 });

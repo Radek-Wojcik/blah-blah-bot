@@ -19,6 +19,7 @@ export function mockSetupStatus(
   llamaCandidates: string[] = [],
   workerEnv = true,
   working: string | null = null,
+  legacyVenvNotice: string | null = null,
 ): SetupStatus {
   const cached = (key: string) => models.find((m) => m.key === key)?.cached ?? false;
   const ok = (key: string, message: string): SetupItem => ({ key, state: "ok", message });
@@ -102,6 +103,7 @@ export function mockSetupStatus(
     firstRunDone: settings.firstRunDone,
     items: shown,
     llamaCandidates,
+    ...(legacyVenvNotice ? { legacyVenvNotice } : {}),
   };
 }
 

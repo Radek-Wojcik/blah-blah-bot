@@ -5,8 +5,9 @@ import { BackendProvider } from "../backend-context";
 import { createMockBackend } from "../ipc/mock";
 import type { QueueState } from "../ipc/types";
 import { Main } from "./Main";
+import { Modal } from "./Modal";
 import { ProcessPrompt } from "./ProcessPrompt";
-import { formatEta, QueueView } from "./Queue";
+import { formatEta, nextLocalMidnightMs, QueueView, startOfLocalDayMs } from "./Queue";
 import { RecordView } from "./RecordView";
 import { Widget } from "./Widget";
 
@@ -28,6 +29,14 @@ async function setInputValue(el: HTMLInputElement, value: string) {
   await act(async () => {
     setter.call(el, value);
     el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+}
+
+async function setSelectValue(el: HTMLSelectElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!;
+  await act(async () => {
+    setter.call(el, value);
     el.dispatchEvent(new Event("change", { bubbles: true }));
   });
 }
@@ -62,8 +71,8 @@ describe("RecordView", () => {
 
     expect(host.querySelector(".recorder-panel-full")).not.toBeNull();
     expect(host.querySelector(".ticker")).toBeNull();
-    expect(host.textContent).toContain("Ctrl+Alt+R");
-    expect(host.textContent).toContain("Ctrl+Alt+S");
+    expect(host.textContent).toContain("Ctrl+Alt+Shift+F9");
+    expect(host.textContent).toContain("Ctrl+Alt+Shift+F10");
 
     // Open briefing button calls openBriefing for selected project.
     const openBriefingBtn = Array.from(host.querySelectorAll("button")).find(
@@ -361,16 +370,29 @@ describe("QueueView", () => {
     await flush();
     expect(setOverrideSpy).toHaveBeenLastCalledWith(null);
 
-    // Verify schedule picker + wake lock note + scheduleJob call on waiting job.
+    // Verify English schedule picker + wake lock note + scheduleJob call on waiting job.
     const waitingCard = host.querySelector('article[aria-label="Budget check-in"]') as HTMLElement;
     expect(waitingCard.textContent).toContain("PC stays awake (monitors may turn off)");
 
-    const scheduleInput = waitingCard.querySelector(
-      'input[type="datetime-local"]',
-    ) as HTMLInputElement;
-    const targetLocal = "2026-12-01T22:30";
+    const picker = waitingCard.querySelector(
+      '[role="group"][aria-label="Schedule date and time for Budget check-in"]',
+    ) as HTMLElement;
+    expect(picker).not.toBeNull();
+    const yearSelect = picker.querySelector('select[aria-label="Year"]') as HTMLSelectElement;
+    const monthSelect = picker.querySelector('select[aria-label="Month"]') as HTMLSelectElement;
+    const daySelect = picker.querySelector('select[aria-label="Day"]') as HTMLSelectElement;
+    const hourSelect = picker.querySelector('select[aria-label="Hour"]') as HTMLSelectElement;
+    const minuteSelect = picker.querySelector('select[aria-label="Minute"]') as HTMLSelectElement;
+    expect(Array.from(monthSelect.options).map((o) => o.textContent)).toContain("December");
+
+    const targetYear = String(new Date().getFullYear());
+    const targetLocal = `${targetYear}-12-01T22:30`;
     const expectedMs = new Date(targetLocal).getTime();
-    await setInputValue(scheduleInput, targetLocal);
+    await setSelectValue(yearSelect, targetYear);
+    await setSelectValue(monthSelect, "12");
+    await setSelectValue(daySelect, "01");
+    await setSelectValue(hourSelect, "22");
+    await setSelectValue(minuteSelect, "30");
 
     const scheduleBtn = Array.from(waitingCard.querySelectorAll("button")).find(
       (b) => b.textContent === "Schedule",
@@ -415,5 +437,189 @@ describe("QueueView", () => {
     await flush();
 
     expect(forceSpy).toHaveBeenCalledWith("m3");
+  });
+
+  it("hides jobs finished before local midnight by default and reveals them with Show finished", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    const baseQueue = await backend.queueState();
+    const midnight = startOfLocalDayMs();
+    const doneTemplate = baseQueue.jobs.find((j) => j.state === "done")!;
+    const runningJob = baseQueue.jobs.find((j) => j.state === "running")!;
+
+    const customQueue: QueueState = {
+      gpuOverride: null,
+      jobs: [
+        runningJob,
+        {
+          ...doneTemplate,
+          meetingId: "done-today",
+          title: "Finished today meeting",
+          finishedUnixMs: midnight + 60_000,
+        },
+        {
+          ...doneTemplate,
+          meetingId: "done-yesterday",
+          title: "Finished yesterday meeting",
+          finishedUnixMs: midnight - 60_000,
+        },
+      ],
+    };
+    vi.spyOn(backend, "queueState").mockResolvedValue(customQueue);
+
+    await act(async () => {
+      root.render(
+        <BackendProvider value={backend}>
+          <QueueView />
+        </BackendProvider>,
+      );
+    });
+    await flush(6);
+
+    expect(host.querySelector('article[aria-label="Thruster review"]')).not.toBeNull();
+    expect(host.querySelector('article[aria-label="Finished today meeting"]')).not.toBeNull();
+    expect(host.querySelector('article[aria-label="Finished yesterday meeting"]')).toBeNull();
+
+    const toggle = host.querySelector(
+      '.queue-show-finished input[type="checkbox"]',
+    ) as HTMLInputElement;
+    expect(toggle).not.toBeNull();
+    expect(toggle.checked).toBe(false);
+
+    await act(async () => {
+      toggle.click();
+    });
+    await flush();
+
+    expect(toggle.checked).toBe(true);
+    expect(host.querySelector('article[aria-label="Finished yesterday meeting"]')).not.toBeNull();
+  });
+
+  it("says why nothing is shown when every finished job is from an earlier day", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    const doneTemplate = (await backend.queueState()).jobs.find((j) => j.state === "done")!;
+    vi.spyOn(backend, "queueState").mockResolvedValue({
+      gpuOverride: null,
+      jobs: [
+        {
+          ...doneTemplate,
+          meetingId: "old",
+          title: "Old meeting",
+          finishedUnixMs: startOfLocalDayMs() - 60_000,
+        },
+      ],
+    });
+    await act(async () => {
+      root.render(
+        <BackendProvider value={backend}>
+          <QueueView />
+        </BackendProvider>,
+      );
+    });
+    await flush(6);
+    expect(host.querySelector(".empty")?.textContent).toContain('Turn on "Show finished"');
+    expect(host.querySelector('article[aria-label="Old meeting"]')).toBeNull();
+  });
+
+  it("rejects an empty idle-seconds field instead of sending 0", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    const setOverrideSpy = vi.spyOn(backend, "setQueueGpuOverride");
+    await act(async () => {
+      root.render(
+        <BackendProvider value={backend}>
+          <QueueView />
+        </BackendProvider>,
+      );
+    });
+    await flush(6);
+    const idleInput = host.querySelectorAll<HTMLInputElement>('input[type="number"]')[1];
+    await setInputValue(idleInput, "");
+    const apply = Array.from(host.querySelectorAll("button")).find(
+      (b) => b.textContent === "Apply override",
+    )!;
+    await act(async () => {
+      apply.click();
+    });
+    await flush();
+    expect(setOverrideSpy).not.toHaveBeenCalled();
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain(
+      "Wait for idle seconds must be between 0 and 3600.",
+    );
+  });
+
+  it("computes the next local midnight", () => {
+    const noon = new Date(2026, 10, 27, 12, 0, 0).getTime();
+    expect(nextLocalMidnightMs(noon)).toBe(new Date(2026, 10, 28, 0, 0, 0).getTime());
+  });
+
+  it("keeps GPU override sliders and number inputs synchronized", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    const setOverrideSpy = vi.spyOn(backend, "setQueueGpuOverride");
+
+    await act(async () => {
+      root.render(
+        <BackendProvider value={backend}>
+          <QueueView />
+        </BackendProvider>,
+      );
+    });
+    await flush(6);
+
+    const sidePanel = host.querySelector(
+      'aside[aria-label="Queue GPU overrides (temporary)"]',
+    ) as HTMLElement;
+    const utilSlider = sidePanel.querySelector(
+      'input[type="range"][aria-label="Max GPU utilization (%) slider"]',
+    ) as HTMLInputElement;
+    const idleSlider = sidePanel.querySelector(
+      'input[type="range"][aria-label="Wait for idle (seconds) slider"]',
+    ) as HTMLInputElement;
+    const numberInputs = Array.from(
+      sidePanel.querySelectorAll<HTMLInputElement>('input[type="number"]'),
+    );
+    expect(utilSlider).not.toBeNull();
+    expect(idleSlider).not.toBeNull();
+    expect(numberInputs).toHaveLength(2);
+
+    await setInputValue(utilSlider, "75");
+    expect(numberInputs[0].value).toBe("75");
+
+    await setInputValue(numberInputs[1], "120");
+    expect(idleSlider.value).toBe("120");
+
+    const form = sidePanel.querySelector("form") as HTMLFormElement;
+    await act(async () => {
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    await flush();
+
+    expect(setOverrideSpy).toHaveBeenCalledWith({
+      gpuMaxUtilPercent: 75,
+      gpuIdleSeconds: 120,
+    });
+  });
+
+  it("renders Modal with scrollable content container and pinned footer", async () => {
+    const onClose = vi.fn();
+    await act(async () => {
+      root.render(
+        <Modal
+          title="Force process"
+          onClose={onClose}
+          footer={
+            <div className="actions">
+              <button type="button" className="btn">
+                Confirm
+              </button>
+            </div>
+          }
+        >
+          <p className="modal-text">Dialog body</p>
+        </Modal>,
+      );
+    });
+
+    expect(host.querySelector(".modal-panel-body")).not.toBeNull();
+    expect(host.querySelector(".modal-content")?.textContent).toContain("Dialog body");
+    expect(host.querySelector(".modal-footer")?.textContent).toContain("Confirm");
   });
 });

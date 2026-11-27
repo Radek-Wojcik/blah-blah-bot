@@ -59,21 +59,29 @@ impl AppState {
     pub fn open(app: &AppHandle) -> Result<Self, Box<dyn std::error::Error>> {
         // `BBB_DATA_DIR` puts all application data in one folder: used by the end-to-end
         // tests so they never touch the real library.
-        let (data_dir, config_dir, default_recordings) = match std::env::var_os("BBB_DATA_DIR") {
-            Some(dir) => {
-                let dir = PathBuf::from(dir);
-                (dir.join("data"), dir.join("config"), dir.join("recordings"))
-            }
-            None => (
-                app.path().app_data_dir()?,
-                app.path().app_config_dir()?,
-                app.path()
-                    .document_dir()?
-                    .join("BlahBlahBot")
-                    .join("recordings"),
-            ),
-        };
+        let (data_dir, local_data_dir, config_dir, default_recordings) =
+            match std::env::var_os("BBB_DATA_DIR") {
+                Some(dir) => {
+                    let dir = PathBuf::from(dir);
+                    (
+                        dir.join("data"),
+                        dir.join("local"),
+                        dir.join("config"),
+                        dir.join("recordings"),
+                    )
+                }
+                None => (
+                    app.path().app_data_dir()?,
+                    app.path().app_local_data_dir()?,
+                    app.path().app_config_dir()?,
+                    app.path()
+                        .document_dir()?
+                        .join("BlahBlahBot")
+                        .join("recordings"),
+                ),
+            };
         std::fs::create_dir_all(&data_dir)?;
+        std::fs::create_dir_all(&local_data_dir)?;
         let settings_path = config_dir.join("settings.json");
         let store = Arc::new(Mutex::new(store::Store::open(
             &data_dir.join("blah-blah-bot.db"),
@@ -102,6 +110,7 @@ impl AppState {
             app.clone(),
             store.clone(),
             &data_dir,
+            &local_data_dir,
             &config_dir,
             move || {
                 root_app

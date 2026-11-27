@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { BackButton } from "../components/BackButton";
 import { UnsavedDialog } from "../components/UnsavedDialog";
 import { AiModelsTab } from "./settings/AiModelsTab";
 import { ConnectorsTab } from "./settings/ConnectorsTab";
@@ -28,6 +29,8 @@ const TABS: { id: SettingsTab; label: string }[] = [
 
 export interface SettingsViewProps {
   initialTab?: SettingsTab;
+  onTabChange?: (tab: SettingsTab) => void;
+  onBack?: () => void;
   onDirtyChange?: (dirty: boolean) => void;
   pendingExit?: boolean;
   onConfirmExit?: () => void;
@@ -40,12 +43,30 @@ export interface SettingsViewProps {
  * and confirmation before switching away from a modified tab.
  */
 export function SettingsView(props: SettingsViewProps = {}) {
-  const { initialTab, onDirtyChange, pendingExit, onConfirmExit, onCancelExit, onRunSetup } = props;
+  const {
+    initialTab,
+    onTabChange,
+    onBack,
+    onDirtyChange,
+    pendingExit,
+    onConfirmExit,
+    onCancelExit,
+    onRunSetup,
+  } = props;
   const [tab, setTab] = useState<SettingsTab>(initialTab ?? "models");
+  const [prevInitialTab, setPrevInitialTab] = useState<SettingsTab | undefined>(initialTab);
   const [dirty, setDirty] = useState(false);
   const [pendingTab, setPendingTab] = useState<SettingsTab | null>(null);
   const [saving, setSaving] = useState(false);
   const handleRef = useRef<SettingsTabHandle | null>(null);
+
+  if (prevInitialTab !== initialTab) {
+    setPrevInitialTab(initialTab);
+    // Going back to the plain Settings route (no tab in it) shows the default tab again.
+    if (!dirty) {
+      setTab(initialTab ?? "models");
+    }
+  }
 
   const registerHandle = useCallback((handle: SettingsTabHandle | null) => {
     handleRef.current = handle;
@@ -78,6 +99,7 @@ export function SettingsView(props: SettingsViewProps = {}) {
       return;
     }
     setTab(next);
+    onTabChange?.(next);
   };
 
   const handleSave = async () => {
@@ -90,6 +112,7 @@ export function SettingsView(props: SettingsViewProps = {}) {
         setDirty(false);
         if (pendingTab) {
           setTab(pendingTab);
+          onTabChange?.(pendingTab);
           setPendingTab(null);
         } else if (pendingExit) {
           onConfirmExit?.();
@@ -108,6 +131,7 @@ export function SettingsView(props: SettingsViewProps = {}) {
     setDirty(false);
     if (pendingTab) {
       setTab(pendingTab);
+      onTabChange?.(pendingTab);
       setPendingTab(null);
     } else if (pendingExit) {
       onConfirmExit?.();
@@ -117,11 +141,14 @@ export function SettingsView(props: SettingsViewProps = {}) {
   return (
     <section className="settings-view" aria-labelledby="settings-heading">
       <div className="page-head">
-        <h2 id="settings-heading">
-          <span className="glitch" data-text="Settings">
-            Settings
-          </span>
-        </h2>
+        <div className="page-head-start">
+          {onBack && <BackButton label="Back" onClick={onBack} />}
+          <h2 id="settings-heading">
+            <span className="glitch" data-text="Settings">
+              Settings
+            </span>
+          </h2>
+        </div>
       </div>
 
       <div className="settings-shell">

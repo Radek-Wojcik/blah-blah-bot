@@ -2,10 +2,14 @@
 
 mod briefing;
 mod browser;
+#[cfg(test)]
+#[path = "../bundle_guard.rs"]
+mod bundle_guard;
 mod commands;
 mod cycle_commands;
 mod cycles;
 mod detection;
+mod downloads;
 mod draft_commands;
 mod hotkeys;
 mod ipc;
@@ -189,9 +193,7 @@ pub fn run() {
             }
 
             // A taken hotkey must not stop the application from starting.
-            if let Err(e) = hotkeys::register(&handle, &settings) {
-                tracing::warn!(error = %e, "hotkeys not registered");
-            }
+            hotkeys::register_initial(&handle, &settings);
             build_tray(&handle)?;
             start_ticker(handle.clone());
             show_main(&handle);
@@ -223,6 +225,9 @@ pub fn run() {
             commands::take_screenshot,
             commands::get_settings,
             commands::save_settings,
+            commands::suspend_hotkeys,
+            commands::resume_hotkeys,
+            commands::hotkey_status,
             commands::save_last_sources,
             browser::bridge_status,
             browser::start_pairing,
@@ -253,7 +258,11 @@ pub fn run() {
             setup_commands::find_gguf_models,
             setup_commands::check_setup_path,
             setup_commands::prepare_worker_env,
+            setup_commands::cancel_setup_task,
+            setup_commands::download_llama_server,
+            setup_commands::download_language_model,
             setup_commands::set_first_run_done,
+            setup_commands::dismiss_legacy_venv_notice,
             project_commands::get_project_prefs,
             project_commands::save_project_prefs,
             project_commands::wizard_create_project,

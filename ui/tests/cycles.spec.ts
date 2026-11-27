@@ -630,7 +630,7 @@ test.describe("cloud confirmation on the mock backend", () => {
     await expect(dialog).toHaveCount(0);
     await expect(build).toBeVisible();
     await build.getByRole("button", { name: "Cancel" }).click();
-    await page.getByRole("button", { name: "Back to meetings" }).click();
+    await page.getByRole("button", { name: "Back", exact: true }).click();
     await page.getByRole("button", { name: "Queue", exact: true }).click();
     const job = page.getByRole("article", { name: "Kickoff" });
     await expect(job.getByText("Processed", { exact: true })).toBeVisible();

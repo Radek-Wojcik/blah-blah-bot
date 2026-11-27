@@ -53,6 +53,7 @@ import type {
   ReportMode,
   SaveCycleResult,
   SegmentEdit,
+  HotkeyStatus,
   Settings,
   SetupPathCheck,
   SetupPathKind,
@@ -107,6 +108,12 @@ export interface Backend {
 
   getSettings(): Promise<Settings>;
   saveSettings(settings: Settings): Promise<void>;
+  /** Unregister the global hotkeys while the user records a new shortcut. Idempotent. */
+  suspendHotkeys(): Promise<void>;
+  /** Register the saved hotkeys again after a capture; a no-op when not suspended. */
+  resumeHotkeys(): Promise<void>;
+  /** Which configured hotkeys are not active, with the reason. */
+  hotkeyStatus(): Promise<HotkeyStatus>;
 
   /** The bridge to the Chrome extension: server, pairing code, paired extensions, tab streams. */
   bridgeStatus(): Promise<BridgeStatus>;
@@ -190,8 +197,16 @@ export interface Backend {
   checkSetupPath(kind: SetupPathKind, path: string): Promise<SetupPathCheck>;
   /** Starts creating the processing environment; follow `onSetupProgress`. */
   prepareWorkerEnv(): Promise<void>;
+  /** Downloads the pinned llama-server release; follow `onSetupProgress`. */
+  downloadLlamaServer(): Promise<void>;
+  /** Downloads the default language model GGUF; follow `onSetupProgress`. */
+  downloadLanguageModel(): Promise<void>;
+  /** Stops the currently running setup task. */
+  cancelSetupTask(): Promise<void>;
   /** Marks the first-run setup as completed (default) or to be shown again. */
   setFirstRunDone(done?: boolean): Promise<void>;
+  /** Dismisses the one-time notice about a legacy Roaming `worker-venv` folder. */
+  dismissLegacyVenvNotice(): Promise<void>;
 
   /** API keys are write-only: `ProcessingSettings.llm.cloudKeySet` / `externalKeySet` tell they are stored. */
   setCloudKey(key: string): Promise<void>;

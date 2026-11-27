@@ -16,7 +16,8 @@ use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Component, Path, PathBuf, Prefix};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -724,6 +725,9 @@ pub struct SetupStatus {
     pub items: Vec<SetupItem>,
     /// `llama-server` programs found on this machine.
     pub llama_candidates: Vec<String>,
+    /// One-time notice when a legacy Roaming `worker-venv` folder still exists on disk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legacy_venv_notice: Option<String>,
 }
 
 /// Facts about the machine, gathered by the caller.
@@ -735,13 +739,21 @@ pub struct Probe {
     /// Which models the worker reports as cached; `None` when it could not be asked.
     pub models: Option<HashMap<String, bool>>,
     pub models_working: bool,
+    /// Keys of the models being downloaded while `models_working` is set. Empty means
+    /// unknown: every model is then reported as downloading, because the cache state is not
+    /// probed while a download runs.
+    pub models_active_keys: Vec<String>,
     pub hf_token_set: bool,
     pub llama: LlamaResolution,
+    pub llama_working: bool,
     /// Result of `--version`, when it was tried.
     pub llama_version: Option<Result<String, String>>,
     pub llama_candidates: Vec<PathBuf>,
     /// The check of the configured language-model file; `None` while no path is set.
     pub llm_model: Option<Result<PathBuf, PathProblem>>,
+    pub llm_working: bool,
+    /// One-time migration notice when an old Roaming `worker-venv` exists.
+    pub legacy_venv_notice: Option<String>,
 }
 
 impl Probe {
@@ -755,11 +767,15 @@ impl Probe {
             env_working: false,
             models: None,
             models_working: false,
+            models_active_keys: Vec::new(),
             hf_token_set: false,
             llama: LlamaResolution::NotSet,
+            llama_working: false,
             llama_version: None,
             llama_candidates: Vec::new(),
             llm_model: None,
+            llm_working: false,
+            legacy_venv_notice: None,
         }
     }
 }
@@ -841,9 +857,15 @@ fn worker_env_item(p: &Probe) -> SetupItem {
     ok(key, "The processing environment is ready.")
 }
 
+/// Whether the model `key` is being downloaded right now.
+fn model_downloading(p: &Probe, key: &str) -> bool {
+    p.models_working
+        && (p.models_active_keys.is_empty() || p.models_active_keys.iter().any(|k| k == key))
+}
+
 fn model_item(p: &Probe, key: &str, name: &str, hint_missing: &str) -> SetupItem {
     let model_key = key.trim_start_matches("model:");
-    if p.models_working {
+    if model_downloading(p, model_key) {
         return item(
             key,
             ItemState::Working,
@@ -853,6 +875,13 @@ fn model_item(p: &Probe, key: &str, name: &str, hint_missing: &str) -> SetupItem
         );
     }
     match &p.models {
+        None if p.models_working => item(
+            key,
+            ItemState::Missing,
+            CODE_MODEL_MISSING,
+            format!("{name} is not downloaded."),
+            "Download it when the current download finishes.",
+        ),
         None => item(
             key,
             ItemState::Missing,
@@ -904,6 +933,15 @@ fn llama_needed(s: &ProcessingSettings) -> bool {
 
 fn llama_item(s: &ProcessingSettings, p: &Probe) -> SetupItem {
     let key = KEY_LLAMA_SERVER;
+    if p.llama_working {
+        return item(
+            key,
+            ItemState::Working,
+            CODE_LLAMA_SERVER,
+            "llama-server is being downloaded.",
+            "Wait until the download finishes.",
+        );
+    }
     let found = |path: &Path, detected: bool| match &p.llama_version {
         Some(Err(e)) => item(
             key,
@@ -972,6 +1010,15 @@ fn no_model_chosen(s: &ProcessingSettings) -> SetupItem {
 }
 
 fn llm_item(s: &ProcessingSettings, p: &Probe) -> SetupItem {
+    if p.llm_working {
+        return item(
+            KEY_LLM_MODEL,
+            ItemState::Working,
+            CODE_LLM_MODEL,
+            "The language model is being downloaded.",
+            "Wait until the download finishes.",
+        );
+    }
     match s.llm.default_kind {
         LlmKind::External => {
             let e = &s.llm.external;
@@ -1019,7 +1066,7 @@ fn vision_item(s: &ProcessingSettings, p: &Probe) -> SetupItem {
             "Turn it on in Settings > AI Models to have screenshots described.",
         );
     }
-    if p.models_working {
+    if model_downloading(p, "vision") {
         return item(
             KEY_VISION,
             ItemState::Working,
@@ -1038,6 +1085,13 @@ fn vision_item(s: &ProcessingSettings, p: &Probe) -> SetupItem {
             CODE_VISION,
             "The screenshot model is not downloaded.",
             "Download it in the setup (about 5 GB), or skip screenshot analysis.",
+        ),
+        None if p.models_working => item(
+            KEY_VISION,
+            ItemState::Missing,
+            CODE_VISION,
+            "The screenshot model is not downloaded.",
+            "Download it when the current download finishes.",
         ),
         None => item(
             KEY_VISION,
@@ -1085,6 +1139,7 @@ pub fn build_status(s: &ProcessingSettings, p: &Probe) -> SetupStatus {
             .iter()
             .map(|c| c.to_string_lossy().into_owned())
             .collect(),
+        legacy_venv_notice: p.legacy_venv_notice.clone(),
     }
 }
 
@@ -1099,6 +1154,25 @@ pub struct JobNeeds {
     pub llm_missing: bool,
 }
 
+fn is_blocking(state: ItemState) -> bool {
+    matches!(
+        state,
+        ItemState::Missing | ItemState::Invalid | ItemState::Working
+    )
+}
+
+/// The worker-environment blocker, if any (missing `uv`, missing worker folder, uncreated
+/// environment, or environment setup currently running).
+///
+/// Reused by commands that invoke the worker directly (such as recording import) so they
+/// produce the exact same readiness error as [`first_blocker`] in the processing queue.
+pub fn worker_env_blocker(status: &SetupStatus) -> Option<&SetupItem> {
+    status
+        .items
+        .iter()
+        .find(|i| i.key == KEY_WORKER_ENV && is_blocking(i.state))
+}
+
 /// The first item that stops a job from running, if any.
 pub fn first_blocker<'a>(status: &'a SetupStatus, needs: &JobNeeds) -> Option<&'a SetupItem> {
     status.items.iter().find(|i| {
@@ -1109,15 +1183,33 @@ pub fn first_blocker<'a>(status: &'a SetupStatus, needs: &JobNeeds) -> Option<&'
             KEY_VISION => needs.vision,
             _ => false,
         };
-        relevant
-            && matches!(
-                i.state,
-                ItemState::Missing | ItemState::Invalid | ItemState::Working
-            )
+        relevant && is_blocking(i.state)
     })
 }
 
 // ----- the environment -------------------------------------------------------------------------
+
+/// Decides whether to show a one-time notice when a legacy Roaming `worker-venv` folder exists
+/// on disk. The old folder is never deleted automatically; the notice tells the user it can be
+/// removed safely to free disk space.
+pub fn legacy_venv_migration_notice(
+    roaming_data_dir: &Path,
+    local_data_dir: &Path,
+    active_env_dir: &Path,
+    notice_dismissed: bool,
+) -> Option<String> {
+    if notice_dismissed || roaming_data_dir == local_data_dir {
+        return None;
+    }
+    let legacy = roaming_data_dir.join("worker-venv");
+    if active_env_dir == legacy || !legacy.is_dir() {
+        return None;
+    }
+    Some(format!(
+        "The processing environment now lives in Local AppData. You can safely delete the old folder at {} to free disk space.",
+        legacy.display()
+    ))
+}
 
 /// Whether a Python environment exists in `env_dir` (the interpreter is there).
 pub fn env_ready(env_dir: &Path) -> bool {
@@ -1126,65 +1218,293 @@ pub fn env_ready(env_dir: &Path) -> bool {
             || env_dir.join("bin").join("python").is_file())
 }
 
-/// Runs `uv sync --frozen` for the worker, handing every line of its output to `on_line`.
-/// Needs the network on the first run. Stopped after two hours.
-pub fn run_uv_sync(
-    uv: &Path,
-    worker_dir: &Path,
-    env_dir: &Path,
-    mut on_line: impl FnMut(&str),
-) -> Result<(), String> {
+/// Task identifier in the `setup-progress` Tauri event contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum SetupTask {
+    #[serde(rename = "uv-sync")]
+    UvSync,
+    #[serde(rename = "llama-server")]
+    LlamaServer,
+    #[serde(rename = "language-model")]
+    LanguageModel,
+    #[serde(rename = "speech-models")]
+    SpeechModels,
+}
+
+/// Lifecycle phase in the `setup-progress` Tauri event contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SetupPhase {
+    Started,
+    Progress,
+    Verifying,
+    Done,
+    Failed,
+    Cancelled,
+}
+
+/// Payload emitted on the `setup-progress` Tauri event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupProgressEvent {
+    pub task: SetupTask,
+    pub phase: SetupPhase,
+    pub downloaded_bytes: Option<u64>,
+    pub total_bytes: Option<u64>,
+    pub elapsed_secs: u64,
+    pub message: String,
+}
+
+/// Parsed progress update from a single line of `uv` output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UvProgressUpdate {
+    pub downloaded_bytes: Option<u64>,
+    pub total_bytes: Option<u64>,
+    pub elapsed_secs: u64,
+    pub message: String,
+}
+
+/// Outcome of [`run_uv_sync`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UvSyncOutcome {
+    Done,
+    Cancelled,
+}
+
+fn strip_ansi(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next();
+            for next in chars.by_ref() {
+                if next.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn parse_size_unit(unit: &str) -> Option<f64> {
+    match unit {
+        "B" => Some(1.0),
+        "KB" | "kB" => Some(1_000.0),
+        "KiB" => Some(1_024.0),
+        "MB" => Some(1_000_000.0),
+        "MiB" => Some(1_048_576.0),
+        "GB" => Some(1_000_000_000.0),
+        "GiB" => Some(1_073_741_824.0),
+        _ => None,
+    }
+}
+
+fn parse_size_str(raw: &str) -> Option<u64> {
+    let trimmed = raw
+        .trim()
+        .trim_matches(|c: char| matches!(c, '(' | ')' | '[' | ']' | ',' | ';'));
+    if trimmed.is_empty() {
+        return None;
+    }
+    let split_idx = trimmed.find(|c: char| !(c.is_ascii_digit() || c == '.'))?;
+    let (num_part, unit_part) = trimmed.split_at(split_idx);
+    if num_part.is_empty() {
+        return None;
+    }
+    let value: f64 = num_part.parse().ok()?;
+    let mult = parse_size_unit(unit_part.trim())?;
+    if !value.is_finite() || value < 0.0 {
+        return None;
+    }
+    Some((value * mult).round() as u64)
+}
+
+fn parse_trailing_size(segment: &str) -> Option<u64> {
+    let tokens: Vec<&str> = segment.split_whitespace().collect();
+    let last = *tokens.last()?;
+    if let Some(v) = parse_size_str(last) {
+        return Some(v);
+    }
+    if tokens.len() >= 2 {
+        let combined = format!("{}{}", tokens[tokens.len() - 2], last);
+        return parse_size_str(&combined);
+    }
+    None
+}
+
+fn parse_leading_size(segment: &str) -> Option<u64> {
+    let tokens: Vec<&str> = segment.split_whitespace().collect();
+    let first = *tokens.first()?;
+    if let Some(v) = parse_size_str(first) {
+        return Some(v);
+    }
+    if tokens.len() >= 2 {
+        let combined = format!("{first}{}", tokens[1]);
+        return parse_size_str(&combined);
+    }
+    None
+}
+
+fn extract_uv_byte_counts(line: &str) -> (Option<u64>, Option<u64>) {
+    for (idx, _) in line.match_indices('/') {
+        let left = &line[..idx];
+        let right = &line[idx + 1..];
+        if let (Some(done), Some(total)) = (parse_trailing_size(left), parse_leading_size(right)) {
+            return (Some(done), Some(total));
+        }
+    }
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    for (i, token) in tokens.iter().enumerate() {
+        if let Some(total) = parse_size_str(token) {
+            return (None, Some(total));
+        }
+        if let Some(next) = tokens.get(i + 1) {
+            let combined = format!("{token}{next}");
+            if let Some(total) = parse_size_str(&combined) {
+                return (None, Some(total));
+            }
+        }
+    }
+    (None, None)
+}
+
+/// Parses one line of `uv sync` output into a progress update, extracting byte counts when
+/// present and ignoring empty lines.
+pub fn parse_uv_progress_line(raw: &str, elapsed_secs: u64) -> Option<UvProgressUpdate> {
+    let clean = strip_ansi(raw).trim().to_string();
+    if clean.is_empty() {
+        return None;
+    }
+    let (downloaded_bytes, total_bytes) = extract_uv_byte_counts(&clean);
+    Some(UvProgressUpdate {
+        downloaded_bytes,
+        total_bytes,
+        elapsed_secs,
+        message: clean,
+    })
+}
+
+fn uv_sync_command(uv: &Path, worker_dir: &Path, env_dir: &Path, cache_dir: &Path) -> Command {
     let mut cmd = Command::new(uv);
     cmd.args(["sync", "--frozen", "--project"])
         .arg(worker_dir)
         .env("UV_PROJECT_ENVIRONMENT", env_dir)
+        .env("UV_CACHE_DIR", cache_dir)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000);
     }
+    cmd
+}
+
+/// Terminates `child` and any descendant processes it spawned.
+fn kill_tree(child: &mut std::process::Child) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = Command::new("taskkill")
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Runs `uv sync --frozen` for the worker, streaming stdout and stderr lines into `on_progress`.
+/// Stops the child process tree and returns [`UvSyncOutcome::Cancelled`] when `cancel` is set.
+/// Needs the network on the first run. Stopped after two hours.
+pub fn run_uv_sync(
+    uv: &Path,
+    worker_dir: &Path,
+    env_dir: &Path,
+    cache_dir: &Path,
+    cancel: &Arc<AtomicBool>,
+    on_progress: impl FnMut(UvProgressUpdate),
+) -> Result<UvSyncOutcome, String> {
+    if cancel.load(Ordering::SeqCst) {
+        return Ok(UvSyncOutcome::Cancelled);
+    }
+    let cmd = uv_sync_command(uv, worker_dir, env_dir, cache_dir);
+    run_uv_sync_cmd(cmd, uv, cancel, on_progress)
+}
+
+fn run_uv_sync_cmd(
+    mut cmd: Command,
+    program_label: &Path,
+    cancel: &Arc<AtomicBool>,
+    mut on_progress: impl FnMut(UvProgressUpdate),
+) -> Result<UvSyncOutcome, String> {
+    if cancel.load(Ordering::SeqCst) {
+        return Ok(UvSyncOutcome::Cancelled);
+    }
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("uv could not be started ({}): {e}", uv.display()))?;
-    let stderr = child.stderr.take().expect("piped");
+        .map_err(|e| format!("uv could not be started ({}): {e}", program_label.display()))?;
     let (tx, rx) = mpsc::channel::<String>();
-    std::thread::spawn(move || {
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            if tx.send(line).is_err() {
-                break;
+    if let Some(stdout) = child.stdout.take() {
+        let tx_out = tx.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                if tx_out.send(line).is_err() {
+                    break;
+                }
             }
-        }
-    });
+        });
+    }
+    if let Some(stderr) = child.stderr.take() {
+        std::thread::spawn(move || {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                if tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+    } else {
+        drop(tx);
+    }
     let started = Instant::now();
     let mut tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
     loop {
+        if cancel.load(Ordering::SeqCst) {
+            kill_tree(&mut child);
+            return Ok(UvSyncOutcome::Cancelled);
+        }
         match rx.recv_timeout(Duration::from_millis(200)) {
             Ok(line) => {
-                let line = line.trim().to_string();
-                if line.is_empty() {
-                    continue;
+                if let Some(update) = parse_uv_progress_line(&line, started.elapsed().as_secs()) {
+                    if tail.len() == 6 {
+                        tail.pop_front();
+                    }
+                    tail.push_back(update.message.clone());
+                    on_progress(update);
                 }
-                on_line(&line);
-                if tail.len() == 6 {
-                    tail.pop_front();
-                }
-                tail.push_back(line);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
         if started.elapsed() > ENV_TIMEOUT {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_tree(&mut child);
             return Err("creating the environment took longer than two hours and was stopped; run it again to continue".into());
         }
     }
+    if cancel.load(Ordering::SeqCst) {
+        kill_tree(&mut child);
+        return Ok(UvSyncOutcome::Cancelled);
+    }
     let status = child.wait().map_err(|e| e.to_string())?;
     if status.success() {
-        Ok(())
+        Ok(UvSyncOutcome::Done)
     } else {
         Err(format!(
             "creating the environment failed: {}",
@@ -1631,6 +1951,22 @@ mod tests {
             .all(|i| (i.state == ItemState::Ok) == i.code.is_none()));
     }
 
+    #[test]
+    fn only_the_model_being_downloaded_is_reported_as_working() {
+        let mut p = Probe::empty();
+        p.models_working = true;
+        p.models_active_keys = vec!["whisper-turbo".to_string()];
+        let st = build_status(&ProcessingSettings::default(), &p);
+        let state_of = |key: &str| st.items.iter().find(|i| i.key == key).map(|i| i.state);
+        assert_eq!(state_of(KEY_MODEL_WHISPER), Some(ItemState::Working));
+        assert_eq!(state_of(KEY_MODEL_DIARIZATION), Some(ItemState::Missing));
+
+        p.models_active_keys.clear();
+        let st = build_status(&ProcessingSettings::default(), &p);
+        let all = st.items.iter().find(|i| i.key == KEY_MODEL_DIARIZATION);
+        assert_eq!(all.map(|i| i.state), Some(ItemState::Working));
+    }
+
     fn ready_probe() -> Probe {
         Probe {
             uv: Ok(PathBuf::from("C:/uv.exe")),
@@ -1731,12 +2067,16 @@ mod tests {
         let mut probe = ready_probe();
         probe.env_working = true;
         probe.models_working = true;
+        probe.llama_working = true;
+        probe.llm_working = true;
         let st = build_status(&ProcessingSettings::default(), &probe);
         assert_eq!(item_of(&st, "workerEnv").state, ItemState::Working);
         assert_eq!(
             item_of(&st, "model:whisper-turbo").state,
             ItemState::Working
         );
+        assert_eq!(item_of(&st, "llamaServer").state, ItemState::Working);
+        assert_eq!(item_of(&st, "llmModel").state, ItemState::Working);
         assert_eq!(item_of(&st, "vision").state, ItemState::Working);
         assert!(!st.ready);
     }
@@ -1817,6 +2157,14 @@ mod tests {
         assert!(json["items"][0]["fixHint"]
             .as_str()
             .is_some_and(|h| !h.is_empty()));
+        assert!(json.get("legacyVenvNotice").is_none());
+
+        let mut with_notice = ready_probe();
+        with_notice.legacy_venv_notice = Some("old venv notice".to_string());
+        let notice_json =
+            serde_json::to_value(build_status(&ProcessingSettings::default(), &with_notice))
+                .unwrap();
+        assert_eq!(notice_json["legacyVenvNotice"], "old venv notice");
     }
 
     #[test]
@@ -1834,9 +2182,195 @@ mod tests {
     fn a_missing_program_fails_with_a_message_and_not_with_a_panic() {
         let d = scratch("nouv");
         let gone = d.path().join(exe("uv"));
-        let err = run_uv_sync(&gone, d.path(), d.path(), |_| {}).unwrap_err();
+        let cache = d.path().join("uv-cache");
+        let cancel = Arc::new(AtomicBool::new(false));
+        let err = run_uv_sync(&gone, d.path(), d.path(), &cache, &cancel, |_| {}).unwrap_err();
         assert!(err.contains("could not be started"), "{err}");
         assert!(probe_llama_version(&gone, Duration::from_secs(1)).is_err());
+    }
+
+    #[test]
+    fn parse_uv_progress_line_extracts_byte_counts_and_messages() {
+        assert_eq!(parse_uv_progress_line("   \t ", 5), None);
+
+        let pair = parse_uv_progress_line("Downloading torch 120.5 MiB / 2.40 GiB", 42).unwrap();
+        assert_eq!(pair.elapsed_secs, 42);
+        assert_eq!(pair.message, "Downloading torch 120.5 MiB / 2.40 GiB");
+        assert_eq!(pair.downloaded_bytes, Some((120.5 * 1_048_576.0) as u64));
+        assert_eq!(
+            pair.total_bytes,
+            Some((2.40 * 1_073_741_824.0_f64).round() as u64)
+        );
+
+        let single = parse_uv_progress_line("Downloading numpy (16.5MiB)", 7).unwrap();
+        assert_eq!(single.downloaded_bytes, None);
+        assert_eq!(
+            single.total_bytes,
+            Some((16.5 * 1_048_576.0_f64).round() as u64)
+        );
+
+        let ansi =
+            parse_uv_progress_line("\x1b[32mResolved 120 packages in 1.2s\x1b[0m", 3).unwrap();
+        assert_eq!(ansi.message, "Resolved 120 packages in 1.2s");
+        assert_eq!(ansi.downloaded_bytes, None);
+        assert_eq!(ansi.total_bytes, None);
+
+        let pre_cancelled = Arc::new(AtomicBool::new(true));
+        let d = scratch("uv-cancel");
+        let res = run_uv_sync(
+            &d.path().join(exe("uv")),
+            d.path(),
+            d.path(),
+            &d.path().join("cache"),
+            &pre_cancelled,
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(res, UvSyncOutcome::Cancelled);
+    }
+
+    #[test]
+    fn run_uv_sync_cmd_cancels_running_child_process() {
+        let mut cmd = if cfg!(windows) {
+            let mut c = Command::new("ping");
+            c.args(["-n", "30", "127.0.0.1"]);
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                c.creation_flags(0x0800_0000);
+            }
+            c
+        } else {
+            let mut c = Command::new("sleep");
+            c.arg("30");
+            c
+        };
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_bg = cancel.clone();
+        let trigger = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            cancel_bg.store(true, Ordering::SeqCst);
+        });
+
+        let started = Instant::now();
+        let outcome = run_uv_sync_cmd(cmd, Path::new("fake-uv"), &cancel, |_| {})
+            .expect("cancelled child should return Ok(Cancelled)");
+        trigger.join().unwrap();
+
+        assert_eq!(outcome, UvSyncOutcome::Cancelled);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "child should be terminated promptly on cancel"
+        );
+    }
+
+    #[test]
+    fn setup_progress_event_matches_ui_json_contract() {
+        let ev = SetupProgressEvent {
+            task: SetupTask::UvSync,
+            phase: SetupPhase::Progress,
+            downloaded_bytes: Some(1024),
+            total_bytes: None,
+            elapsed_secs: 12,
+            message: "Downloading torch".to_string(),
+        };
+        let json = serde_json::to_value(&ev).unwrap();
+        assert_eq!(json["task"], "uv-sync");
+        assert_eq!(json["phase"], "progress");
+        assert_eq!(json["downloadedBytes"], 1024);
+        assert!(json["totalBytes"].is_null());
+        assert_eq!(json["elapsedSecs"], 12);
+        assert_eq!(json["message"], "Downloading torch");
+    }
+
+    #[test]
+    fn legacy_venv_migration_notice_triggers_once_and_never_deletes_old_folder() {
+        let d = scratch("legacy-venv");
+        let roaming = d.path().join("roaming");
+        let local = d.path().join("local");
+        let active_env = local.join("worker-venv");
+        fs::create_dir_all(&roaming).unwrap();
+        fs::create_dir_all(&local).unwrap();
+
+        // No old folder -> no notice.
+        assert_eq!(
+            legacy_venv_migration_notice(&roaming, &local, &active_env, false),
+            None
+        );
+
+        let legacy = roaming.join("worker-venv");
+        fs::create_dir_all(&legacy).unwrap();
+        let sentinel = legacy.join("pyvenv.cfg");
+        fs::write(&sentinel, "home = old").unwrap();
+
+        // Old folder exists and not dismissed -> notice mentions the folder and never deletes it.
+        let notice = legacy_venv_migration_notice(&roaming, &local, &active_env, false)
+            .expect("expected migration notice");
+        assert!(notice.contains(&legacy.display().to_string()), "{notice}");
+        assert!(notice.contains("delete"), "{notice}");
+        assert!(sentinel.is_file(), "legacy folder must never be deleted");
+
+        // Once dismissed -> no notice.
+        assert_eq!(
+            legacy_venv_migration_notice(&roaming, &local, &active_env, true),
+            None
+        );
+
+        // If the user explicitly pointed BBB_WORKER_ENV_DIR at the legacy folder -> no notice.
+        assert_eq!(
+            legacy_venv_migration_notice(&roaming, &local, &legacy, false),
+            None
+        );
+
+        // Same roaming and local dir -> no notice.
+        assert_eq!(
+            legacy_venv_migration_notice(&roaming, &roaming, &active_env, false),
+            None
+        );
+    }
+
+    #[test]
+    fn uv_sync_command_sets_project_env_and_local_cache_dir() {
+        let cmd = uv_sync_command(
+            Path::new("C:/app/bin/uv.exe"),
+            Path::new("C:/app/worker"),
+            Path::new("C:/local/worker-venv"),
+            Path::new("C:/local/uv-cache"),
+        );
+        let env_of = |key: &str| -> Option<String> {
+            cmd.get_envs()
+                .find(|(k, _)| *k == OsStr::new(key))
+                .and_then(|(_, v)| v.map(|s| s.to_string_lossy().into_owned()))
+        };
+        assert_eq!(
+            env_of("UV_PROJECT_ENVIRONMENT").as_deref(),
+            Some("C:/local/worker-venv")
+        );
+        assert_eq!(env_of("UV_CACHE_DIR").as_deref(), Some("C:/local/uv-cache"));
+    }
+
+    #[test]
+    fn worker_env_blocker_matches_first_blocker_for_all_env_failures() {
+        let s = ProcessingSettings::default();
+        let needs = JobNeeds {
+            vision: false,
+            llm_local: false,
+            llm_missing: false,
+        };
+        let mut p = ready_probe();
+        assert!(worker_env_blocker(&build_status(&s, &p)).is_none());
+
+        p.env_ready = false;
+        let st = build_status(&s, &p);
+        assert_eq!(worker_env_blocker(&st), first_blocker(&st, &needs));
+
+        p.env_working = true;
+        let st = build_status(&s, &p);
+        assert_eq!(worker_env_blocker(&st), first_blocker(&st, &needs));
     }
 
     #[test]

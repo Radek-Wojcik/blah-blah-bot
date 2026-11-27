@@ -287,6 +287,7 @@ fn lab_inner(
         store.clone(),
         move || RunnerSettings {
             worker: WorkerConfig {
+                uv_cache_dir: None,
                 uv: PathBuf::from("uv-is-not-used"),
                 worker_dir: PathBuf::from("worker"),
                 env_dir: PathBuf::from("env"),
@@ -429,7 +430,8 @@ fn a_managed_backend_waits_for_the_gpu() {
         lab.sup.drive("m1").unwrap(),
         StepOutcome::Waiting {
             stage: Stage::Extract,
-            reason: "GPU busy".into()
+            reason: "GPU busy".into(),
+            countdown: false,
         }
     );
     assert!(lab.calls().is_empty(), "no worker was started");

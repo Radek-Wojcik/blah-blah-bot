@@ -11,7 +11,7 @@ use queue::cleanup::AudioRetention;
 use queue::gpu::{GpuSampler, Guard, GuardPolicy, NvmlSampler, OnUnavailable};
 use queue::runner::{PipelineRunner, RunnerSettings};
 use queue::voices::VoiceSettings;
-use queue::worker::{self, JobOptions, WorkerConfig, WorkerEvent};
+use queue::worker::{self, JobOptions, ModelCacheState, WorkerConfig, WorkerEvent};
 use queue::{GateDecision, GpuGate, Next, Stage, StepOutcome, Supervisor, STAGES};
 use serde::{Deserialize, Serialize};
 use speakers::Thresholds;
@@ -35,10 +35,22 @@ pub const EVENT_SETUP_PROGRESS: &str = "setup-progress";
 
 /// A stage that crashed this many times in a row is marked failed instead of retried.
 const MAX_CRASHES: u32 = 3;
-/// Pause between attempts while a job waits for the GPU.
+/// Pause between attempts while a job waits on a schedule or non-GPU blocker.
 const WAIT_POLL: Duration = Duration::from_secs(5);
+/// Faster poll interval while a job counts down an idle GPU period, so the counter updates
+/// every second.
+const GPU_WAIT_POLL: Duration = Duration::from_secs(1);
 /// Minimum time between two queue events caused by progress lines.
 const EVENT_THROTTLE: Duration = Duration::from_millis(250);
+
+fn next_driver_poll(counting_down: bool, earliest_schedule_wait: Option<Duration>) -> Duration {
+    let base = if counting_down {
+        GPU_WAIT_POLL
+    } else {
+        WAIT_POLL
+    };
+    earliest_schedule_wait.map_or(base, |w| w.min(base))
+}
 
 // ----- settings ---------------------------------------------------------------------------
 
@@ -122,6 +134,9 @@ pub struct ProcessingSettings {
     /// The first-run setup was completed. Changed only by `set_first_run_done`: a settings
     /// save keeps the stored value.
     pub first_run_done: bool,
+    /// The one-time notice about a legacy Roaming `worker-venv` folder was dismissed.
+    /// Changed only by `dismiss_legacy_venv_notice`: a settings save keeps the stored value.
+    pub legacy_venv_notice_dismissed: bool,
     /// Filled when reading; ignored when saving.
     #[serde(skip_deserializing)]
     pub hf_token_set: bool,
@@ -150,6 +165,7 @@ impl Default for ProcessingSettings {
             describe_screenshots: true,
             skip_reports: false,
             first_run_done: false,
+            legacy_venv_notice_dismissed: false,
             hf_token_set: false,
         }
     }
@@ -205,12 +221,30 @@ fn non_empty(s: &str) -> Option<PathBuf> {
 /// (development builds only) in a parent folder of the executable. A release build looks
 /// nowhere else, so a folder planted in a parent directory or in the environment is never run.
 fn find_worker_dir(configured: &str, resource_dir: Option<&Path>) -> PathBuf {
+    let env_override = std::env::var_os("BBB_WORKER_DIR");
+    let exe_path = std::env::current_exe().ok();
+    find_worker_dir_in(
+        configured,
+        resource_dir,
+        env_override.as_deref(),
+        exe_path.as_deref(),
+        cfg!(debug_assertions),
+    )
+}
+
+fn find_worker_dir_in(
+    configured: &str,
+    resource_dir: Option<&Path>,
+    env_override: Option<&std::ffi::OsStr>,
+    exe_path: Option<&Path>,
+    is_debug: bool,
+) -> PathBuf {
     if let Some(p) = non_empty(configured) {
         return p;
     }
-    if cfg!(debug_assertions) {
-        if let Some(p) = std::env::var_os("BBB_WORKER_DIR") {
-            return PathBuf::from(p);
+    if is_debug {
+        if let Some(p) = env_override.and_then(|v| non_empty(&v.to_string_lossy())) {
+            return p;
         }
     }
     let is_worker = |d: &Path| d.join("pyproject.toml").is_file();
@@ -220,12 +254,8 @@ fn find_worker_dir(configured: &str, resource_dir: Option<&Path>) -> PathBuf {
             return candidate;
         }
     }
-    if let Ok(exe) = std::env::current_exe() {
-        let reach = if cfg!(debug_assertions) {
-            usize::MAX
-        } else {
-            1
-        };
+    if let Some(exe) = exe_path {
+        let reach = if is_debug { usize::MAX } else { 1 };
         for dir in exe.ancestors().skip(1).take(reach) {
             let candidate = dir.join("worker");
             if is_worker(&candidate) {
@@ -238,15 +268,20 @@ fn find_worker_dir(configured: &str, resource_dir: Option<&Path>) -> PathBuf {
 
 /// The Python environment of the worker: `BBB_WORKER_ENV_DIR` when it is set to a folder
 /// (a shared environment, used by the end-to-end tests so that none of them installs its own
-/// copy), otherwise `worker-venv` in the data folder.
-fn worker_env_dir(data_dir: &Path) -> PathBuf {
-    env_dir_from(data_dir, std::env::var_os("BBB_WORKER_ENV_DIR"))
+/// copy), otherwise `worker-venv` in Local AppData.
+fn worker_env_dir(local_data_dir: &Path) -> PathBuf {
+    env_dir_from(local_data_dir, std::env::var_os("BBB_WORKER_ENV_DIR"))
 }
 
-fn env_dir_from(data_dir: &Path, shared: Option<std::ffi::OsString>) -> PathBuf {
+fn env_dir_from(local_data_dir: &Path, shared: Option<std::ffi::OsString>) -> PathBuf {
     shared
         .and_then(|p| non_empty(&p.to_string_lossy()))
-        .unwrap_or_else(|| data_dir.join("worker-venv"))
+        .unwrap_or_else(|| local_data_dir.join("worker-venv"))
+}
+
+/// Dedicated `uv` cache folder under Local AppData (never `%TEMP%`).
+fn uv_cache_dir_for(local_data_dir: &Path) -> PathBuf {
+    local_data_dir.join("uv-cache")
 }
 
 // ----- GPU gate with live settings -----------------------------------------------------------
@@ -323,6 +358,7 @@ pub struct JobView {
     pub waiting_reason: Option<String>,
     pub scheduled_unix_ms: Option<i64>,
     pub eta_seconds: Option<u64>,
+    pub finished_unix_ms: Option<i64>,
     pub stages: Vec<StageView>,
 }
 
@@ -348,6 +384,7 @@ pub struct ModelStatus {
     pub key: String,
     pub label: String,
     pub cached: bool,
+    pub status: ModelCacheState,
     pub gated: bool,
     pub size_mb: Option<u64>,
 }
@@ -368,6 +405,46 @@ const MODEL_INFO: [(&str, &str, bool); 4] = [
 ];
 
 // ----- service --------------------------------------------------------------------------------
+
+/// Clears a "busy" flag when dropped, so a panic in a background thread (or a failed thread
+/// spawn) cannot leave a setup task stuck in the busy state until the application restarts.
+pub(crate) struct BusyGuard {
+    flag: Arc<AtomicBool>,
+    /// Model keys published while the flag is set; cleared together with it.
+    keys: Option<Arc<Mutex<Vec<String>>>>,
+}
+
+impl BusyGuard {
+    /// Takes over a flag that the caller has already set.
+    pub(crate) fn new(flag: &Arc<AtomicBool>) -> Self {
+        Self {
+            flag: flag.clone(),
+            keys: None,
+        }
+    }
+
+    fn with_keys(flag: &Arc<AtomicBool>, keys: &Arc<Mutex<Vec<String>>>) -> Self {
+        Self {
+            flag: flag.clone(),
+            keys: Some(keys.clone()),
+        }
+    }
+}
+
+impl Drop for BusyGuard {
+    fn drop(&mut self) {
+        // Take the key list first and clear the flag and the keys under it, so a download
+        // started meanwhile (which publishes its keys under the same lock) is never wiped.
+        match &self.keys {
+            Some(keys) => {
+                let mut k = keys.lock().unwrap_or_else(|e| e.into_inner());
+                self.flag.store(false, Ordering::SeqCst);
+                k.clear();
+            }
+            None => self.flag.store(false, Ordering::SeqCst),
+        }
+    }
+}
 
 /// Side-effect hooks invoked by [`Processing`] (UI event emission and post-reduce actions).
 /// Abstracted behind a trait so unit tests can construct [`Processing`] without a Tauri runtime.
@@ -435,7 +512,10 @@ pub struct Processing {
     had_active_jobs: AtomicBool,
     driver_wake: Arc<(Mutex<bool>, Condvar)>,
     settings_path: PathBuf,
+    roaming_data_dir: PathBuf,
+    local_data_dir: PathBuf,
     env_dir: PathBuf,
+    uv_cache_dir: PathBuf,
     /// The folder the installer puts its resources in (the bundled `uv` and `worker/`).
     resource_dir: Option<PathBuf>,
     live: Arc<Mutex<HashMap<String, Live>>>,
@@ -443,10 +523,20 @@ pub struct Processing {
     pulls: PullLedger,
     cycle_repos: RepoList,
     last_event: Mutex<Instant>,
+    /// The last queue state sent to the UI, as JSON; unchanged states are not sent again.
+    last_queue_json: Mutex<String>,
     driver_running: Arc<AtomicBool>,
     models_busy: Arc<AtomicBool>,
+    /// Keys of the models being downloaded while `models_busy` is set.
+    models_active: Arc<Mutex<Vec<String>>>,
+    models_cancel: Arc<AtomicBool>,
     /// The processing environment is being created (`prepare_worker_env`).
     env_busy: Arc<AtomicBool>,
+    env_cancel: Arc<AtomicBool>,
+    llama_busy: Arc<AtomicBool>,
+    llama_cancel: Arc<AtomicBool>,
+    llm_busy: Arc<AtomicBool>,
+    llm_cancel: Arc<AtomicBool>,
 }
 
 impl Processing {
@@ -454,7 +544,8 @@ impl Processing {
     pub fn new(
         app: AppHandle,
         store: Arc<Mutex<Store>>,
-        data_dir: &Path,
+        roaming_data_dir: &Path,
+        local_data_dir: &Path,
         config_dir: &Path,
         meeting_root: impl Fn() -> PathBuf + Send + Sync + 'static,
         cycle_repos: impl Fn() -> Vec<CycleRepoSetting> + Send + Sync + 'static,
@@ -463,7 +554,8 @@ impl Processing {
         Self::new_with_hooks(
             Arc::new(TauriProcessingHooks(app)),
             store,
-            data_dir,
+            roaming_data_dir,
+            local_data_dir,
             config_dir,
             resource_dir,
             meeting_root,
@@ -471,10 +563,12 @@ impl Processing {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_hooks(
         hooks: Arc<dyn ProcessingHooks>,
         store: Arc<Mutex<Store>>,
-        data_dir: &Path,
+        roaming_data_dir: &Path,
+        local_data_dir: &Path,
         config_dir: &Path,
         resource_dir: Option<PathBuf>,
         meeting_root: impl Fn() -> PathBuf + Send + Sync + 'static,
@@ -483,19 +577,27 @@ impl Processing {
         let settings_path = config_dir.join("processing.json");
         let settings = Arc::new(Mutex::new(ProcessingSettings::load(&settings_path)));
         let gpu_override: Arc<Mutex<Option<QueueGpuOverrideDto>>> = Arc::default();
-        let env_dir = worker_env_dir(data_dir);
+        let env_dir = worker_env_dir(local_data_dir);
+        let uv_cache_dir = uv_cache_dir_for(local_data_dir);
         let live: Arc<Mutex<HashMap<String, Live>>> = Arc::default();
         let cycle_repos: RepoList = Arc::new(cycle_repos);
 
         let runner_settings = {
             let settings = settings.clone();
             let env_dir = env_dir.clone();
+            let uv_cache_dir = uv_cache_dir.clone();
             let resource_dir = resource_dir.clone();
             move || {
                 let s = settings.lock().map(|s| s.clone()).unwrap_or_default();
                 RunnerSettings {
                     // The key is chosen by the runner from the options the stage runs with.
-                    worker: worker_config(&s, &env_dir, resource_dir.as_deref(), None),
+                    worker: worker_config(
+                        &s,
+                        &env_dir,
+                        &uv_cache_dir,
+                        resource_dir.as_deref(),
+                        None,
+                    ),
                     meeting_root: meeting_root(),
                     retention: s.audio_retention.into(),
                     voice: s.voice_settings(),
@@ -560,15 +662,30 @@ impl Processing {
             had_active_jobs: AtomicBool::new(false),
             driver_wake: Arc::new((Mutex::new(false), Condvar::new())),
             settings_path,
+            roaming_data_dir: roaming_data_dir.to_path_buf(),
+            local_data_dir: local_data_dir.to_path_buf(),
             env_dir,
+            uv_cache_dir,
             resource_dir,
             live,
             pulls: PullLedger::default(),
             cycle_repos,
-            last_event: Mutex::new(Instant::now() - EVENT_THROTTLE),
+            last_event: Mutex::new(
+                Instant::now()
+                    .checked_sub(EVENT_THROTTLE)
+                    .unwrap_or_else(Instant::now),
+            ),
+            last_queue_json: Mutex::new(String::new()),
             driver_running: Arc::default(),
             models_busy: Arc::default(),
+            models_active: Arc::default(),
+            models_cancel: Arc::default(),
             env_busy: Arc::default(),
+            env_cancel: Arc::default(),
+            llama_busy: Arc::default(),
+            llama_cancel: Arc::default(),
+            llm_busy: Arc::default(),
+            llm_cancel: Arc::default(),
         });
         if let Ok(mut t) = progress_target.lock() {
             *t = Some(Arc::downgrade(&this));
@@ -604,15 +721,30 @@ impl Processing {
             had_active_jobs: AtomicBool::new(false),
             driver_wake: Arc::new((Mutex::new(false), Condvar::new())),
             settings_path,
-            env_dir: dir.join("worker-venv"),
+            roaming_data_dir: dir.join("roaming"),
+            local_data_dir: dir.join("local"),
+            env_dir: dir.join("local").join("worker-venv"),
+            uv_cache_dir: dir.join("local").join("uv-cache"),
             resource_dir: None,
             live: Arc::default(),
             pulls: PullLedger::default(),
             cycle_repos: Arc::new(Vec::new),
-            last_event: Mutex::new(Instant::now() - EVENT_THROTTLE),
+            last_event: Mutex::new(
+                Instant::now()
+                    .checked_sub(EVENT_THROTTLE)
+                    .unwrap_or_else(Instant::now),
+            ),
+            last_queue_json: Mutex::new(String::new()),
             driver_running: Arc::default(),
             models_busy: Arc::default(),
+            models_active: Arc::default(),
+            models_cancel: Arc::default(),
             env_busy: Arc::default(),
+            env_cancel: Arc::default(),
+            llama_busy: Arc::default(),
+            llama_cancel: Arc::default(),
+            llm_busy: Arc::default(),
+            llm_cancel: Arc::default(),
         });
         let weak = Arc::downgrade(&this);
         this.supervisor.set_listener(move |_| {
@@ -646,7 +778,36 @@ impl Processing {
         Ok(s)
     }
 
-    pub fn save_settings(&self, mut new: ProcessingSettings) -> IpcResult<()> {
+    pub fn save_settings(&self, new: ProcessingSettings) -> IpcResult<()> {
+        let mut current = self
+            .settings
+            .lock()
+            .map_err(|_| IpcError::new("internal", "settings lock poisoned"))?;
+        self.commit_settings(&mut current, new)
+    }
+
+    /// Reads the stored settings, applies `change` and saves the result while holding the
+    /// settings lock, so concurrent updates cannot overwrite each other (no lost update).
+    /// Like `save_settings`, it keeps the stored `first_run_done` and
+    /// `legacy_venv_notice_dismissed`: those change only through their own methods.
+    pub(crate) fn modify_settings(
+        &self,
+        change: impl FnOnce(&mut ProcessingSettings),
+    ) -> IpcResult<()> {
+        let mut current = self
+            .settings
+            .lock()
+            .map_err(|_| IpcError::new("internal", "settings lock poisoned"))?;
+        let mut next = current.clone();
+        change(&mut next);
+        self.commit_settings(&mut current, next)
+    }
+
+    fn commit_settings(
+        &self,
+        current: &mut ProcessingSettings,
+        mut new: ProcessingSettings,
+    ) -> IpcResult<()> {
         if new.gpu_max_util_percent == 0 || new.gpu_max_util_percent > 100 {
             return Err(IpcError::new(
                 "invalid",
@@ -666,15 +827,12 @@ impl Processing {
                 "voice thresholds must satisfy 0 <= suggest <= accept <= 1 and margin >= 0",
             ));
         }
-        let mut current = self
-            .settings
-            .lock()
-            .map_err(|_| IpcError::new("internal", "settings lock poisoned"))?;
         // A path that is run or read later is checked when it changes (an executable is never
         // taken on trust), and the setup flag is not the settings screen's to change.
-        setup::validate_settings_paths(&new, &current)
+        setup::validate_settings_paths(&new, current)
             .map_err(|p| IpcError::new(p.code, p.message))?;
         new.first_run_done = current.first_run_done;
+        new.legacy_venv_notice_dismissed = current.legacy_venv_notice_dismissed;
         new.save(&self.settings_path)?;
         *current = new;
         Ok(())
@@ -695,7 +853,13 @@ impl Processing {
 
     pub(crate) fn worker_config(&self) -> WorkerConfig {
         let s = self.settings.lock().map(|s| s.clone()).unwrap_or_default();
-        worker_config(&s, &self.env_dir, self.resource_dir.as_deref(), None)
+        worker_config(
+            &s,
+            &self.env_dir,
+            &self.uv_cache_dir,
+            self.resource_dir.as_deref(),
+            None,
+        )
     }
 
     /// The settings as stored (without the flags filled in by [`Processing::settings`]).
@@ -703,12 +867,31 @@ impl Processing {
         self.settings.lock().map(|s| s.clone()).unwrap_or_default()
     }
 
+    pub(crate) fn roaming_data_dir(&self) -> &Path {
+        &self.roaming_data_dir
+    }
+
+    pub(crate) fn local_data_dir(&self) -> &Path {
+        &self.local_data_dir
+    }
+
     pub(crate) fn env_dir(&self) -> &Path {
         &self.env_dir
     }
 
+    pub(crate) fn uv_cache_dir(&self) -> &Path {
+        &self.uv_cache_dir
+    }
+
     pub(crate) fn resource_dir(&self) -> Option<&Path> {
         self.resource_dir.as_deref()
+    }
+
+    pub(crate) fn models_active_keys(&self) -> Vec<String> {
+        self.models_active
+            .lock()
+            .map(|k| k.clone())
+            .unwrap_or_default()
     }
 
     pub(crate) fn models_busy(&self) -> bool {
@@ -719,8 +902,52 @@ impl Processing {
         &self.env_busy
     }
 
-    pub(crate) fn emit_setup_progress(&self, payload: serde_json::Value) {
-        self.hooks.emit_setup_progress(payload);
+    pub(crate) fn env_cancel(&self) -> &Arc<AtomicBool> {
+        &self.env_cancel
+    }
+
+    pub(crate) fn llama_busy(&self) -> &Arc<AtomicBool> {
+        &self.llama_busy
+    }
+
+    pub(crate) fn llama_cancel(&self) -> &Arc<AtomicBool> {
+        &self.llama_cancel
+    }
+
+    pub(crate) fn llm_busy(&self) -> &Arc<AtomicBool> {
+        &self.llm_busy
+    }
+
+    pub(crate) fn llm_cancel(&self) -> &Arc<AtomicBool> {
+        &self.llm_cancel
+    }
+
+    pub(crate) fn cancel_setup_tasks(&self) {
+        self.env_cancel.store(true, Ordering::SeqCst);
+        self.llama_cancel.store(true, Ordering::SeqCst);
+        self.llm_cancel.store(true, Ordering::SeqCst);
+        self.models_cancel.store(true, Ordering::SeqCst);
+    }
+
+    pub(crate) fn downloads_dir(&self) -> PathBuf {
+        self.local_data_dir.join("downloads")
+    }
+
+    pub(crate) fn llama_server_dir(&self) -> PathBuf {
+        self.local_data_dir
+            .join("llama-server")
+            .join(crate::downloads::LLAMA_SERVER_RELEASE)
+    }
+
+    pub(crate) fn set_llama_server_path(&self, path: &Path) -> IpcResult<()> {
+        let value = path.to_string_lossy().into_owned();
+        self.modify_settings(|s| s.llama_server_path = value)
+    }
+
+    pub(crate) fn emit_setup_event(&self, event: setup::SetupProgressEvent) {
+        if let Ok(payload) = serde_json::to_value(event) {
+            self.hooks.emit_setup_progress(payload);
+        }
     }
 
     /// Records that the first-run setup was completed (or is to be run again).
@@ -728,6 +955,16 @@ impl Processing {
         let mut guard = self.settings.lock().map_err(poisoned)?;
         let mut next = guard.clone();
         next.first_run_done = done;
+        next.save(&self.settings_path)?;
+        *guard = next;
+        Ok(())
+    }
+
+    /// Marks the one-time notice about a legacy Roaming `worker-venv` folder as dismissed.
+    pub fn dismiss_legacy_venv_notice(&self) -> IpcResult<()> {
+        let mut guard = self.settings.lock().map_err(poisoned)?;
+        let mut next = guard.clone();
+        next.legacy_venv_notice_dismissed = true;
         next.save(&self.settings_path)?;
         *guard = next;
         Ok(())
@@ -1133,6 +1370,7 @@ impl Processing {
                 wake_lock = Some(recorder::SystemWakeLock::acquire());
             }
             let mut progressed = false;
+            let mut counting_down = false;
             let mut earliest_schedule_wait: Option<Duration> = None;
             for id in ids {
                 self.prepare_step(&id);
@@ -1155,6 +1393,10 @@ impl Processing {
                         );
                         progressed = true;
                     }
+                    Ok(StepOutcome::Waiting { countdown, .. }) => {
+                        // Only the idle countdown changes every second; other waits poll slowly.
+                        counting_down |= countdown;
+                    }
                     Ok(StepOutcome::Scheduled {
                         scheduled_unix_ms, ..
                     }) => {
@@ -1175,12 +1417,12 @@ impl Processing {
             if !self.has_runnable() {
                 self.reset_gpu_override_on_idle();
             }
-            self.emit_queue();
+            self.emit_queue_if_changed();
             if !progressed {
                 if !self.has_scheduled_or_running() {
                     wake_lock = None;
                 }
-                let wait = earliest_schedule_wait.unwrap_or(WAIT_POLL);
+                let wait = next_driver_poll(counting_down, earliest_schedule_wait);
                 self.wait_driver_poll(wait);
             }
         }
@@ -1242,6 +1484,15 @@ impl Processing {
             let live_pair = live_now.map(|l| (l.stage, l.fraction as f32));
             let progress = queue::progress_with_live(&job, live_pair);
             let eta_seconds = estimate_eta_seconds(&job, state, progress, duration_ms, now);
+            let finished_unix_ms = if state == JobState::Done {
+                job.stages
+                    .iter()
+                    .filter_map(|s| s.finished_unix_ms)
+                    .max()
+                    .or(Some(job.updated_unix_ms))
+            } else {
+                None
+            };
             jobs.push(JobView {
                 meeting_id: id,
                 title,
@@ -1254,6 +1505,7 @@ impl Processing {
                 },
                 scheduled_unix_ms: job.scheduled_unix_ms,
                 eta_seconds,
+                finished_unix_ms,
                 stages,
             });
         }
@@ -1289,8 +1541,32 @@ impl Processing {
 
     fn emit_queue(&self) {
         if let Ok(state) = self.queue_state() {
+            if let Ok(json) = serde_json::to_string(&state) {
+                if let Ok(mut last) = self.last_queue_json.lock() {
+                    *last = json;
+                }
+            }
             self.hooks.emit_queue(&state);
         }
+    }
+
+    /// Send the queue state only when it differs from the last one sent. The driver calls this
+    /// on every pass; a waiting job changes the state each second, so the counter still moves.
+    fn emit_queue_if_changed(&self) {
+        let Ok(state) = self.queue_state() else {
+            return;
+        };
+        let Ok(json) = serde_json::to_string(&state) else {
+            return;
+        };
+        let unchanged = self.last_queue_json.lock().is_ok_and(|last| *last == json);
+        if unchanged {
+            return;
+        }
+        if let Ok(mut last) = self.last_queue_json.lock() {
+            *last = json;
+        }
+        self.hooks.emit_queue(&state);
     }
 
     fn emit_queue_throttled(&self) {
@@ -1307,21 +1583,13 @@ impl Processing {
     // ----- models
 
     pub fn model_status(&self) -> IpcResult<Vec<ModelStatus>> {
-        let cached: HashMap<String, bool> = match worker::model_status(&self.worker_config()) {
-            Ok(v) => v.into_iter().collect(),
-            // Without an environment nothing can be checked yet: report not cached.
-            Err(_) => HashMap::new(),
-        };
-        Ok(MODEL_INFO
-            .iter()
-            .map(|(key, label, gated)| ModelStatus {
-                key: (*key).into(),
-                label: (*label).into(),
-                cached: cached.get(*key).copied().unwrap_or(false),
-                gated: *gated,
-                size_mb: None,
-            })
-            .collect())
+        let states: HashMap<String, ModelCacheState> =
+            match worker::model_cache_status(&self.worker_config()) {
+                Ok(v) => v.into_iter().collect(),
+                // Without an environment nothing can be checked yet: report missing.
+                Err(_) => HashMap::new(),
+            };
+        Ok(build_model_statuses(&states))
     }
 
     pub fn download_models(self: &Arc<Self>, keys: Vec<String>) -> IpcResult<()> {
@@ -1331,18 +1599,50 @@ impl Processing {
         {
             return Err(IpcError::new("invalid", "unknown model"));
         }
+        if keys.is_empty() {
+            return Err(IpcError::new("invalid", "no model was selected"));
+        }
+        // Hold the key list while the flag is set, so a status probe that sees the flag also
+        // sees the keys.
+        let mut active = self
+            .models_active
+            .lock()
+            .map_err(|_| IpcError::new("internal", "model state lock poisoned"))?;
         if self.models_busy.swap(true, Ordering::SeqCst) {
             return Err(IpcError::new("busy", "a download is already running"));
         }
+        *active = keys.clone();
+        drop(active);
+        // Created after the lock is released, so dropping it can never deadlock on it.
+        let busy_guard = BusyGuard::with_keys(&self.models_busy, &self.models_active);
+        let cancel = self.models_cancel.clone();
+        cancel.store(false, Ordering::SeqCst);
         let this = self.clone();
+        let (what, what_cap) = if keys.iter().all(|k| k == "vision") {
+            ("the screenshot model", "The screenshot model")
+        } else {
+            ("speech models", "Speech models")
+        };
         let spawned = std::thread::Builder::new()
             .name("model-download".into())
             .spawn(move || {
+                let started = Instant::now();
+                this.emit_setup_event(setup::SetupProgressEvent {
+                    task: setup::SetupTask::SpeechModels,
+                    phase: setup::SetupPhase::Started,
+                    downloaded_bytes: None,
+                    total_bytes: None,
+                    elapsed_secs: 0,
+                    message: format!("Downloading {what}"),
+                });
                 let mut cfg = this.worker_config();
                 cfg.hf_token = secrets::get(secrets::HF_TOKEN);
                 let refs: Vec<&str> = keys.iter().map(String::as_str).collect();
-                let result = worker::ensure_environment(&cfg).and_then(|()| {
-                    worker::ensure_models(&cfg, &refs, |ev| {
+                let result = worker::ensure_environment_cancellable(&cfg, &cancel).and_then(|ok| {
+                    if !ok {
+                        return Ok(false);
+                    }
+                    worker::ensure_models_cancellable(&cfg, &refs, &cancel, |ev| {
                         if let WorkerEvent::Progress {
                             fraction, message, ..
                         } = ev
@@ -1352,26 +1652,86 @@ impl Processing {
                                 "fraction": fraction,
                                 "message": message,
                             }));
+                            this.emit_setup_event(setup::SetupProgressEvent {
+                                task: setup::SetupTask::SpeechModels,
+                                phase: setup::SetupPhase::Progress,
+                                downloaded_bytes: None,
+                                total_bytes: None,
+                                elapsed_secs: started.elapsed().as_secs(),
+                                message: message.to_string(),
+                            });
                         }
                     })
                 });
-                if let Err(e) = result {
-                    tracing::error!(error = %e.message, "model download failed");
-                    this.hooks.emit_models_progress(serde_json::json!({
-                        "key": refs.first().copied().unwrap_or(""),
-                        "fraction": 0.0,
-                        "message": format!("Failed: {}", e.message),
-                    }));
+                // Clear busy BEFORE emitting the terminal event so an immediate Retry is not refused.
+                drop(busy_guard);
+                match result {
+                    Ok(true) => {
+                        this.emit_setup_event(setup::SetupProgressEvent {
+                            task: setup::SetupTask::SpeechModels,
+                            phase: setup::SetupPhase::Done,
+                            downloaded_bytes: None,
+                            total_bytes: None,
+                            elapsed_secs: started.elapsed().as_secs(),
+                            message: format!("{what_cap} ready"),
+                        });
+                    }
+                    Ok(false) => {
+                        this.emit_setup_event(setup::SetupProgressEvent {
+                            task: setup::SetupTask::SpeechModels,
+                            phase: setup::SetupPhase::Cancelled,
+                            downloaded_bytes: None,
+                            total_bytes: None,
+                            elapsed_secs: started.elapsed().as_secs(),
+                            message: format!(
+                                "Download of {what} was cancelled; you can resume later"
+                            ),
+                        });
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e.message, "model download failed");
+                        this.hooks.emit_models_progress(serde_json::json!({
+                            "key": refs.first().copied().unwrap_or(""),
+                            "fraction": 0.0,
+                            "message": format!("Failed: {}", e.message),
+                        }));
+                        this.emit_setup_event(setup::SetupProgressEvent {
+                            task: setup::SetupTask::SpeechModels,
+                            phase: setup::SetupPhase::Failed,
+                            downloaded_bytes: None,
+                            total_bytes: None,
+                            elapsed_secs: started.elapsed().as_secs(),
+                            message: e.message,
+                        });
+                    }
                 }
-                this.models_busy.store(false, Ordering::SeqCst);
                 this.hooks.emit_models_changed();
             });
         if spawned.is_err() {
-            self.models_busy.store(false, Ordering::SeqCst);
             return Err(IpcError::new("internal", "could not start the download"));
         }
         Ok(())
     }
+}
+
+fn build_model_statuses(states: &HashMap<String, ModelCacheState>) -> Vec<ModelStatus> {
+    MODEL_INFO
+        .iter()
+        .map(|(key, label, gated)| {
+            let status = states
+                .get(*key)
+                .copied()
+                .unwrap_or(ModelCacheState::Missing);
+            ModelStatus {
+                key: (*key).into(),
+                label: (*label).into(),
+                cached: status == ModelCacheState::Ready,
+                status,
+                gated: *gated,
+                size_mb: None,
+            }
+        })
+        .collect()
 }
 
 /// Estimate remaining seconds for an active/queued/waiting job based on `progress_with_live`
@@ -1642,6 +2002,7 @@ fn poisoned<T>(_: std::sync::PoisonError<T>) -> IpcError {
 fn worker_config(
     s: &ProcessingSettings,
     env_dir: &Path,
+    uv_cache_dir: &Path,
     resource_dir: Option<&Path>,
     llm_api_key: Option<worker::Secret>,
 ) -> WorkerConfig {
@@ -1653,6 +2014,7 @@ fn worker_config(
         uv: setup::resolve_uv(&s.uv_path, resource_dir, path_var.as_deref()).unwrap_or_default(),
         worker_dir: find_worker_dir(&s.worker_dir, resource_dir),
         env_dir: env_dir.to_path_buf(),
+        uv_cache_dir: Some(uv_cache_dir.to_path_buf()),
         models_dir: non_empty(&s.models_dir),
         llama_server: setup::resolve_llama(&s.llama_server_path, &setup::DetectEnv::from_process())
             .path(),
@@ -2099,5 +2461,231 @@ mod tests {
         let vision_row = job.stages.iter().find(|r| r.stage == "vision").unwrap();
         assert_eq!(vision_row.status, StageStatus::Done);
         assert!(vision_row.note.is_some());
+    }
+
+    #[test]
+    fn find_worker_dir_release_prefers_resource_dir_and_ignores_env_and_parents() {
+        let dir = test_tmp::TestDir::new("proc-worker-release");
+        let res = dir.path().join("res");
+        let res_worker = res.join("worker");
+        std::fs::create_dir_all(&res_worker).unwrap();
+        std::fs::write(res_worker.join("pyproject.toml"), "").unwrap();
+
+        let parent_worker = dir.path().join("worker");
+        std::fs::create_dir_all(&parent_worker).unwrap();
+        std::fs::write(parent_worker.join("pyproject.toml"), "").unwrap();
+        let nested_exe = dir.path().join("sub").join("deep").join("app.exe");
+        std::fs::create_dir_all(nested_exe.parent().unwrap()).unwrap();
+        let env_dir = std::ffi::OsStr::new("D:/env-worker");
+
+        // Release ignores BBB_WORKER_DIR and picks resource_dir/worker.
+        assert_eq!(
+            find_worker_dir_in("", Some(&res), Some(env_dir), Some(&nested_exe), false),
+            res_worker
+        );
+        // Release without resource_dir ignores parent-folder search and BBB_WORKER_DIR.
+        assert_eq!(
+            find_worker_dir_in("", None, Some(env_dir), Some(&nested_exe), false),
+            PathBuf::from("worker")
+        );
+        // Release still checks worker/ directly next to the executable.
+        let sibling_worker = nested_exe.parent().unwrap().join("worker");
+        std::fs::create_dir_all(&sibling_worker).unwrap();
+        std::fs::write(sibling_worker.join("pyproject.toml"), "").unwrap();
+        assert_eq!(
+            find_worker_dir_in("", None, Some(env_dir), Some(&nested_exe), false),
+            sibling_worker
+        );
+    }
+
+    #[test]
+    fn build_model_statuses_maps_ready_older_and_missing_states() {
+        let mut states = HashMap::new();
+        states.insert("whisper-turbo".to_string(), ModelCacheState::Ready);
+        states.insert("vision".to_string(), ModelCacheState::Older);
+
+        let list = build_model_statuses(&states);
+        let by_key: HashMap<_, _> = list.iter().map(|m| (m.key.as_str(), m)).collect();
+        assert_eq!(by_key["whisper-turbo"].status, ModelCacheState::Ready);
+        assert!(by_key["whisper-turbo"].cached);
+        assert_eq!(by_key["vision"].status, ModelCacheState::Older);
+        assert!(!by_key["vision"].cached);
+        assert_eq!(by_key["diarization"].status, ModelCacheState::Missing);
+        assert!(!by_key["diarization"].cached);
+
+        // Empty map (e.g. when the worker is unavailable) marks every model missing.
+        let fallback = build_model_statuses(&HashMap::new());
+        assert_eq!(fallback.len(), MODEL_INFO.len());
+        assert!(fallback
+            .iter()
+            .all(|m| m.status == ModelCacheState::Missing && !m.cached));
+    }
+
+    #[test]
+    fn driver_poll_uses_one_second_only_while_counting_down_an_idle_gpu() {
+        assert_eq!(next_driver_poll(true, None), Duration::from_secs(1));
+        assert_eq!(next_driver_poll(false, None), Duration::from_secs(5));
+        assert_eq!(
+            next_driver_poll(true, Some(Duration::from_millis(400))),
+            Duration::from_millis(400)
+        );
+        assert_eq!(
+            next_driver_poll(true, Some(Duration::from_secs(4))),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            next_driver_poll(false, Some(Duration::from_secs(3))),
+            Duration::from_secs(3)
+        );
+    }
+
+    #[test]
+    fn find_worker_dir_debug_honours_env_override_and_parent_search() {
+        let dir = test_tmp::TestDir::new("proc-worker-debug");
+        let parent_worker = dir.path().join("worker");
+        std::fs::create_dir_all(&parent_worker).unwrap();
+        std::fs::write(parent_worker.join("pyproject.toml"), "").unwrap();
+        let nested_exe = dir.path().join("sub").join("deep").join("app.exe");
+        std::fs::create_dir_all(nested_exe.parent().unwrap()).unwrap();
+
+        let env_dir = std::ffi::OsStr::new("D:/env-worker");
+        assert_eq!(
+            find_worker_dir_in("", None, Some(env_dir), Some(&nested_exe), true),
+            PathBuf::from("D:/env-worker")
+        );
+        assert_eq!(
+            find_worker_dir_in("", None, None, Some(&nested_exe), true),
+            parent_worker
+        );
+    }
+
+    #[test]
+    fn worker_config_uses_bundled_uv_and_local_uv_cache() {
+        let dir = test_tmp::TestDir::new("proc-bundled-uv");
+        let res = dir.path().join("resources");
+        let bin = res.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let uv_name = if cfg!(windows) { "uv.exe" } else { "uv" };
+        let bundled_uv = bin.join(uv_name);
+        std::fs::write(&bundled_uv, b"MZ fake").unwrap();
+
+        let local = dir.path().join("local");
+        let env_dir = env_dir_from(&local, None);
+        let cache_dir = uv_cache_dir_for(&local);
+
+        let cfg = worker_config(
+            &ProcessingSettings::default(),
+            &env_dir,
+            &cache_dir,
+            Some(&res),
+            None,
+        );
+        assert_eq!(cfg.uv, bundled_uv);
+        assert_eq!(cfg.env_dir, local.join("worker-venv"));
+        assert_eq!(cfg.uv_cache_dir.as_deref(), Some(cache_dir.as_path()));
+    }
+
+    #[test]
+    fn uv_cache_dir_lives_under_local_app_data() {
+        let local = Path::new("C:/Users/test/AppData/Local/BlahBlahBot");
+        assert_eq!(uv_cache_dir_for(local), local.join("uv-cache"));
+    }
+
+    #[test]
+    fn finished_job_reports_finished_unix_ms_from_latest_stage() {
+        let dir = test_tmp::TestDir::new("proc-finished-ts");
+        let store = Arc::new(Mutex::new(job_store()));
+        {
+            let s = store.lock().unwrap();
+            for (idx, st) in STAGES.iter().enumerate() {
+                s.set_stage_status(
+                    "m1",
+                    st.as_str(),
+                    StageStatus::Done,
+                    None,
+                    1_700_000_000_000 + (idx as i64) * 1_000,
+                )
+                .unwrap();
+            }
+        }
+        let proc = Processing::new_for_test(
+            store,
+            dir.path(),
+            Arc::new(FastRunner),
+            Arc::new(AlwaysBusyGate),
+        );
+        let q = proc.queue_state().unwrap();
+        assert_eq!(q.jobs.len(), 1);
+        assert_eq!(q.jobs[0].state, JobState::Done);
+        assert_eq!(
+            q.jobs[0].finished_unix_ms,
+            Some(1_700_000_000_000 + ((STAGES.len() - 1) as i64) * 1_000)
+        );
+    }
+
+    #[test]
+    fn busy_guard_clears_the_flag_on_drop_and_after_a_panic() {
+        let flag = Arc::new(AtomicBool::new(true));
+        drop(BusyGuard::new(&flag));
+        assert!(!flag.load(Ordering::SeqCst));
+
+        flag.store(true, Ordering::SeqCst);
+        let moved = BusyGuard::new(&flag);
+        let joined = std::thread::spawn(move || {
+            let _guard = moved;
+            panic!("simulated failure in a setup thread");
+        })
+        .join();
+        assert!(joined.is_err());
+        assert!(
+            !flag.load(Ordering::SeqCst),
+            "a panic must not leave the task busy"
+        );
+    }
+
+    #[test]
+    fn modify_settings_does_not_lose_concurrent_updates() {
+        let dir = test_tmp::TestDir::new("proc-modify-settings");
+        let store = Arc::new(Mutex::new(job_store()));
+        let proc = Arc::new(Processing::new_for_test(
+            store,
+            dir.path(),
+            Arc::new(FastRunner),
+            Arc::new(AlwaysBusyGate),
+        ));
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let p = proc.clone();
+                std::thread::spawn(move || {
+                    p.modify_settings(|s| s.clip_max_days += 1).expect("modify");
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().expect("thread");
+        }
+        let base = ProcessingSettings::default().clip_max_days;
+        assert_eq!(proc.settings_snapshot().clip_max_days, base + 8);
+    }
+
+    #[test]
+    fn busy_guard_with_keys_clears_flag_and_keys_together_even_after_a_panic() {
+        let flag = Arc::new(AtomicBool::new(true));
+        let keys = Arc::new(Mutex::new(vec!["whisper-turbo".to_string()]));
+        drop(BusyGuard::with_keys(&flag, &keys));
+        assert!(!flag.load(Ordering::SeqCst));
+        assert!(keys.lock().unwrap().is_empty());
+
+        flag.store(true, Ordering::SeqCst);
+        *keys.lock().unwrap() = vec!["vision".to_string()];
+        let guard = BusyGuard::with_keys(&flag, &keys);
+        let joined = std::thread::spawn(move || {
+            let _guard = guard;
+            panic!("simulated failure in the download thread");
+        })
+        .join();
+        assert!(joined.is_err());
+        assert!(!flag.load(Ordering::SeqCst));
+        assert!(keys.lock().unwrap().is_empty());
     }
 }

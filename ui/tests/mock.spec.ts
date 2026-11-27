@@ -171,7 +171,8 @@ test.describe("main window on the mock backend", () => {
     await page.goto("/?view=main&backend=mock");
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByRole("tab", { name: "Preferences" }).click();
-    await page.getByLabel("Record / Stop hotkey").fill("Ctrl+F9");
+    await page.getByLabel("Record / Stop hotkey", { exact: true }).click();
+    await page.keyboard.press("Control+F9");
     await page.getByRole("button", { name: "Save preferences", exact: true }).click();
     await expect(page.getByRole("status").filter({ hasText: "Preferences saved." })).toHaveText(
       "Preferences saved.",
@@ -374,7 +375,7 @@ test.describe("transcript on the mock backend", () => {
     await expect(page.getByText("excluded from reports")).toHaveCount(2);
 
     // Leave the transcript and open it again: the backend kept the edits.
-    await page.getByRole("button", { name: "Back to meetings" }).click();
+    await page.getByRole("button", { name: "Back", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Nomad rover", level: 2 })).toBeVisible();
     const row = page
       .getByRole("list", { name: "Meetings list" })
@@ -448,7 +449,7 @@ test.describe("processing settings on the mock backend", () => {
   test("models can be downloaded, gated ones need the token first", async ({ page }) => {
     await page.goto("/?view=main&backend=mock&page=settings&tab=models&jobms=400");
     const models = page.getByRole("list", { name: "Models" });
-    await expect(models.getByText("Cached")).toHaveCount(1);
+    await expect(models.getByText("Downloaded", { exact: true })).toHaveCount(1);
     await expect(models.getByText(/accepting the model terms/)).toBeVisible();
 
     await page.getByRole("button", { name: /^Download Speaker separation/ }).click();
@@ -458,7 +459,9 @@ test.describe("processing settings on the mock backend", () => {
     await expect(
       page.getByRole("progressbar", { name: /Download of Whisper large v3/ }),
     ).toBeVisible();
-    await expect(models.getByText("Cached")).toHaveCount(2, { timeout: 10_000 });
+    await expect(models.getByText("Downloaded", { exact: true })).toHaveCount(2, {
+      timeout: 10_000,
+    });
   });
 });
 
@@ -486,7 +489,7 @@ test.describe("speakers on the mock backend", () => {
     await expect(page.getByRole("heading", { name: "Transcript" })).toBeVisible();
     await page.getByRole("button", { name: "Name speakers" }).click();
     await expect(page.getByRole("heading", { name: "Speakers" })).toBeVisible();
-    await page.getByRole("button", { name: "Back to meetings" }).click();
+    await page.getByRole("button", { name: "Back", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Nomad rover", level: 2 })).toBeVisible();
 
     // A standalone meeting without a finished job offers no labeling button on its row.
@@ -786,24 +789,35 @@ test.describe("meeting detection on the mock backend", () => {
     await expect(page.getByText("Standby")).toBeVisible();
   });
 
-  test("the settings choose the sensitivity and Ask again undoes Never", async ({ page }) => {
+  test("the settings choose the sensitivity and Ask again undoes Turn off", async ({ page }) => {
     await page.goto("/?view=main&backend=mock");
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByRole("tab", { name: "Preferences" }).click();
     const section = page.getByRole("region", { name: "Detection" });
-    await expect(section.getByLabel(/^Balanced/)).toBeChecked();
+    const presets = section.getByRole("group", { name: "Detection sensitivity" });
+    await expect(presets.getByRole("button", { name: "Balanced" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     await expect(section.getByTestId("detection-state")).toHaveText("On, watching 7 applications.");
 
-    await section.getByLabel(/^High/).check();
-    await expect(section.getByLabel(/^High/)).toBeChecked();
+    await presets.getByRole("button", { name: "High" }).click();
+    await expect(presets.getByRole("button", { name: "High" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await expect(presets.getByRole("button", { name: "Balanced" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
 
     const list = section.getByRole("list", { name: "Watched applications" });
     await expect(list.getByRole("listitem")).toHaveCount(6);
-    await section.getByRole("button", { name: "Never ask for Zoom" }).click();
-    await expect(list).toContainText("switched off with Never");
+    await section.getByRole("button", { name: "Turn off Zoom" }).click();
+    await expect(list).toContainText("switched off");
     await expect(section.getByTestId("detection-state")).toHaveText("On, watching 6 applications.");
     await section.getByRole("button", { name: "Ask again for Zoom" }).click();
-    await expect(list).not.toContainText("switched off with Never");
+    await expect(list).not.toContainText("switched off");
 
     await section.getByLabel("Add a program").fill("Webex.exe");
     await section.getByRole("button", { name: "Add", exact: true }).click();
@@ -812,6 +826,6 @@ test.describe("meeting detection on the mock backend", () => {
 
     await section.getByLabel("Ask whether to record when a call starts").uncheck();
     await expect(section.getByTestId("detection-state")).toHaveText("Off: no prompt is raised.");
-    await expect(section.getByLabel(/^Low/)).toBeDisabled();
+    await expect(presets.getByRole("button", { name: "Low" })).toBeDisabled();
   });
 });

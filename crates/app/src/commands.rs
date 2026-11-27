@@ -197,13 +197,39 @@ pub fn save_settings(
     state: State<'_, AppState>,
     settings: Settings,
 ) -> IpcResult<()> {
+    let _guard = hotkeys::change_lock();
+    let previous = state.settings()?;
     // A folder that is refused must not leave new hotkeys registered.
     settings
-        .check_new_locations(&state.settings()?)
+        .check_new_locations(&previous)
         .map_err(|p| IpcError::new("invalid", p.message))?;
     // Register first: a hotkey that is taken must not be saved.
-    hotkeys::register(&app, &settings)?;
-    state.save_settings(settings)
+    hotkeys::replace(&app, &settings, &previous)?;
+    let applied = settings.clone();
+    state.save_settings(settings).inspect_err(|_| {
+        // The settings were not stored: the registered hotkeys must match what is stored.
+        let _ = hotkeys::replace(&app, &previous, &applied);
+    })
+}
+
+/// Unregister the global hotkeys while the UI records a new shortcut.
+#[tauri::command]
+pub fn suspend_hotkeys(app: AppHandle) {
+    hotkeys::suspend(&app);
+}
+
+/// Register the saved hotkeys again after a capture ended (no-op when not suspended).
+#[tauri::command]
+pub fn resume_hotkeys(app: AppHandle, state: State<'_, AppState>) -> IpcResult<()> {
+    let settings = state.settings()?;
+    hotkeys::resume(&app, &settings);
+    Ok(())
+}
+
+/// Which configured hotkeys failed to register (taken by another application or invalid).
+#[tauri::command]
+pub fn hotkey_status() -> hotkeys::HotkeyStatus {
+    hotkeys::status()
 }
 
 #[tauri::command]

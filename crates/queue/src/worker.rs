@@ -6,6 +6,7 @@ use std::fmt;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -50,6 +51,8 @@ pub struct WorkerConfig {
     pub worker_dir: PathBuf,
     /// Where the Python environment is created (outside the installation folder).
     pub env_dir: PathBuf,
+    /// Dedicated `uv` cache folder under Local AppData (never `%TEMP%`).
+    pub uv_cache_dir: Option<PathBuf>,
     /// Cache folder for downloaded models; `None` uses the Hugging Face default cache.
     pub models_dir: Option<PathBuf>,
     /// `llama-server` executable for the managed vision model.
@@ -71,6 +74,7 @@ impl fmt::Debug for WorkerConfig {
             .field("uv", &self.uv)
             .field("worker_dir", &self.worker_dir)
             .field("env_dir", &self.env_dir)
+            .field("uv_cache_dir", &self.uv_cache_dir)
             .field("models_dir", &self.models_dir)
             .field("llama_server", &self.llama_server)
             .field(
@@ -94,6 +98,26 @@ pub struct Launcher {
     pub args: Vec<OsString>,
 }
 
+/// Cache state of a managed worker model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ModelCacheState {
+    Ready,
+    Older,
+    #[default]
+    Missing,
+}
+
+impl ModelCacheState {
+    pub fn from_str_or_missing(s: &str) -> Self {
+        match s {
+            "ready" => Self::Ready,
+            "older" => Self::Older,
+            _ => Self::Missing,
+        }
+    }
+}
+
 /// One line of the worker's output.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -113,6 +137,8 @@ pub enum WorkerEvent {
     },
     Models {
         cached: serde_json::Map<String, Value>,
+        #[serde(default)]
+        states: serde_json::Map<String, Value>,
     },
 }
 
@@ -285,10 +311,13 @@ pub fn build_manifest(details: &MeetingDetails, options: &JobOptions) -> Result<
 fn kill_tree(child: &mut Child) {
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
         let _ = Command::new("taskkill")
             .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
             .status();
     }
     let _ = child.kill();
@@ -323,6 +352,9 @@ fn command_with(cfg: &WorkerConfig, launcher: Option<&Launcher>, args: &[&str]) 
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(cache_dir) = &cfg.uv_cache_dir {
+        cmd.env("UV_CACHE_DIR", cache_dir);
+    }
     if let Some(dir) = &cfg.models_dir {
         cmd.env("BBB_MODELS_DIR", dir);
     }
@@ -339,10 +371,24 @@ fn command_with(cfg: &WorkerConfig, launcher: Option<&Launcher>, args: &[&str]) 
 
 /// Run a command, forwarding worker events, and enforce the timeout.
 fn run_process(
+    cmd: Command,
+    timeout: Duration,
+    on_event: impl FnMut(&WorkerEvent),
+) -> Result<Option<String>, RunError> {
+    run_process_cancellable(cmd, timeout, None, on_event).map(|_| None)
+}
+
+/// Run a command, forwarding worker events, enforcing `timeout`, and stopping early when
+/// `cancel` is set. Returns `Ok(true)` on normal completion and `Ok(false)` when cancelled.
+fn run_process_cancellable(
     mut cmd: Command,
     timeout: Duration,
+    cancel: Option<&AtomicBool>,
     mut on_event: impl FnMut(&WorkerEvent),
-) -> Result<Option<String>, RunError> {
+) -> Result<bool, RunError> {
+    if cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
+        return Ok(false);
+    }
     let mut child = cmd
         .spawn()
         .map_err(|e| RunError::new(format!("could not start the worker: {e}")))?;
@@ -372,6 +418,10 @@ fn run_process(
     let started = Instant::now();
     let mut reported_error: Option<String> = None;
     let status = loop {
+        if cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
+            kill_tree(&mut child);
+            return Ok(false);
+        }
         match rx.recv_timeout(Duration::from_millis(200)) {
             Ok(line) => {
                 if let Some(ev) = parse_event(&line) {
@@ -396,9 +446,12 @@ fn run_process(
             )));
         }
     };
+    if cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
+        return Ok(false);
+    }
     let tail = err_tail.join().unwrap_or_default();
     if status.success() {
-        Ok(None)
+        Ok(true)
     } else {
         Err(RunError::new(match reported_error {
             Some(m) => m,
@@ -408,9 +461,7 @@ fn run_process(
     }
 }
 
-/// Create or update the Python environment from the lock file. Needs the network on the
-/// first run (several GB). `on_event` receives progress lines of the installer as messages.
-pub fn ensure_environment(cfg: &WorkerConfig) -> Result<(), RunError> {
+fn ensure_environment_command(cfg: &WorkerConfig) -> Command {
     let mut cmd = Command::new(&cfg.uv);
     cmd.args(["sync", "--frozen", "--project"])
         .arg(&cfg.worker_dir)
@@ -418,11 +469,21 @@ pub fn ensure_environment(cfg: &WorkerConfig) -> Result<(), RunError> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
+    if let Some(cache_dir) = &cfg.uv_cache_dir {
+        cmd.env("UV_CACHE_DIR", cache_dir);
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000);
     }
+    cmd
+}
+
+/// Create or update the Python environment from the lock file. Needs the network on the
+/// first run (several GB). `on_event` receives progress lines of the installer as messages.
+pub fn ensure_environment(cfg: &WorkerConfig) -> Result<(), RunError> {
+    let mut cmd = ensure_environment_command(cfg);
     let out = cmd
         .output()
         .map_err(|e| RunError::new(format!("could not run uv ({}): {e}", cfg.uv.display())))?;
@@ -434,6 +495,99 @@ pub fn ensure_environment(cfg: &WorkerConfig) -> Result<(), RunError> {
         Err(RunError::new(format!(
             "creating the Python environment failed: {}",
             tail.into_iter().rev().collect::<Vec<_>>().join(" | ")
+        )))
+    }
+}
+
+/// Longest an environment preparation (`uv sync`) may run before it is stopped.
+const ENSURE_ENV_TIMEOUT: Duration = Duration::from_secs(2 * 3600);
+
+/// How a waited-for child process ended.
+enum WaitOutcome {
+    Exited(std::process::ExitStatus),
+    Cancelled,
+    TimedOut,
+}
+
+/// Waits for `child`, killing its process tree on cancellation, timeout or a wait error.
+fn wait_cancellable(
+    child: &mut std::process::Child,
+    cancel: &AtomicBool,
+    timeout: Duration,
+) -> Result<WaitOutcome, RunError> {
+    let started = std::time::Instant::now();
+    loop {
+        if cancel.load(Ordering::SeqCst) {
+            kill_tree(child);
+            return Ok(WaitOutcome::Cancelled);
+        }
+        if started.elapsed() > timeout {
+            kill_tree(child);
+            return Ok(WaitOutcome::TimedOut);
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(WaitOutcome::Exited(status)),
+            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+            Err(e) => {
+                kill_tree(child);
+                return Err(RunError::new(format!("waiting for uv failed: {e}")));
+            }
+        }
+    }
+}
+
+/// Cancellable variant of [`ensure_environment`]. Returns `Ok(true)` on success and
+/// `Ok(false)` when stopped via `cancel`. A hung `uv` is stopped after two hours.
+pub fn ensure_environment_cancellable(
+    cfg: &WorkerConfig,
+    cancel: &AtomicBool,
+) -> Result<bool, RunError> {
+    ensure_environment_with_timeout(cfg, cancel, ENSURE_ENV_TIMEOUT)
+}
+
+fn ensure_environment_with_timeout(
+    cfg: &WorkerConfig,
+    cancel: &AtomicBool,
+    timeout: Duration,
+) -> Result<bool, RunError> {
+    if cancel.load(Ordering::SeqCst) {
+        return Ok(false);
+    }
+    let mut cmd = ensure_environment_command(cfg);
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| RunError::new(format!("could not run uv ({}): {e}", cfg.uv.display())))?;
+    let stderr = child.stderr.take();
+    let err_tail = std::thread::spawn(move || {
+        let mut tail = std::collections::VecDeque::new();
+        if let Some(stderr) = stderr {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                if tail.len() == 8 {
+                    tail.pop_front();
+                }
+                tail.push_back(line);
+            }
+        }
+        tail.into_iter().collect::<Vec<_>>().join(" | ")
+    });
+    let status = match wait_cancellable(&mut child, cancel, timeout)? {
+        WaitOutcome::Exited(status) => status,
+        WaitOutcome::Cancelled => return Ok(false),
+        WaitOutcome::TimedOut => {
+            return Err(RunError::new(
+                "creating the Python environment timed out; check your connection and retry",
+            ));
+        }
+    };
+    if cancel.load(Ordering::SeqCst) {
+        return Ok(false);
+    }
+    let tail = err_tail.join().unwrap_or_default();
+    if status.success() {
+        Ok(true)
+    } else {
+        Err(RunError::new(format!(
+            "creating the Python environment failed: {tail}"
         )))
     }
 }
@@ -458,6 +612,50 @@ pub fn ensure_models(
     run_process(cmd, Duration::from_secs(6 * 3600), on_event).map(|_| ())
 }
 
+/// Cancellable variant of [`ensure_models`]. Returns `Ok(true)` on success and `Ok(false)`
+/// when stopped via `cancel`.
+pub fn ensure_models_cancellable(
+    cfg: &WorkerConfig,
+    keys: &[&str],
+    cancel: &AtomicBool,
+    on_event: impl FnMut(&WorkerEvent),
+) -> Result<bool, RunError> {
+    let cmd = ensure_models_command(cfg, keys);
+    run_process_cancellable(cmd, Duration::from_secs(6 * 3600), Some(cancel), on_event)
+}
+
+/// Parse per-model cache states from a `WorkerEvent::Models` payload, falling back to the
+/// legacy `cached` booleans when `states` is absent.
+pub fn parse_model_states(
+    cached: &serde_json::Map<String, Value>,
+    states: &serde_json::Map<String, Value>,
+) -> Vec<(String, ModelCacheState)> {
+    if !states.is_empty() {
+        states
+            .iter()
+            .map(|(k, v)| {
+                let state = v
+                    .as_str()
+                    .map(ModelCacheState::from_str_or_missing)
+                    .unwrap_or(ModelCacheState::Missing);
+                (k.clone(), state)
+            })
+            .collect()
+    } else {
+        cached
+            .iter()
+            .map(|(k, v)| {
+                let state = if v.as_bool().unwrap_or(false) {
+                    ModelCacheState::Ready
+                } else {
+                    ModelCacheState::Missing
+                };
+                (k.clone(), state)
+            })
+            .collect()
+    }
+}
+
 /// Which models are cached: `(key, cached)` pairs.
 pub fn model_status(cfg: &WorkerConfig) -> Result<Vec<(String, bool)>, RunError> {
     let cmd = command(cfg, &["run", "--frozen"]).tap(|c| {
@@ -465,11 +663,25 @@ pub fn model_status(cfg: &WorkerConfig) -> Result<Vec<(String, bool)>, RunError>
     });
     let mut out = Vec::new();
     run_process(cmd, Duration::from_secs(120), |ev| {
-        if let WorkerEvent::Models { cached } = ev {
+        if let WorkerEvent::Models { cached, .. } = ev {
             out = cached
                 .iter()
                 .map(|(k, v)| (k.clone(), v.as_bool().unwrap_or(false)))
                 .collect();
+        }
+    })?;
+    Ok(out)
+}
+
+/// Cache state (`ready`, `older`, `missing`) for each model known to the worker.
+pub fn model_cache_status(cfg: &WorkerConfig) -> Result<Vec<(String, ModelCacheState)>, RunError> {
+    let cmd = command(cfg, &["run", "--frozen"]).tap(|c| {
+        c.args(["python", "-m", "bbb_worker", "models", "--status"]);
+    });
+    let mut out = Vec::new();
+    run_process(cmd, Duration::from_secs(120), |ev| {
+        if let WorkerEvent::Models { cached, states } = ev {
+            out = parse_model_states(cached, states);
         }
     })?;
     Ok(out)
@@ -905,6 +1117,46 @@ mod tests {
     use super::*;
     use store::{Meeting, MeetingState, Screenshot, Segment, Track};
 
+    fn sleeper() -> std::process::Child {
+        #[cfg(windows)]
+        let mut cmd = {
+            let mut c = Command::new("ping");
+            c.args(["-n", "30", "127.0.0.1"]);
+            c
+        };
+        #[cfg(not(windows))]
+        let mut cmd = {
+            let mut c = Command::new("sleep");
+            c.arg("30");
+            c
+        };
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn a sleeping process")
+    }
+
+    #[test]
+    fn wait_cancellable_stops_a_process_that_runs_past_the_timeout() {
+        let mut child = sleeper();
+        let cancel = AtomicBool::new(false);
+        let outcome = wait_cancellable(&mut child, &cancel, Duration::from_millis(300))
+            .expect("wait must not fail");
+        assert!(matches!(outcome, WaitOutcome::TimedOut));
+        assert!(child.try_wait().expect("try_wait").is_some());
+    }
+
+    #[test]
+    fn wait_cancellable_stops_a_process_when_cancelled() {
+        let mut child = sleeper();
+        let cancel = AtomicBool::new(true);
+        let outcome = wait_cancellable(&mut child, &cancel, Duration::from_secs(60))
+            .expect("wait must not fail");
+        assert!(matches!(outcome, WaitOutcome::Cancelled));
+        assert!(child.try_wait().expect("try_wait").is_some());
+    }
+
     #[test]
     fn parses_protocol_lines_and_ignores_noise() {
         assert_eq!(
@@ -1143,6 +1395,7 @@ mod tests {
             uv: "uv".into(),
             worker_dir: "worker".into(),
             env_dir: "env".into(),
+            uv_cache_dir: None,
             models_dir: None,
             llama_server: None,
             hf_token: Some("hf_SECRETTOKEN".into()),
@@ -1187,6 +1440,7 @@ mod tests {
         use std::ffi::OsStr;
         let cfg = WorkerConfig {
             uv: "uv".into(),
+            uv_cache_dir: None,
             worker_dir: "worker".into(),
             env_dir: "env".into(),
             models_dir: None,
@@ -1292,5 +1546,71 @@ mod tests {
         assert_eq!(d.tracks.len(), 1);
         assert_eq!(d.segments.len(), 2);
         assert_eq!(d.screenshots.len(), 2);
+    }
+
+    #[test]
+    fn uv_cache_dir_is_passed_to_uv_commands() {
+        use std::ffi::OsStr;
+        let cache = PathBuf::from("C:/Users/test/AppData/Local/BlahBlahBot/uv-cache");
+        let cfg = WorkerConfig {
+            uv: "C:/app/bin/uv.exe".into(),
+            worker_dir: "C:/app/worker".into(),
+            env_dir: "C:/Users/test/AppData/Local/BlahBlahBot/worker-venv".into(),
+            uv_cache_dir: Some(cache.clone()),
+            models_dir: None,
+            llama_server: None,
+            hf_token: None,
+            step_timeout: Duration::from_secs(1),
+            llm_api_key: None,
+        };
+        let env_of = |cmd: &Command, key: &str| -> Option<Option<String>> {
+            cmd.get_envs()
+                .find(|(k, _)| *k == OsStr::new(key))
+                .map(|(_, v)| v.map(|s| s.to_string_lossy().into_owned()))
+        };
+        let expected = Some(Some(cache.to_string_lossy().into_owned()));
+
+        let sync_cmd = ensure_environment_command(&cfg);
+        assert_eq!(env_of(&sync_cmd, "UV_CACHE_DIR"), expected);
+
+        let models_cmd = ensure_models_command(&cfg, &["whisper-turbo"]);
+        assert_eq!(env_of(&models_cmd, "UV_CACHE_DIR"), expected);
+
+        let step_cmd = step_command(
+            None,
+            &cfg,
+            Path::new("m.json"),
+            Path::new("dir"),
+            &JobOptions::default(),
+            "asr",
+        );
+        assert_eq!(env_of(&step_cmd, "UV_CACHE_DIR"), expected);
+    }
+
+    #[test]
+    fn parses_model_states_and_falls_back_to_cached_booleans() {
+        let ev = parse_event(
+            r#"{"event":"models","cached":{"whisper-turbo":true,"vision":false,"diarization":false},"states":{"whisper-turbo":"ready","vision":"older","diarization":"missing"}}"#,
+        )
+        .unwrap();
+        let WorkerEvent::Models { cached, states } = ev else {
+            panic!("expected models event");
+        };
+        let parsed: std::collections::HashMap<_, _> =
+            parse_model_states(&cached, &states).into_iter().collect();
+        assert_eq!(parsed.get("whisper-turbo"), Some(&ModelCacheState::Ready));
+        assert_eq!(parsed.get("vision"), Some(&ModelCacheState::Older));
+        assert_eq!(parsed.get("diarization"), Some(&ModelCacheState::Missing));
+
+        let legacy =
+            parse_event(r#"{"event":"models","cached":{"whisper-turbo":true,"vision":false}}"#)
+                .unwrap();
+        let WorkerEvent::Models { cached, states } = legacy else {
+            panic!("expected legacy models event");
+        };
+        let fallback: std::collections::HashMap<_, _> =
+            parse_model_states(&cached, &states).into_iter().collect();
+        assert_eq!(fallback.get("whisper-turbo"), Some(&ModelCacheState::Ready));
+        assert_eq!(fallback.get("vision"), Some(&ModelCacheState::Missing));
     }
 }

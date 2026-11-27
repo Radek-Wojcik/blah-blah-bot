@@ -433,8 +433,8 @@ export function RecorderPanel(props: RecorderPanelProps = {}) {
         </div>
       )}
 
-      <div className="panel quiet grow">
-        <div className="panel-body">
+      <div className="panel quiet grow recorder-sources">
+        <div className="panel-body recorder-sources-scroll">
           {recording ? (
             <ul className="source-list" aria-label="Recorded sources">
               {state.sources.map((s) => (

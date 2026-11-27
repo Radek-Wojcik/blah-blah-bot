@@ -91,6 +91,13 @@
   border-left-color: var(--magenta);
   color: var(--text);
 }
+.setup-legacy-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
 .setup-note {
   color: var(--muted);
   font-size: 0.9em;
@@ -122,6 +129,11 @@
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 0.8em;
+}
+.setup-progress-text {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
 }
 .progress-busy {
   animation: setup-busy 1.4s ease-in-out infinite alternate;

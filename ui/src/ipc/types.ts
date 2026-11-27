@@ -87,17 +87,28 @@ export interface RecordingState {
   screenshotCount: number;
 }
 
-/** Live 12-bar audio energy levels emitted while recording. */
+/** Live 12-bar audio energy levels emitted while recording (dB-normalized 0..1). */
 export interface RecordingLevels {
   peak: number;
   rms: number;
   bars: number[];
+  /** Latched peak-hold marker level (0..1). */
+  peakHold?: number;
 }
+
+/** Why a configured global hotkey is not active (taken by another application, or invalid). */
+export interface HotkeyStatus {
+  recordError: string | null;
+  screenshotError: string | null;
+}
+
+export type MouseButtonsMode = "normal" | "swapped" | "off";
 
 export interface Settings {
   recordingsDir: string;
   recordHotkey: string;
   screenshotHotkey: string;
+  mouseButtons?: MouseButtonsMode;
   localSaveEnabled?: boolean;
   localSaveDir?: string;
   lastSourceKeys?: string[];
@@ -348,6 +359,8 @@ export interface JobView {
   scheduledUnixMs?: number | null;
   /** Estimated remaining seconds for the active job. */
   etaSeconds?: number | null;
+  /** Completion timestamp (Unix ms) when the job is `done`. */
+  finishedUnixMs?: number | null;
 }
 
 export interface QueueGpuOverride {
@@ -457,10 +470,13 @@ export interface ProcessingSettings {
 
 export type ModelKey = "whisper-turbo" | "whisper-large-v3" | "diarization" | "vision";
 
+export type ModelCacheStatus = "ready" | "older" | "missing";
+
 export interface ModelStatus {
   key: ModelKey;
   label: string;
   cached: boolean;
+  status?: ModelCacheStatus;
   gated: boolean;
   sizeMb: number | null;
 }
@@ -507,6 +523,8 @@ export interface SetupStatus {
   items: SetupItem[];
   /** `llama-server` programs found on this machine, the configured one first. */
   llamaCandidates: string[];
+  /** One-time notice when a legacy Roaming `worker-venv` folder still exists on disk. */
+  legacyVenvNotice?: string;
 }
 
 export interface GgufFile {
@@ -526,15 +544,18 @@ export interface SetupPathCheck {
   message: string | null;
 }
 
-/** Event `setup-progress` while the processing environment is prepared. */
+export type SetupTask = "uv-sync" | "llama-server" | "language-model" | "speech-models";
+
+export type SetupPhase = "started" | "progress" | "verifying" | "done" | "failed" | "cancelled";
+
+/** Event `setup-progress` emitted while a first-run setup task runs. */
 export interface SetupProgress {
-  key: string;
-  line: string;
-  fraction: number | null;
-  /** The last event of a run: `ok` and `error` tell how it ended. */
-  done: boolean;
-  ok: boolean | null;
-  error: string | null;
+  task: SetupTask;
+  phase: SetupPhase;
+  downloadedBytes: number | null;
+  totalBytes: number | null;
+  elapsedSecs: number;
+  message: string;
 }
 
 // ---------- Stage 3: speakers and voice profiles ----------
@@ -1420,10 +1441,16 @@ export interface ImportMeetingInput {
   processNow: boolean;
 }
 
+export interface DetectedVisionModel {
+  modelPath: string;
+  mmprojPath?: string | null;
+}
+
 export interface DetectedModels {
   llamaServerPath: string | null;
   llmModels: string[];
   visionModels: string[];
+  visionPairs?: DetectedVisionModel[];
   defaultLocalSaveDir: string;
 }
 

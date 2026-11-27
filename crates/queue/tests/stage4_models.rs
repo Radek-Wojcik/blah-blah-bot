@@ -283,6 +283,7 @@ fn lab(script: Script, speaker_count: u32) -> Lab {
         store.clone(),
         move || RunnerSettings {
             worker: WorkerConfig {
+                uv_cache_dir: None,
                 uv: PathBuf::from("uv"),
                 worker_dir: worker_dir.clone(),
                 env_dir: worker_dir.join(".venv"),
@@ -424,7 +425,7 @@ impl Lab {
                     }
                 }
                 StepOutcome::Finished => return,
-                StepOutcome::Waiting { stage, reason } => {
+                StepOutcome::Waiting { stage, reason, .. } => {
                     let since = *waiting_since.get_or_insert_with(|| {
                         println!("  stage {:<14} waits: {reason}", stage.as_str());
                         Instant::now()
