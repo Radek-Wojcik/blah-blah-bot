@@ -109,7 +109,7 @@ test.describe("projects and project settings on the mock backend", () => {
 
     // The new project and its template are usable in the report defaults.
     await modal.locator("details.advanced-section > summary").click();
-    const defaultTemplate = modal.getByLabel("Default template");
+    const defaultTemplate = modal.getByLabel("Default template", { exact: true });
     await expect(defaultTemplate.locator("option", { hasText: "weekly" })).toHaveCount(1);
   });
 
@@ -157,7 +157,7 @@ test.describe("projects and project settings on the mock backend", () => {
     const modal = page.getByRole("dialog", { name: /Project Settings/ });
     await modal.getByRole("tab", { name: "Report & Templates" }).click();
     await modal.locator("details.advanced-section > summary").click();
-    await modal.getByLabel("Default report mode").selectOption("by-type");
+    await modal.getByLabel("Default report mode", { exact: true }).selectOption("by-type");
     await expect(
       modal.getByText("The meeting type picks a template of the project."),
     ).toBeVisible();
@@ -691,5 +691,57 @@ test.describe("speakers of a project on the mock backend", () => {
     await expect(select.locator("option", { hasText: "Piotr Demo" })).toHaveCount(1);
     await select.selectOption({ label: "Piotr Demo" });
     await expect(page.getByRole("status")).toHaveText("1 of 4 voices named");
+  });
+});
+
+test.describe("WP-09 project integrations and reprocess UX", () => {
+  test("Integrations tab shows compact rows with details collapsed and fits on one screen", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await openProjectSettings(page, "NOMAD");
+    const modal = page.getByRole("dialog", { name: /Project Settings/ });
+    await modal.getByRole("tab", { name: "Integrations" }).click();
+
+    await expect(modal.getByRole("button", { name: "GitHub details" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    await expect(modal.getByRole("button", { name: "Discord details" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    await expect(modal.getByRole("button", { name: "Notion details" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+
+    const box = await modal.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.height).toBeLessThanOrEqual(760);
+  });
+
+  test("done meeting shows Reprocess with confirmation dialog and disables published ones", async ({
+    page,
+  }) => {
+    await page.goto(`${MAIN}&page=project&cycle=NOMAD`);
+    const publishedReprocess = page.getByRole("button", { name: "Reprocess" }).first();
+    await expect(publishedReprocess).toBeDisabled();
+
+    await page.goto("/?view=main&backend=mock&jobms=40&page=project&cycle=SANDBOX");
+    await page.getByRole("button", { name: "+ Add meeting" }).click();
+    await page.getByLabel("Audio or video file path").fill("C:\\demo\\standup.wav");
+    await page.getByRole("button", { name: "Import meeting" }).click();
+
+    const row = page.getByRole("listitem").filter({ hasText: "standup" });
+    const unlockedReprocess = row.getByRole("button", { name: "Reprocess", exact: true }).first();
+    await expect(unlockedReprocess).toBeEnabled({ timeout: 20_000 });
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await unlockedReprocess.click();
+
+    const reprocessDialog = page.getByRole("dialog", { name: "Reprocess meeting?" });
+    await expect(reprocessDialog).toContainText("overwrite the existing draft");
+    await reprocessDialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(reprocessDialog).toHaveCount(0);
   });
 });

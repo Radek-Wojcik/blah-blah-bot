@@ -499,7 +499,10 @@ impl Store {
         }
         let tx = self.conn.unchecked_transaction()?;
         if delete_meetings {
-            tx.execute("DELETE FROM meetings WHERE cycle_id = ?1", params![cycle_id])?;
+            tx.execute(
+                "DELETE FROM meetings WHERE cycle_id = ?1",
+                params![cycle_id],
+            )?;
         } else {
             tx.execute(
                 "UPDATE meetings SET cycle_id = NULL WHERE cycle_id = ?1",

@@ -1637,7 +1637,7 @@ pub fn move_to_recycle_bin(path: &Path) -> IpcResult<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows::core::PCWSTR;
     use windows::Win32::UI::Shell::{
-        SHFileOperationW, FO_DELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT,
+        SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, FO_DELETE,
         SHFILEOPSTRUCTW,
     };
 
@@ -1673,8 +1673,9 @@ pub fn move_to_recycle_bin(path: &Path) -> IpcResult<()> {
 #[cfg(not(windows))]
 pub fn move_to_recycle_bin(path: &Path) -> IpcResult<()> {
     if path.exists() {
-        std::fs::remove_dir_all(path)
-            .map_err(|e| IpcError::new("io", format!("could not remove {}: {e}", path.display())))?;
+        std::fs::remove_dir_all(path).map_err(|e| {
+            IpcError::new("io", format!("could not remove {}: {e}", path.display()))
+        })?;
     }
     Ok(())
 }

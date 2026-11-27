@@ -124,10 +124,19 @@ export function MeetingRowCard(props: {
   recordingMeetingId: string | null;
   onOpen: (meetingId: string) => void;
   onProcess: (meetingId: string) => void;
+  onRequestReprocess?: (meeting: MeetingSummary) => void;
   onRecover: (meetingId: string) => void;
   onDelete: (meetingId: string) => void;
 }) {
-  const { meeting: m, recordingMeetingId, onOpen, onProcess, onRecover, onDelete } = props;
+  const {
+    meeting: m,
+    recordingMeetingId,
+    onOpen,
+    onProcess,
+    onRequestReprocess,
+    onRecover,
+    onDelete,
+  } = props;
   const [confirmReprocess, setConfirmReprocess] = useState(false);
   const headline = m.shortTitle?.trim() || m.title;
   const showSubtitle = Boolean(m.shortTitle?.trim() && m.shortTitle.trim() !== m.title);
@@ -189,7 +198,8 @@ export function MeetingRowCard(props: {
           }
           onClick={() => {
             if (isReprocess) {
-              setConfirmReprocess(true);
+              if (onRequestReprocess) onRequestReprocess(m);
+              else setConfirmReprocess(true);
             } else {
               onProcess(m.id);
             }
@@ -263,7 +273,8 @@ function TaskRow({
 }) {
   const { task, assignee } = item;
   const safeUrl = isSafeHttpUrl(task.url) ? task.url : null;
-  const closedText = done && task.closedByMeeting ? `Closed by meeting ${task.closedByMeeting}` : null;
+  const closedText =
+    done && task.closedByMeeting ? `Closed by meeting ${task.closedByMeeting}` : null;
   return (
     <li className={task.overdue && !done ? "cycle-row brief-overdue" : "cycle-row"}>
       <label className="check" style={{ marginRight: "0.5rem" }}>
@@ -374,6 +385,7 @@ export function ProjectDetailView({
   const [error, setError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [reprocessTarget, setReprocessTarget] = useState<MeetingSummary | null>(null);
   const [importedMap, setImportedMap] = useState<Map<string, string>>(() => new Map());
 
   const { cycleMap } = useMeetingCycles(meetings, importedMap);
@@ -749,6 +761,7 @@ export function ProjectDetailView({
                 recordingMeetingId={recording.meetingId}
                 onOpen={onOpenMeeting}
                 onProcess={processMeeting}
+                onRequestReprocess={setReprocessTarget}
                 onRecover={(id) => actOnMeeting(backend.recoverMeeting(id))}
                 onDelete={(id) => actOnMeeting(backend.deleteMeeting(id))}
               />
@@ -787,6 +800,35 @@ export function ProjectDetailView({
             reloadMeetings();
           }}
         />
+      )}
+
+      {reprocessTarget && (
+        <Modal title="Reprocess meeting?" onClose={() => setReprocessTarget(null)}>
+          <p className="section-hint">
+            Reprocessing <strong>{reprocessTarget.shortTitle || reprocessTarget.title}</strong> will
+            overwrite the existing draft and any edits made to it. Continue?
+          </p>
+          <div className="actions">
+            <button
+              type="button"
+              className="btn btn-small btn-ghost"
+              onClick={() => setReprocessTarget(null)}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-small btn-stop"
+              onClick={() => {
+                const id = reprocessTarget.id;
+                setReprocessTarget(null);
+                processMeeting(id);
+              }}
+            >
+              Reprocess
+            </button>
+          </div>
+        </Modal>
       )}
     </>
   );

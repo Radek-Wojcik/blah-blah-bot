@@ -1754,7 +1754,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       if (result.saved) emitCycles();
       return result;
     },
-    deleteProject: async (cycleId, deleteMeetings, _deleteFolder) => {
+    deleteProject: async (cycleId, deleteMeetings) => {
       cycles.deleteCycle(cycleId);
       projectPrefs.delete(cycleId);
       if (deleteMeetings) {

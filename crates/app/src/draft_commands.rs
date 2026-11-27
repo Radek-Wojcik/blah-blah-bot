@@ -832,7 +832,12 @@ pub fn set_status_decision(
     idle(&state, &meeting_id)?;
     let view = set_decision(&state.cycle_repos(), &dir, &proposal_id, decision, comment);
     if let Ok(ref v) = view {
-        if let Some(p) = v.draft.status_proposals.iter().find(|p| p.id == proposal_id) {
+        if let Some(p) = v
+            .draft
+            .status_proposals
+            .iter()
+            .find(|p| p.id == proposal_id)
+        {
             let now = cycle_store::time::now_unix_ms() as i64;
             if p.decision == Decision::Approved && p.status == ProposedStatus::Done {
                 let _ = state.with_store(|s| {

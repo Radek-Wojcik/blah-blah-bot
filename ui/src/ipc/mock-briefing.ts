@@ -206,7 +206,9 @@ export function createMockBriefing(cycles: CycleStore) {
       }
       const demo = cycleId === "NOMAD";
       const groups = groupRaw(demo ? NOMAD_OPEN : [], details.cycle.participants);
-      const doneList = demo ? groupRaw(NOMAD_DONE, details.cycle.participants).flatMap((g) => g.tasks) : [];
+      const doneList = demo
+        ? groupRaw(NOMAD_DONE, details.cycle.participants).flatMap((g) => g.tasks)
+        : [];
       const doneKeys = cycleCompletions(cycleId);
       for (const g of groups) {
         const remaining = [];

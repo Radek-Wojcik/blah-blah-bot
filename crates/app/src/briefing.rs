@@ -407,7 +407,10 @@ pub fn set_task_done(
     state.with_store(|s| s.set_task_done(&cycle_id, &task_key, done, None, now))?;
 
     if done {
-        if let Some(number) = task_key.trim().strip_prefix('#').and_then(|n| n.parse::<u64>().ok())
+        if let Some(number) = task_key
+            .trim()
+            .strip_prefix('#')
+            .and_then(|n| n.parse::<u64>().ok())
         {
             let repos = state.cycle_repos();
             if let Ok(Some(located)) = cycles::locate(&repos, &cycle_id) {

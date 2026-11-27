@@ -1013,9 +1013,7 @@ export function ProjectSettingsModal({
                     className="btn btn-small btn-ghost"
                     aria-label="GitHub details"
                     aria-expanded={openTargets.github}
-                    onClick={() =>
-                      setOpenTargets((cur) => ({ ...cur, github: !cur.github }))
-                    }
+                    onClick={() => setOpenTargets((cur) => ({ ...cur, github: !cur.github }))}
                   >
                     {openTargets.github ? "Hide" : "Details"}
                   </button>
@@ -1167,9 +1165,7 @@ export function ProjectSettingsModal({
                     className="btn btn-small btn-ghost"
                     aria-label="Discord details"
                     aria-expanded={openTargets.discord}
-                    onClick={() =>
-                      setOpenTargets((cur) => ({ ...cur, discord: !cur.discord }))
-                    }
+                    onClick={() => setOpenTargets((cur) => ({ ...cur, discord: !cur.discord }))}
                   >
                     {openTargets.discord ? "Hide" : "Details"}
                   </button>
@@ -1319,7 +1315,9 @@ export function ProjectSettingsModal({
                       checked={notion != null}
                       onChange={(e) =>
                         setTargets({
-                          notion: e.target.checked ? { database: "", publish: "on-approval" } : null,
+                          notion: e.target.checked
+                            ? { database: "", publish: "on-approval" }
+                            : null,
                         })
                       }
                     />
@@ -1330,9 +1328,7 @@ export function ProjectSettingsModal({
                     className="btn btn-small btn-ghost"
                     aria-label="Notion details"
                     aria-expanded={openTargets.notion}
-                    onClick={() =>
-                      setOpenTargets((cur) => ({ ...cur, notion: !cur.notion }))
-                    }
+                    onClick={() => setOpenTargets((cur) => ({ ...cur, notion: !cur.notion }))}
                   >
                     {openTargets.notion ? "Hide" : "Details"}
                   </button>
