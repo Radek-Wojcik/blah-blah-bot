@@ -1,10 +1,11 @@
-"""Tests for check_versions.py and release_notes.py (standard library only).
+"""Tests for release scripts and installer guard wiring (standard library only).
 
 Run from the repository root: python -m unittest scripts.test_release_scripts
 """
 
 from __future__ import annotations
 
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -109,6 +110,36 @@ class Versions(unittest.TestCase):
 
     def test_real_repository_is_consistent(self) -> None:
         self.assertEqual(check_versions.check(check_versions.collect(check_versions.ROOT)), [])
+
+
+class BundleGuard(unittest.TestCase):
+    def test_build_installer_sets_and_restores_installer_build_flag(self) -> None:
+        script = (check_versions.ROOT / "scripts" / "build-installer.ps1").read_text(encoding="utf-8")
+        self.assertRegex(script, r'\$env:BBB_INSTALLER_BUILD\s*=\s*"1"')
+        self.assertRegex(
+            script,
+            r"finally\s*\{[^}]*\$env:BBB_INSTALLER_BUILD\s*=\s*(\$null|\$saved\w+)",
+        )
+
+    def test_build_installer_invokes_tauri_build_with_bundle_config(self) -> None:
+        script = (check_versions.ROOT / "scripts" / "build-installer.ps1").read_text(encoding="utf-8")
+        self.assertIn("tauri.bundle.conf.json", script)
+        self.assertRegex(script, r"&\s*\$tauri\s+build\b.*@configs")
+
+    def test_build_rs_enforces_guard_on_tauri_config_and_installer_build(self) -> None:
+        build_rs = (check_versions.ROOT / "crates" / "app" / "build.rs").read_text(encoding="utf-8")
+        self.assertIn("TAURI_CONFIG", build_rs)
+        self.assertIn("BBB_INSTALLER_BUILD", build_rs)
+        self.assertIn("should_enforce", build_rs)
+        self.assertIn("check_bundle_resources", build_rs)
+        self.assertIsNotNone(
+            re.search(r'env::var\("TAURI_CONFIG"\)', build_rs),
+            "build.rs must read TAURI_CONFIG",
+        )
+        self.assertIsNotNone(
+            re.search(r'env::var\("BBB_INSTALLER_BUILD"\)', build_rs),
+            "build.rs must read BBB_INSTALLER_BUILD",
+        )
 
 
 if __name__ == "__main__":

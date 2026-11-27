@@ -65,6 +65,7 @@ $downloadDir = Join-Path $target "installer-download"
 $savedTemp = $env:TEMP
 $savedTmp = $env:TMP
 $savedRustflags = $env:RUSTFLAGS
+$savedInstallerBuild = $env:BBB_INSTALLER_BUILD
 $failed = $false
 
 function Invoke-Native([string]$title, [scriptblock]$command) {
@@ -293,11 +294,16 @@ try {
             Write-Host "signing is on (BBB_SIGN_COMMAND is set)"
         }
 
+        # Turns on the bundle resource guard in crates/app/build.rs.
+        $env:BBB_INSTALLER_BUILD = "1"
         Push-Location (Join-Path $repo "crates\app")
         try {
             $tauri = Join-Path $repo "ui\node_modules\.bin\tauri.cmd"
             Invoke-Native "tauri build (NSIS)" { & $tauri build --ci --bundles nsis @configs }
-        } finally { Pop-Location }
+        } finally {
+            $env:BBB_INSTALLER_BUILD = $savedInstallerBuild
+            Pop-Location
+        }
         $env:RUSTFLAGS = $savedRustflags
         $env:CARGO_ENCODED_RUSTFLAGS = $null
 
@@ -333,6 +339,7 @@ try {
     $failed = $true
     Write-Host "FAILED: $_" -ForegroundColor Red
 } finally {
+    $env:BBB_INSTALLER_BUILD = $savedInstallerBuild
     $env:RUSTFLAGS = $savedRustflags
     $env:CARGO_ENCODED_RUSTFLAGS = $null
     $env:TEMP = $savedTemp
