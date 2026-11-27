@@ -751,7 +751,9 @@ test.describe("browser extension settings on the mock backend", () => {
     await page.getByRole("tab", { name: "Preferences" }).click();
     await page.getByLabel("Accept the Chrome extension on this computer").uncheck();
     await page.getByRole("button", { name: "Save preferences", exact: true }).click();
-    await expect(page.getByRole("status")).toHaveText("Preferences saved.");
+    await expect(page.getByRole("status").filter({ hasText: "Preferences saved." })).toHaveText(
+      "Preferences saved.",
+    );
     const section = page.getByRole("region", { name: "Browser extension" });
     await expect(section.getByTestId("bridge-state")).toContainText("Off");
     await expect(section.getByRole("button", { name: "Pair extension" })).toBeDisabled();
