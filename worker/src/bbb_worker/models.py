@@ -14,8 +14,11 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from . import protocol
+
+CacheStatus = Literal["ready", "older", "missing"]
 
 
 @dataclass(frozen=True)
@@ -91,6 +94,32 @@ def cache_dir() -> Path | None:
     return Path(env) if env else None
 
 
+def _effective_cache_dir() -> Path:
+    configured = cache_dir()
+    if configured is not None:
+        return configured
+    hub_cache = os.environ.get("HF_HUB_CACHE", "").strip()
+    if hub_cache:
+        return Path(hub_cache)
+    hf_home = os.environ.get("HF_HOME", "").strip()
+    if hf_home:
+        return Path(hf_home) / "hub"
+    return Path.home() / ".cache" / "huggingface" / "hub"
+
+
+def _repo_snapshots_dir(spec: ModelSpec, root: Path | None = None) -> Path:
+    base = root if root is not None else _effective_cache_dir()
+    return base / f"models--{spec.repo.replace('/', '--')}" / "snapshots"
+
+
+def _snapshot_complete(folder: Path, patterns: tuple[str, ...] | None) -> bool:
+    if not folder.is_dir():
+        return False
+    if patterns:
+        return all((folder / p).exists() for p in patterns)
+    return any(folder.iterdir())
+
+
 def asr_key(asr_model: str) -> str:
     return "whisper-large-v3" if asr_model == "large-v3" else "whisper-turbo"
 
@@ -101,19 +130,41 @@ def local_path(key: str) -> Path:
     `BBB_VISION_DIR` points the vision model at a folder that already holds the two GGUF
     files (for example the models of an existing llama.cpp setup).
     """
-    from huggingface_hub import snapshot_download
-
     override = os.environ.get("BBB_VISION_DIR")
     if key == "vision" and override:
         return Path(override)
 
     spec = MODELS[key]
+    root = _effective_cache_dir()
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError:
+        folder = _repo_snapshots_dir(spec, root) / spec.revision
+        if not folder.is_dir():
+            raise ModelMissing(
+                f"The model '{key}' ({spec.repo}) is not downloaded. "
+                "Download it in Settings > Processing or run the setup again."
+            ) from None
+        if spec.patterns:
+            missing = [p for p in spec.patterns if not (folder / p).exists()]
+            if missing:
+                raise ModelMissing(
+                    f"The model '{key}' is incomplete: missing {', '.join(missing)}. "
+                    "Download it again in Settings > Processing or run the setup again."
+                ) from None
+        elif not any(folder.iterdir()):
+            raise ModelMissing(
+                f"The model '{key}' ({spec.repo}) is not downloaded. "
+                "Download it in Settings > Processing or run the setup again."
+            ) from None
+        return folder
+
     try:
         path = snapshot_download(
             spec.repo,
             revision=spec.revision,
             allow_patterns=list(spec.patterns) if spec.patterns else None,
-            cache_dir=cache_dir(),
+            cache_dir=root,
             local_files_only=True,
         )
     except Exception as e:
@@ -138,6 +189,21 @@ def is_cached(key: str) -> bool:
         return True
     except ModelMissing:
         return False
+
+
+def cache_status(key: str) -> CacheStatus:
+    """Return 'ready' for the pinned revision, 'older' for another cached snapshot, or 'missing'."""
+    if is_cached(key):
+        return "ready"
+    spec = MODELS[key]
+    snapshots = _repo_snapshots_dir(spec)
+    if snapshots.is_dir():
+        for entry in snapshots.iterdir():
+            if entry.name == spec.revision or not entry.is_dir():
+                continue
+            if _snapshot_complete(entry, spec.patterns):
+                return "older"
+    return "missing"
 
 
 def download(key: str, token: str | None) -> Path:

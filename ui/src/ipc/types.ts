@@ -455,10 +455,13 @@ export interface ProcessingSettings {
 
 export type ModelKey = "whisper-turbo" | "whisper-large-v3" | "diarization" | "vision";
 
+export type ModelCacheStatus = "ready" | "older" | "missing";
+
 export interface ModelStatus {
   key: ModelKey;
   label: string;
   cached: boolean;
+  status?: ModelCacheStatus;
   gated: boolean;
   sizeMb: number | null;
 }
@@ -1410,10 +1413,16 @@ export interface ImportMeetingInput {
   processNow: boolean;
 }
 
+export interface DetectedVisionModel {
+  modelPath: string;
+  mmprojPath?: string | null;
+}
+
 export interface DetectedModels {
   llamaServerPath: string | null;
   llmModels: string[];
   visionModels: string[];
+  visionPairs?: DetectedVisionModel[];
   defaultLocalSaveDir: string;
 }
 

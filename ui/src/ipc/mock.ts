@@ -1085,7 +1085,11 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       processing.hfTokenSet = true;
     },
     clearHfToken: async () => void (processing.hfTokenSet = false),
-    modelStatus: async () => structuredClone(models),
+    modelStatus: async () =>
+      structuredClone(models).map((m) => ({
+        ...m,
+        status: m.status ?? (m.cached ? "ready" : "missing"),
+      })),
     setupStatus: async () => readiness(),
     detectLlamaServer: async () => [...world.llamaCandidates],
     findGgufModels: async (dir) => mockGgufModels(world.ggufs, dir),
@@ -1159,7 +1163,10 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
           if (fraction >= 1) {
             clearInterval(timer);
             const model = models.find((m) => m.key === key);
-            if (model) model.cached = true;
+            if (model) {
+              model.cached = true;
+              model.status = "ready";
+            }
             modelsListeners.forEach((l) => l.cb());
           }
         }, setupMs);
