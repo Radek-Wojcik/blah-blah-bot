@@ -113,9 +113,15 @@ test.describe("wave 3 UX overhaul flows on the mock backend", () => {
     await expect(side).toContainText("Using global settings: 40% max util · 30s idle");
 
     const waitingJob = page.getByRole("article", { name: "Budget check-in" });
-    await waitingJob
-      .getByLabel("Schedule date and time for Budget check-in")
-      .fill("2026-11-15T22:30");
+    const schedule = waitingJob.locator(
+      '[role="group"][aria-label="Schedule date and time for Budget check-in"]',
+    );
+    const year = String(new Date().getFullYear());
+    await schedule.getByLabel("Year", { exact: true }).selectOption(year);
+    await schedule.getByLabel("Month", { exact: true }).selectOption("11");
+    await schedule.getByLabel("Day", { exact: true }).selectOption("15");
+    await schedule.getByLabel("Hour", { exact: true }).selectOption("22");
+    await schedule.getByLabel("Minute", { exact: true }).selectOption("30");
     await waitingJob.getByRole("button", { name: "Schedule", exact: true }).click();
     await expect(waitingJob.getByText(/^Scheduled for /)).toBeVisible();
     await waitingJob.getByRole("button", { name: "Clear schedule" }).click();
