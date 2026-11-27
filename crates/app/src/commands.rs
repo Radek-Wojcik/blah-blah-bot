@@ -205,7 +205,11 @@ pub fn save_settings(
         .map_err(|p| IpcError::new("invalid", p.message))?;
     // Register first: a hotkey that is taken must not be saved.
     hotkeys::replace(&app, &settings, &previous)?;
-    state.save_settings(settings)
+    let applied = settings.clone();
+    state.save_settings(settings).inspect_err(|_| {
+        // The settings were not stored: the registered hotkeys must match what is stored.
+        let _ = hotkeys::replace(&app, &previous, &applied);
+    })
 }
 
 /// Unregister the global hotkeys while the UI records a new shortcut.

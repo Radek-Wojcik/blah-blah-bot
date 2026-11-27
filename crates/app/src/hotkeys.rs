@@ -212,6 +212,11 @@ pub fn resume(app: &AppHandle, settings: &Settings) {
 /// `change_lock()`.
 pub fn replace(app: &AppHandle, next: &Settings, previous: &Settings) -> IpcResult<()> {
     let (record, screenshot) = validate_pair(next)?;
+    // Unchanged hotkeys stay as they are: one that is taken by another application must not
+    // block saving unrelated options.
+    if hotkeys_unchanged(next, previous) {
+        return Ok(());
+    }
     let gs = app.global_shortcut();
     let _ = gs.unregister_all();
     registry().suspended = false;
@@ -235,6 +240,15 @@ pub fn replace(app: &AppHandle, next: &Settings, previous: &Settings) -> IpcResu
         r.screenshot_error = None;
     }
     result
+}
+
+fn hotkeys_unchanged(next: &Settings, previous: &Settings) -> bool {
+    let same = |a: &str, b: &str| match (parse_shortcut(a), parse_shortcut(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a.trim().eq_ignore_ascii_case(b.trim()),
+    };
+    same(&next.record_hotkey, &previous.record_hotkey)
+        && same(&next.screenshot_hotkey, &previous.screenshot_hotkey)
 }
 
 fn hotkey_error(text: &str, e: &dyn std::fmt::Display) -> IpcError {
@@ -289,6 +303,66 @@ mod tests {
         assert!(parse_shortcut("Shift+F9").unwrap().is_some());
         assert!(parse_shortcut("Shift+F24").unwrap().is_some());
         assert!(parse_shortcut("Ctrl+S").unwrap().is_some());
+    }
+
+    #[test]
+    fn every_key_the_ui_can_record_parses() {
+        for key in [
+            "R",
+            "5",
+            "F1",
+            "F24",
+            "Space",
+            "Tab",
+            "Enter",
+            "Up",
+            "Down",
+            "Left",
+            "Right",
+            "Insert",
+            "Delete",
+            "Home",
+            "End",
+            "PageUp",
+            "PageDown",
+            "-",
+            "=",
+            "[",
+            "]",
+            "\\",
+            ";",
+            "'",
+            "`",
+            ",",
+            ".",
+            "/",
+            "Numpad0",
+            "Numpad9",
+            "NumpadAdd",
+            "NumpadSubtract",
+            "NumpadMultiply",
+            "NumpadDivide",
+            "NumpadDecimal",
+            "NumpadEnter",
+        ] {
+            let text = format!("Ctrl+Alt+{key}");
+            assert!(
+                parse_shortcut(&text).unwrap().is_some(),
+                "`{text}` should parse"
+            );
+        }
+        assert!(parse_shortcut("Super+Shift+R").unwrap().is_some());
+    }
+
+    #[test]
+    fn unchanged_hotkeys_are_detected_ignoring_case_and_order() {
+        let a = Settings::default();
+        let mut b = a.clone();
+        assert!(hotkeys_unchanged(&b, &a));
+        b.record_hotkey = "shift+alt+ctrl+f9".into();
+        assert!(hotkeys_unchanged(&b, &a));
+        b.screenshot_hotkey = "Ctrl+Alt+F10".into();
+        assert!(!hotkeys_unchanged(&b, &a));
     }
 
     #[test]
