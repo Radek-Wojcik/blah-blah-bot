@@ -817,43 +817,6 @@ export function ProjectSettingsModal({
                 </label>
               </div>
 
-              <div className="form-row">
-                <label>
-                  Default report mode
-                  <select
-                    aria-label="Default report mode"
-                    value={cycle.report.defaultMode}
-                    onChange={(e) => setReport({ defaultMode: e.target.value as ReportMode })}
-                  >
-                    {REPORT_MODES.map((m) => (
-                      <option key={m} value={m}>
-                        {MODE_NAMES[m]}
-                      </option>
-                    ))}
-                  </select>
-                  <small>{MODE_HELP[cycle.report.defaultMode]}</small>
-                </label>
-                <label>
-                  Default template
-                  <select
-                    aria-label="Default template"
-                    value={cycle.report.defaultTemplate}
-                    onChange={(e) => setReport({ defaultTemplate: e.target.value })}
-                  >
-                    {!templateNames.includes(cycle.report.defaultTemplate) && (
-                      <option value={cycle.report.defaultTemplate}>
-                        {cycle.report.defaultTemplate} (missing)
-                      </option>
-                    )}
-                    {templateNames.map((n) => (
-                      <option key={n} value={n}>
-                        {n}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-
               <label>
                 Custom AI instruction
                 <textarea
@@ -864,35 +827,52 @@ export function ProjectSettingsModal({
                 />
               </label>
 
-              <h4 className="field-head">Meeting types</h4>
-              <ul className="rows" aria-label="Meeting types">
-                {rows.map((r, i) => (
-                  <li key={i} className="row-grid">
-                    <label>
-                      Type
-                      <input
-                        aria-label={`Meeting type ${i + 1}`}
-                        value={r.type}
-                        onChange={(e) =>
-                          setRows(
-                            rows.map((x, j) => (j === i ? { ...x, type: e.target.value } : x)),
-                          )
-                        }
-                      />
-                    </label>
-                    <label>
-                      Template
+              <details className="advanced-section">
+                <summary>Advanced</summary>
+                <div className="form" style={{ marginTop: "0.75rem" }}>
+                  <div className="form-row">
+                    <div className="field-block">
+                      <div className="field-label-row">
+                        <label htmlFor="project-default-mode">Default report mode</label>
+                        <HelpPopover
+                          title="Default report mode"
+                          text="Controls how the AI structures each report: Fixed uses the built-in format, Template uses a custom section layout, and Auto picks based on the meeting type. Leave on Auto unless you want every meeting in this project to use one fixed layout."
+                          recommended="Auto"
+                        />
+                      </div>
                       <select
-                        aria-label={`Template of meeting type ${i + 1}`}
-                        value={r.template}
-                        onChange={(e) =>
-                          setRows(
-                            rows.map((x, j) => (j === i ? { ...x, template: e.target.value } : x)),
-                          )
-                        }
+                        id="project-default-mode"
+                        aria-label="Default report mode"
+                        value={cycle.report.defaultMode}
+                        onChange={(e) => setReport({ defaultMode: e.target.value as ReportMode })}
                       >
-                        {!templateNames.includes(r.template) && (
-                          <option value={r.template}>{r.template || "Choose…"}</option>
+                        {REPORT_MODES.map((m) => (
+                          <option key={m} value={m}>
+                            {MODE_NAMES[m]}
+                          </option>
+                        ))}
+                      </select>
+                      <small>{MODE_HELP[cycle.report.defaultMode]}</small>
+                    </div>
+                    <div className="field-block">
+                      <div className="field-label-row">
+                        <label htmlFor="project-default-template">Default template</label>
+                        <HelpPopover
+                          title="Default template"
+                          text="The section template used when a meeting uses Template mode or has no matching meeting type. Change this only if you created a custom template below."
+                          recommended="default"
+                        />
+                      </div>
+                      <select
+                        id="project-default-template"
+                        aria-label="Default template"
+                        value={cycle.report.defaultTemplate}
+                        onChange={(e) => setReport({ defaultTemplate: e.target.value })}
+                      >
+                        {!templateNames.includes(cycle.report.defaultTemplate) && (
+                          <option value={cycle.report.defaultTemplate}>
+                            {cycle.report.defaultTemplate} (missing)
+                          </option>
                         )}
                         {templateNames.map((n) => (
                           <option key={n} value={n}>
@@ -900,31 +880,82 @@ export function ProjectSettingsModal({
                           </option>
                         ))}
                       </select>
-                    </label>
-                    <button
-                      className="btn btn-small btn-ghost row-remove"
-                      type="button"
-                      onClick={() => setRows(rows.filter((_, j) => j !== i))}
-                    >
-                      Remove
-                    </button>
-                  </li>
-                ))}
-              </ul>
-              {dupTypes.length > 0 && (
-                <p className="error" role="alert">
-                  Duplicate meeting types: {dupTypes.join(", ")}.
-                </p>
-              )}
-              <button
-                className="btn btn-small"
-                type="button"
-                onClick={() =>
-                  setRows([...rows, { type: "", template: cycle.report.defaultTemplate }])
-                }
-              >
-                Add meeting type
-              </button>
+                    </div>
+                  </div>
+
+                  <div className="field-label-row">
+                    <h4 className="field-head" style={{ margin: 0 }}>
+                      Meeting types
+                    </h4>
+                    <HelpPopover
+                      title="Meeting types"
+                      text="Named meeting kinds (such as standup or review) that map automatically to a specific report template when selected before recording. Add entries here only if your team uses different report layouts for different recurring meetings."
+                    />
+                  </div>
+                  <ul className="rows" aria-label="Meeting types">
+                    {rows.map((r, i) => (
+                      <li key={i} className="row-grid">
+                        <label>
+                          Type
+                          <input
+                            aria-label={`Meeting type ${i + 1}`}
+                            value={r.type}
+                            onChange={(e) =>
+                              setRows(
+                                rows.map((x, j) => (j === i ? { ...x, type: e.target.value } : x)),
+                              )
+                            }
+                          />
+                        </label>
+                        <label>
+                          Template
+                          <select
+                            aria-label={`Template of meeting type ${i + 1}`}
+                            value={r.template}
+                            onChange={(e) =>
+                              setRows(
+                                rows.map((x, j) =>
+                                  j === i ? { ...x, template: e.target.value } : x,
+                                ),
+                              )
+                            }
+                          >
+                            {!templateNames.includes(r.template) && (
+                              <option value={r.template}>{r.template || "Choose…"}</option>
+                            )}
+                            {templateNames.map((n) => (
+                              <option key={n} value={n}>
+                                {n}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <button
+                          className="btn btn-small btn-ghost row-remove"
+                          type="button"
+                          onClick={() => setRows(rows.filter((_, j) => j !== i))}
+                        >
+                          Remove
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                  {dupTypes.length > 0 && (
+                    <p className="error" role="alert">
+                      Duplicate meeting types: {dupTypes.join(", ")}.
+                    </p>
+                  )}
+                  <button
+                    className="btn btn-small"
+                    type="button"
+                    onClick={() =>
+                      setRows([...rows, { type: "", template: cycle.report.defaultTemplate }])
+                    }
+                  >
+                    Add meeting type
+                  </button>
+                </div>
+              </details>
 
               <h4 className="field-head">Templates</h4>
               <TemplateEditor

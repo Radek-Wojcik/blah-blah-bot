@@ -108,6 +108,7 @@ test.describe("projects and project settings on the mock backend", () => {
     );
 
     // The new project and its template are usable in the report defaults.
+    await modal.locator("details.advanced-section > summary").click();
     const defaultTemplate = modal.getByLabel("Default template");
     await expect(defaultTemplate.locator("option", { hasText: "weekly" })).toHaveCount(1);
   });
@@ -154,6 +155,7 @@ test.describe("projects and project settings on the mock backend", () => {
     await openProjectSettings(page, "NOMAD");
     const modal = page.getByRole("dialog", { name: /Project Settings/ });
     await modal.getByRole("tab", { name: "Report & Templates" }).click();
+    await modal.locator("details.advanced-section > summary").click();
     await modal.getByLabel("Default report mode").selectOption("by-type");
     await expect(
       modal.getByText("The meeting type picks a template of the project."),

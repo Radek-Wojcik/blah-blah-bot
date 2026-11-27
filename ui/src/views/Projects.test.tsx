@@ -714,6 +714,39 @@ describe("ProjectDetailView, ProjectSettingsModal, and ImportMeetingModal", () =
     await flush();
     expect(processSpy).toHaveBeenCalledWith("m-done-unlocked");
   });
+
+  it("hides report mode, template and meeting types under collapsed Advanced with HelpPopovers", async () => {
+    const backend = createMockBackend({ clockRate: 0, jobStepMs: 5000 });
+    await act(async () => {
+      root.render(
+        <BackendProvider value={backend}>
+          <ProjectDetailView cycleId="NOMAD" onBack={vi.fn()} onOpenMeeting={vi.fn()} />
+        </BackendProvider>,
+      );
+    });
+    await flush();
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('button[aria-label="Project settings"]')!.click();
+    });
+    await flush();
+
+    await act(async () => {
+      findButton("Report & Templates").click();
+    });
+    await flush();
+
+    const adv = host.querySelector<HTMLDetailsElement>("details.advanced-section")!;
+    expect(adv).not.toBeNull();
+    expect(adv.open).toBe(false);
+
+    await act(async () => {
+      adv.querySelector("summary")!.click();
+    });
+    await flush();
+    expect(adv.open).toBe(true);
+    expect(adv.querySelectorAll("button.help-popover-btn").length).toBeGreaterThanOrEqual(3);
+  });
 });
 
 describe("native file dialogs", () => {
