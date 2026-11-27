@@ -235,7 +235,7 @@ function wavBytes(freqHz: number, seconds: number, sampleRate = 8000): number[] 
 function computeMockLevels(elapsedMs: number, activeSources: ActiveSource[]): RecordingLevels {
   const live = activeSources.filter((s) => s.status === "recording");
   if (live.length === 0) {
-    return { peak: 0, rms: 0, bars: Array<number>(12).fill(0) };
+    return { peak: 0, rms: 0, bars: Array<number>(12).fill(0), peakHold: 0 };
   }
   const bars = Array.from({ length: 12 }, (_, i) => {
     const wave =
@@ -246,7 +246,8 @@ function computeMockLevels(elapsedMs: number, activeSources: ActiveSource[]): Re
   });
   const peak = Math.max(...bars);
   const rms = Number(Math.sqrt(bars.reduce((acc, b) => acc + b * b, 0) / bars.length).toFixed(3));
-  return { peak, rms, bars };
+  const peakHold = Math.min(1, Number((peak + 0.06).toFixed(3)));
+  return { peak, rms, bars, peakHold };
 }
 
 export interface MockOptions {

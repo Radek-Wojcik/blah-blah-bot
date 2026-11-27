@@ -615,6 +615,7 @@ impl Session {
                         s.levels.rms * 0.7
                     },
                     bars: next_bars,
+                    peak_hold: raw_levels.peak_hold.max(s.levels.peak_hold * 0.85),
                 };
                 let (offset_ms, error) = s
                     .state

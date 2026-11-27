@@ -85,11 +85,13 @@ export interface RecordingState {
   screenshotCount: number;
 }
 
-/** Live 12-bar audio energy levels emitted while recording. */
+/** Live 12-bar audio energy levels emitted while recording (dB-normalized 0..1). */
 export interface RecordingLevels {
   peak: number;
   rms: number;
   bars: number[];
+  /** Latched peak-hold marker level (0..1). */
+  peakHold?: number;
 }
 
 export interface Settings {
@@ -346,6 +348,8 @@ export interface JobView {
   scheduledUnixMs?: number | null;
   /** Estimated remaining seconds for the active job. */
   etaSeconds?: number | null;
+  /** Completion timestamp (Unix ms) when the job is `done`. */
+  finishedUnixMs?: number | null;
 }
 
 export interface QueueGpuOverride {
