@@ -437,7 +437,7 @@ impl Store {
             let rebound_pid = existing_rows
                 .iter()
                 .find(|(_, slug, existing_name)| {
-                    existing_name.eq_ignore_ascii_case(name)
+                    existing_name.to_lowercase() == name.to_lowercase()
                         && slug.as_deref().is_none_or(|s| !incoming_slugs.contains(s))
                 })
                 .map(|(pid, _, existing_name)| (pid.clone(), existing_name.clone()));
@@ -1011,5 +1011,22 @@ mod tests {
         };
         s.set_project_prefs(&deleting).unwrap();
         assert_eq!(s.get_project_prefs("NOMAD").unwrap(), deleting);
+    }
+
+    #[test]
+    fn syncing_rebinds_polish_diacritic_case_variants() {
+        let s = store();
+        s.sync_cycle_participants("C", &pairs(&[("old", "Łukasz")]))
+            .unwrap();
+        let old_key = s.participants_for_cycle("C").unwrap()[0].id.clone();
+        let out = s
+            .sync_cycle_participants("C", &pairs(&[("lukasz", "łukasz")]))
+            .unwrap();
+        assert_eq!(out.rebound, ["lukasz"]);
+        assert!(out.created.is_empty());
+        let list = s.participants_for_cycle("C").unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, old_key);
+        assert_eq!(list[0].cycle_participant_id.as_deref(), Some("lukasz"));
     }
 }

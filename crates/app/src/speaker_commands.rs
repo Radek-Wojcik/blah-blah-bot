@@ -55,6 +55,8 @@ pub struct VoiceDto {
     pub suggested_from_projects: Vec<String>,
     /// The participant the voice is named after (automatic match or the user's choice).
     pub assigned_participant_id: Option<String>,
+    /// Display name of the assigned participant (available even before linking into the cycle).
+    pub assigned_participant_name: Option<String>,
     pub confirmed: bool,
     pub merged_into: Option<String>,
     pub clips: Vec<ClipDto>,
@@ -93,18 +95,42 @@ impl From<ParticipantInfo> for ParticipantDto {
 #[serde(rename_all = "camelCase")]
 pub struct VoicesData {
     pub meeting_id: String,
+    pub cycle_id: Option<String>,
     pub voices: Vec<VoiceDto>,
     pub participants: Vec<ParticipantDto>,
     pub all_confirmed: bool,
 }
 
-fn to_dto(v: VoiceRow, clips: &[store::ClipRow], all_participants: &[ParticipantInfo]) -> VoiceDto {
+fn to_dto(
+    v: VoiceRow,
+    clips: &[store::ClipRow],
+    all_participants: &[ParticipantInfo],
+    current_cycle: Option<&str>,
+) -> VoiceDto {
     let suggested_id = (v.decision == VoiceDecision::Suggested)
         .then(|| v.matched_participant.clone())
         .flatten();
     let suggested_info = suggested_id
         .as_deref()
         .and_then(|sid| all_participants.iter().find(|p| p.id == sid));
+    let suggested_from_projects = suggested_info
+        .map(|p| {
+            if current_cycle.is_some_and(|cid| p.projects.iter().any(|c| c == cid)) {
+                Vec::new()
+            } else {
+                p.projects
+                    .iter()
+                    .filter(|c| Some(c.as_str()) != current_cycle)
+                    .cloned()
+                    .collect()
+            }
+        })
+        .unwrap_or_default();
+    let assigned_participant_name = v
+        .assigned_participant
+        .as_deref()
+        .and_then(|aid| all_participants.iter().find(|p| p.id == aid))
+        .map(|p| p.name.clone());
     VoiceDto {
         clips: clips
             .iter()
@@ -117,9 +143,7 @@ fn to_dto(v: VoiceRow, clips: &[store::ClipRow], all_participants: &[Participant
             })
             .collect(),
         suggested_participant_name: suggested_info.map(|p| p.name.clone()),
-        suggested_from_projects: suggested_info
-            .map(|p| p.projects.clone())
-            .unwrap_or_default(),
+        suggested_from_projects,
         suggested_participant_id: suggested_id,
         voice_id: v.voice_id,
         track: v.track,
@@ -128,6 +152,7 @@ fn to_dto(v: VoiceRow, clips: &[store::ClipRow], all_participants: &[Participant
         decision: v.decision,
         score: v.score,
         assigned_participant_id: v.assigned_participant,
+        assigned_participant_name,
         confirmed: v.confirmed,
         merged_into: v.merged_into,
     }
@@ -162,16 +187,12 @@ fn participants_for(
     Ok(store.list_participants_for(cycle.as_deref())?)
 }
 
-fn voices_data(state: &AppState, id: &str) -> IpcResult<VoicesData> {
-    let repos = state.cycle_repos();
-    let participants = state.with_store_ipc(|s| participants_for(&repos, s, None, Some(id)))?;
-    let (voices, clips, all_participants) = state.with_store(|s| {
-        Ok((
-            s.list_meeting_voices(id)?,
-            s.list_clips(id)?,
-            s.list_participants()?,
-        ))
-    })?;
+fn voices_data_in(repos: &[CycleRepoSetting], store: &Store, id: &str) -> IpcResult<VoicesData> {
+    let cycle_id = meeting_cycle(store, id)?;
+    let participants = participants_for(repos, store, cycle_id.as_deref(), Some(id))?;
+    let voices = store.list_meeting_voices(id)?;
+    let clips = store.list_clips(id)?;
+    let all_participants = store.list_participants()?;
     let all_confirmed = voices::all_voices_confirmed(&voices);
     // The labels of the transcript ("Speaker 1") are shown as they are; the screen lists voices
     // by their order of appearance, which is the diarization label order.
@@ -179,11 +200,17 @@ fn voices_data(state: &AppState, id: &str) -> IpcResult<VoicesData> {
         meeting_id: id.to_string(),
         voices: voices
             .into_iter()
-            .map(|v| to_dto(v, &clips, &all_participants))
+            .map(|v| to_dto(v, &clips, &all_participants, cycle_id.as_deref()))
             .collect(),
         participants: participants.into_iter().map(Into::into).collect(),
         all_confirmed,
+        cycle_id,
     })
+}
+
+fn voices_data(state: &AppState, id: &str) -> IpcResult<VoicesData> {
+    let repos = state.cycle_repos();
+    state.with_store_ipc(|s| voices_data_in(&repos, s, id))
 }
 
 /// After a naming decision: drop the clips of a meeting whose voices are all confirmed.
@@ -281,12 +308,20 @@ fn rename_participant_in(
     let name = clean_name(name)?;
     let info = cycles::find_participant(store, participant_id)?
         .ok_or_else(|| IpcError::new("not_found", "participant not found"))?;
-    if info.cycle_id.is_some() {
+    if !info.projects.is_empty() || info.cycle_id.is_some() {
         return cycles::rename_cycle_participant(repos, store, &info, &name);
     }
-    let renamed = store
-        .rename_participant(participant_id, &name)
-        .map_err(|_| IpcError::new("duplicate", "a participant with this name already exists"))?;
+    let taken = store
+        .list_participants_for(None)?
+        .iter()
+        .any(|p| p.id != participant_id && cycles::same_name(&p.name, &name));
+    if taken {
+        return Err(IpcError::new(
+            "duplicate",
+            "a participant with this name already exists",
+        ));
+    }
+    let renamed = store.rename_participant(participant_id, &name)?;
     if renamed {
         Ok(())
     } else {
@@ -427,6 +462,33 @@ pub fn get_meeting_voices(state: State<'_, AppState>, id: String) -> IpcResult<V
     voices_data(&state, &id)
 }
 
+fn assign_voice_in(
+    repos: &[CycleRepoSetting],
+    store: &Store,
+    meeting_id: &str,
+    voice_id: &str,
+    participant_id: Option<&str>,
+) -> IpcResult<bool> {
+    if let Some(pid) = participant_id {
+        if let Some(cycle) = meeting_cycle(store, meeting_id)? {
+            let already_in_cycle = store
+                .participants_for_cycle(&cycle)?
+                .iter()
+                .any(|p| p.id == pid);
+            if !already_in_cycle {
+                cycles::add_existing_participant_to_cycle(repos, store, &cycle, pid)?;
+            }
+        }
+    }
+    Ok(voices::assign_voice(
+        store,
+        meeting_id,
+        voice_id,
+        participant_id,
+        queue::now_ms(),
+    )?)
+}
+
 #[tauri::command]
 pub fn assign_voice(
     state: State<'_, AppState>,
@@ -436,24 +498,7 @@ pub fn assign_voice(
 ) -> IpcResult<VoicesData> {
     let repos = state.cycle_repos();
     let ok = state.with_store_ipc(|s| {
-        if let Some(pid) = participant_id.as_deref() {
-            if let Some(cycle) = meeting_cycle(s, &id)? {
-                let already_in_cycle = s
-                    .participants_for_cycle(&cycle)?
-                    .iter()
-                    .any(|p| p.id == pid);
-                if !already_in_cycle {
-                    cycles::add_existing_participant_to_cycle(&repos, s, &cycle, pid)?;
-                }
-            }
-        }
-        Ok(voices::assign_voice(
-            s,
-            &id,
-            &voice_id,
-            participant_id.as_deref(),
-            queue::now_ms(),
-        )?)
+        assign_voice_in(&repos, s, &id, &voice_id, participant_id.as_deref())
     })?;
     if !ok {
         return Err(IpcError::new("not_found", "voice not found"));
@@ -498,10 +543,38 @@ pub fn merge_voices(
     voices_data(&state, &id)
 }
 
+pub fn confirm_matches_in(
+    repos: &[CycleRepoSetting],
+    store: &Store,
+    meeting_id: &str,
+) -> IpcResult<usize> {
+    if let Some(cycle) = meeting_cycle(store, meeting_id)? {
+        for v in store.list_meeting_voices(meeting_id)? {
+            if v.decision == VoiceDecision::Auto && !v.confirmed {
+                if let Some(pid) = v.assigned_participant.as_deref() {
+                    let already_in_cycle = store
+                        .participants_for_cycle(&cycle)?
+                        .iter()
+                        .any(|p| p.id == pid);
+                    if !already_in_cycle {
+                        cycles::add_existing_participant_to_cycle(repos, store, &cycle, pid)?;
+                    }
+                }
+            }
+        }
+    }
+    Ok(voices::confirm_automatic(
+        store,
+        meeting_id,
+        queue::now_ms(),
+    )?)
+}
+
 /// Accept all automatic matches of a meeting.
 #[tauri::command]
 pub fn confirm_matches(state: State<'_, AppState>, id: String) -> IpcResult<VoicesData> {
-    state.with_store(|s| voices::confirm_automatic(s, &id, queue::now_ms()).map(|_| ()))?;
+    let repos = state.cycle_repos();
+    state.with_store_ipc(|s| confirm_matches_in(&repos, s, &id).map(|_| ()))?;
     after_change(&state)?;
     voices_data(&state, &id)
 }
@@ -904,11 +977,104 @@ pub fn merge_participants_in(
     keep_id: &str,
     drop_id: &str,
 ) -> IpcResult<GlobalVoiceProfileDto> {
-    store.merge_participants(keep_id, drop_id)?;
+    if keep_id == drop_id {
+        return Err(IpcError::new(
+            "invalid",
+            "cannot merge a participant with itself",
+        ));
+    }
+    let keep_info = cycles::find_participant(store, keep_id)?
+        .ok_or_else(|| IpcError::new("not_found", "participant not found"))?;
+    let drop_info = cycles::find_participant(store, drop_id)?
+        .ok_or_else(|| IpcError::new("not_found", "participant not found"))?;
+
+    for proj in &drop_info.projects {
+        if keep_info.projects.iter().any(|p| p == proj) {
+            return Err(IpcError::new(
+                "invalid",
+                format!("cannot merge participants that both belong to project {proj}"),
+            ));
+        }
+    }
+
+    let cycle_updates =
+        cycles::prepare_merge_cycle_updates(repos, store, keep_id, &keep_info.name, &drop_info)?;
+
+    let drop_clip = store
+        .get_participant(drop_id)?
+        .and_then(|p| p.sample_clip_file)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let drop_default_rel = voices::participant_sample_clip_rel(drop_id);
+
+    store
+        .merge_participants(keep_id, drop_id)
+        .map_err(|e| match e {
+            store::StoreError::Invalid(msg) => IpcError::new("invalid", msg),
+            other => other.into(),
+        })?;
+
+    for (repo, cycle) in cycle_updates {
+        repo.save_cycle(&cycle)?;
+    }
+
+    let remaining = store.list_all_participants_with_profiles()?;
+    let is_referenced = |rel: &str| {
+        let norm = rel.replace('\\', "/");
+        remaining.iter().any(|p| {
+            p.sample_clip_file
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|other| other.replace('\\', "/") == norm)
+        })
+    };
+    let mut orphaned_clips = Vec::new();
+    if let Some(rel) = drop_clip {
+        if !is_referenced(&rel) {
+            orphaned_clips.push(rel);
+        }
+    }
+    if !orphaned_clips.contains(&drop_default_rel) && !is_referenced(&drop_default_rel) {
+        orphaned_clips.push(drop_default_rel);
+    }
+    if !orphaned_clips.is_empty() {
+        voices::remove_files(recordings_root, &orphaned_clips);
+    }
+
     list_all_voice_profiles_in(repos, store, recordings_root)?
         .into_iter()
         .find(|p| p.id == keep_id)
         .ok_or_else(|| IpcError::new("not_found", "participant not found"))
+}
+
+pub fn undo_voice_decision_in(
+    repos: &[CycleRepoSetting],
+    store: &Store,
+    meeting_id: &str,
+    voice_id: &str,
+    unlink_cycle_id: Option<&str>,
+) -> IpcResult<bool> {
+    let voices = store.list_meeting_voices(meeting_id)?;
+    let Some(voice) = voices.iter().find(|v| v.voice_id == voice_id) else {
+        return Ok(false);
+    };
+    let prev_participant = voice.assigned_participant.clone();
+    if let (Some(cid), Some(pid)) = (unlink_cycle_id, prev_participant.as_deref()) {
+        if let Some(in_cycle) = store
+            .participants_for_cycle(cid)?
+            .into_iter()
+            .find(|p| p.id == pid)
+        {
+            cycles::delete_cycle_participant(repos, store, &in_cycle)?;
+        }
+    }
+    Ok(voices::undo_voice_decision(
+        store,
+        meeting_id,
+        voice_id,
+        None,
+        queue::now_ms(),
+    )?)
 }
 
 #[tauri::command]
@@ -954,8 +1120,9 @@ pub fn undo_voice_decision(
     voice_id: String,
     unlink_cycle_id: Option<String>,
 ) -> IpcResult<VoicesData> {
-    let ok = state.with_store(|s| {
-        voices::undo_voice_decision(s, &id, &voice_id, unlink_cycle_id.as_deref())
+    let repos = state.cycle_repos();
+    let ok = state.with_store_ipc(|s| {
+        undo_voice_decision_in(&repos, s, &id, &voice_id, unlink_cycle_id.as_deref())
     })?;
     if !ok {
         return Err(IpcError::new("not_found", "voice not found"));
@@ -1408,5 +1575,376 @@ mod tests {
         .unwrap();
         assert_eq!(after_unlink.projects, vec!["NOMAD".to_string()]);
         assert_eq!(after_unlink.sample_count, 1);
+    }
+
+    #[test]
+    fn undo_voice_decision_unlinks_cycle_yaml_and_prevents_sync_duplicate() {
+        let lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        lab.make_cycle("ATLAS");
+        let nomad_kasia =
+            create_participant_in(lab.repos(), &lab.store, Some("NOMAD"), "Kasia").unwrap();
+        lab.store
+            .put_sample(
+                &nomad_kasia.id,
+                &SampleRow {
+                    source_key: "m0/sys:0".into(),
+                    embedding: vec![1.0, 0.0],
+                    speech_ms: 15_000,
+                },
+                1,
+            )
+            .unwrap();
+
+        // Meeting in ATLAS (brand-new project with 0 participants).
+        lab.meeting("m-atlas", Some("ATLAS"));
+        let mut v = voice("discord:SPEAKER_00");
+        v.speech_ms = 12_000;
+        v.decision = VoiceDecision::Suggested;
+        v.score = Some(0.82);
+        v.matched_participant = Some(nomad_kasia.id.clone());
+        lab.store.put_meeting_voices("m-atlas", &[v]).unwrap();
+
+        // VoicesData carries cycle_id even when ATLAS has 0 participants yet.
+        let before = voices_data_in(lab.repos(), &lab.store, "m-atlas").unwrap();
+        assert_eq!(before.cycle_id.as_deref(), Some("ATLAS"));
+        assert!(before.participants.is_empty());
+        assert_eq!(
+            before.voices[0].suggested_from_projects,
+            vec!["NOMAD".to_string()]
+        );
+
+        // Accepting links Kasia into ATLAS (both cycle.yaml and project_people).
+        assert!(assign_voice_in(
+            lab.repos(),
+            &lab.store,
+            "m-atlas",
+            "discord:SPEAKER_00",
+            Some(&nomad_kasia.id)
+        )
+        .unwrap());
+        assert_eq!(
+            cycles::get_cycle(lab.repos(), "ATLAS")
+                .unwrap()
+                .cycle
+                .participants
+                .len(),
+            1
+        );
+        assert_eq!(lab.store.samples_of(&nomad_kasia.id).unwrap().len(), 2);
+
+        // Undoing removes Kasia from BOTH ATLAS/cycle.yaml and project_people, and removes sample.
+        assert!(undo_voice_decision_in(
+            lab.repos(),
+            &lab.store,
+            "m-atlas",
+            "discord:SPEAKER_00",
+            Some("ATLAS")
+        )
+        .unwrap());
+        assert!(cycles::get_cycle(lab.repos(), "ATLAS")
+            .unwrap()
+            .cycle
+            .participants
+            .is_empty());
+
+        // Subsequent voices_data_in runs sync_cycle: ATLAS must stay empty (no recreated duplicate).
+        let after = voices_data_in(lab.repos(), &lab.store, "m-atlas").unwrap();
+        assert!(after.participants.is_empty());
+        assert!(!after.voices[0].confirmed);
+        assert_eq!(after.voices[0].assigned_participant_id, None);
+        assert_eq!(lab.store.samples_of(&nomad_kasia.id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn merge_updates_drop_cycle_yaml_and_deletes_orphaned_clip() {
+        let lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        lab.make_cycle("ATLAS");
+        let rec_root = test_tmp::TestDir::new("voice-merge-yaml-clip");
+        let sample_wav = rec_root.path().join("sample.wav");
+        crate::project_commands::write_demo_wav(&sample_wav, 330.0, 2).unwrap();
+
+        let keep = enroll_voice_profile_in(
+            lab.repos(),
+            &lab.store,
+            rec_root.path(),
+            EnrollMode::Demo,
+            "Alex Smith",
+            Some("NOMAD"),
+            &sample_wav.to_string_lossy(),
+        )
+        .unwrap();
+        let drop_p = enroll_voice_profile_in(
+            lab.repos(),
+            &lab.store,
+            rec_root.path(),
+            EnrollMode::Demo,
+            "Alex",
+            Some("ATLAS"),
+            &sample_wav.to_string_lossy(),
+        )
+        .unwrap();
+        let keep_clip = voices::participant_sample_clip_path(rec_root.path(), &keep.id);
+        let drop_clip = voices::participant_sample_clip_path(rec_root.path(), &drop_p.id);
+        assert!(keep_clip.is_file());
+        assert!(drop_clip.is_file());
+
+        // Merge ATLAS "Alex" into NOMAD "Alex Smith":
+        // - ATLAS/cycle.yaml is updated to "Alex Smith" so sync_cycle does not revert keep's name.
+        // - Orphaned drop clip is deleted from disk while keep clip stays.
+        let merged = merge_participants_in(
+            lab.repos(),
+            &lab.store,
+            rec_root.path(),
+            &keep.id,
+            &drop_p.id,
+        )
+        .unwrap();
+        assert_eq!(merged.name, "Alex Smith");
+        assert_eq!(
+            merged.projects,
+            vec!["ATLAS".to_string(), "NOMAD".to_string()]
+        );
+        assert!(keep_clip.is_file());
+        assert!(!drop_clip.exists());
+        assert_eq!(
+            cycles::get_cycle(lab.repos(), "ATLAS")
+                .unwrap()
+                .cycle
+                .participants[0]
+                .name,
+            "Alex Smith"
+        );
+
+        // Explicit sync_cycle keeps the merged name intact.
+        cycles::sync_cycle(lab.repos(), &lab.store, "ATLAS").unwrap();
+        assert_eq!(
+            lab.store.get_participant(&keep.id).unwrap().unwrap().name,
+            "Alex Smith"
+        );
+
+        // When keep has no clip and drop has one, drop's clip is transferred and NOT deleted.
+        let bare = create_participant_in(lab.repos(), &lab.store, None, "Ewa").unwrap();
+        let with_clip = enroll_voice_profile_in(
+            lab.repos(),
+            &lab.store,
+            rec_root.path(),
+            EnrollMode::Demo,
+            "Ewa Two",
+            Some("ATLAS"),
+            &sample_wav.to_string_lossy(),
+        )
+        .unwrap();
+        let transferred_clip = voices::participant_sample_clip_path(rec_root.path(), &with_clip.id);
+        assert!(transferred_clip.is_file());
+        let merged_bare = merge_participants_in(
+            lab.repos(),
+            &lab.store,
+            rec_root.path(),
+            &bare.id,
+            &with_clip.id,
+        )
+        .unwrap();
+        assert!(merged_bare.has_sample_clip);
+        assert!(transferred_clip.is_file());
+    }
+
+    #[test]
+    fn rename_multi_project_pinned_global_and_duplicate_checks() {
+        let lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        lab.make_cycle("ATLAS");
+        let rec_root = test_tmp::TestDir::new("voice-rename-multi");
+
+        // Global profile pinned to 1 project can be renamed without "invalid".
+        let g = create_participant_in(lab.repos(), &lab.store, None, "Ola").unwrap();
+        add_profile_to_project_in(lab.repos(), &lab.store, rec_root.path(), &g.id, "NOMAD")
+            .unwrap();
+        rename_participant_in(lab.repos(), &lab.store, &g.id, "Ola Nowak").unwrap();
+        assert_eq!(
+            cycles::get_cycle(lab.repos(), "NOMAD")
+                .unwrap()
+                .cycle
+                .participants[0]
+                .name,
+            "Ola Nowak"
+        );
+
+        // Pin to a second project ATLAS, then rename: BOTH cycle.yaml files update and survive sync.
+        add_profile_to_project_in(lab.repos(), &lab.store, rec_root.path(), &g.id, "ATLAS")
+            .unwrap();
+        rename_participant_in(lab.repos(), &lab.store, &g.id, "Aleksandra Nowak").unwrap();
+        assert_eq!(
+            cycles::get_cycle(lab.repos(), "NOMAD")
+                .unwrap()
+                .cycle
+                .participants[0]
+                .name,
+            "Aleksandra Nowak"
+        );
+        assert_eq!(
+            cycles::get_cycle(lab.repos(), "ATLAS")
+                .unwrap()
+                .cycle
+                .participants[0]
+                .name,
+            "Aleksandra Nowak"
+        );
+        let listed = list_all_voice_profiles_in(lab.repos(), &lab.store, rec_root.path()).unwrap();
+        assert_eq!(
+            listed.iter().find(|p| p.id == g.id).unwrap().name,
+            "Aleksandra Nowak"
+        );
+
+        // Duplicate name in one of the projects rejects the rename and leaves all files unchanged.
+        create_participant_in(lab.repos(), &lab.store, Some("ATLAS"), "Jan").unwrap();
+        assert_eq!(
+            rename_participant_in(lab.repos(), &lab.store, &g.id, "jan")
+                .unwrap_err()
+                .code,
+            "duplicate"
+        );
+        assert_eq!(
+            cycles::get_cycle(lab.repos(), "NOMAD")
+                .unwrap()
+                .cycle
+                .participants[0]
+                .name,
+            "Aleksandra Nowak"
+        );
+
+        // Duplicate name check works for unlinked global profiles too.
+        let g1 = create_participant_in(lab.repos(), &lab.store, None, "Marek").unwrap();
+        let g2 = create_participant_in(lab.repos(), &lab.store, None, "Piotr").unwrap();
+        assert_eq!(
+            rename_participant_in(lab.repos(), &lab.store, &g2.id, "marek")
+                .unwrap_err()
+                .code,
+            "duplicate"
+        );
+        assert_eq!(
+            lab.store.get_participant(&g1.id).unwrap().unwrap().name,
+            "Marek"
+        );
+    }
+
+    #[test]
+    fn add_existing_participant_to_cycle_duplicate_name_returns_domain_error() {
+        let lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        lab.make_cycle("ATLAS");
+        let rec_root = test_tmp::TestDir::new("voice-dup-add");
+
+        create_participant_in(lab.repos(), &lab.store, Some("NOMAD"), "Ola").unwrap();
+        let atlas_ola =
+            create_participant_in(lab.repos(), &lab.store, Some("ATLAS"), "Ola").unwrap();
+        let err = add_profile_to_project_in(
+            lab.repos(),
+            &lab.store,
+            rec_root.path(),
+            &atlas_ola.id,
+            "NOMAD",
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "duplicate");
+    }
+
+    #[test]
+    fn tier2_auto_match_shows_name_links_on_confirm_and_tier1_suggestion_has_no_from_projects() {
+        let lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        lab.make_cycle("ATLAS");
+        let nomad_jan =
+            create_participant_in(lab.repos(), &lab.store, Some("NOMAD"), "Jan").unwrap();
+        let global_ewa =
+            create_participant_in(lab.repos(), &lab.store, None, "Ewa Global").unwrap();
+        let atlas_kasia =
+            create_participant_in(lab.repos(), &lab.store, Some("ATLAS"), "Kasia").unwrap();
+
+        lab.meeting("m1", Some("NOMAD"));
+        let mut auto_global = voice("discord:SPEAKER_00");
+        auto_global.decision = VoiceDecision::Auto;
+        auto_global.score = Some(0.95);
+        auto_global.matched_participant = Some(global_ewa.id.clone());
+        auto_global.assigned_participant = Some(global_ewa.id.clone());
+
+        let mut tier1_suggest = voice("discord:SPEAKER_01");
+        tier1_suggest.decision = VoiceDecision::Suggested;
+        tier1_suggest.score = Some(0.62);
+        tier1_suggest.matched_participant = Some(nomad_jan.id.clone());
+
+        let mut tier3_suggest = voice("discord:SPEAKER_02");
+        tier3_suggest.decision = VoiceDecision::Suggested;
+        tier3_suggest.score = Some(0.75);
+        tier3_suggest.matched_participant = Some(atlas_kasia.id.clone());
+
+        lab.store
+            .put_meeting_voices("m1", &[auto_global, tier1_suggest, tier3_suggest])
+            .unwrap();
+
+        let data = voices_data_in(lab.repos(), &lab.store, "m1").unwrap();
+        let v0 = data
+            .voices
+            .iter()
+            .find(|v| v.voice_id == "discord:SPEAKER_00")
+            .unwrap();
+        assert_eq!(v0.assigned_participant_name.as_deref(), Some("Ewa Global"));
+        let v1 = data
+            .voices
+            .iter()
+            .find(|v| v.voice_id == "discord:SPEAKER_01")
+            .unwrap();
+        assert!(v1.suggested_from_projects.is_empty());
+        let v2 = data
+            .voices
+            .iter()
+            .find(|v| v.voice_id == "discord:SPEAKER_02")
+            .unwrap();
+        assert_eq!(v2.suggested_from_projects, vec!["ATLAS".to_string()]);
+
+        // Confirm all automatic matches links the Tier 2 global profile into NOMAD.
+        assert_eq!(
+            confirm_matches_in(lab.repos(), &lab.store, "m1").unwrap(),
+            1
+        );
+        let after = voices_data_in(lab.repos(), &lab.store, "m1").unwrap();
+        assert!(after.participants.iter().any(|p| p.id == global_ewa.id));
+        assert!(cycles::get_cycle(lab.repos(), "NOMAD")
+            .unwrap()
+            .cycle
+            .participants
+            .iter()
+            .any(|p| p.name == "Ewa Global"));
+    }
+
+    #[test]
+    fn remove_profile_from_project_handles_legacy_null_cycle_participant_id() {
+        let lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        let rec_root = test_tmp::TestDir::new("voice-legacy-unlink");
+
+        // Legacy row: participant id does not carry "NOMAD:" prefix -> cycle_participant_id is NULL.
+        lab.store
+            .create_participant_in(Some("NOMAD"), "legacy-p1", "Legacy Person", 1)
+            .unwrap();
+        let in_nomad = lab.store.participants_for_cycle("NOMAD").unwrap();
+        assert_eq!(in_nomad.len(), 1);
+        assert_eq!(in_nomad[0].cycle_participant_id, None);
+
+        let after = remove_profile_from_project_in(
+            lab.repos(),
+            &lab.store,
+            rec_root.path(),
+            "legacy-p1",
+            "NOMAD",
+        )
+        .unwrap();
+        assert!(after.projects.is_empty());
+        assert!(lab
+            .store
+            .participants_for_cycle("NOMAD")
+            .unwrap()
+            .is_empty());
     }
 }

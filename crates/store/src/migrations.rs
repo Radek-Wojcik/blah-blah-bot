@@ -313,7 +313,8 @@ fn ensure_ux_schema(conn: &Connection) -> Result<()> {
 /// share a name without auto-merging), and backfills `project_people` from existing
 /// `participants.cycle_id` rows when `project_people` is empty.
 fn ensure_people_schema(conn: &Connection) -> Result<()> {
-    conn.execute_batch(
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS project_people (
             cycle_id TEXT NOT NULL,
             participant_id TEXT NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
@@ -329,12 +330,11 @@ fn ensure_people_schema(conn: &Connection) -> Result<()> {
         DROP INDEX IF EXISTS idx_participants_name_local;
         DROP INDEX IF EXISTS idx_participants_name_cycle;",
     )?;
-    let has_rows: bool =
-        conn.query_row("SELECT EXISTS(SELECT 1 FROM project_people)", [], |r| {
-            r.get(0)
-        })?;
+    let has_rows: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM project_people)", [], |r| {
+        r.get(0)
+    })?;
     if !has_rows {
-        conn.execute(
+        tx.execute(
             "INSERT INTO project_people (cycle_id, participant_id, cycle_participant_id, created_unix_ms)
              SELECT p.cycle_id,
                     p.id,
@@ -350,6 +350,7 @@ fn ensure_people_schema(conn: &Connection) -> Result<()> {
             [],
         )?;
     }
+    tx.commit()?;
     Ok(())
 }
 

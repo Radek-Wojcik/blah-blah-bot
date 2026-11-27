@@ -142,9 +142,10 @@ fn to_sample(r: SampleRow) -> Sample {
 /// voice automatically; a weaker one becomes a suggestion; everything else stays unknown.
 /// The user's earlier decisions are kept when the stage is repeated.
 ///
-/// For a meeting in a cycle `C`, voices are matched against cycle `C`'s profiles first, and
-/// any remaining unclaimed voices are matched against global (`cycle_id IS NULL`) profiles
-/// (auto-enrolling/linking a matched global participant into cycle `C`).
+/// For a meeting in a cycle `C`, voices are matched against cycle `C`'s profiles first
+/// (Tier 1), and any remaining unclaimed voices are matched against unlinked global profiles
+/// (Tier 2) together with profiles from other cycles (Tier 3, always emitted as suggestions).
+/// Linking into cycle `C` happens only when the user confirms or accepts the match.
 pub fn run_speaker_id(
     store: &Store,
     meeting_id: &str,
@@ -861,24 +862,25 @@ pub fn assign_voice(
     Ok(true)
 }
 
-/// Undo a naming decision on a voice: removes any sample contributed by this voice, clears
-/// its confirmed assignment, and optionally unlinks the previously assigned participant from
-/// `unlink_cycle_id`.
+/// Undo a naming decision on a voice: clears its confirmed assignment, refreshes learned
+/// voice samples for the meeting (removing samples from this voice and any voices merged into
+/// it), and optionally unlinks the previously assigned participant from `unlink_cycle_id`.
 pub fn undo_voice_decision(
     store: &Store,
     meeting_id: &str,
     voice_id: &str,
     unlink_cycle_id: Option<&str>,
+    now_ms: i64,
 ) -> Result<bool, store::StoreError> {
     let voices = store.list_meeting_voices(meeting_id)?;
     let Some(voice) = voices.iter().find(|v| v.voice_id == voice_id) else {
         return Ok(false);
     };
     let prev_participant = voice.assigned_participant.clone();
-    store.remove_samples_of_source(&source_key(meeting_id, voice_id))?;
     if !store.clear_voice_assignment(meeting_id, voice_id)? {
         return Ok(false);
     }
+    refresh_learning(store, meeting_id, now_ms)?;
     if let (Some(cid), Some(pid)) = (unlink_cycle_id, prev_participant.as_deref()) {
         store.remove_participant_from_project(pid, cid)?;
     }
@@ -1731,12 +1733,35 @@ mod tests {
         assert!(assign_voice(&s, "m", "sys:SPEAKER_00", Some("NOMAD:kasia"), 3).unwrap());
         assert_eq!(s.samples_of("NOMAD:kasia").unwrap().len(), 2);
 
-        assert!(undo_voice_decision(&s, "m", "sys:SPEAKER_00", Some("ATLAS")).unwrap());
+        assert!(undo_voice_decision(&s, "m", "sys:SPEAKER_00", Some("ATLAS"), 4).unwrap());
         let after = &s.list_meeting_voices("m").unwrap()[0];
         assert!(!after.confirmed);
         assert_eq!(after.assigned_participant, None);
         assert_eq!(after.decision, VoiceDecision::Suggested);
         assert_eq!(s.samples_of("NOMAD:kasia").unwrap().len(), 1);
         assert!(s.participants_for_cycle("ATLAS").unwrap().is_empty());
+    }
+
+    #[test]
+    fn undo_voice_decision_removes_samples_of_merged_voices_too() {
+        let s = setup();
+        s.put_meeting_voices(
+            "m",
+            &[
+                voice("t:A", vec![1.0, 0.0], 20_000),
+                voice("t:B", vec![0.95, 0.05], 12_000),
+            ],
+        )
+        .unwrap();
+        assert!(merge_voice(&s, "m", "t:B", Some("t:A"), 1).unwrap());
+        assert!(assign_voice(&s, "m", "t:A", Some("ola"), 2).unwrap());
+        assert_eq!(s.samples_of("ola").unwrap().len(), 2);
+
+        assert!(undo_voice_decision(&s, "m", "t:A", None, 3).unwrap());
+        assert!(s.samples_of("ola").unwrap().is_empty());
+        let after = s.list_meeting_voices("m").unwrap();
+        let a = after.iter().find(|v| v.voice_id == "t:A").unwrap();
+        assert!(!a.confirmed);
+        assert_eq!(a.assigned_participant, None);
     }
 }

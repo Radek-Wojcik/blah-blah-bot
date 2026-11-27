@@ -369,8 +369,15 @@ impl Store {
             let projects: Vec<String> = links
                 .map(|v| v.iter().map(|(c, _)| c.clone()).collect())
                 .unwrap_or_default();
+            let resolved_cycle_id = cycle_id.or_else(|| {
+                if scope.is_none() && projects.len() == 1 {
+                    Some(projects[0].clone())
+                } else {
+                    None
+                }
+            });
             let cycle_participant_id = row_slug.or_else(|| {
-                let cid = cycle_id.as_deref()?;
+                let cid = resolved_cycle_id.as_deref()?;
                 links
                     .and_then(|v| v.iter().find(|(c, _)| c == cid))
                     .and_then(|(_, s)| s.clone())
@@ -379,13 +386,6 @@ impl Store {
                             .and_then(|rest| rest.strip_prefix(KEY_SEPARATOR))
                             .map(str::to_string)
                     })
-            });
-            let resolved_cycle_id = cycle_id.or_else(|| {
-                if scope.is_none() && projects.len() == 1 {
-                    Some(projects[0].clone())
-                } else {
-                    None
-                }
             });
             Ok(ParticipantInfo {
                 id,
@@ -1214,5 +1214,74 @@ mod tests {
             .unwrap();
         assert!(global.projects.is_empty());
         assert_eq!(global.sample_count, 20);
+    }
+
+    #[test]
+    fn merge_participants_edge_cases_and_duplicate_source_key() {
+        let s = store();
+        s.create_participant("p1", "Ola", 1).unwrap();
+        s.create_participant("p2", "Ola Two", 2).unwrap();
+
+        // Self-merge is refused.
+        assert!(matches!(
+            s.merge_participants("p1", "p1"),
+            Err(StoreError::Invalid(_))
+        ));
+        // Missing keep_id or drop_id is refused.
+        assert!(matches!(
+            s.merge_participants("missing", "p2"),
+            Err(StoreError::Invalid(_))
+        ));
+        assert!(matches!(
+            s.merge_participants("p1", "missing"),
+            Err(StoreError::Invalid(_))
+        ));
+
+        // Duplicate source_key keeps the longer speech_ms embedding.
+        s.put_sample(
+            "p1",
+            &SampleRow {
+                source_key: "m1/v0".into(),
+                embedding: vec![1.0, 0.0],
+                speech_ms: 4_000,
+            },
+            1,
+        )
+        .unwrap();
+        s.put_sample(
+            "p2",
+            &SampleRow {
+                source_key: "m1/v0".into(),
+                embedding: vec![0.0, 1.0],
+                speech_ms: 9_000,
+            },
+            2,
+        )
+        .unwrap();
+
+        s.merge_participants("p1", "p2").unwrap();
+        let samples = s.samples_of("p1").unwrap();
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].speech_ms, 9_000);
+        assert_eq!(samples[0].embedding, vec![0.0, 1.0]);
+
+        // Merging an already-deleted participant fails cleanly.
+        assert!(matches!(
+            s.merge_participants("p1", "p2"),
+            Err(StoreError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn query_participants_resolves_slug_for_global_profile_pinned_to_one_project() {
+        let s = store();
+        s.create_participant("global-1", "Ola", 1).unwrap();
+        s.add_participant_to_project("global-1", "NOMAD", Some("ola"), 2)
+            .unwrap();
+        let all = s.list_participants().unwrap();
+        let p = all.iter().find(|x| x.id == "global-1").unwrap();
+        assert_eq!(p.cycle_id.as_deref(), Some("NOMAD"));
+        assert_eq!(p.cycle_participant_id.as_deref(), Some("ola"));
+        assert_eq!(p.projects, vec!["NOMAD".to_string()]);
     }
 }
