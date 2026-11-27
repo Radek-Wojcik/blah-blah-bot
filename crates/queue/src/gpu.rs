@@ -274,6 +274,35 @@ mod tests {
     }
 
     #[test]
+    fn idle_wait_counter_advances_each_second() {
+        let mut g = Guard::new(GuardPolicy {
+            idle_ms: 5_000,
+            ..GuardPolicy::default()
+        });
+        for sec in 0..5u64 {
+            let sample = GpuSample {
+                t_ms: sec * 1000,
+                util_percent: 10,
+                free_mib: 10_000,
+                total_mib: 12_000,
+                processes: Vec::new(),
+            };
+            assert_eq!(
+                g.evaluate(Some(&sample), Stage::Asr),
+                GateDecision::Wait(format!("Waiting for the GPU to stay idle ({sec} of 5 s)"))
+            );
+        }
+        let ready = GpuSample {
+            t_ms: 5_000,
+            util_percent: 10,
+            free_mib: 10_000,
+            total_mib: 12_000,
+            processes: Vec::new(),
+        };
+        assert_eq!(g.evaluate(Some(&ready), Stage::Asr), GateDecision::Go);
+    }
+
+    #[test]
     fn recorded_desktop_load_counts_as_idle() {
         // A real reading of the reference machine with only the desktop running: the GPU
         // hovers around 25 % utilization, which must not keep processing waiting forever.

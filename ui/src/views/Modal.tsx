@@ -5,10 +5,12 @@ export function Modal(props: {
   title: string;
   onClose: () => void;
   children: ReactNode;
+  /** Optional footer pinned at the bottom of the dialog while body content scrolls. */
+  footer?: ReactNode;
   /** A wider dialog for forms. */
   wide?: boolean;
 }) {
-  const { title, onClose, children, wide } = props;
+  const { title, onClose, children, footer, wide } = props;
   const titleId = useId();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -25,11 +27,12 @@ export function Modal(props: {
         aria-modal="true"
         aria-labelledby={titleId}
       >
-        <div className="panel-body">
+        <div className="panel-body modal-panel-body">
           <h3 id={titleId} className="modal-title">
             {title}
           </h3>
-          {children}
+          <div className="modal-content">{children}</div>
+          {footer && <div className="modal-footer">{footer}</div>}
         </div>
       </div>
     </div>

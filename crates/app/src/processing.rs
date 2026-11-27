@@ -35,10 +35,21 @@ pub const EVENT_SETUP_PROGRESS: &str = "setup-progress";
 
 /// A stage that crashed this many times in a row is marked failed instead of retried.
 const MAX_CRASHES: u32 = 3;
-/// Pause between attempts while a job waits for the GPU.
+/// Pause between attempts while a job waits on a schedule or non-GPU blocker.
 const WAIT_POLL: Duration = Duration::from_secs(5);
+/// Faster poll interval while any job waits on the GPU gate so idle counters update every second.
+const GPU_WAIT_POLL: Duration = Duration::from_secs(1);
 /// Minimum time between two queue events caused by progress lines.
 const EVENT_THROTTLE: Duration = Duration::from_millis(250);
+
+fn next_driver_poll(waiting_on_gpu: bool, earliest_schedule_wait: Option<Duration>) -> Duration {
+    let base = if waiting_on_gpu {
+        GPU_WAIT_POLL
+    } else {
+        WAIT_POLL
+    };
+    earliest_schedule_wait.map_or(base, |w| w.min(base))
+}
 
 // ----- settings ---------------------------------------------------------------------------
 
@@ -323,6 +334,7 @@ pub struct JobView {
     pub waiting_reason: Option<String>,
     pub scheduled_unix_ms: Option<i64>,
     pub eta_seconds: Option<u64>,
+    pub finished_unix_ms: Option<i64>,
     pub stages: Vec<StageView>,
 }
 
@@ -1133,6 +1145,7 @@ impl Processing {
                 wake_lock = Some(recorder::SystemWakeLock::acquire());
             }
             let mut progressed = false;
+            let mut waiting_on_gpu = false;
             let mut earliest_schedule_wait: Option<Duration> = None;
             for id in ids {
                 self.prepare_step(&id);
@@ -1154,6 +1167,9 @@ impl Processing {
                             "stage failed"
                         );
                         progressed = true;
+                    }
+                    Ok(StepOutcome::Waiting { .. }) => {
+                        waiting_on_gpu = true;
                     }
                     Ok(StepOutcome::Scheduled {
                         scheduled_unix_ms, ..
@@ -1180,7 +1196,7 @@ impl Processing {
                 if !self.has_scheduled_or_running() {
                     wake_lock = None;
                 }
-                let wait = earliest_schedule_wait.unwrap_or(WAIT_POLL);
+                let wait = next_driver_poll(waiting_on_gpu, earliest_schedule_wait);
                 self.wait_driver_poll(wait);
             }
         }
@@ -1242,6 +1258,15 @@ impl Processing {
             let live_pair = live_now.map(|l| (l.stage, l.fraction as f32));
             let progress = queue::progress_with_live(&job, live_pair);
             let eta_seconds = estimate_eta_seconds(&job, state, progress, duration_ms, now);
+            let finished_unix_ms = if state == JobState::Done {
+                job.stages
+                    .iter()
+                    .filter_map(|s| s.finished_unix_ms)
+                    .max()
+                    .or(Some(job.updated_unix_ms))
+            } else {
+                None
+            };
             jobs.push(JobView {
                 meeting_id: id,
                 title,
@@ -1254,6 +1279,7 @@ impl Processing {
                 },
                 scheduled_unix_ms: job.scheduled_unix_ms,
                 eta_seconds,
+                finished_unix_ms,
                 stages,
             });
         }
@@ -2099,5 +2125,55 @@ mod tests {
         let vision_row = job.stages.iter().find(|r| r.stage == "vision").unwrap();
         assert_eq!(vision_row.status, StageStatus::Done);
         assert!(vision_row.note.is_some());
+    }
+
+    #[test]
+    fn driver_poll_uses_one_second_while_waiting_on_gpu_gate() {
+        assert_eq!(next_driver_poll(true, None), Duration::from_secs(1));
+        assert_eq!(next_driver_poll(false, None), Duration::from_secs(5));
+        assert_eq!(
+            next_driver_poll(true, Some(Duration::from_millis(400))),
+            Duration::from_millis(400)
+        );
+        assert_eq!(
+            next_driver_poll(true, Some(Duration::from_secs(4))),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            next_driver_poll(false, Some(Duration::from_secs(3))),
+            Duration::from_secs(3)
+        );
+    }
+
+    #[test]
+    fn finished_job_reports_finished_unix_ms_from_latest_stage() {
+        let dir = test_tmp::TestDir::new("proc-finished-ts");
+        let store = Arc::new(Mutex::new(job_store()));
+        {
+            let s = store.lock().unwrap();
+            for (idx, st) in STAGES.iter().enumerate() {
+                s.set_stage_status(
+                    "m1",
+                    st.as_str(),
+                    StageStatus::Done,
+                    None,
+                    1_700_000_000_000 + (idx as i64) * 1_000,
+                )
+                .unwrap();
+            }
+        }
+        let proc = Processing::new_for_test(
+            store,
+            dir.path(),
+            Arc::new(FastRunner),
+            Arc::new(AlwaysBusyGate),
+        );
+        let q = proc.queue_state().unwrap();
+        assert_eq!(q.jobs.len(), 1);
+        assert_eq!(q.jobs[0].state, JobState::Done);
+        assert_eq!(
+            q.jobs[0].finished_unix_ms,
+            Some(1_700_000_000_000 + ((STAGES.len() - 1) as i64) * 1_000)
+        );
     }
 }
