@@ -405,6 +405,23 @@ const MODEL_INFO: [(&str, &str, bool); 4] = [
 
 // ----- service --------------------------------------------------------------------------------
 
+/// Clears a "busy" flag when dropped, so a panic in a background thread (or a failed thread
+/// spawn) cannot leave a setup task stuck in the busy state until the application restarts.
+pub(crate) struct BusyGuard(Arc<AtomicBool>);
+
+impl BusyGuard {
+    /// Takes over a flag that the caller has already set.
+    pub(crate) fn new(flag: &Arc<AtomicBool>) -> Self {
+        Self(flag.clone())
+    }
+}
+
+impl Drop for BusyGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
 /// Side-effect hooks invoked by [`Processing`] (UI event emission and post-reduce actions).
 /// Abstracted behind a trait so unit tests can construct [`Processing`] without a Tauri runtime.
 pub trait ProcessingHooks: Send + Sync {
@@ -486,6 +503,8 @@ pub struct Processing {
     last_queue_json: Mutex<String>,
     driver_running: Arc<AtomicBool>,
     models_busy: Arc<AtomicBool>,
+    /// Keys of the models being downloaded while `models_busy` is set.
+    models_active: Mutex<Vec<String>>,
     models_cancel: Arc<AtomicBool>,
     /// The processing environment is being created (`prepare_worker_env`).
     env_busy: Arc<AtomicBool>,
@@ -635,6 +654,7 @@ impl Processing {
             last_queue_json: Mutex::new(String::new()),
             driver_running: Arc::default(),
             models_busy: Arc::default(),
+            models_active: Mutex::default(),
             models_cancel: Arc::default(),
             env_busy: Arc::default(),
             env_cancel: Arc::default(),
@@ -693,6 +713,7 @@ impl Processing {
             last_queue_json: Mutex::new(String::new()),
             driver_running: Arc::default(),
             models_busy: Arc::default(),
+            models_active: Mutex::default(),
             models_cancel: Arc::default(),
             env_busy: Arc::default(),
             env_cancel: Arc::default(),
@@ -733,7 +754,34 @@ impl Processing {
         Ok(s)
     }
 
-    pub fn save_settings(&self, mut new: ProcessingSettings) -> IpcResult<()> {
+    pub fn save_settings(&self, new: ProcessingSettings) -> IpcResult<()> {
+        let mut current = self
+            .settings
+            .lock()
+            .map_err(|_| IpcError::new("internal", "settings lock poisoned"))?;
+        self.commit_settings(&mut current, new)
+    }
+
+    /// Reads the stored settings, applies `change` and saves the result while holding the
+    /// settings lock, so concurrent updates cannot overwrite each other (no lost update).
+    pub(crate) fn modify_settings(
+        &self,
+        change: impl FnOnce(&mut ProcessingSettings),
+    ) -> IpcResult<()> {
+        let mut current = self
+            .settings
+            .lock()
+            .map_err(|_| IpcError::new("internal", "settings lock poisoned"))?;
+        let mut next = current.clone();
+        change(&mut next);
+        self.commit_settings(&mut current, next)
+    }
+
+    fn commit_settings(
+        &self,
+        current: &mut ProcessingSettings,
+        mut new: ProcessingSettings,
+    ) -> IpcResult<()> {
         if new.gpu_max_util_percent == 0 || new.gpu_max_util_percent > 100 {
             return Err(IpcError::new(
                 "invalid",
@@ -753,13 +801,9 @@ impl Processing {
                 "voice thresholds must satisfy 0 <= suggest <= accept <= 1 and margin >= 0",
             ));
         }
-        let mut current = self
-            .settings
-            .lock()
-            .map_err(|_| IpcError::new("internal", "settings lock poisoned"))?;
         // A path that is run or read later is checked when it changes (an executable is never
         // taken on trust), and the setup flag is not the settings screen's to change.
-        setup::validate_settings_paths(&new, &current)
+        setup::validate_settings_paths(&new, current)
             .map_err(|p| IpcError::new(p.code, p.message))?;
         new.first_run_done = current.first_run_done;
         new.legacy_venv_notice_dismissed = current.legacy_venv_notice_dismissed;
@@ -817,6 +861,13 @@ impl Processing {
         self.resource_dir.as_deref()
     }
 
+    pub(crate) fn models_active_keys(&self) -> Vec<String> {
+        self.models_active
+            .lock()
+            .map(|k| k.clone())
+            .unwrap_or_default()
+    }
+
     pub(crate) fn models_busy(&self) -> bool {
         self.models_busy.load(Ordering::SeqCst)
     }
@@ -863,9 +914,8 @@ impl Processing {
     }
 
     pub(crate) fn set_llama_server_path(&self, path: &Path) -> IpcResult<()> {
-        let mut next = self.settings_snapshot();
-        next.llama_server_path = path.to_string_lossy().into_owned();
-        self.save_settings(next)
+        let value = path.to_string_lossy().into_owned();
+        self.modify_settings(|s| s.llama_server_path = value)
     }
 
     pub(crate) fn emit_setup_event(&self, event: setup::SetupProgressEvent) {
@@ -1534,9 +1584,18 @@ impl Processing {
         if self.models_busy.swap(true, Ordering::SeqCst) {
             return Err(IpcError::new("busy", "a download is already running"));
         }
+        let busy_guard = BusyGuard::new(&self.models_busy);
+        if let Ok(mut active) = self.models_active.lock() {
+            *active = keys.clone();
+        }
         let cancel = self.models_cancel.clone();
         cancel.store(false, Ordering::SeqCst);
         let this = self.clone();
+        let (what, what_cap) = if keys.iter().all(|k| k == "vision") {
+            ("the screenshot model", "The screenshot model")
+        } else {
+            ("speech models", "Speech models")
+        };
         let spawned = std::thread::Builder::new()
             .name("model-download".into())
             .spawn(move || {
@@ -1547,7 +1606,7 @@ impl Processing {
                     downloaded_bytes: None,
                     total_bytes: None,
                     elapsed_secs: 0,
-                    message: "Downloading speech models".to_string(),
+                    message: format!("Downloading {what}"),
                 });
                 let mut cfg = this.worker_config();
                 cfg.hf_token = secrets::get(secrets::HF_TOKEN);
@@ -1578,7 +1637,10 @@ impl Processing {
                     })
                 });
                 // Clear busy BEFORE emitting the terminal event so an immediate Retry is not refused.
-                this.models_busy.store(false, Ordering::SeqCst);
+                if let Ok(mut active) = this.models_active.lock() {
+                    active.clear();
+                }
+                drop(busy_guard);
                 match result {
                     Ok(true) => {
                         this.emit_setup_event(setup::SetupProgressEvent {
@@ -1587,7 +1649,7 @@ impl Processing {
                             downloaded_bytes: None,
                             total_bytes: None,
                             elapsed_secs: started.elapsed().as_secs(),
-                            message: "Speech models are ready".to_string(),
+                            message: format!("{what_cap} ready"),
                         });
                     }
                     Ok(false) => {
@@ -1597,8 +1659,9 @@ impl Processing {
                             downloaded_bytes: None,
                             total_bytes: None,
                             elapsed_secs: started.elapsed().as_secs(),
-                            message: "Speech model download was cancelled; you can resume later"
-                                .to_string(),
+                            message: format!(
+                                "Download of {what} was cancelled; you can resume later"
+                            ),
                         });
                     }
                     Err(e) => {
@@ -1621,7 +1684,6 @@ impl Processing {
                 this.hooks.emit_models_changed();
             });
         if spawned.is_err() {
-            self.models_busy.store(false, Ordering::SeqCst);
             return Err(IpcError::new("internal", "could not start the download"));
         }
         Ok(())
@@ -2492,5 +2554,50 @@ mod tests {
             q.jobs[0].finished_unix_ms,
             Some(1_700_000_000_000 + ((STAGES.len() - 1) as i64) * 1_000)
         );
+    }
+
+    #[test]
+    fn busy_guard_clears_the_flag_on_drop_and_after_a_panic() {
+        let flag = Arc::new(AtomicBool::new(true));
+        drop(BusyGuard::new(&flag));
+        assert!(!flag.load(Ordering::SeqCst));
+
+        flag.store(true, Ordering::SeqCst);
+        let moved = BusyGuard::new(&flag);
+        let joined = std::thread::spawn(move || {
+            let _guard = moved;
+            panic!("simulated failure in a setup thread");
+        })
+        .join();
+        assert!(joined.is_err());
+        assert!(
+            !flag.load(Ordering::SeqCst),
+            "a panic must not leave the task busy"
+        );
+    }
+
+    #[test]
+    fn modify_settings_does_not_lose_concurrent_updates() {
+        let dir = test_tmp::TestDir::new("proc-modify-settings");
+        let store = Arc::new(Mutex::new(job_store()));
+        let proc = Arc::new(Processing::new_for_test(
+            store,
+            dir.path(),
+            Arc::new(FastRunner),
+            Arc::new(AlwaysBusyGate),
+        ));
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let p = proc.clone();
+                std::thread::spawn(move || {
+                    p.modify_settings(|s| s.clip_max_days += 1).expect("modify");
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().expect("thread");
+        }
+        let base = ProcessingSettings::default().clip_max_days;
+        assert_eq!(proc.settings_snapshot().clip_max_days, base + 8);
     }
 }

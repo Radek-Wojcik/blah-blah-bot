@@ -16,7 +16,7 @@ use crate::downloads::{
     self, DownloadError, DownloadPhase, CUDART_ZIP, GEMMA_12B_Q4_K_M, LLAMA_CPP_ZIP,
 };
 use crate::ipc::{IpcError, IpcResult};
-use crate::processing::Processing;
+use crate::processing::{BusyGuard, Processing};
 use crate::secrets;
 use crate::setup::{
     self, DetectEnv, GgufFile, JobNeeds, LlamaResolution, PathCheck, PathKind, PathProblem, Probe,
@@ -55,6 +55,7 @@ fn gather_with(
     let env_ready = setup::env_ready(p.env_dir());
     let env_working = p.env_busy().load(Ordering::SeqCst);
     let models_working = p.models_busy();
+    let models_active_keys = p.models_active_keys();
     let llama_working = p.llama_busy().load(Ordering::SeqCst);
     let llm_working = p.llm_busy().load(Ordering::SeqCst);
 
@@ -92,6 +93,7 @@ fn gather_with(
         env_working,
         models,
         models_working,
+        models_active_keys,
         hf_token_set: secrets::get(secrets::HF_TOKEN).is_some(),
         llama,
         llama_working,
@@ -266,6 +268,7 @@ pub fn prepare_worker_env(state: State<'_, AppState>) -> IpcResult<()> {
             "the environment is already being prepared",
         ));
     }
+    let busy_guard = BusyGuard::new(processing.env_busy());
     let cancel = processing.env_cancel().clone();
     cancel.store(false, Ordering::SeqCst);
     let env_dir = processing.env_dir().to_path_buf();
@@ -301,7 +304,7 @@ pub fn prepare_worker_env(state: State<'_, AppState>) -> IpcResult<()> {
             );
             let elapsed_secs = started.elapsed().as_secs();
             // Clear busy BEFORE emitting the terminal event so an immediate Retry is not refused.
-            processing.env_busy().store(false, Ordering::SeqCst);
+            drop(busy_guard);
             match result {
                 Ok(UvSyncOutcome::Done) => {
                     processing.emit_setup_event(SetupProgressEvent {
@@ -338,7 +341,6 @@ pub fn prepare_worker_env(state: State<'_, AppState>) -> IpcResult<()> {
             }
         });
     if spawned.is_err() {
-        state.processing().env_busy().store(false, Ordering::SeqCst);
         return Err(IpcError::new("internal", "could not start the set-up"));
     }
     Ok(())
@@ -372,6 +374,7 @@ pub fn download_llama_server(state: State<'_, AppState>) -> IpcResult<()> {
             "llama-server is already being downloaded",
         ));
     }
+    let busy_guard = BusyGuard::new(processing.llama_busy());
     let cancel = processing.llama_cancel().clone();
     cancel.store(false, Ordering::SeqCst);
     let download_dir = processing.downloads_dir();
@@ -446,12 +449,12 @@ pub fn download_llama_server(state: State<'_, AppState>) -> IpcResult<()> {
                         elapsed_secs: started.elapsed().as_secs(),
                         message: "Extracting llama-server archives".to_string(),
                     });
-                    for zip_path in &archive_paths {
-                        if let Err(msg) = downloads::extract_zip_safe(zip_path, &extract_dir) {
-                            outcome = Err(DownloadError::Failed(msg));
-                            break;
-                        }
-                    }
+                    outcome = downloads::extract_archives_atomic(
+                        &archive_paths,
+                        &extract_dir,
+                        downloads::MAX_UNPACKED_BYTES,
+                        &cancel,
+                    );
                 }
             }
 
@@ -475,7 +478,7 @@ pub fn download_llama_server(state: State<'_, AppState>) -> IpcResult<()> {
 
             let elapsed_secs = started.elapsed().as_secs();
             // Clear busy BEFORE emitting the terminal event so an immediate Retry is not refused.
-            processing.llama_busy().store(false, Ordering::SeqCst);
+            drop(busy_guard);
             match outcome {
                 Ok(()) => {
                     processing.emit_setup_event(SetupProgressEvent {
@@ -512,10 +515,6 @@ pub fn download_llama_server(state: State<'_, AppState>) -> IpcResult<()> {
             }
         });
     if spawned.is_err() {
-        state
-            .processing()
-            .llama_busy()
-            .store(false, Ordering::SeqCst);
         return Err(IpcError::new(
             "internal",
             "could not start the llama-server download",
@@ -536,6 +535,7 @@ pub fn download_language_model(state: State<'_, AppState>) -> IpcResult<()> {
             "the language model is already being downloaded",
         ));
     }
+    let busy_guard = BusyGuard::new(processing.llm_busy());
     let cancel = processing.llm_cancel().clone();
     cancel.store(false, Ordering::SeqCst);
     let download_dir = processing.downloads_dir();
@@ -581,22 +581,20 @@ pub fn download_language_model(state: State<'_, AppState>) -> IpcResult<()> {
             });
 
             let outcome: Result<(), DownloadError> = match res {
-                Ok(final_path) => {
-                    let mut next = processing.settings_snapshot();
-                    apply_downloaded_language_model(&mut next, &final_path);
-                    processing.save_settings(next).map_err(|e| {
+                Ok(final_path) => processing
+                    .modify_settings(|s| apply_downloaded_language_model(s, &final_path))
+                    .map_err(|e| {
                         DownloadError::Failed(format!(
                             "could not save language model path: {}",
                             e.message
                         ))
-                    })
-                }
+                    }),
                 Err(err) => Err(err),
             };
 
             let elapsed_secs = started.elapsed().as_secs();
             // Clear busy BEFORE emitting the terminal event so an immediate Retry is not refused.
-            processing.llm_busy().store(false, Ordering::SeqCst);
+            drop(busy_guard);
             match outcome {
                 Ok(()) => {
                     processing.emit_setup_event(SetupProgressEvent {
@@ -633,7 +631,6 @@ pub fn download_language_model(state: State<'_, AppState>) -> IpcResult<()> {
             }
         });
     if spawned.is_err() {
-        state.processing().llm_busy().store(false, Ordering::SeqCst);
         return Err(IpcError::new(
             "internal",
             "could not start the language model download",

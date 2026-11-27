@@ -326,7 +326,7 @@ test.describe("first-run wizard on the mock backend", () => {
   test("legacy venv notice is shown and can be dismissed", async ({ page }) => {
     await page.goto(url("legacy-venv"));
     const notice = page.getByText(
-      "An old Python environment from the previous version is still in your Roaming folder. The app does not delete it. You can delete it yourself.",
+      "You can safely delete the old folder at C:\\Users\\demo\\AppData\\Roaming\\BlahBlahBot\\worker-venv to free disk space.",
     );
     await expect(notice).toBeVisible();
     await page.getByRole("button", { name: "Dismiss" }).click();

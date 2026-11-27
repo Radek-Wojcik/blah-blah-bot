@@ -418,10 +418,7 @@ export function FirstRun(props: {
             )}
             {status?.legacyVenvNotice && (
               <div className="notice setup-legacy-notice" role="status">
-                <p>
-                  An old Python environment from the previous version is still in your Roaming
-                  folder. The app does not delete it. You can delete it yourself.
-                </p>
+                <p>{status.legacyVenvNotice}</p>
                 <button
                   type="button"
                   className="btn btn-ghost btn-small"
@@ -574,12 +571,12 @@ function SetupTaskPanel(props: {
           )}
         </div>
       )}
-      {phase === "cancelled" && (
+      {phase === "cancelled" && !ready && (
         <p className="notice" role="status">
           {formatCancelledMessage(state.latest?.message)} Press Retry to continue where it stopped.
         </p>
       )}
-      {(phase === "failed" || state.error) && (
+      {(phase === "failed" || state.error) && !ready && (
         <p className="error" role="alert">
           {state.error ?? formatFailureMessage(state.latest?.message ?? "")}
         </p>
@@ -660,7 +657,12 @@ function ModelRow(props: { ctx: Ctx; modelKey: string; blockedBy?: string }) {
   const cancelledMsg = ctx.downloads.cancelled[modelKey];
   const item = itemOf(ctx.status, modelKey === "vision" ? "vision" : `model:${modelKey}`);
   const working = item?.state === "working";
-  const anyBusy = Object.keys(ctx.downloads.progress).length > 0 || working;
+  // `working` is true only for the model the backend is downloading; any other model waits.
+  const otherModelWorking =
+    ctx.status?.items.some(
+      (i) => (i.key.startsWith("model:") || i.key === "vision") && i.state === "working",
+    ) ?? false;
+  const anyBusy = Object.keys(ctx.downloads.progress).length > 0 || working || otherModelWorking;
   const hintId = useId();
   if (!model) return null;
   const retry = Boolean(failure || cancelledMsg);

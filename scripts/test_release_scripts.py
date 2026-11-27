@@ -119,11 +119,6 @@ class Versions(unittest.TestCase):
         self.assertEqual(check_versions.check(check_versions.collect(check_versions.ROOT)), [])
 
 
-import json
-import os
-import re
-import shutil
-import subprocess
 class BundleGuard(unittest.TestCase):
     def test_build_installer_sets_and_restores_installer_build_flag(self) -> None:
         script = (check_versions.ROOT / "scripts" / "build-installer.ps1").read_text(encoding="utf-8")

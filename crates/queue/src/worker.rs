@@ -477,11 +477,56 @@ pub fn ensure_environment(cfg: &WorkerConfig) -> Result<(), RunError> {
     }
 }
 
+/// Longest an environment preparation (`uv sync`) may run before it is stopped.
+const ENSURE_ENV_TIMEOUT: Duration = Duration::from_secs(2 * 3600);
+
+/// How a waited-for child process ended.
+enum WaitOutcome {
+    Exited(std::process::ExitStatus),
+    Cancelled,
+    TimedOut,
+}
+
+/// Waits for `child`, killing its process tree on cancellation, timeout or a wait error.
+fn wait_cancellable(
+    child: &mut std::process::Child,
+    cancel: &AtomicBool,
+    timeout: Duration,
+) -> Result<WaitOutcome, RunError> {
+    let started = std::time::Instant::now();
+    loop {
+        if cancel.load(Ordering::SeqCst) {
+            kill_tree(child);
+            return Ok(WaitOutcome::Cancelled);
+        }
+        if started.elapsed() > timeout {
+            kill_tree(child);
+            return Ok(WaitOutcome::TimedOut);
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(WaitOutcome::Exited(status)),
+            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+            Err(e) => {
+                kill_tree(child);
+                return Err(RunError::new(format!("waiting for uv failed: {e}")));
+            }
+        }
+    }
+}
+
 /// Cancellable variant of [`ensure_environment`]. Returns `Ok(true)` on success and
-/// `Ok(false)` when stopped via `cancel`.
+/// `Ok(false)` when stopped via `cancel`. A hung `uv` is stopped after two hours.
 pub fn ensure_environment_cancellable(
     cfg: &WorkerConfig,
     cancel: &AtomicBool,
+) -> Result<bool, RunError> {
+    ensure_environment_with_timeout(cfg, cancel, ENSURE_ENV_TIMEOUT)
+}
+
+fn ensure_environment_with_timeout(
+    cfg: &WorkerConfig,
+    cancel: &AtomicBool,
+    timeout: Duration,
 ) -> Result<bool, RunError> {
     if cancel.load(Ordering::SeqCst) {
         return Ok(false);
@@ -503,18 +548,13 @@ pub fn ensure_environment_cancellable(
         }
         tail.into_iter().collect::<Vec<_>>().join(" | ")
     });
-    let status = loop {
-        if cancel.load(Ordering::SeqCst) {
-            kill_tree(&mut child);
-            return Ok(false);
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
-            Err(e) => {
-                kill_tree(&mut child);
-                return Err(RunError::new(format!("waiting for uv failed: {e}")));
-            }
+    let status = match wait_cancellable(&mut child, cancel, timeout)? {
+        WaitOutcome::Exited(status) => status,
+        WaitOutcome::Cancelled => return Ok(false),
+        WaitOutcome::TimedOut => {
+            return Err(RunError::new(
+                "creating the Python environment timed out; check your connection and retry",
+            ));
         }
     };
     if cancel.load(Ordering::SeqCst) {
@@ -1008,6 +1048,46 @@ pub fn run_enroll_with(
 mod tests {
     use super::*;
     use store::{Meeting, MeetingState, Screenshot, Segment, Track};
+
+    fn sleeper() -> std::process::Child {
+        #[cfg(windows)]
+        let mut cmd = {
+            let mut c = Command::new("ping");
+            c.args(["-n", "30", "127.0.0.1"]);
+            c
+        };
+        #[cfg(not(windows))]
+        let mut cmd = {
+            let mut c = Command::new("sleep");
+            c.arg("30");
+            c
+        };
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn a sleeping process")
+    }
+
+    #[test]
+    fn wait_cancellable_stops_a_process_that_runs_past_the_timeout() {
+        let mut child = sleeper();
+        let cancel = AtomicBool::new(false);
+        let outcome = wait_cancellable(&mut child, &cancel, Duration::from_millis(300))
+            .expect("wait must not fail");
+        assert!(matches!(outcome, WaitOutcome::TimedOut));
+        assert!(child.try_wait().expect("try_wait").is_some());
+    }
+
+    #[test]
+    fn wait_cancellable_stops_a_process_when_cancelled() {
+        let mut child = sleeper();
+        let cancel = AtomicBool::new(true);
+        let outcome = wait_cancellable(&mut child, &cancel, Duration::from_secs(60))
+            .expect("wait must not fail");
+        assert!(matches!(outcome, WaitOutcome::Cancelled));
+        assert!(child.try_wait().expect("try_wait").is_some());
+    }
 
     #[test]
     fn parses_protocol_lines_and_ignores_noise() {

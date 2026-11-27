@@ -739,6 +739,9 @@ pub struct Probe {
     /// Which models the worker reports as cached; `None` when it could not be asked.
     pub models: Option<HashMap<String, bool>>,
     pub models_working: bool,
+    /// Keys of the models being downloaded while `models_working` is set. Empty means
+    /// unknown: every model that is not cached is then reported as downloading.
+    pub models_active_keys: Vec<String>,
     pub hf_token_set: bool,
     pub llama: LlamaResolution,
     pub llama_working: bool,
@@ -763,6 +766,7 @@ impl Probe {
             env_working: false,
             models: None,
             models_working: false,
+            models_active_keys: Vec::new(),
             hf_token_set: false,
             llama: LlamaResolution::NotSet,
             llama_working: false,
@@ -852,9 +856,15 @@ fn worker_env_item(p: &Probe) -> SetupItem {
     ok(key, "The processing environment is ready.")
 }
 
+/// Whether the model `key` is being downloaded right now.
+fn model_downloading(p: &Probe, key: &str) -> bool {
+    p.models_working
+        && (p.models_active_keys.is_empty() || p.models_active_keys.iter().any(|k| k == key))
+}
+
 fn model_item(p: &Probe, key: &str, name: &str, hint_missing: &str) -> SetupItem {
     let model_key = key.trim_start_matches("model:");
-    if p.models_working {
+    if model_downloading(p, model_key) {
         return item(
             key,
             ItemState::Working,
@@ -864,6 +874,13 @@ fn model_item(p: &Probe, key: &str, name: &str, hint_missing: &str) -> SetupItem
         );
     }
     match &p.models {
+        None if p.models_working => item(
+            key,
+            ItemState::Missing,
+            CODE_MODEL_MISSING,
+            format!("{name} is not downloaded."),
+            "Download it when the current download finishes.",
+        ),
         None => item(
             key,
             ItemState::Missing,
@@ -1048,7 +1065,7 @@ fn vision_item(s: &ProcessingSettings, p: &Probe) -> SetupItem {
             "Turn it on in Settings > AI Models to have screenshots described.",
         );
     }
-    if p.models_working {
+    if model_downloading(p, "vision") {
         return item(
             KEY_VISION,
             ItemState::Working,
@@ -1067,6 +1084,13 @@ fn vision_item(s: &ProcessingSettings, p: &Probe) -> SetupItem {
             CODE_VISION,
             "The screenshot model is not downloaded.",
             "Download it in the setup (about 5 GB), or skip screenshot analysis.",
+        ),
+        None if p.models_working => item(
+            KEY_VISION,
+            ItemState::Missing,
+            CODE_VISION,
+            "The screenshot model is not downloaded.",
+            "Download it when the current download finishes.",
         ),
         None => item(
             KEY_VISION,
@@ -1924,6 +1948,22 @@ mod tests {
             .items
             .iter()
             .all(|i| (i.state == ItemState::Ok) == i.code.is_none()));
+    }
+
+    #[test]
+    fn only_the_model_being_downloaded_is_reported_as_working() {
+        let mut p = Probe::empty();
+        p.models_working = true;
+        p.models_active_keys = vec!["whisper-turbo".to_string()];
+        let st = build_status(&ProcessingSettings::default(), &p);
+        let state_of = |key: &str| st.items.iter().find(|i| i.key == key).map(|i| i.state);
+        assert_eq!(state_of(KEY_MODEL_WHISPER), Some(ItemState::Working));
+        assert_eq!(state_of(KEY_MODEL_DIARIZATION), Some(ItemState::Missing));
+
+        p.models_active_keys.clear();
+        let st = build_status(&ProcessingSettings::default(), &p);
+        let all = st.items.iter().find(|i| i.key == KEY_MODEL_DIARIZATION);
+        assert_eq!(all.map(|i| i.state), Some(ItemState::Working));
     }
 
     fn ready_probe() -> Probe {

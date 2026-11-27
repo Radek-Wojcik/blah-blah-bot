@@ -19,6 +19,12 @@ use sha2::{Digest, Sha256};
 /// Streaming read/write chunk size (64 KiB).
 const CHUNK_SIZE: usize = 64 * 1024;
 
+/// Total time allowed for receiving one response body (a resumed run gets a fresh budget).
+const BODY_TIMEOUT: Duration = Duration::from_secs(12 * 60 * 60);
+
+/// Upper bound for the total unpacked size of one archive (zip-bomb guard).
+pub const MAX_UNPACKED_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+
 /// Maximum number of HTTP redirects followed manually for a download.
 const MAX_REDIRECTS: usize = 5;
 
@@ -31,9 +37,16 @@ pub const ALLOWED_DOWNLOAD_HOSTS: &[&str] = &[
     "objects.githubusercontent.com",
     "release-assets.githubusercontent.com",
     "huggingface.co",
-    "cdn-lfs.huggingface.co",
-    "cdn-lfs-us-1.hf.co",
+    "cas-bridge.xethub.hf.co",
 ];
+
+/// Domain suffixes (label-boundary match, including the leading dot) whose subdomains are
+/// allowed: the Hugging Face Xet storage hosts.
+pub const ALLOWED_DOWNLOAD_HOST_SUFFIXES: &[&str] = &[".xethub.hf.co"];
+
+/// Domains whose single-label `cdn-lfs*` subdomains (for example `cdn-lfs-eu-1.hf.co`) are
+/// allowed: the Hugging Face LFS CDN hosts.
+pub const ALLOWED_CDN_LFS_DOMAINS: &[&str] = &["hf.co", "huggingface.co"];
 
 /// Network policy controlling URL validation and TLS enforcement for downloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,9 +167,35 @@ fn is_loopback_host(host: &str) -> bool {
 }
 
 fn is_allowlisted_host(host: &str) -> bool {
-    ALLOWED_DOWNLOAD_HOSTS
-        .iter()
-        .any(|allowed| host.eq_ignore_ascii_case(allowed))
+    let host = host.to_ascii_lowercase();
+    if ALLOWED_DOWNLOAD_HOSTS.contains(&host.as_str()) {
+        return true;
+    }
+    if ALLOWED_DOWNLOAD_HOST_SUFFIXES.iter().any(|suffix| {
+        host.len() > suffix.len()
+            && host.ends_with(suffix)
+            && is_dns_label_sequence(&host[..host.len() - suffix.len()])
+    }) {
+        return true;
+    }
+    ALLOWED_CDN_LFS_DOMAINS.iter().any(|domain| {
+        host.strip_suffix(domain)
+            .and_then(|rest| rest.strip_suffix('.'))
+            .is_some_and(|label| {
+                label.starts_with("cdn-lfs") && is_dns_label_sequence(label) && !label.contains('.')
+            })
+    })
+}
+
+/// True when `value` is one or more dot-separated non-empty labels of `[a-z0-9-]`.
+fn is_dns_label_sequence(value: &str) -> bool {
+    !value.is_empty()
+        && value.split('.').all(|label| {
+            !label.is_empty()
+                && label
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        })
 }
 
 /// Extracts a safe host name from `url` (never includes credentials, path or query string) and
@@ -226,6 +265,13 @@ fn resolve_redirect_url(current_url: &str, location: &str) -> Result<String, Dow
     if loc.contains("://") {
         return Ok(loc.to_string());
     }
+    if loc.starts_with("//") {
+        // Scheme-relative reference (RFC 3986 section 4.2): keep the current scheme.
+        let (scheme, _) = current_url.split_once("://").ok_or_else(|| {
+            DownloadError::Failed("download address is not a valid URL".to_string())
+        })?;
+        return Ok(format!("{scheme}:{loc}"));
+    }
     if loc.starts_with('/') {
         let (scheme, rest) = current_url.split_once("://").ok_or_else(|| {
             DownloadError::Failed("download address is not a valid URL".to_string())
@@ -292,7 +338,9 @@ fn download_agent(policy: DownloadPolicy) -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_connect(Some(Duration::from_secs(30)))
         .timeout_recv_response(Some(Duration::from_secs(60)))
-        .timeout_recv_body(Some(Duration::from_secs(300)))
+        // ureq 3 applies this as a total budget for the whole body (not per read), so it has to
+        // cover the largest pinned file (about 7.7 GB) even on a slow link.
+        .timeout_recv_body(Some(BODY_TIMEOUT))
         .https_only(!policy.allow_loopback_http)
         .http_status_as_error(false)
         .max_redirects(0)
@@ -456,6 +504,20 @@ pub fn download_pin_from(
         return finalize_download(download_dir, &part_path, &final_path, pin, len, hasher);
     }
 
+    // Hash an existing partial file BEFORE opening the HTTP stream, so the connection is never
+    // left idle while a multi-gigabyte `.part` file is read.
+    let mut resume_hasher: Option<Sha256> = None;
+    if existing_len > 0 {
+        let mut h = Sha256::new();
+        let hashed = hash_existing_file(&part_path, &mut h, cancel)?;
+        if hashed == existing_len {
+            resume_hasher = Some(h);
+        } else {
+            remove_file_in_dir(download_dir, &part_path);
+            existing_len = 0;
+        }
+    }
+
     let agent = download_agent(policy);
     let mut current_url = url.to_string();
     let mut hops = 0usize;
@@ -519,15 +581,14 @@ pub fn download_pin_from(
                         .to_string(),
                 ));
             }
-            let mut h = Sha256::new();
-            let hashed = hash_existing_file(&part_path, &mut h, cancel)?;
-            if hashed != existing_len {
+            let Some(h) = resume_hasher.take() else {
                 remove_file_in_dir(download_dir, &part_path);
                 return Err(DownloadError::Failed(
                     "partial download changed during resume; the partial download was cleared and can be retried"
                         .to_string(),
                 ));
-            }
+            };
+            let hashed = existing_len;
             let f = OpenOptions::new()
                 .append(true)
                 .open(&part_path)
@@ -653,83 +714,196 @@ fn finalize_download(
     Ok(final_path.to_path_buf())
 }
 
+#[cfg(test)]
 /// Extracts a ZIP archive into `target_dir`, failing closed on the first unsafe entry.
 ///
 /// Every entry is validated before anything is written: absolute paths, drive prefixes,
 /// `..` traversal components, NUL bytes, and symlinks are rejected so nothing can be
 /// written outside `target_dir`.
 pub fn extract_zip_safe(zip_path: &Path, target_dir: &Path) -> Result<(), String> {
-    let file = File::open(zip_path)
-        .map_err(|e| format!("could not open archive {}: {e}", zip_path.display()))?;
-    let mut archive = zip::ZipArchive::new(file)
-        .map_err(|e| format!("could not read archive {}: {e}", zip_path.display()))?;
+    extract_zip_checked(zip_path, target_dir, MAX_UNPACKED_BYTES, None).map_err(|e| match e {
+        DownloadError::Cancelled => "extraction was cancelled".to_string(),
+        DownloadError::Failed(msg) => msg,
+    })
+}
+
+/// Like [`extract_zip_safe`], with a cap on the total unpacked size (zip-bomb guard) and an
+/// optional cancel flag checked between entries and while copying.
+pub fn extract_zip_checked(
+    zip_path: &Path,
+    target_dir: &Path,
+    max_unpacked: u64,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> Result<(), DownloadError> {
+    let is_cancelled = || cancel.is_some_and(|c| c.load(Ordering::SeqCst));
+    extract_zip_inner(zip_path, target_dir, max_unpacked, &is_cancelled)
+}
+
+fn extract_zip_inner(
+    zip_path: &Path,
+    target_dir: &Path,
+    max_unpacked: u64,
+    is_cancelled: &dyn Fn() -> bool,
+) -> Result<(), DownloadError> {
+    let fail = DownloadError::Failed;
+    let file = File::open(zip_path).map_err(|e| {
+        fail(format!(
+            "could not open archive {}: {e}",
+            zip_path.display()
+        ))
+    })?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| {
+        fail(format!(
+            "could not read archive {}: {e}",
+            zip_path.display()
+        ))
+    })?;
 
     // Pass 1: validate every entry before creating directories or writing any files.
     let mut rel_paths: Vec<Option<PathBuf>> = Vec::with_capacity(archive.len());
+    let mut declared_total: u64 = 0;
     for i in 0..archive.len() {
         let entry = archive
             .by_index(i)
-            .map_err(|e| format!("could not read archive entry: {e}"))?;
+            .map_err(|e| fail(format!("could not read archive entry: {e}")))?;
         let raw_name: String = entry
             .name()
-            .map_err(|_| "archive contains an entry with an invalid name".to_string())?
+            .map_err(|_| fail("archive contains an entry with an invalid name".to_string()))?
             .into_owned();
         if raw_name.is_empty()
             || raw_name.starts_with(['/', '\\'])
             || raw_name.contains([':', '\0'])
         {
-            return Err(format!("archive contains an unsafe path: {raw_name}"));
+            return Err(fail(format!("archive contains an unsafe path: {raw_name}")));
         }
         if entry
             .unix_mode()
             .is_some_and(|mode| (mode & 0o170000) == 0o120000)
         {
-            return Err(format!("archive contains a symlink entry: {raw_name}"));
+            return Err(fail(format!(
+                "archive contains a symlink entry: {raw_name}"
+            )));
         }
         let Some(rel) = entry.enclosed_name() else {
-            return Err(format!("archive contains an unsafe path: {raw_name}"));
+            return Err(fail(format!("archive contains an unsafe path: {raw_name}")));
         };
+        declared_total = declared_total.saturating_add(entry.size());
+        if declared_total > max_unpacked {
+            return Err(fail(
+                "archive is larger than allowed once unpacked".to_string(),
+            ));
+        }
         if rel.as_os_str().is_empty() {
             if entry.is_dir() {
                 rel_paths.push(None);
                 continue;
             }
-            return Err(format!("archive contains an unsafe path: {raw_name}"));
+            return Err(fail(format!("archive contains an unsafe path: {raw_name}")));
         }
         if rel.components().any(|c| !matches!(c, Component::Normal(_))) {
-            return Err(format!("archive contains an unsafe path: {raw_name}"));
+            return Err(fail(format!("archive contains an unsafe path: {raw_name}")));
         }
         rel_paths.push(Some(rel));
     }
 
     // Pass 2: extract validated entries into `target_dir`.
     fs::create_dir_all(target_dir)
-        .map_err(|e| format!("could not create extraction folder: {e}"))?;
+        .map_err(|e| fail(format!("could not create extraction folder: {e}")))?;
+    let mut written_total: u64 = 0;
+    let mut buf = vec![0u8; CHUNK_SIZE];
     for (i, rel_opt) in rel_paths.into_iter().enumerate() {
+        if is_cancelled() {
+            return Err(DownloadError::Cancelled);
+        }
         let Some(rel) = rel_opt else {
             continue;
         };
         let mut entry = archive
             .by_index(i)
-            .map_err(|e| format!("could not read archive entry: {e}"))?;
+            .map_err(|e| fail(format!("could not read archive entry: {e}")))?;
         let dest = target_dir.join(rel);
         if entry.is_dir() {
             fs::create_dir_all(&dest)
-                .map_err(|e| format!("could not create folder during extraction: {e}"))?;
+                .map_err(|e| fail(format!("could not create folder during extraction: {e}")))?;
         } else {
             if let Some(parent) = dest.parent() {
                 fs::create_dir_all(parent)
-                    .map_err(|e| format!("could not create folder during extraction: {e}"))?;
+                    .map_err(|e| fail(format!("could not create folder during extraction: {e}")))?;
             }
             let mut out = File::create(&dest)
-                .map_err(|e| format!("could not extract file from archive: {e}"))?;
-            io::copy(&mut entry, &mut out)
-                .map_err(|e| format!("could not extract file from archive: {e}"))?;
+                .map_err(|e| fail(format!("could not extract file from archive: {e}")))?;
+            loop {
+                if is_cancelled() {
+                    return Err(DownloadError::Cancelled);
+                }
+                let n = match entry.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => n,
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(e) => {
+                        return Err(fail(format!("could not extract file from archive: {e}")));
+                    }
+                };
+                written_total += n as u64;
+                if written_total > max_unpacked {
+                    return Err(fail(
+                        "archive is larger than allowed once unpacked".to_string(),
+                    ));
+                }
+                out.write_all(&buf[..n])
+                    .map_err(|e| fail(format!("could not extract file from archive: {e}")))?;
+            }
             out.sync_all()
-                .map_err(|e| format!("could not flush extracted file: {e}"))?;
+                .map_err(|e| fail(format!("could not flush extracted file: {e}")))?;
         }
     }
     Ok(())
+}
+
+/// Extracts every archive of `zip_paths` into a staging folder next to `final_dir` (inside the
+/// same app data folder, never `%TEMP%`) and only then swaps it into place with a rename, so
+/// `final_dir` is either complete or untouched. The staging folder is removed on any failure,
+/// including cancellation.
+pub fn extract_archives_atomic(
+    zip_paths: &[PathBuf],
+    final_dir: &Path,
+    max_unpacked: u64,
+    cancel: &Arc<AtomicBool>,
+) -> Result<(), DownloadError> {
+    let fail = DownloadError::Failed;
+    let parent = final_dir
+        .parent()
+        .ok_or_else(|| fail("extraction folder has no parent folder".to_string()))?;
+    let name = final_dir
+        .file_name()
+        .ok_or_else(|| fail("extraction folder has no name".to_string()))?
+        .to_string_lossy();
+    let staging = parent.join(format!(".{name}.extracting"));
+    let _ = fs::remove_dir_all(&staging);
+    fs::create_dir_all(&staging)
+        .map_err(|e| fail(format!("could not create extraction folder: {e}")))?;
+
+    let result = (|| {
+        for zip_path in zip_paths {
+            if cancel.load(Ordering::SeqCst) {
+                return Err(DownloadError::Cancelled);
+            }
+            extract_zip_checked(zip_path, &staging, max_unpacked, Some(cancel))?;
+        }
+        if cancel.load(Ordering::SeqCst) {
+            return Err(DownloadError::Cancelled);
+        }
+        if final_dir.exists() {
+            fs::remove_dir_all(final_dir)
+                .map_err(|e| fail(format!("could not replace the previous extraction: {e}")))?;
+        }
+        fs::rename(&staging, final_dir)
+            .map_err(|e| fail(format!("could not finish extracting the archives: {e}")))
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    result
 }
 
 /// Searches `root` for a file named `target_name` (case-insensitive) up to `max_depth`
@@ -1283,5 +1457,151 @@ mod tests {
             target.join("nested").join("bin").join("llama-server.exe")
         );
         assert_eq!(fs::read(&found).unwrap(), b"MZ fake llama");
+    }
+
+    #[test]
+    fn allowlist_accepts_real_hugging_face_and_github_redirect_hosts() {
+        for host in [
+            "github.com",
+            "objects.githubusercontent.com",
+            "release-assets.githubusercontent.com",
+            "huggingface.co",
+            "cas-bridge.xethub.hf.co",
+            "us.xethub.hf.co",
+            "cdn-lfs.hf.co",
+            "cdn-lfs-us-1.hf.co",
+            "cdn-lfs-eu-1.hf.co",
+            "cdn-lfs.huggingface.co",
+            "CDN-LFS.HF.CO",
+        ] {
+            assert!(is_allowlisted_host(host), "{host} must be allowed");
+        }
+    }
+
+    #[test]
+    fn allowlist_rejects_lookalike_hosts() {
+        for host in [
+            "evilhuggingface.co",
+            "huggingface.co.evil.com",
+            "hf.co",
+            "xethub.hf.co",
+            "evil-xethub.hf.co",
+            "a.b.cdn-lfs.hf.co",
+            "cdn-lfs.hf.co.evil.com",
+            "cdn-lfsevil.com",
+            "evilcdn-lfs.hf.co.",
+            "notcdn-lfs.hf.co",
+            "x.huggingface.co",
+            "githubusercontent.com",
+            "raw.githubusercontent.com",
+            "github.com.evil.com",
+            "",
+        ] {
+            assert!(!is_allowlisted_host(host), "{host} must be rejected");
+        }
+    }
+
+    #[test]
+    fn redirect_hops_are_https_only_and_checked_against_the_allowlist() {
+        let policy = DownloadPolicy::PRODUCTION;
+        let from = "https://huggingface.co/a/b";
+        let ok = validate_redirect_hop(from, true, "https://cas-bridge.xethub.hf.co/x?y=1", policy)
+            .expect("xet host is allowed");
+        assert_eq!(ok.1, "cas-bridge.xethub.hf.co");
+        assert!(validate_redirect_hop(from, true, "http://cdn-lfs.hf.co/x", policy).is_err());
+        assert!(validate_redirect_hop(from, true, "https://evil.example/x", policy).is_err());
+        assert!(
+            validate_redirect_hop(from, true, "https://cdn-lfs.hf.co@evil.example/x", policy)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn resolve_redirect_url_handles_absolute_path_and_scheme_relative_locations() {
+        let cur = "https://huggingface.co/a/b?x=1";
+        assert_eq!(
+            resolve_redirect_url(cur, "/c/d").expect("path"),
+            "https://huggingface.co/c/d"
+        );
+        assert_eq!(
+            resolve_redirect_url(cur, "//cdn-lfs.hf.co/file").expect("scheme-relative"),
+            "https://cdn-lfs.hf.co/file"
+        );
+        assert_eq!(
+            resolve_redirect_url(cur, "https://objects.githubusercontent.com/z").expect("abs"),
+            "https://objects.githubusercontent.com/z"
+        );
+        assert!(resolve_redirect_url(cur, "relative/path").is_err());
+    }
+
+    #[test]
+    fn extract_zip_checked_rejects_archives_above_the_unpacked_size_cap() {
+        let dir = TestDir::new("dl-zip-cap");
+        let zip_path = dir.path().join("big.zip");
+        let target = dir.path().join("extract");
+        write_test_zip(&zip_path, &[("a.bin", &[0u8; 600]), ("b.bin", &[0u8; 600])]);
+        let err = extract_zip_checked(&zip_path, &target, 1000, None)
+            .expect_err("total above the cap must fail");
+        match err {
+            DownloadError::Failed(msg) => assert!(msg.contains("larger than allowed"), "{msg}"),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+        assert!(
+            !target.join("a.bin").exists(),
+            "nothing is written before the check"
+        );
+        extract_zip_checked(&zip_path, &target, 1200, None).expect("exactly at the cap is fine");
+    }
+
+    #[test]
+    fn extract_zip_checked_stops_when_cancelled() {
+        let dir = TestDir::new("dl-zip-cancel");
+        let zip_path = dir.path().join("a.zip");
+        write_test_zip(&zip_path, &[("a.txt", b"x")]);
+        let cancel = Arc::new(AtomicBool::new(true));
+        let err = extract_zip_checked(&zip_path, &dir.path().join("out"), 1000, Some(&cancel))
+            .expect_err("cancelled");
+        assert!(matches!(err, DownloadError::Cancelled));
+    }
+
+    #[test]
+    fn extract_archives_atomic_swaps_in_a_complete_folder_and_leaves_no_staging() {
+        let dir = TestDir::new("dl-atomic-ok");
+        let (z1, z2) = (dir.path().join("1.zip"), dir.path().join("2.zip"));
+        write_test_zip(&z1, &[("bin/llama-server.exe", b"exe")]);
+        write_test_zip(&z2, &[("cudart.dll", b"dll")]);
+        let final_dir = dir.path().join("llama").join("b1");
+        fs::create_dir_all(&final_dir).expect("old dir");
+        fs::write(final_dir.join("stale.txt"), b"old").expect("stale");
+        let cancel = Arc::new(AtomicBool::new(false));
+        extract_archives_atomic(&[z1, z2], &final_dir, 10_000, &cancel).expect("extract");
+        assert!(final_dir.join("bin").join("llama-server.exe").is_file());
+        assert!(final_dir.join("cudart.dll").is_file());
+        assert!(!final_dir.join("stale.txt").exists());
+        assert!(!dir.path().join("llama").join(".b1.extracting").exists());
+    }
+
+    #[test]
+    fn extract_archives_atomic_cleans_the_staging_folder_and_keeps_the_old_one_on_error() {
+        let dir = TestDir::new("dl-atomic-fail");
+        let (z1, z2) = (dir.path().join("1.zip"), dir.path().join("2.zip"));
+        write_test_zip(&z1, &[("ok.txt", b"ok")]);
+        write_test_zip(&z2, &[("../evil.txt", b"x")]);
+        let final_dir = dir.path().join("llama").join("b1");
+        fs::create_dir_all(&final_dir).expect("old dir");
+        fs::write(final_dir.join("keep.txt"), b"old").expect("keep");
+        let cancel = Arc::new(AtomicBool::new(false));
+        let err = extract_archives_atomic(&[z1.clone(), z2], &final_dir, 10_000, &cancel)
+            .expect_err("unsafe second archive");
+        assert!(matches!(err, DownloadError::Failed(_)));
+        assert!(final_dir.join("keep.txt").is_file());
+        assert!(!dir.path().join("llama").join(".b1.extracting").exists());
+
+        cancel.store(true, Ordering::SeqCst);
+        let err =
+            extract_archives_atomic(&[z1], &final_dir, 10_000, &cancel).expect_err("cancelled");
+        assert!(matches!(err, DownloadError::Cancelled));
+        assert!(!dir.path().join("llama").join(".b1.extracting").exists());
+        assert!(final_dir.join("keep.txt").is_file());
     }
 }
