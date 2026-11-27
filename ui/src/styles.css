@@ -2785,9 +2785,8 @@ textarea {
 .target-rule-warn {
   flex: 1 1 100%;
   margin: 0;
-  padding: 4px 8px;
-  border-left: 2px solid var(--yellow);
-  color: var(--text);
+  padding: 0;
+  color: var(--yellow);
   font-size: 0.8em;
 }
 .conflict-plain {
