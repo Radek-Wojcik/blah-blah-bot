@@ -1045,4 +1045,30 @@ describe("meeting detection", () => {
       vi.useRealTimers();
     }
   });
+
+  it("supports global voice profile project links, merge, and undo", async () => {
+    const b = createMockBackend({ clockRate: 0 });
+    const g = await b.enrollVoiceProfile("Marta Global", null, "C:\\Audio\\marta.wav");
+    expect(g.projects).toEqual([]);
+
+    const linked = await b.addProfileToProject(g.id, "NOMAD");
+    expect(linked.projects).toEqual(["NOMAD"]);
+
+    const unlinked = await b.removeProfileFromProject(g.id, "NOMAD");
+    expect(unlinked.projects).toEqual([]);
+    expect(unlinked.sampleCount).toBe(1);
+
+    const p2 = await b.enrollVoiceProfile("Marta Two", "NOMAD", "C:\\Audio\\marta2.wav");
+    const merged = await b.mergeParticipants(g.id, p2.id);
+    expect(merged.projects).toEqual(["NOMAD"]);
+    expect(merged.sampleCount).toBe(2);
+
+    const before = await b.getMeetingVoices("m5");
+    const vId = before.voices[0].voiceId;
+    await b.assignVoice("m5", vId, g.id);
+    const undone = await b.undoVoiceDecision("m5", vId, "NOMAD");
+    const afterVoice = undone.voices.find((v) => v.voiceId === vId)!;
+    expect(afterVoice.confirmed).toBe(false);
+    expect(afterVoice.assignedParticipantId).toBeUndefined();
+  });
 });

@@ -182,7 +182,9 @@ test.describe("wave 3 UX overhaul flows on the mock backend", () => {
     );
 
     const profiles = page.getByRole("list", { name: "Voice profiles" });
-    const elena = profiles.getByRole("listitem").filter({ hasText: "Elena Vance" });
+    const elena = profiles.getByRole("listitem").filter({
+      has: page.getByRole("button", { name: "Rename Elena Vance" }),
+    });
     await expect(elena).toContainText("NOMAD");
     await expect(elena).toContainText("1 sample");
 

@@ -94,10 +94,19 @@ export function voiceState(
     };
   }
   if (voice.decision === "suggested" && voice.suggestedParticipantId && !rejected) {
-    const name = participantName(participants, voice.suggestedParticipantId) ?? "Unknown name";
+    const inCurrentProject = participants.some((p) => p.id === voice.suggestedParticipantId);
+    const name =
+      voice.suggestedParticipantName ??
+      participantName(participants, voice.suggestedParticipantId) ??
+      "Unknown name";
+    const fromProjects = inCurrentProject ? [] : (voice.suggestedFromProjects ?? []);
+    const label =
+      fromProjects.length > 0
+        ? `Recognised from ${fromProjects.join(", ")}: ${name}?${score ? ` ${score}` : ""}`
+        : `Suggested: ${name}?${score ? ` ${score}` : ""}`;
     return {
       kind: "suggested",
-      label: `Suggested: ${name}?${score ? ` ${score}` : ""}`,
+      label,
       participantId: voice.suggestedParticipantId,
     };
   }

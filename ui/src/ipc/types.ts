@@ -558,7 +558,10 @@ export interface VoiceView {
   /** Cosine similarity of the match, 0 to 1. */
   score?: number | null;
   suggestedParticipantId?: string | null;
+  suggestedParticipantName?: string | null;
+  suggestedFromProjects?: string[];
   assignedParticipantId?: string | null;
+  assignedParticipantName?: string | null;
   /** True once the user decided (or accepted the automatic match). */
   confirmed: boolean;
   /** The voice this one was declared to be the same person as. */
@@ -581,6 +584,7 @@ export interface ParticipantView {
 
 export interface VoicesData {
   meetingId: string;
+  cycleId?: string | null;
   voices: VoiceView[];
   participants: ParticipantView[];
   allConfirmed: boolean;
