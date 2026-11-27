@@ -6,7 +6,10 @@ Run from the repository root: python -m unittest scripts.test_release_scripts
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -124,6 +127,58 @@ class SigningHookContract(unittest.TestCase):
         self.assertIn("UTF8Encoding($false)", text)
         self.assertNotRegex(text, r"Set-Content\s+-LiteralPath\s+\$signConfig.*-Encoding\s+utf8")
 
+    EXTRACT = (
+        "$ErrorActionPreference = 'Stop'; "
+        "$ast = [System.Management.Automation.Language.Parser]::ParseFile("
+        "$env:BBB_TEST_SCRIPT, [ref]$null, [ref]$null); "
+        "$fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language."
+        "FunctionDefinitionAst] -and $n.Name -eq 'Resolve-SignCommand' }, $true); "
+        "Invoke-Expression $fn.Extent.Text; "
+    )
+
+    def resolve(self, raw: str) -> subprocess.CompletedProcess[str]:
+        """Run the real Resolve-SignCommand on fake input; nothing is signed or written."""
+        powershell = shutil.which("powershell") or shutil.which("pwsh")
+        if powershell is None:
+            self.skipTest("PowerShell is not available")
+        env = dict(os.environ, BBB_TEST_SCRIPT=str(self.SCRIPT), BBB_TEST_INPUT=raw)
+        command = self.EXTRACT + (
+            "$r = Resolve-SignCommand $env:BBB_TEST_INPUT; "
+            "if ($r -is [string]) { 'string' } else { 'object' }"
+        )
+        return subprocess.run(
+            [powershell, "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+            timeout=120,
+            check=False,
+        )
+
+    def test_resolve_sign_command_accepts_valid_input(self) -> None:
+        plain = self.resolve("signtool sign /fd sha256 %1")
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        self.assertEqual(plain.stdout.strip(), "string")
+        structured = self.resolve('{"cmd":"signtool","args":["sign","%1"]}')
+        self.assertEqual(structured.returncode, 0, structured.stderr)
+        self.assertEqual(structured.stdout.strip(), "object")
+
+    def test_resolve_sign_command_rejects_bad_input(self) -> None:
+        bad = [
+            "signtool sign",  # no placeholder
+            '{"cmd":"signtool","args":["sign"]}',  # no placeholder in args
+            '{"cmd":"signtool","args":"sign %1"}',  # scalar args
+            '{"cmd":"","args":["%1"]}',  # empty cmd
+            '{"cmd":"signtool"',  # broken JSON
+        ]
+        for raw in bad:
+            with self.subTest(raw=raw):
+                result = self.resolve(raw)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn("BBB_SIGN_COMMAND", result.stderr)
+
     def test_verifies_signature_and_supports_defender_scan(self) -> None:
         text = self.SCRIPT.read_text(encoding="utf-8")
         self.assertIn("Get-AuthenticodeSignature", text)
@@ -166,9 +221,11 @@ class InstallerMetadata(unittest.TestCase):
         self.assertIn("!macro NSIS_HOOK_PREINSTALL", hooks)
         self.assertIn("Call VerifyWritableInstDir", hooks)
         self.assertIn("!macro NSIS_HOOK_POSTUNINSTALL", hooks)
-        self.assertIn('DeleteRegValue HKCU "${MANUPRODUCTKEY}" ""', hooks)
-        self.assertIn('DeleteRegKey /ifempty HKCU "${MANUPRODUCTKEY}"', hooks)
-        self.assertIn('DeleteRegKey /ifempty HKCU "Software\\${MANUFACTURER}"', hooks)
+        self.assertIn("${If} $UpdateMode <> 1", hooks.split("NSIS_HOOK_POSTUNINSTALL")[1])
+        self.assertIn('DeleteRegValue SHCTX "${MANUPRODUCTKEY}" ""', hooks)
+        self.assertIn('DeleteRegKey /ifempty SHCTX "${MANUPRODUCTKEY}"', hooks)
+        self.assertIn('DeleteRegKey /ifempty SHCTX "${MANUKEY}"', hooks)
+        self.assertNotIn("HKCU", hooks)
 
         template = (self.APP_DIR / "nsis" / "installer.nsi").read_text(encoding="utf-8")
         self.assertRegex(

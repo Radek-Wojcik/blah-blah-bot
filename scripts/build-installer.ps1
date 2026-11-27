@@ -105,8 +105,11 @@ function Resolve-SignCommand([string]$raw) {
             throw "BBB_SIGN_COMMAND JSON must contain a non-empty 'cmd' string"
         }
         $hasPlaceholder = $false
+        if ($null -ne $parsed.args -and -not ($parsed.args -is [System.Collections.IList])) {
+            throw "BBB_SIGN_COMMAND JSON 'args' must be an array of strings"
+        }
         if ($parsed.args) {
-            foreach ($arg in @($parsed.args)) {
+            foreach ($arg in $parsed.args) {
                 if ("$arg" -like "*%1*") { $hasPlaceholder = $true; break }
             }
         }
