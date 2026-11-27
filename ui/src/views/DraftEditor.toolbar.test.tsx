@@ -46,7 +46,6 @@ describe("DraftEditor report toolbar", () => {
         <BackendProvider value={backend}>
           <DraftEditor
             meetingId="m5"
-            onBack={() => undefined}
             onOpenTranscript={() => undefined}
             onOpenQueue={() => undefined}
           />

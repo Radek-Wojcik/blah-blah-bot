@@ -1,8 +1,23 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useBackend } from "../backend-context";
 import { type StepId } from "../first-run";
 import { formatDuration } from "../format";
 import { useRecordingState } from "../hooks";
+import { onSettingsChanged } from "../hotkeys";
+import type { MouseButtonsMode } from "../ipc/types";
+import {
+  canGoBack,
+  canGoForward,
+  createHistory,
+  type HistoryState,
+  type MeetingTab,
+  type Page,
+  pushRoute,
+  type Route,
+  type SettingsTab,
+  stepBack,
+  stepForward,
+} from "../navigation";
 import { FirstRun } from "./FirstRun";
 import { MeetingDetailView } from "./MeetingDetail";
 import { ProcessPrompt } from "./ProcessPrompt";
@@ -11,20 +26,6 @@ import { ProjectsView } from "./Projects";
 import { QueueView } from "./Queue";
 import { RecordView } from "./RecordView";
 import { SettingsView } from "./Settings";
-
-type Page = "projects" | "project" | "record" | "queue" | "settings" | "meeting";
-type MeetingTab = "draft" | "transcript" | "speakers";
-type SettingsTab = "models" | "connectors" | "preferences" | "processing" | "voices";
-
-interface Route {
-  page: Page;
-  meetingId: string | null;
-  cycleId?: string | null;
-  returnCycleId?: string | null;
-  meetingTab?: MeetingTab;
-  highlightMs?: number | null;
-  settingsTab?: SettingsTab;
-}
 
 const SETTINGS_TABS = new Set<SettingsTab>([
   "models",
@@ -82,13 +83,18 @@ interface Wizard {
   reason?: string | null;
 }
 
+type PendingNav = { kind: "push"; route: Route } | { kind: "back" } | { kind: "forward" };
+
 export function Main() {
   const backend = useBackend();
-  const [route, setRoute] = useState<Route>(initialRoute);
+  const [history, setHistory] = useState<HistoryState>(() => createHistory(initialRoute()));
+  const route = history.entries[history.index];
   // `undefined` until it is known whether the first-run setup was completed.
   const [wizard, setWizard] = useState<Wizard | null | undefined>(undefined);
   const [settingsDirty, setSettingsDirty] = useState(false);
-  const [pendingRoute, setPendingRoute] = useState<Route | null>(null);
+  const [pendingNav, setPendingNav] = useState<PendingNav | null>(null);
+  const [mouseButtons, setMouseButtons] = useState<MouseButtonsMode>("normal");
+  const lastSideClickRef = useRef<{ button: number; time: number } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -97,6 +103,24 @@ export function Main() {
     });
     return () => {
       cancelled = true;
+    };
+  }, [backend]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      void backend
+        .getSettings()
+        .then((s) => {
+          if (!cancelled) setMouseButtons(s.mouseButtons ?? "normal");
+        })
+        .catch(() => {});
+    };
+    load();
+    const unsub = onSettingsChanged(load);
+    return () => {
+      cancelled = true;
+      unsub();
     };
   }, [backend]);
 
@@ -109,15 +133,81 @@ export function Main() {
   const navigate = useCallback(
     (next: Route) => {
       if (page === "settings" && settingsDirty && next.page !== "settings") {
-        setPendingRoute(next);
+        setPendingNav({ kind: "push", route: next });
         return;
       }
-      setPendingRoute(null);
+      setPendingNav(null);
       if (next.page !== "settings") setSettingsDirty(false);
-      setRoute(next);
+      setHistory((h) => pushRoute(h, next));
     },
     [page, settingsDirty],
   );
+
+  const goBack = useCallback(() => {
+    if (!canGoBack(history)) return;
+    if (page === "settings" && settingsDirty) {
+      setPendingNav({ kind: "back" });
+      return;
+    }
+    setPendingNav(null);
+    setSettingsDirty(false);
+    setHistory((h) => stepBack(h));
+  }, [history, page, settingsDirty]);
+
+  const goForward = useCallback(() => {
+    if (!canGoForward(history)) return;
+    if (page === "settings" && settingsDirty) {
+      setPendingNav({ kind: "forward" });
+      return;
+    }
+    setPendingNav(null);
+    setSettingsDirty(false);
+    setHistory((h) => stepForward(h));
+  }, [history, page, settingsDirty]);
+
+  useEffect(() => {
+    const navigationOff = mouseButtons === "off" || wizard !== null;
+
+    const isBlocked = () =>
+      document.querySelector('[role="dialog"], [role="alertdialog"]') !== null ||
+      document.querySelector('[data-hotkey-capturing="true"]') !== null;
+
+    const handleSideDown = (e: MouseEvent) => {
+      if (e.button === 3 || e.button === 4) {
+        e.preventDefault();
+      }
+    };
+
+    const handleSideActivate = (e: MouseEvent) => {
+      if (e.button !== 3 && e.button !== 4) return;
+      // Always swallow the side buttons so the web view never navigates by itself.
+      e.preventDefault();
+      if (navigationOff || isBlocked()) return;
+
+      const now = Date.now();
+      const prev = lastSideClickRef.current;
+      if (prev && prev.button === e.button && now - prev.time < 80) {
+        return;
+      }
+      lastSideClickRef.current = { button: e.button, time: now };
+
+      const wantBack = mouseButtons === "swapped" ? e.button === 4 : e.button === 3;
+      if (wantBack) {
+        goBack();
+      } else {
+        goForward();
+      }
+    };
+
+    window.addEventListener("mousedown", handleSideDown);
+    window.addEventListener("mouseup", handleSideActivate);
+    window.addEventListener("auxclick", handleSideActivate);
+    return () => {
+      window.removeEventListener("mousedown", handleSideDown);
+      window.removeEventListener("mouseup", handleSideActivate);
+      window.removeEventListener("auxclick", handleSideActivate);
+    };
+  }, [mouseButtons, wizard, goBack, goForward]);
 
   const setPage = (p: Page) => navigate({ page: p, meetingId: null });
   const inProjects = page === "projects" || page === "project" || page === "meeting";
@@ -145,7 +235,9 @@ export function Main() {
         onOpenSettings={() => {
           setWizard(null);
           setSettingsDirty(false);
-          setRoute({ page: "settings", meetingId: null, settingsTab: "models" });
+          setHistory((h) =>
+            pushRoute(h, { page: "settings", meetingId: null, settingsTab: "models" }),
+          );
         }}
       />
     );
@@ -190,10 +282,10 @@ export function Main() {
           {page === "projects" && (
             <ProjectsView
               onOpenProject={(cycleId: string) =>
-                setRoute({ page: "project", meetingId: null, cycleId })
+                navigate({ page: "project", meetingId: null, cycleId })
               }
               onOpenMeeting={(meetingId: string) =>
-                setRoute({
+                navigate({
                   page: "meeting",
                   meetingId,
                   meetingTab: "draft",
@@ -209,7 +301,7 @@ export function Main() {
               cycleId={route.cycleId}
               onBack={() => setPage("projects")}
               onOpenMeeting={(meetingId: string) =>
-                setRoute({
+                navigate({
                   page: "meeting",
                   meetingId,
                   meetingTab: "draft",
@@ -223,19 +315,22 @@ export function Main() {
           {page === "queue" && (
             <QueueView
               onOpenDraft={(id) =>
-                setRoute({ page: "meeting", meetingId: id, meetingTab: "draft" })
+                navigate({ page: "meeting", meetingId: id, meetingTab: "draft" })
               }
             />
           )}
           {page === "meeting" && route.meetingId && (
             <MeetingDetailView
-              key={`${route.meetingId}-${route.meetingTab ?? "draft"}`}
+              key={route.meetingId}
               meetingId={route.meetingId}
               initialTab={route.meetingTab}
               highlightMs={route.highlightMs}
+              onTabChange={(meetingTab) =>
+                setHistory((h) => pushRoute(h, { ...route, meetingTab }))
+              }
               onBack={() => {
                 if (route.returnCycleId) {
-                  setRoute({ page: "project", meetingId: null, cycleId: route.returnCycleId });
+                  navigate({ page: "project", meetingId: null, cycleId: route.returnCycleId });
                 } else {
                   setPage("projects");
                 }
@@ -246,15 +341,26 @@ export function Main() {
           {page === "settings" && (
             <SettingsView
               initialTab={route.settingsTab}
+              onTabChange={(settingsTab) =>
+                setHistory((h) => pushRoute(h, { ...route, settingsTab }))
+              }
+              onBack={() => (canGoBack(history) ? goBack() : setPage("projects"))}
               onDirtyChange={setSettingsDirty}
-              pendingExit={pendingRoute !== null}
+              pendingExit={pendingNav !== null}
               onConfirmExit={() => {
-                const next = pendingRoute;
-                setPendingRoute(null);
+                const next = pendingNav;
+                setPendingNav(null);
                 setSettingsDirty(false);
-                if (next) setRoute(next);
+                if (!next) return;
+                if (next.kind === "push") {
+                  setHistory((h) => pushRoute(h, next.route));
+                } else if (next.kind === "back") {
+                  setHistory((h) => stepBack(h));
+                } else if (next.kind === "forward") {
+                  setHistory((h) => stepForward(h));
+                }
               }}
-              onCancelExit={() => setPendingRoute(null)}
+              onCancelExit={() => setPendingNav(null)}
               onRunSetup={() => openSetup("welcome")}
             />
           )}

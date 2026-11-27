@@ -5,7 +5,7 @@
 //! [`SharedState`] of each track.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
@@ -85,19 +85,94 @@ impl Source {
 /// Number of waveform bars in the live audio envelope.
 pub const LEVEL_BARS: usize = 12;
 
-/// Fast attack factor when incoming energy exceeds the current envelope.
-const ENVELOPE_ATTACK: f32 = 0.85;
-/// Smooth decay factor when incoming energy is below the current envelope.
-const ENVELOPE_DECAY: f32 = 0.65;
+/// Lower bound of the dBFS display scale (`-60..=0 dBFS` maps to `0.0..=1.0`).
+pub const DB_FLOOR: f32 = -60.0;
+/// Floor for linear amplitude before taking `log10`.
+const LINEAR_EPSILON: f32 = 1e-5;
+/// Attack time constant in seconds (~50 ms 10%->90% rise).
+const ATTACK_TAU_S: f32 = 0.025;
+/// Release time constant in seconds (~300 ms 90%->10% fall).
+const RELEASE_TAU_S: f32 = 0.140;
+/// Duration to hold a peak before decaying, in milliseconds.
+const PEAK_HOLD_MS: u64 = 600;
+/// Decay rate of the peak-hold marker after the hold window expires (normalized units / second).
+const PEAK_HOLD_DECAY_PER_S: f32 = 1.2;
 /// Values below this floor snap to `0.0`.
 const ENVELOPE_FLOOR: f32 = 0.0005;
+/// Time without a new packet before the readings start to fall, in milliseconds. Keeps short
+/// gaps between packets (and the snapshot tick) from dimming the bars.
+const IDLE_GRACE_MS: u64 = 250;
 
-/// Real-time audio levels and 12-bar waveform envelope, normalized to `0.0..=1.0`.
+/// Map a linear amplitude (`0.0..=1.0`) to normalized dBFS (`-60..=0 dBFS` -> `0.0..=1.0`).
+pub fn amplitude_to_db_norm(linear: f32) -> f32 {
+    if !linear.is_finite() || linear <= 0.0 {
+        return 0.0;
+    }
+    let db = 20.0 * linear.max(LINEAR_EPSILON).log10();
+    ((db - DB_FLOOR) / -DB_FLOOR).clamp(0.0, 1.0)
+}
+
+/// Raw linear amplitude readings for a block of PCM samples (`0.0..=1.0`), before dB mapping.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RawBlockLevels {
+    pub peak: f32,
+    pub rms: f32,
+    pub bars: [f32; LEVEL_BARS],
+}
+
+/// Compute raw linear peak, RMS, and 12-bar slice amplitudes for a block of 16-bit PCM samples.
+pub fn compute_raw_block_levels(samples: &[i16]) -> RawBlockLevels {
+    if samples.is_empty() {
+        return RawBlockLevels {
+            peak: 0.0,
+            rms: 0.0,
+            bars: [0.0; LEVEL_BARS],
+        };
+    }
+    let mut max_abs = 0u32;
+    let mut sum_sq = 0u64;
+    for &s in samples {
+        let a = u32::from(s.unsigned_abs());
+        if a > max_abs {
+            max_abs = a;
+        }
+        sum_sq += u64::from(a) * u64::from(a);
+    }
+    let len = samples.len();
+    let peak = (max_abs as f32 / 32768.0).clamp(0.0, 1.0);
+    let rms = (((sum_sq as f64 / len as f64).sqrt() / 32768.0) as f32).clamp(0.0, 1.0);
+    let mut bars = [0.0f32; LEVEL_BARS];
+    if max_abs > 0 {
+        for (i, bar) in bars.iter_mut().enumerate() {
+            let start = (i * len / LEVEL_BARS).min(len - 1);
+            let end = (((i + 1) * len) / LEVEL_BARS).max(start + 1).min(len);
+            let slice = &samples[start..end];
+            let mut s_max = 0u32;
+            let mut s_sq = 0u64;
+            for &v in slice {
+                let a = u32::from(v.unsigned_abs());
+                if a > s_max {
+                    s_max = a;
+                }
+                s_sq += u64::from(a) * u64::from(a);
+            }
+            let s_peak = s_max as f32 / 32768.0;
+            let s_rms = ((s_sq as f64 / slice.len() as f64).sqrt() / 32768.0) as f32;
+            *bar = (s_rms * 0.65 + s_peak * 0.35).clamp(0.0, 1.0);
+        }
+    }
+    RawBlockLevels { peak, rms, bars }
+}
+
+/// Real-time audio levels and 12-bar waveform envelope, mapped to normalized dBFS (`0.0..=1.0`).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AudioLevels {
     pub peak: f32,
     pub rms: f32,
     pub bars: [f32; LEVEL_BARS],
+    #[serde(default)]
+    pub peak_hold: f32,
 }
 
 impl Default for AudioLevels {
@@ -106,6 +181,7 @@ impl Default for AudioLevels {
             peak: 0.0,
             rms: 0.0,
             bars: [0.0; LEVEL_BARS],
+            peak_hold: 0.0,
         }
     }
 }
@@ -121,6 +197,7 @@ impl AudioLevels {
             peak: self.peak.max(other.peak).clamp(0.0, 1.0),
             rms: self.rms.max(other.rms).clamp(0.0, 1.0),
             bars,
+            peak_hold: self.peak_hold.max(other.peak_hold).clamp(0.0, 1.0),
         }
     }
 }
@@ -150,16 +227,20 @@ fn store_f32(atom: &AtomicU32, val: f32) {
     atom.store(clamped.to_bits(), Ordering::Relaxed);
 }
 
+/// Time-based exponential smoothing with asymmetric attack (~50 ms) and release (~300 ms).
 #[inline]
-fn smooth_step(prev: f32, target: f32) -> f32 {
+pub fn smooth_step_dt(prev: f32, target: f32, dt_s: f32) -> f32 {
+    // No time has passed (or the value is not a number): keep the previous reading.
+    if !dt_s.is_finite() || dt_s <= 0.0 {
+        return prev;
+    }
+    let dt = dt_s.min(1.0);
     let next = if target >= prev {
-        if prev <= ENVELOPE_FLOOR {
-            target
-        } else {
-            prev + (target - prev) * ENVELOPE_ATTACK
-        }
+        let alpha = 1.0 - (-dt / ATTACK_TAU_S).exp();
+        prev + (target - prev) * alpha
     } else {
-        prev * ENVELOPE_DECAY + target * (1.0 - ENVELOPE_DECAY)
+        let alpha = 1.0 - (-dt / RELEASE_TAU_S).exp();
+        prev + (target - prev) * alpha
     };
     if next < ENVELOPE_FLOOR {
         0.0
@@ -175,7 +256,7 @@ pub fn compute_demo_bars(base_level: f32, seq: u32) -> [f32; LEVEL_BARS] {
     }
     let t = seq as f32 * 0.14;
     let syllable = 0.55 + 0.45 * ((t * 0.75).sin() * (t * 0.27).cos()).abs();
-    let gain = (base_level * 2.2 * syllable).clamp(0.05, 1.0);
+    let gain = (base_level * syllable).clamp(0.05, 1.0);
     let mut bars = [0.0; LEVEL_BARS];
     for (i, bar) in bars.iter_mut().enumerate() {
         let pos = i as f32 / (LEVEL_BARS - 1) as f32;
@@ -187,15 +268,57 @@ pub fn compute_demo_bars(base_level: f32, seq: u32) -> [f32; LEVEL_BARS] {
     bars
 }
 
+/// Readings of a stream that delivered no packet for `idle_ms` milliseconds.
+///
+/// The envelope falls exponentially with the release time constant once the grace time has
+/// passed, which is the same curve [`smooth_step_dt`] follows while packets arrive. The peak hold
+/// stays latched for [`PEAK_HOLD_MS`] and then decays at [`PEAK_HOLD_DECAY_PER_S`]. Applied
+/// once per read, so repeated reads never compound.
+pub fn idle_fall(live: AudioLevels, idle_ms: u64) -> AudioLevels {
+    if idle_ms <= IDLE_GRACE_MS {
+        return live;
+    }
+    let env_s = (idle_ms - IDLE_GRACE_MS) as f32 / 1000.0;
+    let factor = (-env_s / RELEASE_TAU_S).exp();
+    let fall = |v: f32| {
+        let next = v * factor;
+        if next < ENVELOPE_FLOOR {
+            0.0
+        } else {
+            next
+        }
+    };
+    let mut bars = [0.0; LEVEL_BARS];
+    for (out, &b) in bars.iter_mut().zip(live.bars.iter()) {
+        *out = fall(b);
+    }
+    let hold_s = idle_ms.saturating_sub(PEAK_HOLD_MS) as f32 / 1000.0;
+    AudioLevels {
+        peak: fall(live.peak),
+        rms: fall(live.rms),
+        bars,
+        peak_hold: (live.peak_hold - PEAK_HOLD_DECAY_PER_S * hold_s).max(0.0),
+    }
+}
+
 /// Data shared by all capture threads of a recording.
 pub struct CaptureContext {
     /// Largest absolute sample (0 to 32768) seen since the last [`CaptureContext::take_peak`].
     pub peak: AtomicU32,
-    /// Smoothed normalized peak (`0.0..=1.0`, stored as `f32::to_bits`).
+    /// Smoothed dB-normalized peak (`0.0..=1.0`, stored as `f32::to_bits`).
     pub envelope_peak: AtomicU32,
-    /// Smoothed normalized RMS (`0.0..=1.0`, stored as `f32::to_bits`).
+    /// Smoothed dB-normalized RMS (`0.0..=1.0`, stored as `f32::to_bits`).
     pub rms: AtomicU32,
-    /// Smoothed normalized 12-bar waveform envelope (`0.0..=1.0`, stored as `f32::to_bits`).
+    /// Peak-hold level (`0.0..=1.0`, stored as `f32::to_bits`).
+    pub peak_hold: AtomicU32,
+    /// Samples processed so far; the audio clock of the peak hold is derived from it, so the
+    /// rounding never drifts.
+    pub audio_samples: AtomicU64,
+    /// Session-clock milliseconds of the last packet, used by readers to let an idle stream fall.
+    pub last_packet_ms: AtomicU64,
+    /// Audio timestamp until which `peak_hold` stays latched before decaying, in milliseconds.
+    pub peak_hold_until_ms: AtomicU64,
+    /// Smoothed dB-normalized 12-bar waveform envelope (`0.0..=1.0`, stored as `f32::to_bits`).
     pub bars: [AtomicU32; LEVEL_BARS],
     /// Monotonic packet counter used for demo envelope modulation.
     pub packet_seq: AtomicU32,
@@ -234,6 +357,10 @@ impl CaptureContext {
             peak: AtomicU32::new(0),
             envelope_peak: AtomicU32::new(0),
             rms: AtomicU32::new(0),
+            peak_hold: AtomicU32::new(0),
+            audio_samples: AtomicU64::new(0),
+            last_packet_ms: AtomicU64::new(0),
+            peak_hold_until_ms: AtomicU64::new(0),
             bars: Self::empty_bars(),
             packet_seq: AtomicU32::new(0),
             clock_start_hns,
@@ -246,9 +373,14 @@ impl CaptureContext {
         }
     }
 
-    /// Read and reset the peak level, scaled to 0.0 to 1.0.
-    pub fn take_peak(&self) -> f32 {
+    /// Read and reset the raw linear peak level (`0.0..=1.0`), before dB mapping.
+    pub fn take_raw_peak(&self) -> f32 {
         self.peak.swap(0, Ordering::Relaxed) as f32 / 32768.0
+    }
+
+    /// Read and reset the peak level, mapped to normalized dBFS (`-60..=0 dBFS` -> `0.0..=1.0`).
+    pub fn take_peak(&self) -> f32 {
+        amplitude_to_db_norm(self.take_raw_peak())
     }
 
     /// Record a block of PCM samples, updating [`CaptureContext::peak`], [`CaptureContext::rms`]
@@ -266,56 +398,54 @@ impl CaptureContext {
         if samples.is_empty() {
             return;
         }
-        let mut max_abs = 0u32;
-        let mut sum_sq = 0u64;
-        for &s in samples {
-            let a = u32::from(s.unsigned_abs());
-            if a > max_abs {
-                max_abs = a;
-            }
-            sum_sq += u64::from(a) * u64::from(a);
-        }
+        let raw = compute_raw_block_levels(samples);
+        let max_abs = (raw.peak * 32768.0).round() as u32;
         self.peak.fetch_max(max_abs, Ordering::Relaxed);
 
-        let len = samples.len();
-        let block_peak = (max_abs as f32 / 32768.0).clamp(0.0, 1.0);
-        let block_rms = (((sum_sq as f64 / len as f64).sqrt() / 32768.0) as f32).clamp(0.0, 1.0);
+        let dt_s = samples.len() as f32 / SAMPLE_RATE as f32;
+        let total_samples = self
+            .audio_samples
+            .fetch_add(samples.len() as u64, Ordering::Relaxed)
+            + samples.len() as u64;
+        let now_audio_ms = total_samples * 1000 / u64::from(SAMPLE_RATE);
+        self.last_packet_ms
+            .store(self.now_ms().max(0.0) as u64, Ordering::Relaxed);
+
+        let db_peak = amplitude_to_db_norm(raw.peak);
+        let db_rms = amplitude_to_db_norm(raw.rms);
 
         let seq = self.packet_seq.fetch_add(1, Ordering::Relaxed);
         let target_bars = if max_abs == 0 {
             [0.0; LEVEL_BARS]
         } else if demo {
-            compute_demo_bars(block_rms.max(block_peak * 0.7), seq)
+            compute_demo_bars(db_rms.max(db_peak * 0.85), seq)
         } else {
             let mut out = [0.0f32; LEVEL_BARS];
             for (i, bar) in out.iter_mut().enumerate() {
-                let start = (i * len / LEVEL_BARS).min(len - 1);
-                let end = (((i + 1) * len) / LEVEL_BARS).max(start + 1).min(len);
-                let slice = &samples[start..end];
-                let mut s_max = 0u32;
-                let mut s_sq = 0u64;
-                for &v in slice {
-                    let a = u32::from(v.unsigned_abs());
-                    if a > s_max {
-                        s_max = a;
-                    }
-                    s_sq += u64::from(a) * u64::from(a);
-                }
-                let s_peak = s_max as f32 / 32768.0;
-                let s_rms = ((s_sq as f64 / slice.len() as f64).sqrt() / 32768.0) as f32;
-                *bar = (s_rms * 0.65 + s_peak * 0.35).clamp(0.0, 1.0);
+                *bar = amplitude_to_db_norm(raw.bars[i]);
             }
             out
         };
 
-        store_f32(
-            &self.envelope_peak,
-            smooth_step(load_f32(&self.envelope_peak), block_peak),
-        );
-        store_f32(&self.rms, smooth_step(load_f32(&self.rms), block_rms));
+        let next_peak = smooth_step_dt(load_f32(&self.envelope_peak), db_peak, dt_s);
+        let next_rms = smooth_step_dt(load_f32(&self.rms), db_rms, dt_s);
+        store_f32(&self.envelope_peak, next_peak);
+        store_f32(&self.rms, next_rms);
+
+        let prev_hold = load_f32(&self.peak_hold);
+        let hold_until = self.peak_hold_until_ms.load(Ordering::Relaxed);
+        if next_peak >= prev_hold && next_peak >= ENVELOPE_FLOOR {
+            store_f32(&self.peak_hold, next_peak);
+            self.peak_hold_until_ms
+                .store(now_audio_ms + PEAK_HOLD_MS, Ordering::Relaxed);
+        } else if now_audio_ms >= hold_until {
+            let decayed = (prev_hold - PEAK_HOLD_DECAY_PER_S * dt_s).max(next_peak);
+            store_f32(&self.peak_hold, decayed);
+        }
+
         for (i, &target) in target_bars.iter().enumerate() {
             let prev = load_f32(&self.bars[i]);
-            store_f32(&self.bars[i], smooth_step(prev, target));
+            store_f32(&self.bars[i], smooth_step_dt(prev, target, dt_s));
         }
     }
 
@@ -324,29 +454,23 @@ impl CaptureContext {
         self.note_samples(samples);
     }
 
-    /// Read the current lock-free 12-bar audio envelope without modifying it.
+    /// Read the current 12-bar audio envelope. Read-only: any number of readers can call it, and
+    /// the capture thread stays the only writer. When no packet arrived for a while (silence
+    /// that stopped delivering, a stopped device) the readings fall off in real time.
     pub fn levels(&self) -> AudioLevels {
+        let idle_ms = (self.now_ms().max(0.0) as u64)
+            .saturating_sub(self.last_packet_ms.load(Ordering::Relaxed));
         let mut bars = [0.0; LEVEL_BARS];
         for (i, b) in bars.iter_mut().enumerate() {
             *b = load_f32(&self.bars[i]);
         }
-        AudioLevels {
+        let live = AudioLevels {
             peak: load_f32(&self.envelope_peak),
             rms: load_f32(&self.rms),
             bars,
-        }
-    }
-
-    /// Read the current 12-bar audio envelope and apply one tick of decay so an idle stream
-    /// smoothly falls off to zero between polls.
-    pub fn take_levels(&self) -> AudioLevels {
-        let current = self.levels();
-        store_f32(&self.envelope_peak, current.peak * 0.7);
-        store_f32(&self.rms, current.rms * 0.7);
-        for (i, &b) in current.bars.iter().enumerate() {
-            store_f32(&self.bars[i], b * 0.7);
-        }
-        current
+            peak_hold: load_f32(&self.peak_hold),
+        };
+        idle_fall(live, idle_ms)
     }
 
     /// Milliseconds on the session clock now.
@@ -810,6 +934,194 @@ mod tests {
             max_bar - min_bar > 0.02,
             "expected voice-like variation across demo bars: {:?}",
             levels.bars
+        );
+    }
+
+    fn sine_block(dbfs: f32, len: usize) -> Vec<i16> {
+        let amp = 10.0f32.powf(dbfs / 20.0) * 32767.0;
+        let step = 2.0 * std::f32::consts::PI * 1000.0 / SAMPLE_RATE as f32;
+        (0..len)
+            .map(|i| ((i as f32 * step).sin() * amp).round() as i16)
+            .collect()
+    }
+
+    #[test]
+    fn db_mapping_matches_expected_reference_levels() {
+        assert_eq!(amplitude_to_db_norm(0.0), 0.0);
+        assert_eq!(amplitude_to_db_norm(1e-5), 0.0);
+        assert!(amplitude_to_db_norm(0.001) < 1e-4);
+        assert!((amplitude_to_db_norm(0.01) - 1.0 / 3.0).abs() < 0.005);
+        assert!((amplitude_to_db_norm(0.1) - 2.0 / 3.0).abs() < 0.005);
+        assert!((amplitude_to_db_norm(10.0f32.powf(-6.0 / 20.0)) - 0.9).abs() < 0.005);
+        assert!((amplitude_to_db_norm(1.0) - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn synthetic_sine_blocks_at_minus_40_20_6_dbfs_produce_expected_bar_heights() {
+        let cases = [
+            (-40.0f32, 0.01f32, 0.25f32..=0.36f32, 0.30f32..=0.37f32),
+            (-20.0f32, 0.10f32, 0.59f32..=0.70f32, 0.63f32..=0.70f32),
+            (-6.0f32, 0.501f32, 0.82f32..=0.92f32, 0.87f32..=0.93f32),
+        ];
+        let mut avg_bars = Vec::new();
+        for (idx, (dbfs, expected_raw_peak, bar_range, peak_range)) in cases.iter().enumerate() {
+            let (_dir, ctx) = test_context(&format!("sine-{idx}"));
+            let block = sine_block(*dbfs, 320);
+
+            // Raw linear values stay available for tests before dB mapping.
+            let raw = compute_raw_block_levels(&block);
+            assert!(
+                (raw.peak - expected_raw_peak).abs() < 0.01,
+                "raw peak at {dbfs} dBFS: {}",
+                raw.peak
+            );
+
+            // Feed 300 ms (15 x 20 ms blocks) so the ~50 ms attack settles.
+            for _ in 0..15 {
+                ctx.note_samples_with_demo(&block, false);
+            }
+            let levels = ctx.levels();
+            assert!(
+                peak_range.contains(&levels.peak),
+                "peak at {dbfs} dBFS = {}, expected {peak_range:?}",
+                levels.peak
+            );
+            for (i, &bar) in levels.bars.iter().enumerate() {
+                assert!(
+                    bar_range.contains(&bar),
+                    "bar {i} at {dbfs} dBFS = {bar}, expected {bar_range:?}"
+                );
+            }
+            let mean = levels.bars.iter().sum::<f32>() / LEVEL_BARS as f32;
+            avg_bars.push(mean);
+        }
+        assert!(avg_bars[0] < avg_bars[1] && avg_bars[1] < avg_bars[2]);
+    }
+
+    #[test]
+    fn zero_time_step_keeps_the_previous_reading() {
+        assert_eq!(smooth_step_dt(0.2, 0.9, 0.0), 0.2);
+        assert_eq!(smooth_step_dt(0.9, 0.0, 0.0), 0.9);
+        assert_eq!(smooth_step_dt(0.2, 0.9, f32::NAN), 0.2);
+    }
+
+    #[test]
+    fn repeated_reads_do_not_change_the_envelope() {
+        let (_dir, ctx) = test_context("repeated-reads");
+        ctx.note_samples_with_demo(&sine_block(-6.0, 320), false);
+        let first = ctx.levels();
+        for _ in 0..5 {
+            assert_eq!(ctx.levels(), first);
+        }
+    }
+
+    #[test]
+    fn idle_fall_keeps_readings_inside_the_grace_time() {
+        let live = AudioLevels {
+            peak: 0.9,
+            rms: 0.6,
+            bars: [0.5; LEVEL_BARS],
+            peak_hold: 0.9,
+        };
+        assert_eq!(idle_fall(live, 0), live);
+        assert_eq!(idle_fall(live, IDLE_GRACE_MS), live);
+    }
+
+    #[test]
+    fn idle_fall_brings_a_stopped_stream_to_zero_and_releases_the_hold() {
+        let live = AudioLevels {
+            peak: 0.9,
+            rms: 0.6,
+            bars: [0.5; LEVEL_BARS],
+            peak_hold: 0.9,
+        };
+        // Still latched inside the hold window, then released.
+        let held = idle_fall(live, 500);
+        assert!(held.peak < live.peak);
+        assert!((held.peak_hold - 0.9).abs() < 1e-6);
+        let later = idle_fall(live, 700);
+        assert!(
+            later.peak_hold < 0.9,
+            "hold must start to fall after 600 ms"
+        );
+        assert!(later.peak_hold > 0.7);
+        let silent = idle_fall(live, 3_000);
+        assert_eq!(silent.peak, 0.0);
+        assert_eq!(silent.rms, 0.0);
+        assert_eq!(silent.bars, [0.0; LEVEL_BARS]);
+        assert_eq!(silent.peak_hold, 0.0);
+    }
+
+    #[test]
+    fn a_stream_that_stopped_delivering_packets_falls_in_real_time() {
+        let (_dir, ctx) = test_context("stopped-stream");
+        let loud = sine_block(-6.0, 320);
+        for _ in 0..10 {
+            ctx.note_samples_with_demo(&loud, false);
+        }
+        let settled = ctx.levels();
+        assert!(settled.peak > 0.8);
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        let after = ctx.levels();
+        assert!(
+            after.peak < settled.peak * 0.1,
+            "expected the stopped stream to fall, got {} from {}",
+            after.peak,
+            settled.peak
+        );
+        assert!(after.peak_hold < settled.peak_hold);
+    }
+
+    #[test]
+    fn attack_release_and_peak_hold_follow_time_constants() {
+        let (_dir, ctx) = test_context("envelope");
+        let loud = sine_block(-6.0, 320); // 20 ms blocks
+        let silence = vec![0i16; 320];
+
+        // ~50 ms attack (3 x 20 ms = 60 ms) should reach most of the -6 dBFS target (~0.90).
+        for _ in 0..3 {
+            ctx.note_samples_with_demo(&loud, false);
+        }
+        let after_attack = ctx.levels();
+        assert!(
+            after_attack.peak > 0.72,
+            "expected fast ~50 ms attack, got peak={}",
+            after_attack.peak
+        );
+
+        // Settle fully, then verify peak_hold latches at the peak.
+        for _ in 0..10 {
+            ctx.note_samples_with_demo(&loud, false);
+        }
+        let settled = ctx.levels();
+        assert!(settled.peak_hold >= settled.peak - 1e-4);
+        assert!(settled.peak_hold > 0.85);
+
+        // 300 ms of silence (15 x 20 ms): bars/peak decay strongly, peak_hold still latched (< 600 ms).
+        for _ in 0..15 {
+            ctx.note_samples_with_demo(&silence, false);
+        }
+        let after_300ms = ctx.levels();
+        assert!(
+            after_300ms.peak < 0.25,
+            "expected ~300 ms release, got peak={}",
+            after_300ms.peak
+        );
+        assert!(
+            after_300ms.peak_hold > 0.85,
+            "expected peak_hold to stay latched during hold window, got {}",
+            after_300ms.peak_hold
+        );
+
+        // Another 800 ms of silence (past the 600 ms hold window): peak_hold decays cleanly.
+        for _ in 0..40 {
+            ctx.note_samples_with_demo(&silence, false);
+        }
+        let after_1100ms = ctx.levels();
+        assert!(
+            after_1100ms.peak_hold < 0.40,
+            "expected peak_hold to decay after hold window, got {}",
+            after_1100ms.peak_hold
         );
     }
 }

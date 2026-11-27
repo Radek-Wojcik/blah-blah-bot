@@ -88,7 +88,6 @@ function mountEditor(backend: Backend) {
       <BackendProvider value={backend}>
         <DraftEditor
           meetingId="m1"
-          onBack={() => undefined}
           onOpenTranscript={() => undefined}
           onOpenQueue={() => undefined}
         />

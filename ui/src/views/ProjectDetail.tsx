@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useBackend } from "../backend-context";
 import { dueLabel, plural, sourceLabel, statusLine, summaryLine } from "../briefing";
+import { BackButton } from "../components/BackButton";
 import { formatDateTimeUtc, formatDuration } from "../format";
 import { type StepId, stepForError } from "../first-run";
 import { errorMessage, useCycleFacts, useMeetings, useRecordingState } from "../hooks";
@@ -401,11 +402,14 @@ export function ProjectDetailView({
   return (
     <>
       <div className="page-head">
-        <h2>
-          <span className="glitch" data-text={title}>
-            {title}
-          </span>
-        </h2>
+        <div className="page-head-start">
+          <BackButton label="Back to projects" onClick={onBack} />
+          <h2>
+            <span className="glitch" data-text={title}>
+              {title}
+            </span>
+          </h2>
+        </div>
         <span className="head-actions">
           <span className="chip">{cycleId}</span>
           <button
@@ -422,9 +426,6 @@ export function ProjectDetailView({
             onClick={() => setImportOpen(true)}
           >
             + Add meeting
-          </button>
-          <button type="button" className="btn btn-small btn-ghost" onClick={onBack}>
-            Back to projects
           </button>
         </span>
       </div>
