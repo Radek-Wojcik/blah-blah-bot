@@ -2,6 +2,9 @@
 
 mod briefing;
 mod browser;
+#[cfg(test)]
+#[path = "../bundle_guard.rs"]
+mod bundle_guard;
 mod commands;
 mod cycle_commands;
 mod cycles;
@@ -254,6 +257,7 @@ pub fn run() {
             setup_commands::check_setup_path,
             setup_commands::prepare_worker_env,
             setup_commands::set_first_run_done,
+            setup_commands::dismiss_legacy_venv_notice,
             project_commands::get_project_prefs,
             project_commands::save_project_prefs,
             project_commands::wizard_create_project,

@@ -8,6 +8,7 @@ license.workspace = true
 publish.workspace = true
 
 [build-dependencies]
+serde_json.workspace = true
 tauri-build = { version = "2.7", features = [] }
 
 [dependencies]

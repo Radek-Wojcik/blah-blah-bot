@@ -122,6 +122,9 @@ pub struct ProcessingSettings {
     /// The first-run setup was completed. Changed only by `set_first_run_done`: a settings
     /// save keeps the stored value.
     pub first_run_done: bool,
+    /// The one-time notice about a legacy Roaming `worker-venv` folder was dismissed.
+    /// Changed only by `dismiss_legacy_venv_notice`: a settings save keeps the stored value.
+    pub legacy_venv_notice_dismissed: bool,
     /// Filled when reading; ignored when saving.
     #[serde(skip_deserializing)]
     pub hf_token_set: bool,
@@ -150,6 +153,7 @@ impl Default for ProcessingSettings {
             describe_screenshots: true,
             skip_reports: false,
             first_run_done: false,
+            legacy_venv_notice_dismissed: false,
             hf_token_set: false,
         }
     }
@@ -205,12 +209,30 @@ fn non_empty(s: &str) -> Option<PathBuf> {
 /// (development builds only) in a parent folder of the executable. A release build looks
 /// nowhere else, so a folder planted in a parent directory or in the environment is never run.
 fn find_worker_dir(configured: &str, resource_dir: Option<&Path>) -> PathBuf {
+    let env_override = std::env::var_os("BBB_WORKER_DIR");
+    let exe_path = std::env::current_exe().ok();
+    find_worker_dir_in(
+        configured,
+        resource_dir,
+        env_override.as_deref(),
+        exe_path.as_deref(),
+        cfg!(debug_assertions),
+    )
+}
+
+fn find_worker_dir_in(
+    configured: &str,
+    resource_dir: Option<&Path>,
+    env_override: Option<&std::ffi::OsStr>,
+    exe_path: Option<&Path>,
+    is_debug: bool,
+) -> PathBuf {
     if let Some(p) = non_empty(configured) {
         return p;
     }
-    if cfg!(debug_assertions) {
-        if let Some(p) = std::env::var_os("BBB_WORKER_DIR") {
-            return PathBuf::from(p);
+    if is_debug {
+        if let Some(p) = env_override.and_then(|v| non_empty(&v.to_string_lossy())) {
+            return p;
         }
     }
     let is_worker = |d: &Path| d.join("pyproject.toml").is_file();
@@ -220,12 +242,8 @@ fn find_worker_dir(configured: &str, resource_dir: Option<&Path>) -> PathBuf {
             return candidate;
         }
     }
-    if let Ok(exe) = std::env::current_exe() {
-        let reach = if cfg!(debug_assertions) {
-            usize::MAX
-        } else {
-            1
-        };
+    if let Some(exe) = exe_path {
+        let reach = if is_debug { usize::MAX } else { 1 };
         for dir in exe.ancestors().skip(1).take(reach) {
             let candidate = dir.join("worker");
             if is_worker(&candidate) {
@@ -238,15 +256,20 @@ fn find_worker_dir(configured: &str, resource_dir: Option<&Path>) -> PathBuf {
 
 /// The Python environment of the worker: `BBB_WORKER_ENV_DIR` when it is set to a folder
 /// (a shared environment, used by the end-to-end tests so that none of them installs its own
-/// copy), otherwise `worker-venv` in the data folder.
-fn worker_env_dir(data_dir: &Path) -> PathBuf {
-    env_dir_from(data_dir, std::env::var_os("BBB_WORKER_ENV_DIR"))
+/// copy), otherwise `worker-venv` in Local AppData.
+fn worker_env_dir(local_data_dir: &Path) -> PathBuf {
+    env_dir_from(local_data_dir, std::env::var_os("BBB_WORKER_ENV_DIR"))
 }
 
-fn env_dir_from(data_dir: &Path, shared: Option<std::ffi::OsString>) -> PathBuf {
+fn env_dir_from(local_data_dir: &Path, shared: Option<std::ffi::OsString>) -> PathBuf {
     shared
         .and_then(|p| non_empty(&p.to_string_lossy()))
-        .unwrap_or_else(|| data_dir.join("worker-venv"))
+        .unwrap_or_else(|| local_data_dir.join("worker-venv"))
+}
+
+/// Dedicated `uv` cache folder under Local AppData (never `%TEMP%`).
+fn uv_cache_dir_for(local_data_dir: &Path) -> PathBuf {
+    local_data_dir.join("uv-cache")
 }
 
 // ----- GPU gate with live settings -----------------------------------------------------------
@@ -435,7 +458,10 @@ pub struct Processing {
     had_active_jobs: AtomicBool,
     driver_wake: Arc<(Mutex<bool>, Condvar)>,
     settings_path: PathBuf,
+    roaming_data_dir: PathBuf,
+    local_data_dir: PathBuf,
     env_dir: PathBuf,
+    uv_cache_dir: PathBuf,
     /// The folder the installer puts its resources in (the bundled `uv` and `worker/`).
     resource_dir: Option<PathBuf>,
     live: Arc<Mutex<HashMap<String, Live>>>,
@@ -454,7 +480,8 @@ impl Processing {
     pub fn new(
         app: AppHandle,
         store: Arc<Mutex<Store>>,
-        data_dir: &Path,
+        roaming_data_dir: &Path,
+        local_data_dir: &Path,
         config_dir: &Path,
         meeting_root: impl Fn() -> PathBuf + Send + Sync + 'static,
         cycle_repos: impl Fn() -> Vec<CycleRepoSetting> + Send + Sync + 'static,
@@ -463,7 +490,8 @@ impl Processing {
         Self::new_with_hooks(
             Arc::new(TauriProcessingHooks(app)),
             store,
-            data_dir,
+            roaming_data_dir,
+            local_data_dir,
             config_dir,
             resource_dir,
             meeting_root,
@@ -471,10 +499,12 @@ impl Processing {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_hooks(
         hooks: Arc<dyn ProcessingHooks>,
         store: Arc<Mutex<Store>>,
-        data_dir: &Path,
+        roaming_data_dir: &Path,
+        local_data_dir: &Path,
         config_dir: &Path,
         resource_dir: Option<PathBuf>,
         meeting_root: impl Fn() -> PathBuf + Send + Sync + 'static,
@@ -483,19 +513,27 @@ impl Processing {
         let settings_path = config_dir.join("processing.json");
         let settings = Arc::new(Mutex::new(ProcessingSettings::load(&settings_path)));
         let gpu_override: Arc<Mutex<Option<QueueGpuOverrideDto>>> = Arc::default();
-        let env_dir = worker_env_dir(data_dir);
+        let env_dir = worker_env_dir(local_data_dir);
+        let uv_cache_dir = uv_cache_dir_for(local_data_dir);
         let live: Arc<Mutex<HashMap<String, Live>>> = Arc::default();
         let cycle_repos: RepoList = Arc::new(cycle_repos);
 
         let runner_settings = {
             let settings = settings.clone();
             let env_dir = env_dir.clone();
+            let uv_cache_dir = uv_cache_dir.clone();
             let resource_dir = resource_dir.clone();
             move || {
                 let s = settings.lock().map(|s| s.clone()).unwrap_or_default();
                 RunnerSettings {
                     // The key is chosen by the runner from the options the stage runs with.
-                    worker: worker_config(&s, &env_dir, resource_dir.as_deref(), None),
+                    worker: worker_config(
+                        &s,
+                        &env_dir,
+                        &uv_cache_dir,
+                        resource_dir.as_deref(),
+                        None,
+                    ),
                     meeting_root: meeting_root(),
                     retention: s.audio_retention.into(),
                     voice: s.voice_settings(),
@@ -560,7 +598,10 @@ impl Processing {
             had_active_jobs: AtomicBool::new(false),
             driver_wake: Arc::new((Mutex::new(false), Condvar::new())),
             settings_path,
+            roaming_data_dir: roaming_data_dir.to_path_buf(),
+            local_data_dir: local_data_dir.to_path_buf(),
             env_dir,
+            uv_cache_dir,
             resource_dir,
             live,
             pulls: PullLedger::default(),
@@ -604,7 +645,10 @@ impl Processing {
             had_active_jobs: AtomicBool::new(false),
             driver_wake: Arc::new((Mutex::new(false), Condvar::new())),
             settings_path,
-            env_dir: dir.join("worker-venv"),
+            roaming_data_dir: dir.join("roaming"),
+            local_data_dir: dir.join("local"),
+            env_dir: dir.join("local").join("worker-venv"),
+            uv_cache_dir: dir.join("local").join("uv-cache"),
             resource_dir: None,
             live: Arc::default(),
             pulls: PullLedger::default(),
@@ -675,6 +719,7 @@ impl Processing {
         setup::validate_settings_paths(&new, &current)
             .map_err(|p| IpcError::new(p.code, p.message))?;
         new.first_run_done = current.first_run_done;
+        new.legacy_venv_notice_dismissed = current.legacy_venv_notice_dismissed;
         new.save(&self.settings_path)?;
         *current = new;
         Ok(())
@@ -695,7 +740,13 @@ impl Processing {
 
     pub(crate) fn worker_config(&self) -> WorkerConfig {
         let s = self.settings.lock().map(|s| s.clone()).unwrap_or_default();
-        worker_config(&s, &self.env_dir, self.resource_dir.as_deref(), None)
+        worker_config(
+            &s,
+            &self.env_dir,
+            &self.uv_cache_dir,
+            self.resource_dir.as_deref(),
+            None,
+        )
     }
 
     /// The settings as stored (without the flags filled in by [`Processing::settings`]).
@@ -703,8 +754,20 @@ impl Processing {
         self.settings.lock().map(|s| s.clone()).unwrap_or_default()
     }
 
+    pub(crate) fn roaming_data_dir(&self) -> &Path {
+        &self.roaming_data_dir
+    }
+
+    pub(crate) fn local_data_dir(&self) -> &Path {
+        &self.local_data_dir
+    }
+
     pub(crate) fn env_dir(&self) -> &Path {
         &self.env_dir
+    }
+
+    pub(crate) fn uv_cache_dir(&self) -> &Path {
+        &self.uv_cache_dir
     }
 
     pub(crate) fn resource_dir(&self) -> Option<&Path> {
@@ -728,6 +791,16 @@ impl Processing {
         let mut guard = self.settings.lock().map_err(poisoned)?;
         let mut next = guard.clone();
         next.first_run_done = done;
+        next.save(&self.settings_path)?;
+        *guard = next;
+        Ok(())
+    }
+
+    /// Marks the one-time notice about a legacy Roaming `worker-venv` folder as dismissed.
+    pub fn dismiss_legacy_venv_notice(&self) -> IpcResult<()> {
+        let mut guard = self.settings.lock().map_err(poisoned)?;
+        let mut next = guard.clone();
+        next.legacy_venv_notice_dismissed = true;
         next.save(&self.settings_path)?;
         *guard = next;
         Ok(())
@@ -1642,6 +1715,7 @@ fn poisoned<T>(_: std::sync::PoisonError<T>) -> IpcError {
 fn worker_config(
     s: &ProcessingSettings,
     env_dir: &Path,
+    uv_cache_dir: &Path,
     resource_dir: Option<&Path>,
     llm_api_key: Option<worker::Secret>,
 ) -> WorkerConfig {
@@ -1653,6 +1727,7 @@ fn worker_config(
         uv: setup::resolve_uv(&s.uv_path, resource_dir, path_var.as_deref()).unwrap_or_default(),
         worker_dir: find_worker_dir(&s.worker_dir, resource_dir),
         env_dir: env_dir.to_path_buf(),
+        uv_cache_dir: Some(uv_cache_dir.to_path_buf()),
         models_dir: non_empty(&s.models_dir),
         llama_server: setup::resolve_llama(&s.llama_server_path, &setup::DetectEnv::from_process())
             .path(),
@@ -2099,5 +2174,92 @@ mod tests {
         let vision_row = job.stages.iter().find(|r| r.stage == "vision").unwrap();
         assert_eq!(vision_row.status, StageStatus::Done);
         assert!(vision_row.note.is_some());
+    }
+
+    #[test]
+    fn find_worker_dir_release_prefers_resource_dir_and_ignores_env_and_parents() {
+        let dir = test_tmp::TestDir::new("proc-worker-release");
+        let res = dir.path().join("res");
+        let res_worker = res.join("worker");
+        std::fs::create_dir_all(&res_worker).unwrap();
+        std::fs::write(res_worker.join("pyproject.toml"), "").unwrap();
+
+        let parent_worker = dir.path().join("worker");
+        std::fs::create_dir_all(&parent_worker).unwrap();
+        std::fs::write(parent_worker.join("pyproject.toml"), "").unwrap();
+        let nested_exe = dir.path().join("sub").join("deep").join("app.exe");
+        std::fs::create_dir_all(nested_exe.parent().unwrap()).unwrap();
+        let env_dir = std::ffi::OsStr::new("D:/env-worker");
+
+        // Release ignores BBB_WORKER_DIR and picks resource_dir/worker.
+        assert_eq!(
+            find_worker_dir_in("", Some(&res), Some(env_dir), Some(&nested_exe), false),
+            res_worker
+        );
+        // Release without resource_dir ignores parent-folder search and BBB_WORKER_DIR.
+        assert_eq!(
+            find_worker_dir_in("", None, Some(env_dir), Some(&nested_exe), false),
+            PathBuf::from("worker")
+        );
+        // Release still checks worker/ directly next to the executable.
+        let sibling_worker = nested_exe.parent().unwrap().join("worker");
+        std::fs::create_dir_all(&sibling_worker).unwrap();
+        std::fs::write(sibling_worker.join("pyproject.toml"), "").unwrap();
+        assert_eq!(
+            find_worker_dir_in("", None, Some(env_dir), Some(&nested_exe), false),
+            sibling_worker
+        );
+    }
+
+    #[test]
+    fn find_worker_dir_debug_honours_env_override_and_parent_search() {
+        let dir = test_tmp::TestDir::new("proc-worker-debug");
+        let parent_worker = dir.path().join("worker");
+        std::fs::create_dir_all(&parent_worker).unwrap();
+        std::fs::write(parent_worker.join("pyproject.toml"), "").unwrap();
+        let nested_exe = dir.path().join("sub").join("deep").join("app.exe");
+        std::fs::create_dir_all(nested_exe.parent().unwrap()).unwrap();
+
+        let env_dir = std::ffi::OsStr::new("D:/env-worker");
+        assert_eq!(
+            find_worker_dir_in("", None, Some(env_dir), Some(&nested_exe), true),
+            PathBuf::from("D:/env-worker")
+        );
+        assert_eq!(
+            find_worker_dir_in("", None, None, Some(&nested_exe), true),
+            parent_worker
+        );
+    }
+
+    #[test]
+    fn worker_config_uses_bundled_uv_and_local_uv_cache() {
+        let dir = test_tmp::TestDir::new("proc-bundled-uv");
+        let res = dir.path().join("resources");
+        let bin = res.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let uv_name = if cfg!(windows) { "uv.exe" } else { "uv" };
+        let bundled_uv = bin.join(uv_name);
+        std::fs::write(&bundled_uv, b"MZ fake").unwrap();
+
+        let local = dir.path().join("local");
+        let env_dir = env_dir_from(&local, None);
+        let cache_dir = uv_cache_dir_for(&local);
+
+        let cfg = worker_config(
+            &ProcessingSettings::default(),
+            &env_dir,
+            &cache_dir,
+            Some(&res),
+            None,
+        );
+        assert_eq!(cfg.uv, bundled_uv);
+        assert_eq!(cfg.env_dir, local.join("worker-venv"));
+        assert_eq!(cfg.uv_cache_dir.as_deref(), Some(cache_dir.as_path()));
+    }
+
+    #[test]
+    fn uv_cache_dir_lives_under_local_app_data() {
+        let local = Path::new("C:/Users/test/AppData/Local/BlahBlahBot");
+        assert_eq!(uv_cache_dir_for(local), local.join("uv-cache"));
     }
 }

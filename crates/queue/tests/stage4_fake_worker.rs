@@ -287,6 +287,7 @@ fn lab_inner(
         store.clone(),
         move || RunnerSettings {
             worker: WorkerConfig {
+                uv_cache_dir: None,
                 uv: PathBuf::from("uv-is-not-used"),
                 worker_dir: PathBuf::from("worker"),
                 env_dir: PathBuf::from("env"),

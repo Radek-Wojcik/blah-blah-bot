@@ -28,6 +28,14 @@ pub(crate) fn gather(
     p: &Processing,
     probe_llama: bool,
 ) -> (crate::processing::ProcessingSettings, Probe) {
+    gather_with(p, probe_llama, true)
+}
+
+fn gather_with(
+    p: &Processing,
+    probe_llama: bool,
+    probe_models: bool,
+) -> (crate::processing::ProcessingSettings, Probe) {
     let s = p.settings_snapshot();
     let env = DetectEnv::from_process();
     let cfg = p.worker_config();
@@ -45,7 +53,12 @@ pub(crate) fn gather(
     let env_working = p.env_busy().load(Ordering::SeqCst);
     let models_working = p.models_busy();
 
-    let models = (env_ready && uv.is_ok() && worker_dir.is_ok() && !env_working && !models_working)
+    let models = (probe_models
+        && env_ready
+        && uv.is_ok()
+        && worker_dir.is_ok()
+        && !env_working
+        && !models_working)
         .then(|| worker::model_status(&cfg).ok())
         .flatten()
         .map(|v| v.into_iter().collect::<HashMap<_, _>>());
@@ -60,6 +73,12 @@ pub(crate) fn gather(
     let model_path = s.llm.managed.model_path.trim();
     let llm_model =
         (!model_path.is_empty()).then(|| setup::validate_path(PathKind::LlmModel, model_path));
+    let legacy_venv_notice = setup::legacy_venv_migration_notice(
+        p.roaming_data_dir(),
+        p.local_data_dir(),
+        p.env_dir(),
+        s.legacy_venv_notice_dismissed,
+    );
 
     let probe = Probe {
         uv,
@@ -73,6 +92,7 @@ pub(crate) fn gather(
         llama_version,
         llama_candidates: setup::detect_llama_candidates(&s.llama_server_path, &env),
         llm_model,
+        legacy_venv_notice,
     };
     (s, probe)
 }
@@ -91,6 +111,24 @@ pub(crate) fn blocker_error(item: &SetupItem) -> IpcError {
         None => item.message.clone(),
     };
     IpcError::new(item.code.unwrap_or("setup_incomplete"), text)
+}
+
+/// Converts the first blocking item of `status` for a processing job into the IPC error shown
+/// to the user.
+pub(crate) fn check_readiness_for_queue(status: &SetupStatus, needs: &JobNeeds) -> IpcResult<()> {
+    match setup::first_blocker(status, needs) {
+        Some(item) => Err(blocker_error(item)),
+        None => Ok(()),
+    }
+}
+
+/// Converts a worker-environment blocker in `status` into the same IPC error as
+/// [`check_readiness_for_queue`], for commands that invoke the worker directly (recording import).
+pub(crate) fn check_readiness_for_import(status: &SetupStatus) -> IpcResult<()> {
+    match setup::worker_env_blocker(status) {
+        Some(item) => Err(blocker_error(item)),
+        None => Ok(()),
+    }
 }
 
 /// Refuses to process a meeting while something it needs is missing, with the message of the
@@ -116,10 +154,15 @@ pub(crate) fn ensure_ready(state: &AppState, meeting_id: &str, job: &JobOptions)
     };
     let (settings, probe) = gather(p, needs.vision || needs.llm_local);
     let status = setup::build_status(&settings, &probe);
-    match setup::first_blocker(&status, &needs) {
-        Some(item) => Err(blocker_error(item)),
-        None => Ok(()),
-    }
+    check_readiness_for_queue(&status, &needs)
+}
+
+/// Refuses to import a recording while the worker environment is missing, invalid, or still
+/// being prepared, with the exact same readiness message as [`ensure_ready`].
+pub(crate) fn ensure_import_ready(p: &Processing) -> IpcResult<()> {
+    let (settings, probe) = gather_with(p, false, false);
+    let status = setup::build_status(&settings, &probe);
+    check_readiness_for_import(&status)
 }
 
 /// Async: the report asks the worker which models are cached and may run `llama-server
@@ -223,6 +266,7 @@ pub fn prepare_worker_env(state: State<'_, AppState>) -> IpcResult<()> {
         ));
     }
     let env_dir = processing.env_dir().to_path_buf();
+    let uv_cache_dir = processing.uv_cache_dir().to_path_buf();
     let spawned = std::thread::Builder::new()
         .name("worker-env".into())
         .spawn(move || {
@@ -239,7 +283,7 @@ pub fn prepare_worker_env(state: State<'_, AppState>) -> IpcResult<()> {
                 }
             };
             emit("Preparing the processing environment", false, None, None);
-            let result = setup::run_uv_sync(&uv, &worker_dir, &env_dir, |line| {
+            let result = setup::run_uv_sync(&uv, &worker_dir, &env_dir, &uv_cache_dir, |line| {
                 emit(line, false, None, None);
             });
             match result {
@@ -267,4 +311,66 @@ pub fn prepare_worker_env(state: State<'_, AppState>) -> IpcResult<()> {
 #[tauri::command]
 pub fn set_first_run_done(state: State<'_, AppState>, done: bool) -> IpcResult<()> {
     state.processing().set_first_run_done(done)
+}
+
+/// Dismisses the one-time notice about a legacy Roaming `worker-venv` folder.
+#[tauri::command]
+pub fn dismiss_legacy_venv_notice(state: State<'_, AppState>) -> IpcResult<()> {
+    state.processing().dismiss_legacy_venv_notice()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::processing::ProcessingSettings;
+
+    #[test]
+    fn import_and_queue_readiness_produce_the_same_error_when_worker_env_is_not_ready() {
+        let settings = ProcessingSettings::default();
+        let needs = JobNeeds {
+            vision: false,
+            llm_local: false,
+            llm_missing: false,
+        };
+
+        // 1. Missing uv
+        let mut p_no_uv = Probe::empty();
+        p_no_uv.worker_dir = Ok(PathBuf::from("C:/app/worker"));
+        let st = setup::build_status(&settings, &p_no_uv);
+        let q_err = check_readiness_for_queue(&st, &needs).unwrap_err();
+        let i_err = check_readiness_for_import(&st).unwrap_err();
+        assert_eq!(i_err.code, q_err.code);
+        assert_eq!(i_err.message, q_err.message);
+        assert_eq!(i_err.code, setup::CODE_WORKER_ENV);
+
+        // 2. Missing worker folder
+        let mut p_no_worker = Probe::empty();
+        p_no_worker.uv = Ok(PathBuf::from("C:/app/bin/uv.exe"));
+        let st = setup::build_status(&settings, &p_no_worker);
+        let q_err = check_readiness_for_queue(&st, &needs).unwrap_err();
+        let i_err = check_readiness_for_import(&st).unwrap_err();
+        assert_eq!(i_err.code, q_err.code);
+        assert_eq!(i_err.message, q_err.message);
+
+        // 3. Worker env not created yet
+        let mut p_no_env = Probe::empty();
+        p_no_env.uv = Ok(PathBuf::from("C:/app/bin/uv.exe"));
+        p_no_env.worker_dir = Ok(PathBuf::from("C:/app/worker"));
+        p_no_env.env_ready = false;
+        let st = setup::build_status(&settings, &p_no_env);
+        let q_err = check_readiness_for_queue(&st, &needs).unwrap_err();
+        let i_err = check_readiness_for_import(&st).unwrap_err();
+        assert_eq!(i_err.code, q_err.code);
+        assert_eq!(i_err.message, q_err.message);
+        assert!(i_err.message.contains("has not been created yet"));
+
+        // 4. Worker env currently being prepared
+        let mut p_working = p_no_env;
+        p_working.env_working = true;
+        let st = setup::build_status(&settings, &p_working);
+        let q_err = check_readiness_for_queue(&st, &needs).unwrap_err();
+        let i_err = check_readiness_for_import(&st).unwrap_err();
+        assert_eq!(i_err.code, q_err.code);
+        assert_eq!(i_err.message, q_err.message);
+    }
 }

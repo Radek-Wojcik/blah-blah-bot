@@ -724,6 +724,9 @@ pub struct SetupStatus {
     pub items: Vec<SetupItem>,
     /// `llama-server` programs found on this machine.
     pub llama_candidates: Vec<String>,
+    /// One-time notice when a legacy Roaming `worker-venv` folder still exists on disk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legacy_venv_notice: Option<String>,
 }
 
 /// Facts about the machine, gathered by the caller.
@@ -742,6 +745,8 @@ pub struct Probe {
     pub llama_candidates: Vec<PathBuf>,
     /// The check of the configured language-model file; `None` while no path is set.
     pub llm_model: Option<Result<PathBuf, PathProblem>>,
+    /// One-time migration notice when an old Roaming `worker-venv` exists.
+    pub legacy_venv_notice: Option<String>,
 }
 
 impl Probe {
@@ -760,6 +765,7 @@ impl Probe {
             llama_version: None,
             llama_candidates: Vec::new(),
             llm_model: None,
+            legacy_venv_notice: None,
         }
     }
 }
@@ -1085,6 +1091,7 @@ pub fn build_status(s: &ProcessingSettings, p: &Probe) -> SetupStatus {
             .iter()
             .map(|c| c.to_string_lossy().into_owned())
             .collect(),
+        legacy_venv_notice: p.legacy_venv_notice.clone(),
     }
 }
 
@@ -1099,6 +1106,25 @@ pub struct JobNeeds {
     pub llm_missing: bool,
 }
 
+fn is_blocking(state: ItemState) -> bool {
+    matches!(
+        state,
+        ItemState::Missing | ItemState::Invalid | ItemState::Working
+    )
+}
+
+/// The worker-environment blocker, if any (missing `uv`, missing worker folder, uncreated
+/// environment, or environment setup currently running).
+///
+/// Reused by commands that invoke the worker directly (such as recording import) so they
+/// produce the exact same readiness error as [`first_blocker`] in the processing queue.
+pub fn worker_env_blocker(status: &SetupStatus) -> Option<&SetupItem> {
+    status
+        .items
+        .iter()
+        .find(|i| i.key == KEY_WORKER_ENV && is_blocking(i.state))
+}
+
 /// The first item that stops a job from running, if any.
 pub fn first_blocker<'a>(status: &'a SetupStatus, needs: &JobNeeds) -> Option<&'a SetupItem> {
     status.items.iter().find(|i| {
@@ -1109,15 +1135,33 @@ pub fn first_blocker<'a>(status: &'a SetupStatus, needs: &JobNeeds) -> Option<&'
             KEY_VISION => needs.vision,
             _ => false,
         };
-        relevant
-            && matches!(
-                i.state,
-                ItemState::Missing | ItemState::Invalid | ItemState::Working
-            )
+        relevant && is_blocking(i.state)
     })
 }
 
 // ----- the environment -------------------------------------------------------------------------
+
+/// Decides whether to show a one-time notice when a legacy Roaming `worker-venv` folder exists
+/// on disk. The old folder is never deleted automatically; the notice tells the user it can be
+/// removed safely to free disk space.
+pub fn legacy_venv_migration_notice(
+    roaming_data_dir: &Path,
+    local_data_dir: &Path,
+    active_env_dir: &Path,
+    notice_dismissed: bool,
+) -> Option<String> {
+    if notice_dismissed || roaming_data_dir == local_data_dir {
+        return None;
+    }
+    let legacy = roaming_data_dir.join("worker-venv");
+    if active_env_dir == legacy || !legacy.is_dir() {
+        return None;
+    }
+    Some(format!(
+        "The processing environment now lives in Local AppData. You can safely delete the old folder at {} to free disk space.",
+        legacy.display()
+    ))
+}
 
 /// Whether a Python environment exists in `env_dir` (the interpreter is there).
 pub fn env_ready(env_dir: &Path) -> bool {
@@ -1126,18 +1170,12 @@ pub fn env_ready(env_dir: &Path) -> bool {
             || env_dir.join("bin").join("python").is_file())
 }
 
-/// Runs `uv sync --frozen` for the worker, handing every line of its output to `on_line`.
-/// Needs the network on the first run. Stopped after two hours.
-pub fn run_uv_sync(
-    uv: &Path,
-    worker_dir: &Path,
-    env_dir: &Path,
-    mut on_line: impl FnMut(&str),
-) -> Result<(), String> {
+fn uv_sync_command(uv: &Path, worker_dir: &Path, env_dir: &Path, cache_dir: &Path) -> Command {
     let mut cmd = Command::new(uv);
     cmd.args(["sync", "--frozen", "--project"])
         .arg(worker_dir)
         .env("UV_PROJECT_ENVIRONMENT", env_dir)
+        .env("UV_CACHE_DIR", cache_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
@@ -1146,6 +1184,19 @@ pub fn run_uv_sync(
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000);
     }
+    cmd
+}
+
+/// Runs `uv sync --frozen` for the worker, handing every line of its output to `on_line`.
+/// Needs the network on the first run. Stopped after two hours.
+pub fn run_uv_sync(
+    uv: &Path,
+    worker_dir: &Path,
+    env_dir: &Path,
+    cache_dir: &Path,
+    mut on_line: impl FnMut(&str),
+) -> Result<(), String> {
+    let mut cmd = uv_sync_command(uv, worker_dir, env_dir, cache_dir);
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("uv could not be started ({}): {e}", uv.display()))?;
@@ -1834,9 +1885,96 @@ mod tests {
     fn a_missing_program_fails_with_a_message_and_not_with_a_panic() {
         let d = scratch("nouv");
         let gone = d.path().join(exe("uv"));
-        let err = run_uv_sync(&gone, d.path(), d.path(), |_| {}).unwrap_err();
+        let cache = d.path().join("uv-cache");
+        let err = run_uv_sync(&gone, d.path(), d.path(), &cache, |_| {}).unwrap_err();
         assert!(err.contains("could not be started"), "{err}");
         assert!(probe_llama_version(&gone, Duration::from_secs(1)).is_err());
+    }
+
+    #[test]
+    fn legacy_venv_migration_notice_triggers_once_and_never_deletes_old_folder() {
+        let d = scratch("legacy-venv");
+        let roaming = d.path().join("roaming");
+        let local = d.path().join("local");
+        let active_env = local.join("worker-venv");
+        fs::create_dir_all(&roaming).unwrap();
+        fs::create_dir_all(&local).unwrap();
+
+        // No old folder -> no notice.
+        assert_eq!(
+            legacy_venv_migration_notice(&roaming, &local, &active_env, false),
+            None
+        );
+
+        let legacy = roaming.join("worker-venv");
+        fs::create_dir_all(&legacy).unwrap();
+        let sentinel = legacy.join("pyvenv.cfg");
+        fs::write(&sentinel, "home = old").unwrap();
+
+        // Old folder exists and not dismissed -> notice mentions the folder and never deletes it.
+        let notice = legacy_venv_migration_notice(&roaming, &local, &active_env, false)
+            .expect("expected migration notice");
+        assert!(notice.contains(&legacy.display().to_string()), "{notice}");
+        assert!(notice.contains("delete"), "{notice}");
+        assert!(sentinel.is_file(), "legacy folder must never be deleted");
+
+        // Once dismissed -> no notice.
+        assert_eq!(
+            legacy_venv_migration_notice(&roaming, &local, &active_env, true),
+            None
+        );
+
+        // If the user explicitly pointed BBB_WORKER_ENV_DIR at the legacy folder -> no notice.
+        assert_eq!(
+            legacy_venv_migration_notice(&roaming, &local, &legacy, false),
+            None
+        );
+
+        // Same roaming and local dir -> no notice.
+        assert_eq!(
+            legacy_venv_migration_notice(&roaming, &roaming, &active_env, false),
+            None
+        );
+    }
+
+    #[test]
+    fn uv_sync_command_sets_project_env_and_local_cache_dir() {
+        let cmd = uv_sync_command(
+            Path::new("C:/app/bin/uv.exe"),
+            Path::new("C:/app/worker"),
+            Path::new("C:/local/worker-venv"),
+            Path::new("C:/local/uv-cache"),
+        );
+        let env_of = |key: &str| -> Option<String> {
+            cmd.get_envs()
+                .find(|(k, _)| *k == OsStr::new(key))
+                .and_then(|(_, v)| v.map(|s| s.to_string_lossy().into_owned()))
+        };
+        assert_eq!(
+            env_of("UV_PROJECT_ENVIRONMENT").as_deref(),
+            Some("C:/local/worker-venv")
+        );
+        assert_eq!(env_of("UV_CACHE_DIR").as_deref(), Some("C:/local/uv-cache"));
+    }
+
+    #[test]
+    fn worker_env_blocker_matches_first_blocker_for_all_env_failures() {
+        let s = ProcessingSettings::default();
+        let needs = JobNeeds {
+            vision: false,
+            llm_local: false,
+            llm_missing: false,
+        };
+        let mut p = ready_probe();
+        assert!(worker_env_blocker(&build_status(&s, &p)).is_none());
+
+        p.env_ready = false;
+        let st = build_status(&s, &p);
+        assert_eq!(worker_env_blocker(&st), first_blocker(&st, &needs));
+
+        p.env_working = true;
+        let st = build_status(&s, &p);
+        assert_eq!(worker_env_blocker(&st), first_blocker(&st, &needs));
     }
 
     #[test]

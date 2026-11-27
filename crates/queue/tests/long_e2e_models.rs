@@ -385,6 +385,7 @@ fn a_long_synthetic_meeting_goes_through_the_whole_pipeline() {
         store.clone(),
         move || RunnerSettings {
             worker: WorkerConfig {
+                uv_cache_dir: None,
                 uv: PathBuf::from("uv"),
                 worker_dir: worker_dir.clone(),
                 env_dir: env_dir.clone(),

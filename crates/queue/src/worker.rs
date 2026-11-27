@@ -50,6 +50,8 @@ pub struct WorkerConfig {
     pub worker_dir: PathBuf,
     /// Where the Python environment is created (outside the installation folder).
     pub env_dir: PathBuf,
+    /// Dedicated `uv` cache folder under Local AppData (never `%TEMP%`).
+    pub uv_cache_dir: Option<PathBuf>,
     /// Cache folder for downloaded models; `None` uses the Hugging Face default cache.
     pub models_dir: Option<PathBuf>,
     /// `llama-server` executable for the managed vision model.
@@ -71,6 +73,7 @@ impl fmt::Debug for WorkerConfig {
             .field("uv", &self.uv)
             .field("worker_dir", &self.worker_dir)
             .field("env_dir", &self.env_dir)
+            .field("uv_cache_dir", &self.uv_cache_dir)
             .field("models_dir", &self.models_dir)
             .field("llama_server", &self.llama_server)
             .field(
@@ -323,6 +326,9 @@ fn command_with(cfg: &WorkerConfig, launcher: Option<&Launcher>, args: &[&str]) 
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(cache_dir) = &cfg.uv_cache_dir {
+        cmd.env("UV_CACHE_DIR", cache_dir);
+    }
     if let Some(dir) = &cfg.models_dir {
         cmd.env("BBB_MODELS_DIR", dir);
     }
@@ -408,9 +414,7 @@ fn run_process(
     }
 }
 
-/// Create or update the Python environment from the lock file. Needs the network on the
-/// first run (several GB). `on_event` receives progress lines of the installer as messages.
-pub fn ensure_environment(cfg: &WorkerConfig) -> Result<(), RunError> {
+fn ensure_environment_command(cfg: &WorkerConfig) -> Command {
     let mut cmd = Command::new(&cfg.uv);
     cmd.args(["sync", "--frozen", "--project"])
         .arg(&cfg.worker_dir)
@@ -418,11 +422,21 @@ pub fn ensure_environment(cfg: &WorkerConfig) -> Result<(), RunError> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
+    if let Some(cache_dir) = &cfg.uv_cache_dir {
+        cmd.env("UV_CACHE_DIR", cache_dir);
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000);
     }
+    cmd
+}
+
+/// Create or update the Python environment from the lock file. Needs the network on the
+/// first run (several GB). `on_event` receives progress lines of the installer as messages.
+pub fn ensure_environment(cfg: &WorkerConfig) -> Result<(), RunError> {
+    let mut cmd = ensure_environment_command(cfg);
     let out = cmd
         .output()
         .map_err(|e| RunError::new(format!("could not run uv ({}): {e}", cfg.uv.display())))?;
@@ -1143,6 +1157,7 @@ mod tests {
             uv: "uv".into(),
             worker_dir: "worker".into(),
             env_dir: "env".into(),
+            uv_cache_dir: None,
             models_dir: None,
             llama_server: None,
             hf_token: Some("hf_SECRETTOKEN".into()),
@@ -1187,6 +1202,7 @@ mod tests {
         use std::ffi::OsStr;
         let cfg = WorkerConfig {
             uv: "uv".into(),
+            uv_cache_dir: None,
             worker_dir: "worker".into(),
             env_dir: "env".into(),
             models_dir: None,
@@ -1292,5 +1308,44 @@ mod tests {
         assert_eq!(d.tracks.len(), 1);
         assert_eq!(d.segments.len(), 2);
         assert_eq!(d.screenshots.len(), 2);
+    }
+
+    #[test]
+    fn uv_cache_dir_is_passed_to_uv_commands() {
+        use std::ffi::OsStr;
+        let cache = PathBuf::from("C:/Users/test/AppData/Local/BlahBlahBot/uv-cache");
+        let cfg = WorkerConfig {
+            uv: "C:/app/bin/uv.exe".into(),
+            worker_dir: "C:/app/worker".into(),
+            env_dir: "C:/Users/test/AppData/Local/BlahBlahBot/worker-venv".into(),
+            uv_cache_dir: Some(cache.clone()),
+            models_dir: None,
+            llama_server: None,
+            hf_token: None,
+            step_timeout: Duration::from_secs(1),
+            llm_api_key: None,
+        };
+        let env_of = |cmd: &Command, key: &str| -> Option<Option<String>> {
+            cmd.get_envs()
+                .find(|(k, _)| *k == OsStr::new(key))
+                .map(|(_, v)| v.map(|s| s.to_string_lossy().into_owned()))
+        };
+        let expected = Some(Some(cache.to_string_lossy().into_owned()));
+
+        let sync_cmd = ensure_environment_command(&cfg);
+        assert_eq!(env_of(&sync_cmd, "UV_CACHE_DIR"), expected);
+
+        let models_cmd = ensure_models_command(&cfg, &["whisper-turbo"]);
+        assert_eq!(env_of(&models_cmd, "UV_CACHE_DIR"), expected);
+
+        let step_cmd = step_command(
+            None,
+            &cfg,
+            Path::new("m.json"),
+            Path::new("dir"),
+            &JobOptions::default(),
+            "asr",
+        );
+        assert_eq!(env_of(&step_cmd, "UV_CACHE_DIR"), expected);
     }
 }

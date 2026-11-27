@@ -82,6 +82,7 @@ fn the_context_is_reported_without_holding_the_store() {
         store,
         move || RunnerSettings {
             worker: WorkerConfig {
+                uv_cache_dir: None,
                 uv: PathBuf::from("uv-is-not-used"),
                 worker_dir: PathBuf::from("worker"),
                 env_dir: PathBuf::from("env"),
