@@ -222,6 +222,17 @@ describe("SettingsView", () => {
     expect(inputByLabel("Vision model path (GGUF)").value).toBe("E:\\Models\\detected-vision.gguf");
   });
 
+  it("keeps the Auto-detect button when the language model settings are missing", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    const original = await backend.getProcessingSettings();
+    const withoutLlm = { ...original, llm: undefined };
+    vi.spyOn(backend, "getProcessingSettings").mockResolvedValue(withoutLlm);
+
+    await mount(backend, "models");
+
+    expect(host.textContent).toContain("Auto-detect models on disk");
+  });
+
   it("persists Local Folder Auto-Save checkbox and pre-populated folder path in Preferences", async () => {
     const backend = createMockBackend({ clockRate: 0 });
     const saveSpy = vi.spyOn(backend, "saveSettings");
@@ -669,5 +680,163 @@ describe("Keep audio after processing (global setting)", () => {
     });
     await flush();
     expect(host.textContent).not.toContain("Possible duplicate name");
+  });
+});
+
+describe("Settings cards and compact Detection panel", () => {
+  it("renders separate cards with topic headings in AI Models and Processing tabs", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    await mount(backend, "models");
+
+    const modelCards = Array.from(host.querySelectorAll(".panel.quiet"));
+    expect(modelCards.length).toBe(4);
+    expect(host.querySelectorAll("fieldset.llm-group").length).toBe(0);
+    const modelHeadings = modelCards.map((c) =>
+      c.querySelector("h3.sub-head")?.textContent?.trim(),
+    );
+    expect(modelHeadings).toEqual([
+      "Language model",
+      "llama-server",
+      "Vision",
+      "Downloadable models",
+    ]);
+
+    await clickTab("Processing");
+    const procCards = Array.from(host.querySelectorAll(".panel.quiet"));
+    expect(procCards.length).toBe(5);
+    expect(host.querySelectorAll("fieldset.llm-group").length).toBe(0);
+    const procHeadings = procCards.map((c) => c.querySelector("h3.sub-head")?.textContent?.trim());
+    expect(procHeadings).toEqual([
+      "Processing & Hardware Policy",
+      "GPU guard thresholds",
+      "Audio after processing",
+      "Voice recognition thresholds",
+      "Worker Python environment",
+    ]);
+  });
+
+  it("uses Turn off wording and switches app state without Never in Detection", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    const saveSpy = vi.spyOn(backend, "saveDetectionSettings");
+    await mount(backend, "preferences");
+
+    const section = host.querySelector('section[aria-labelledby="detection-heading"]')!;
+    expect(section).not.toBeNull();
+    const list = section.querySelector('ul[aria-label="Watched applications"]')!;
+    expect(list.textContent).not.toContain("Never ask");
+
+    const turnOffZoom = section.querySelector<HTMLButtonElement>(
+      'button[aria-label="Turn off Zoom"]',
+    )!;
+    expect(turnOffZoom).not.toBeNull();
+    expect(turnOffZoom.textContent?.trim()).toBe("Turn off");
+
+    await act(async () => {
+      turnOffZoom.click();
+    });
+    await flush();
+
+    expect(saveSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ optedOut: expect.arrayContaining(["zoom"]) }),
+    );
+    expect(list.textContent).toContain("switched off");
+    expect(list.textContent).not.toContain("switched off with Never");
+    expect(section.querySelector('[data-testid="detection-state"]')?.textContent).toBe(
+      "On, watching 6 applications.",
+    );
+
+    const askAgainZoom = section.querySelector<HTMLButtonElement>(
+      'button[aria-label="Ask again for Zoom"]',
+    )!;
+    await act(async () => {
+      askAgainZoom.click();
+    });
+    await flush();
+    expect(list.textContent).not.toContain("switched off");
+  });
+
+  it("renders sensitivity presets as a segmented control and updates aria-pressed on click", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    const saveSpy = vi.spyOn(backend, "saveDetectionSettings");
+    await mount(backend, "preferences");
+
+    const group = host.querySelector('[role="group"][aria-label="Detection sensitivity"]')!;
+    expect(group).not.toBeNull();
+    const buttons = Array.from(group.querySelectorAll<HTMLButtonElement>("button"));
+    expect(buttons.map((b) => b.textContent?.trim())).toEqual(["Low", "Balanced", "High"]);
+    expect(buttons[0].getAttribute("aria-pressed")).toBe("false");
+    expect(buttons[1].getAttribute("aria-pressed")).toBe("true");
+    expect(buttons[2].getAttribute("aria-pressed")).toBe("false");
+
+    await act(async () => {
+      buttons[2].click();
+    });
+    await flush();
+
+    expect(saveSpy).toHaveBeenCalledWith(expect.objectContaining({ sensitivity: "high" }));
+    expect(buttons[1].getAttribute("aria-pressed")).toBe("false");
+    expect(buttons[2].getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("renders ready, older, and missing model states with Update and Download actions", async () => {
+    const base = createMockBackend({ clockRate: 0 });
+    const downloadSpy = vi.fn().mockResolvedValue(undefined);
+    const backend: Backend = {
+      ...base,
+      modelStatus: async () => [
+        {
+          key: "whisper-turbo",
+          label: "Whisper turbo (speech recognition)",
+          cached: true,
+          status: "ready",
+          gated: false,
+          sizeMb: 1600,
+        },
+        {
+          key: "vision",
+          label: "Screenshot descriptions (vision model)",
+          cached: false,
+          status: "older",
+          gated: false,
+          sizeMb: 4800,
+        },
+        {
+          key: "diarization",
+          label: "Speaker separation (pyannote)",
+          cached: false,
+          status: "missing",
+          gated: true,
+          sizeMb: 1200,
+        },
+      ],
+      downloadModels: downloadSpy,
+    };
+
+    await mount(backend, "models");
+
+    const items = Array.from(host.querySelectorAll<HTMLLIElement>('ul[aria-label="Models"] li'));
+    expect(items).toHaveLength(3);
+
+    expect(items[0].textContent).toContain("Downloaded");
+    expect(items[0].querySelector("button")).toBeNull();
+
+    expect(items[1].textContent).toContain("Downloaded (older version, update?)");
+    const updateBtn = items[1].querySelector<HTMLButtonElement>(
+      'button[aria-label="Update Screenshot descriptions (vision model)"]',
+    );
+    expect(updateBtn).not.toBeNull();
+    expect(updateBtn!.textContent?.trim()).toBe("Update");
+
+    const downloadBtn = items[2].querySelector<HTMLButtonElement>(
+      'button[aria-label="Download Speaker separation (pyannote)"]',
+    );
+    expect(downloadBtn).not.toBeNull();
+    expect(downloadBtn!.textContent?.trim()).toBe("Download");
+
+    await act(async () => {
+      updateBtn!.click();
+    });
+    await flush();
+    expect(downloadSpy).toHaveBeenCalledWith(["vision"]);
   });
 });

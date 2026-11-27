@@ -91,7 +91,12 @@ def _run_enroll(args: argparse.Namespace) -> None:
 
 def _run_models(args: argparse.Namespace) -> None:
     if args.status:
-        protocol.emit("models", cached={k: models.is_cached(k) for k in models.MODELS})
+        states = {k: models.cache_status(k) for k in models.MODELS}
+        protocol.emit(
+            "models",
+            cached={k: v == "ready" for k, v in states.items()},
+            states=states,
+        )
         return
     token = os.environ.get("HF_TOKEN") or None
     keys = [k for k in args.ensure.split(",") if k]

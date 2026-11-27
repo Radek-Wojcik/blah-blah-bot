@@ -57,7 +57,7 @@ def test_missing_model_messages_point_to_the_settings_and_the_setup(monkeypatch,
     monkeypatch.setenv("BBB_MODELS_DIR", str(tmp_path))
     with pytest.raises(models.ModelMissing) as e:
         models.local_path("vision")
-    assert "Settings > Processing" in str(e.value) and "setup" in str(e.value)
+    assert "Settings > AI Models" in str(e.value) and "setup" in str(e.value)
     with pytest.raises(models.ModelMissing) as e:
         models.download("diarization", token=None)
     assert "setup" in str(e.value)

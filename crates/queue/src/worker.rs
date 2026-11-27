@@ -94,6 +94,26 @@ pub struct Launcher {
     pub args: Vec<OsString>,
 }
 
+/// Cache state of a managed worker model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ModelCacheState {
+    Ready,
+    Older,
+    #[default]
+    Missing,
+}
+
+impl ModelCacheState {
+    pub fn from_str_or_missing(s: &str) -> Self {
+        match s {
+            "ready" => Self::Ready,
+            "older" => Self::Older,
+            _ => Self::Missing,
+        }
+    }
+}
+
 /// One line of the worker's output.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -113,6 +133,8 @@ pub enum WorkerEvent {
     },
     Models {
         cached: serde_json::Map<String, Value>,
+        #[serde(default)]
+        states: serde_json::Map<String, Value>,
     },
 }
 
@@ -458,6 +480,38 @@ pub fn ensure_models(
     run_process(cmd, Duration::from_secs(6 * 3600), on_event).map(|_| ())
 }
 
+/// Parse per-model cache states from a `WorkerEvent::Models` payload, falling back to the
+/// legacy `cached` booleans when `states` is absent.
+pub fn parse_model_states(
+    cached: &serde_json::Map<String, Value>,
+    states: &serde_json::Map<String, Value>,
+) -> Vec<(String, ModelCacheState)> {
+    if !states.is_empty() {
+        states
+            .iter()
+            .map(|(k, v)| {
+                let state = v
+                    .as_str()
+                    .map(ModelCacheState::from_str_or_missing)
+                    .unwrap_or(ModelCacheState::Missing);
+                (k.clone(), state)
+            })
+            .collect()
+    } else {
+        cached
+            .iter()
+            .map(|(k, v)| {
+                let state = if v.as_bool().unwrap_or(false) {
+                    ModelCacheState::Ready
+                } else {
+                    ModelCacheState::Missing
+                };
+                (k.clone(), state)
+            })
+            .collect()
+    }
+}
+
 /// Which models are cached: `(key, cached)` pairs.
 pub fn model_status(cfg: &WorkerConfig) -> Result<Vec<(String, bool)>, RunError> {
     let cmd = command(cfg, &["run", "--frozen"]).tap(|c| {
@@ -465,11 +519,25 @@ pub fn model_status(cfg: &WorkerConfig) -> Result<Vec<(String, bool)>, RunError>
     });
     let mut out = Vec::new();
     run_process(cmd, Duration::from_secs(120), |ev| {
-        if let WorkerEvent::Models { cached } = ev {
+        if let WorkerEvent::Models { cached, .. } = ev {
             out = cached
                 .iter()
                 .map(|(k, v)| (k.clone(), v.as_bool().unwrap_or(false)))
                 .collect();
+        }
+    })?;
+    Ok(out)
+}
+
+/// Cache state (`ready`, `older`, `missing`) for each model known to the worker.
+pub fn model_cache_status(cfg: &WorkerConfig) -> Result<Vec<(String, ModelCacheState)>, RunError> {
+    let cmd = command(cfg, &["run", "--frozen"]).tap(|c| {
+        c.args(["python", "-m", "bbb_worker", "models", "--status"]);
+    });
+    let mut out = Vec::new();
+    run_process(cmd, Duration::from_secs(120), |ev| {
+        if let WorkerEvent::Models { cached, states } = ev {
+            out = parse_model_states(cached, states);
         }
     })?;
     Ok(out)
@@ -1292,5 +1360,32 @@ mod tests {
         assert_eq!(d.tracks.len(), 1);
         assert_eq!(d.segments.len(), 2);
         assert_eq!(d.screenshots.len(), 2);
+    }
+
+    #[test]
+    fn parses_model_states_and_falls_back_to_cached_booleans() {
+        let ev = parse_event(
+            r#"{"event":"models","cached":{"whisper-turbo":true,"vision":false,"diarization":false},"states":{"whisper-turbo":"ready","vision":"older","diarization":"missing"}}"#,
+        )
+        .unwrap();
+        let WorkerEvent::Models { cached, states } = ev else {
+            panic!("expected models event");
+        };
+        let parsed: std::collections::HashMap<_, _> =
+            parse_model_states(&cached, &states).into_iter().collect();
+        assert_eq!(parsed.get("whisper-turbo"), Some(&ModelCacheState::Ready));
+        assert_eq!(parsed.get("vision"), Some(&ModelCacheState::Older));
+        assert_eq!(parsed.get("diarization"), Some(&ModelCacheState::Missing));
+
+        let legacy =
+            parse_event(r#"{"event":"models","cached":{"whisper-turbo":true,"vision":false}}"#)
+                .unwrap();
+        let WorkerEvent::Models { cached, states } = legacy else {
+            panic!("expected legacy models event");
+        };
+        let fallback: std::collections::HashMap<_, _> =
+            parse_model_states(&cached, &states).into_iter().collect();
+        assert_eq!(fallback.get("whisper-turbo"), Some(&ModelCacheState::Ready));
+        assert_eq!(fallback.get("vision"), Some(&ModelCacheState::Missing));
     }
 }
