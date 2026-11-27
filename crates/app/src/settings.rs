@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use recorder::detect::Sensitivity;
 use serde::{Deserialize, Serialize};
 
-pub const DEFAULT_RECORD_HOTKEY: &str = "Ctrl+Shift+R";
-pub const DEFAULT_SCREENSHOT_HOTKEY: &str = "Ctrl+Shift+S";
+pub const DEFAULT_RECORD_HOTKEY: &str = "Ctrl+Alt+Shift+F9";
+pub const DEFAULT_SCREENSHOT_HOTKEY: &str = "Ctrl+Alt+Shift+F10";
 
 /// How mouse side buttons (X1/X2, back/forward) behave in the UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -302,20 +302,22 @@ impl Default for Settings {
 }
 
 impl Settings {
-    /// Migrate legacy `Ctrl+Alt+R` / `Ctrl+Alt+S` defaults once, independently per key.
+    /// Migrate legacy `Ctrl+Alt+R` / `Ctrl+Alt+S` defaults once, independently per key. A key is
+    /// left alone when the new default would equal the other key (no duplicates).
     pub fn migrate_legacy_hotkeys(&mut self) -> bool {
         if self.hotkeys_migrated {
             return false;
         }
-        if self.record_hotkey.trim().eq_ignore_ascii_case("Ctrl+Alt+R") {
-            self.record_hotkey = DEFAULT_RECORD_HOTKEY.into();
-        }
-        if self
-            .screenshot_hotkey
-            .trim()
-            .eq_ignore_ascii_case("Ctrl+Alt+S")
+        let same = |a: &str, b: &str| a.trim().eq_ignore_ascii_case(b.trim());
+        if same(&self.screenshot_hotkey, "Ctrl+Alt+S")
+            && !same(&self.record_hotkey, DEFAULT_SCREENSHOT_HOTKEY)
         {
             self.screenshot_hotkey = DEFAULT_SCREENSHOT_HOTKEY.into();
+        }
+        if same(&self.record_hotkey, "Ctrl+Alt+R")
+            && !same(&self.screenshot_hotkey, DEFAULT_RECORD_HOTKEY)
+        {
+            self.record_hotkey = DEFAULT_RECORD_HOTKEY.into();
         }
         self.hotkeys_migrated = true;
         true
@@ -729,6 +731,34 @@ mod tests {
         let reloaded = Settings::load(&path);
         assert_eq!(reloaded.record_hotkey, "Ctrl+Alt+R");
         assert!(reloaded.hotkeys_migrated);
+    }
+
+    #[test]
+    fn legacy_migration_does_not_create_a_duplicate_with_the_other_key() {
+        let (_dir, path) = temp("legacy-dup");
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"recordHotkey":"Ctrl+Alt+R","screenshotHotkey":"{DEFAULT_RECORD_HOTKEY}"}}"#
+            ),
+        )
+        .unwrap();
+        let loaded = Settings::load(&path);
+        assert_eq!(loaded.record_hotkey, "Ctrl+Alt+R");
+        assert_eq!(loaded.screenshot_hotkey, DEFAULT_RECORD_HOTKEY);
+        assert!(loaded.hotkeys_migrated);
+
+        let (_dir2, path2) = temp("legacy-dup2");
+        std::fs::write(
+            &path2,
+            format!(
+                r#"{{"recordHotkey":"{DEFAULT_SCREENSHOT_HOTKEY}","screenshotHotkey":"Ctrl+Alt+S"}}"#
+            ),
+        )
+        .unwrap();
+        let loaded = Settings::load(&path2);
+        assert_eq!(loaded.screenshot_hotkey, "Ctrl+Alt+S");
+        assert_eq!(loaded.record_hotkey, DEFAULT_SCREENSHOT_HOTKEY);
     }
 
     #[test]
