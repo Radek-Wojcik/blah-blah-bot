@@ -9,8 +9,11 @@ import type { GgufFile, ModelStatus, ProcessingSettings } from "./types";
  * - `no-vision`: ready, except that the screenshot model is not downloaded.
  * - `no-llama`: ready, except that no llama-server is configured or found.
  * - `download-fails`: fresh, and the first download of every model fails.
+ * - `setup-offline`: fresh, and the first run of each setup task fails with an offline error.
+ * - `legacy-venv`: ready, with a one-time notice about an old Roaming `worker-venv` folder.
  */
-export type SetupScenario = "fresh" | "ready" | "no-vision" | "no-llama" | "download-fails";
+export type SetupScenario =
+  "fresh" | "ready" | "no-vision" | "no-llama" | "download-fails" | "setup-offline" | "legacy-venv";
 
 export const SETUP_SCENARIOS: SetupScenario[] = [
   "fresh",
@@ -18,6 +21,8 @@ export const SETUP_SCENARIOS: SetupScenario[] = [
   "no-vision",
   "no-llama",
   "download-fails",
+  "setup-offline",
+  "legacy-venv",
 ];
 
 /** The scenario named by a query value, or undefined. */
@@ -33,12 +38,18 @@ export interface SetupWorld {
   workerEnv: boolean;
   /** Attempts to prepare the environment that still fail before one succeeds. */
   envFailures: number;
+  /** Attempts to download llama-server that still fail before one succeeds. */
+  llamaFailures: number;
+  /** Attempts to download the default language model that still fail before one succeeds. */
+  llmFailures: number;
   llamaCandidates: string[];
   ggufs: GgufFile[];
   /** Downloads that still fail before one succeeds, per model key. */
   downloadFailures: Record<string, number>;
   /** Files that exist; a path outside this set is "not found". */
   knownFiles: Set<string>;
+  /** One-time notice about an old Roaming `worker-venv` folder, or null when absent/dismissed. */
+  legacyVenvNotice: string | null;
 }
 
 export const DEMO_LLAMA = "C:\\Tools\\llama\\llama-server.exe";
@@ -61,10 +72,13 @@ export function idleWorld(): SetupWorld {
     active: false,
     workerEnv: true,
     envFailures: 0,
+    llamaFailures: 0,
+    llmFailures: 0,
     llamaCandidates: [],
     ggufs: [],
     downloadFailures: {},
     knownFiles: new Set(),
+    legacyVenvNotice: null,
   };
 }
 
@@ -86,15 +100,18 @@ export function applySetupScenario(
     active: true,
     workerEnv: false,
     envFailures: 0,
+    llamaFailures: 0,
+    llmFailures: 0,
     llamaCandidates: [DEMO_LLAMA],
     ggufs,
     downloadFailures: {},
     knownFiles: new Set([DEMO_LLAMA, ...ggufs.map((g) => g.path)]),
+    legacyVenvNotice: null,
   };
   processing.firstRunDone = false;
   processing.describeScreenshots = true;
   processing.skipReports = false;
-  if (scenario === "fresh" || scenario === "download-fails") {
+  if (scenario === "fresh" || scenario === "download-fails" || scenario === "setup-offline") {
     processing.hfTokenSet = false;
     processing.llamaServerPath = "";
     processing.llm!.managed.modelPath = "";
@@ -102,6 +119,11 @@ export function applySetupScenario(
     if (scenario === "download-fails") {
       world.workerEnv = true;
       world.downloadFailures = { "whisper-turbo": 1, diarization: 1, vision: 1 };
+    }
+    if (scenario === "setup-offline") {
+      world.envFailures = 1;
+      world.llamaFailures = 1;
+      world.llmFailures = 1;
     }
     return world;
   }
@@ -115,6 +137,10 @@ export function applySetupScenario(
     processing.llamaServerPath = "";
     world.llamaCandidates = [];
     world.knownFiles.delete(DEMO_LLAMA);
+  }
+  if (scenario === "legacy-venv") {
+    world.legacyVenvNotice =
+      "The processing environment now lives in Local AppData. You can safely delete the old folder at C:\\Users\\demo\\AppData\\Roaming\\BlahBlahBot\\worker-venv to free disk space.";
   }
   return world;
 }

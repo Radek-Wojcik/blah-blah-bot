@@ -197,8 +197,16 @@ export interface Backend {
   checkSetupPath(kind: SetupPathKind, path: string): Promise<SetupPathCheck>;
   /** Starts creating the processing environment; follow `onSetupProgress`. */
   prepareWorkerEnv(): Promise<void>;
+  /** Downloads the pinned llama-server release; follow `onSetupProgress`. */
+  downloadLlamaServer(): Promise<void>;
+  /** Downloads the default language model GGUF; follow `onSetupProgress`. */
+  downloadLanguageModel(): Promise<void>;
+  /** Stops the currently running setup task. */
+  cancelSetupTask(): Promise<void>;
   /** Marks the first-run setup as completed (default) or to be shown again. */
   setFirstRunDone(done?: boolean): Promise<void>;
+  /** Dismisses the one-time notice about a legacy Roaming `worker-venv` folder. */
+  dismissLegacyVenvNotice(): Promise<void>;
 
   /** API keys are write-only: `ProcessingSettings.llm.cloudKeySet` / `externalKeySet` tell they are stored. */
   setCloudKey(key: string): Promise<void>;

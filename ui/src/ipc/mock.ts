@@ -19,7 +19,7 @@ import { createMockDetection } from "./mock-detection";
 import { createMockDrafts } from "./mock-drafts";
 import { createMockPublishing, type MockHooks } from "./mock-publish";
 import { mockCheckSetupPath, mockGgufModels, mockSetupStatus } from "./mock-readiness";
-import { applySetupScenario, type SetupScenario } from "./mock-setup";
+import { applySetupScenario, DEMO_LLAMA, DEMO_LLM, type SetupScenario } from "./mock-setup";
 import { fail } from "./mock-util";
 import { createMockPicker, type MockPickResults } from "./mock-pick";
 import { isLocalHost, missingForKind, urlHost, validateLlmSettings } from "../llm";
@@ -54,6 +54,7 @@ import type {
   HotkeyStatus,
   Settings,
   SetupProgress,
+  SetupTask,
   SourceInfo,
   StageName,
   TranscriptData,
@@ -376,7 +377,15 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
   const world = applySetupScenario(opts.setup, processing, models);
   // The steps of a setup scenario are slower than a queue tick so that their progress can be seen.
   const setupMs = world.active ? Math.max(stepMs / 4, 60) : stepMs / 4;
-  let preparing = false;
+  let activeSetupTask: { task: SetupTask; timers: ReturnType<typeof setTimeout>[] } | null = null;
+  let activeModelDownloads: Array<{ key: string; stop: () => void }> = [];
+  const activeSetupItemKey = (): string | null => {
+    if (!activeSetupTask) return null;
+    if (activeSetupTask.task === "uv-sync") return "workerEnv";
+    if (activeSetupTask.task === "llama-server") return "llamaServer";
+    if (activeSetupTask.task === "language-model") return "llmModel";
+    return null;
+  };
   /** The readiness report; without a scenario the demo setup counts as finished. */
   const readiness = () =>
     mockSetupStatus(
@@ -384,7 +393,8 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       world.active ? models : models.map((m) => ({ ...m, cached: true })),
       world.llamaCandidates,
       world.workerEnv,
-      preparing ? "workerEnv" : null,
+      activeSetupItemKey(),
+      world.legacyVenvNotice,
     );
   let jobs: JobView[] = demoJobs().map((j) => ({
     ...j,
@@ -537,6 +547,105 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
   const progressListeners = new Set<{ cb: (p: ModelsProgress) => void }>();
   const modelsListeners = new Set<{ cb: () => void }>();
   const setupListeners = new Set<{ cb: (p: SetupProgress) => void }>();
+
+  function runSetupTask(
+    task: SetupTask,
+    spec: {
+      steps: Array<{
+        downloadedBytes: number | null;
+        totalBytes: number | null;
+        elapsedSecs: number;
+        message: string;
+      }>;
+      verifyMessage?: string;
+      hasFailure: () => boolean;
+      consumeFailure: () => void;
+      onSuccess: () => void;
+      doneMessage: string;
+    },
+  ) {
+    if (activeSetupTask !== null) fail("busy", "A setup task is already running.");
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    activeSetupTask = { task, timers };
+    const emitSetup = (p: SetupProgress) => setupListeners.forEach((l) => l.cb(p));
+    const willFail = spec.hasFailure();
+    const steps = willFail ? spec.steps.slice(0, 1) : spec.steps;
+    emitSetup({
+      task,
+      phase: "started",
+      downloadedBytes: 0,
+      totalBytes: steps[0]?.totalBytes ?? null,
+      elapsedSecs: 0,
+      message: "Starting...",
+    });
+    steps.forEach((step, idx) => {
+      timers.push(
+        setTimeout(
+          () => {
+            if (activeSetupTask?.task !== task) return;
+            emitSetup({
+              task,
+              phase: "progress",
+              downloadedBytes: step.downloadedBytes,
+              totalBytes: step.totalBytes,
+              elapsedSecs: step.elapsedSecs,
+              message: step.message,
+            });
+          },
+          (idx + 1) * setupMs,
+        ),
+      );
+    });
+    if (!willFail && spec.verifyMessage) {
+      const verifyMessage = spec.verifyMessage;
+      timers.push(
+        setTimeout(
+          () => {
+            if (activeSetupTask?.task !== task) return;
+            const last = steps[steps.length - 1];
+            emitSetup({
+              task,
+              phase: "verifying",
+              downloadedBytes: last?.totalBytes ?? last?.downloadedBytes ?? null,
+              totalBytes: last?.totalBytes ?? null,
+              elapsedSecs: (last?.elapsedSecs ?? 0) + 1,
+              message: verifyMessage,
+            });
+          },
+          (steps.length + 1) * setupMs,
+        ),
+      );
+    }
+    const endStep = steps.length + (!willFail && spec.verifyMessage ? 2 : 1);
+    timers.push(
+      setTimeout(() => {
+        if (activeSetupTask?.task !== task) return;
+        activeSetupTask = null;
+        const last = steps[steps.length - 1];
+        if (willFail) {
+          spec.consumeFailure();
+          emitSetup({
+            task,
+            phase: "failed",
+            downloadedBytes: last?.downloadedBytes ?? null,
+            totalBytes: last?.totalBytes ?? null,
+            elapsedSecs: (last?.elapsedSecs ?? 0) + 1,
+            message: "Network error: no internet connection.",
+          });
+          return;
+        }
+        spec.onSuccess();
+        emitSetup({
+          task,
+          phase: "done",
+          downloadedBytes: last?.totalBytes ?? last?.downloadedBytes ?? null,
+          totalBytes: last?.totalBytes ?? null,
+          elapsedSecs: (last?.elapsedSecs ?? 0) + 2,
+          message: spec.doneMessage,
+        });
+      }, endStep * setupMs),
+    );
+  }
 
   const emit = () => {
     stateListeners.forEach((l) => l.cb(structuredClone(state)));
@@ -1158,37 +1267,144 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
     checkSetupPath: async (kind, path) =>
       mockCheckSetupPath(kind, path, world.active ? world.knownFiles : undefined),
     prepareWorkerEnv: async () => {
-      if (preparing) fail("busy", "The environment is already being prepared.");
-      preparing = true;
-      const lines: Array<[string, number | null]> = [
-        ["Resolving packages", 0.1],
-        ["Downloading packages", 0.45],
-        ["Installing packages", 0.8],
-      ];
-      const send = (line: string, fraction: number | null, end?: string | null) =>
+      const MB = 1024 * 1024;
+      runSetupTask("uv-sync", {
+        steps: [
+          {
+            downloadedBytes: 120 * MB,
+            totalBytes: null,
+            elapsedSecs: 4,
+            message: "Resolving packages",
+          },
+          {
+            downloadedBytes: 480 * MB,
+            totalBytes: null,
+            elapsedSecs: 12,
+            message: "Downloading packages",
+          },
+          {
+            downloadedBytes: 920 * MB,
+            totalBytes: null,
+            elapsedSecs: 21,
+            message: "Installing packages",
+          },
+        ],
+        hasFailure: () => world.envFailures > 0 || Boolean(opts.offline),
+        consumeFailure: () => {
+          if (world.envFailures > 0) world.envFailures -= 1;
+        },
+        onSuccess: () => {
+          world.workerEnv = true;
+        },
+        doneMessage: "The processing environment is ready.",
+      });
+    },
+    downloadLlamaServer: async () => {
+      const MB = 1024 * 1024;
+      const total = 200 * MB;
+      runSetupTask("llama-server", {
+        steps: [
+          {
+            downloadedBytes: 80 * MB,
+            totalBytes: total,
+            elapsedSecs: 3,
+            message: "Downloading llama-server",
+          },
+          {
+            downloadedBytes: 160 * MB,
+            totalBytes: total,
+            elapsedSecs: 6,
+            message: "Downloading llama-server",
+          },
+        ],
+        verifyMessage: "Verifying checksum...",
+        hasFailure: () => world.llamaFailures > 0 || Boolean(opts.offline),
+        consumeFailure: () => {
+          if (world.llamaFailures > 0) world.llamaFailures -= 1;
+        },
+        onSuccess: () => {
+          processing.llamaServerPath = DEMO_LLAMA;
+          world.knownFiles.add(DEMO_LLAMA);
+          if (!world.llamaCandidates.includes(DEMO_LLAMA)) world.llamaCandidates.push(DEMO_LLAMA);
+        },
+        doneMessage: "llama-server is ready.",
+      });
+    },
+    downloadLanguageModel: async () => {
+      const MB = 1024 * 1024;
+      const total = 7400 * MB;
+      runSetupTask("language-model", {
+        steps: [
+          {
+            downloadedBytes: 2400 * MB,
+            totalBytes: total,
+            elapsedSecs: 35,
+            message: "Downloading language model",
+          },
+          {
+            downloadedBytes: 5200 * MB,
+            totalBytes: total,
+            elapsedSecs: 74,
+            message: "Downloading language model",
+          },
+        ],
+        verifyMessage: "Verifying checksum...",
+        hasFailure: () => world.llmFailures > 0 || Boolean(opts.offline),
+        consumeFailure: () => {
+          if (world.llmFailures > 0) world.llmFailures -= 1;
+        },
+        onSuccess: () => {
+          processing.skipReports = false;
+          if (processing.llm) {
+            processing.llm.defaultKind = "managed";
+            processing.llm.managed.modelPath = DEMO_LLM;
+          }
+          world.knownFiles.add(DEMO_LLM);
+        },
+        doneMessage: "The language model is ready.",
+      });
+    },
+    cancelSetupTask: async () => {
+      if (activeSetupTask !== null) {
+        const { task, timers } = activeSetupTask;
+        timers.forEach((t) => clearTimeout(t));
+        activeSetupTask = null;
         setupListeners.forEach((l) =>
           l.cb({
-            key: "workerEnv",
-            line,
-            fraction,
-            done: end !== undefined,
-            ok: end === undefined ? null : end === null,
-            error: end ?? null,
+            task,
+            phase: "cancelled",
+            downloadedBytes: null,
+            totalBytes: null,
+            elapsedSecs: 0,
+            message: "Cancelled.",
           }),
         );
-      lines.forEach(([line, fraction], n) => setTimeout(() => send(line, fraction), n * setupMs));
-      setTimeout(() => {
-        preparing = false;
-        if (world.envFailures > 0) {
-          world.envFailures -= 1;
-          send("uv sync failed", null, "uv sync failed: no network connection.");
-          return;
+      }
+      if (activeModelDownloads.length > 0) {
+        const running = activeModelDownloads;
+        activeModelDownloads = [];
+        running.forEach((entry) => entry.stop());
+        const keys = running.map((entry) => entry.key);
+        keys.forEach((key) => {
+          progressListeners.forEach((l) => l.cb({ key, fraction: 0, message: "Cancelled." }));
+        });
+        if (keys.some((key) => key === "whisper-turbo" || key === "diarization")) {
+          setupListeners.forEach((l) =>
+            l.cb({
+              task: "speech-models",
+              phase: "cancelled",
+              downloadedBytes: null,
+              totalBytes: null,
+              elapsedSecs: 0,
+              message: "Speech model download was cancelled.",
+            }),
+          );
         }
-        world.workerEnv = true;
-        send("The processing environment is ready", 1, null);
-      }, lines.length * setupMs);
+        modelsListeners.forEach((l) => l.cb());
+      }
     },
     setFirstRunDone: async (done = true) => void (processing.firstRunDone = done),
+    dismissLegacyVenvNotice: async () => void (world.legacyVenvNotice = null),
     downloadModels: async (keys) => {
       for (const key of keys) {
         const model = models.find((m) => m.key === key);
@@ -1203,7 +1419,12 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         if ((world.downloadFailures[key] ?? 0) > 0) {
           // Like the real application: the failure arrives as an event, not as a rejection.
           world.downloadFailures[key] -= 1;
-          setTimeout(() => {
+          const entry = {
+            key,
+            stop: () => clearTimeout(failTimer),
+          };
+          const failTimer = setTimeout(() => {
+            activeModelDownloads = activeModelDownloads.filter((d) => d !== entry);
             progressListeners.forEach((l) =>
               l.cb({
                 key,
@@ -1213,17 +1434,23 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
             );
             modelsListeners.forEach((l) => l.cb());
           }, setupMs);
+          activeModelDownloads.push(entry);
           continue;
         }
         let step = 0;
-        const timer = setInterval(() => {
+        const entry = {
+          key,
+          stop: () => clearInterval(dlTimer),
+        };
+        const dlTimer = setInterval(() => {
           step += 1;
           const fraction = Math.min(1, step / 5);
           progressListeners.forEach((l) =>
             l.cb({ key, fraction, message: `Downloading ${Math.round(fraction * 100)}%` }),
           );
           if (fraction >= 1) {
-            clearInterval(timer);
+            clearInterval(dlTimer);
+            activeModelDownloads = activeModelDownloads.filter((d) => d !== entry);
             const model = models.find((m) => m.key === key);
             if (model) {
               model.cached = true;
@@ -1232,6 +1459,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
             modelsListeners.forEach((l) => l.cb());
           }
         }, setupMs);
+        activeModelDownloads.push(entry);
       }
     },
     getSettings: async () => ({

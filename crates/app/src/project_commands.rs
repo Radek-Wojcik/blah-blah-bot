@@ -1051,6 +1051,11 @@ pub fn import_meeting(
         req.report_mode.trim().to_string()
     };
 
+    let demo = state.is_demo() || std::env::var_os("BBB_DEMO").is_some();
+    if !demo {
+        crate::setup_commands::ensure_import_ready(state.processing())?;
+    }
+
     let root = state.recordings_root()?;
     let id = state.with_store(|s| Ok(next_imported_meeting_id(s)))?;
     let meeting_dir_path = root.join(&id);
@@ -1096,7 +1101,6 @@ pub fn import_meeting(
         Ok(())
     })?;
 
-    let demo = state.is_demo() || std::env::var_os("BBB_DEMO").is_some();
     if demo {
         state.with_store_ipc(|s| synthetic_ingest(s, &id, &meeting_dir_path, mode))?;
     } else {

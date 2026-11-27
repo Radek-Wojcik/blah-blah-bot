@@ -29,3 +29,4 @@ Each record states the context, the decision, its consequences and the alternati
 | [0024](0024-installer-signing.md) | Installer signing | Proposed |
 | [0025](0025-model-revision-pinning.md) | Model revision pinning | Accepted |
 | [0026](0026-global-people-and-voice-profiles.md) | Global people and voice profiles | Proposed |
+| [0027](0027-bundled-worker-and-first-run-downloads.md) | Bundled worker and first-run downloads | Proposed |

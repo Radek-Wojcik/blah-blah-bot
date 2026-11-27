@@ -347,7 +347,11 @@ test.describe("static screenshots", () => {
   test("first run: welcome", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto(setupUrl("fresh"));
-    await expect(page.getByText("Plan for tens of gigabytes")).toBeVisible();
+    await expect(
+      page.getByText(
+        "This takes 10-30 minutes and needs about 8 GB of free space. Keep the PC on.",
+      ),
+    ).toBeVisible();
     await settle(page);
     await page.screenshot({ path: path.join(OUT, "first-run-welcome.png") });
   });
@@ -749,7 +753,9 @@ test("hero GIF", async ({ page }) => {
   const next = () => page.getByRole("button", { name: "Next", exact: true }).click();
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/?view=main&backend=mock&rate=0&jobms=450&setup=fresh");
-  await expect(page.getByText("Plan for tens of gigabytes")).toBeVisible();
+  await expect(
+    page.getByText("This takes 10-30 minutes and needs about 8 GB of free space. Keep the PC on."),
+  ).toBeVisible();
   await gif.hold(320);
   await next();
   await page.getByRole("button", { name: "Prepare environment" }).click();
