@@ -11,7 +11,7 @@ use queue::cleanup::AudioRetention;
 use queue::gpu::{GpuSampler, Guard, GuardPolicy, NvmlSampler, OnUnavailable};
 use queue::runner::{PipelineRunner, RunnerSettings};
 use queue::voices::VoiceSettings;
-use queue::worker::{self, JobOptions, WorkerConfig, WorkerEvent};
+use queue::worker::{self, JobOptions, ModelCacheState, WorkerConfig, WorkerEvent};
 use queue::{GateDecision, GpuGate, Next, Stage, StepOutcome, Supervisor, STAGES};
 use serde::{Deserialize, Serialize};
 use speakers::Thresholds;
@@ -384,6 +384,7 @@ pub struct ModelStatus {
     pub key: String,
     pub label: String,
     pub cached: bool,
+    pub status: ModelCacheState,
     pub gated: bool,
     pub size_mb: Option<u64>,
 }
@@ -1580,21 +1581,13 @@ impl Processing {
     // ----- models
 
     pub fn model_status(&self) -> IpcResult<Vec<ModelStatus>> {
-        let cached: HashMap<String, bool> = match worker::model_status(&self.worker_config()) {
-            Ok(v) => v.into_iter().collect(),
-            // Without an environment nothing can be checked yet: report not cached.
-            Err(_) => HashMap::new(),
-        };
-        Ok(MODEL_INFO
-            .iter()
-            .map(|(key, label, gated)| ModelStatus {
-                key: (*key).into(),
-                label: (*label).into(),
-                cached: cached.get(*key).copied().unwrap_or(false),
-                gated: *gated,
-                size_mb: None,
-            })
-            .collect())
+        let states: HashMap<String, ModelCacheState> =
+            match worker::model_cache_status(&self.worker_config()) {
+                Ok(v) => v.into_iter().collect(),
+                // Without an environment nothing can be checked yet: report missing.
+                Err(_) => HashMap::new(),
+            };
+        Ok(build_model_statuses(&states))
     }
 
     pub fn download_models(self: &Arc<Self>, keys: Vec<String>) -> IpcResult<()> {
@@ -1716,6 +1709,26 @@ impl Processing {
         }
         Ok(())
     }
+}
+
+fn build_model_statuses(states: &HashMap<String, ModelCacheState>) -> Vec<ModelStatus> {
+    MODEL_INFO
+        .iter()
+        .map(|(key, label, gated)| {
+            let status = states
+                .get(*key)
+                .copied()
+                .unwrap_or(ModelCacheState::Missing);
+            ModelStatus {
+                key: (*key).into(),
+                label: (*label).into(),
+                cached: status == ModelCacheState::Ready,
+                status,
+                gated: *gated,
+                size_mb: None,
+            }
+        })
+        .collect()
 }
 
 /// Estimate remaining seconds for an active/queued/waiting job based on `progress_with_live`
@@ -2480,6 +2493,29 @@ mod tests {
             find_worker_dir_in("", None, Some(env_dir), Some(&nested_exe), false),
             sibling_worker
         );
+    }
+
+    #[test]
+    fn build_model_statuses_maps_ready_older_and_missing_states() {
+        let mut states = HashMap::new();
+        states.insert("whisper-turbo".to_string(), ModelCacheState::Ready);
+        states.insert("vision".to_string(), ModelCacheState::Older);
+
+        let list = build_model_statuses(&states);
+        let by_key: HashMap<_, _> = list.iter().map(|m| (m.key.as_str(), m)).collect();
+        assert_eq!(by_key["whisper-turbo"].status, ModelCacheState::Ready);
+        assert!(by_key["whisper-turbo"].cached);
+        assert_eq!(by_key["vision"].status, ModelCacheState::Older);
+        assert!(!by_key["vision"].cached);
+        assert_eq!(by_key["diarization"].status, ModelCacheState::Missing);
+        assert!(!by_key["diarization"].cached);
+
+        // Empty map (e.g. when the worker is unavailable) marks every model missing.
+        let fallback = build_model_statuses(&HashMap::new());
+        assert_eq!(fallback.len(), MODEL_INFO.len());
+        assert!(fallback
+            .iter()
+            .all(|m| m.status == ModelCacheState::Missing && !m.cached));
     }
 
     #[test]

@@ -19,7 +19,7 @@ export function Widget() {
   }
 
   return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+    <div className="widget-shell">
       <RecorderPanel compact={true} className="grow" />
       <div style={{ padding: "0 clamp(8px, 3vmin, 16px) clamp(8px, 3vmin, 16px)" }}>
         <DetectionPrompt embedded />

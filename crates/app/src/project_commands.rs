@@ -1,7 +1,7 @@
 //! IPC commands for project preferences, the guided project wizard, manual audio/video
 //! meeting import, local Markdown export, and automatic local model detection.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -122,10 +122,20 @@ pub struct ImportMeetingDto {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DetectedVisionModelDto {
+    pub model_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mmproj_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DetectedModelsDto {
     pub llama_server_path: Option<String>,
     pub llm_models: Vec<String>,
     pub vision_models: Vec<String>,
+    #[serde(default)]
+    pub vision_pairs: Vec<DetectedVisionModelDto>,
     pub default_local_save_dir: String,
 }
 
@@ -536,6 +546,40 @@ fn synthetic_ingest(
     Ok(())
 }
 
+fn is_gguf_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("gguf"))
+}
+
+/// True when `vl` appears as a token, as in `Qwen3-VL-8B`, `Qwen3VL-8B`, `qwen2.5vl-7b`.
+fn has_vl_token(name_lower: &str) -> bool {
+    let bytes = name_lower.as_bytes();
+    let mut from = 0;
+    while let Some(pos) = name_lower[from..].find("vl") {
+        let start = from + pos;
+        let end = start + 2;
+        let before_ok = start > 0 && {
+            let b = bytes[start - 1];
+            b.is_ascii_digit() || b == b'-' || b == b'_' || b == b'.'
+        };
+        let after_ok = end >= bytes.len() || matches!(bytes[end], b'-' | b'_' | b'.');
+        if before_ok && after_ok {
+            return true;
+        }
+        from = end;
+    }
+    false
+}
+
+fn is_vision_model_name(name_lower: &str) -> bool {
+    has_vl_token(name_lower)
+        || name_lower.contains("vision")
+        || name_lower.contains("llava")
+        || name_lower.contains("pixtral")
+        || name_lower.contains("minicpm-v")
+}
+
 fn scan_models_in_dir(
     dir: &Path,
     depth: u32,
@@ -554,11 +598,7 @@ fn scan_models_in_dir(
             scan_models_in_dir(&path, depth + 1, llm_out, vision_out);
             continue;
         }
-        let is_gguf = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("gguf"));
-        if !is_gguf {
+        if !is_gguf_path(&path) {
             continue;
         }
         let name_lower = path
@@ -570,16 +610,200 @@ fn scan_models_in_dir(
             continue;
         }
         let full = path.to_string_lossy().into_owned();
-        if name_lower.contains("-vl")
-            || name_lower.contains("_vl")
-            || name_lower.contains("vision")
-            || name_lower.contains("llava")
-            || name_lower.contains("pixtral")
-            || name_lower.contains("minicpm-v")
-        {
+        if is_vision_model_name(&name_lower) {
             vision_out.insert(full);
         } else {
             llm_out.insert(full);
+        }
+    }
+}
+
+fn hf_cache_root_from(
+    hf_hub_cache: Option<std::ffi::OsString>,
+    hf_home: Option<std::ffi::OsString>,
+    user_profile: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    let non_empty = |v: std::ffi::OsString| {
+        let trimmed = v.to_string_lossy().trim().to_string();
+        (!trimmed.is_empty()).then(|| std::ffi::OsString::from(trimmed))
+    };
+    if let Some(hub) = hf_hub_cache.and_then(non_empty) {
+        return Some(PathBuf::from(hub));
+    }
+    if let Some(home) = hf_home.and_then(non_empty) {
+        return Some(PathBuf::from(home).join("hub"));
+    }
+    user_profile.and_then(non_empty).map(|u| {
+        PathBuf::from(u)
+            .join(".cache")
+            .join("huggingface")
+            .join("hub")
+    })
+}
+
+fn hf_cache_root() -> Option<PathBuf> {
+    hf_cache_root_from(
+        std::env::var_os("HF_HUB_CACHE"),
+        std::env::var_os("HF_HOME"),
+        std::env::var_os("USERPROFILE"),
+    )
+}
+
+fn scan_hf_snapshot_dir(
+    dir: &Path,
+    cache_canon: &Path,
+    depth: u32,
+    llm_out: &mut BTreeSet<String>,
+    vision_out: &mut BTreeSet<String>,
+    vision_pairs_out: &mut BTreeMap<String, Option<String>>,
+) {
+    if depth > 5 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut subdirs = Vec::new();
+    let mut mmproj_files = BTreeSet::new();
+    let mut gguf_files = Vec::new();
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(meta) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        let file_type = meta.file_type();
+        let name_lower = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+
+        if file_type.is_symlink() {
+            let Ok(target) = fs::canonicalize(&path) else {
+                continue;
+            };
+            if !target.starts_with(cache_canon) || !target.is_file() {
+                continue;
+            }
+            if is_gguf_path(&path) {
+                let full = path.to_string_lossy().into_owned();
+                if name_lower.contains("mmproj") {
+                    mmproj_files.insert(full);
+                } else {
+                    gguf_files.push((full, name_lower));
+                }
+            }
+            continue;
+        }
+
+        if file_type.is_dir() {
+            if name_lower == "blobs" || name_lower == "refs" {
+                continue;
+            }
+            subdirs.push(path);
+            continue;
+        }
+
+        if file_type.is_file() && is_gguf_path(&path) {
+            let full = path.to_string_lossy().into_owned();
+            if name_lower.contains("mmproj") {
+                mmproj_files.insert(full);
+            } else {
+                gguf_files.push((full, name_lower));
+            }
+        }
+    }
+
+    let paired_mmproj = mmproj_files.iter().next().cloned();
+    for (full, name_lower) in gguf_files {
+        if let Some(proj) = &paired_mmproj {
+            vision_out.insert(full.clone());
+            vision_pairs_out.insert(full, Some(proj.clone()));
+        } else if is_vision_model_name(&name_lower) {
+            vision_out.insert(full.clone());
+            vision_pairs_out.entry(full).or_insert(None);
+        } else {
+            llm_out.insert(full);
+        }
+    }
+
+    for sub in subdirs {
+        scan_hf_snapshot_dir(
+            &sub,
+            cache_canon,
+            depth + 1,
+            llm_out,
+            vision_out,
+            vision_pairs_out,
+        );
+    }
+}
+
+fn scan_hf_cache(
+    cache_root: &Path,
+    llm_out: &mut BTreeSet<String>,
+    vision_out: &mut BTreeSet<String>,
+    vision_pairs_out: &mut BTreeMap<String, Option<String>>,
+) {
+    let Ok(cache_canon) = fs::canonicalize(cache_root) else {
+        return;
+    };
+    if !cache_canon.is_dir() {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(cache_root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let repo_dir = entry.path();
+        let Ok(meta) = fs::symlink_metadata(&repo_dir) else {
+            continue;
+        };
+        if meta.file_type().is_symlink() || !meta.file_type().is_dir() {
+            continue;
+        }
+        let name = repo_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        if !name.starts_with("models--") {
+            continue;
+        }
+        let snapshots_dir = repo_dir.join("snapshots");
+        let Ok(snap_meta) = fs::symlink_metadata(&snapshots_dir) else {
+            continue;
+        };
+        if snap_meta.file_type().is_symlink() || !snap_meta.file_type().is_dir() {
+            continue;
+        }
+        let Ok(snaps) = fs::read_dir(&snapshots_dir) else {
+            continue;
+        };
+        for snap in snaps.flatten() {
+            let snap_path = snap.path();
+            let Ok(rev_meta) = fs::symlink_metadata(&snap_path) else {
+                continue;
+            };
+            if rev_meta.file_type().is_symlink() || !rev_meta.file_type().is_dir() {
+                continue;
+            }
+            let rev_name = snap_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if rev_name == "blobs" || rev_name == "refs" {
+                continue;
+            }
+            scan_hf_snapshot_dir(
+                &snap_path,
+                &cache_canon,
+                3,
+                llm_out,
+                vision_out,
+                vision_pairs_out,
+            );
         }
     }
 }
@@ -638,13 +862,59 @@ fn find_llama_server(configured: &str, data_dir: &Path) -> Option<String> {
     None
 }
 
-pub fn auto_detect_models_with(
+/// Collapse entries that point at the same file (for example a models folder that is also in the
+/// HF cache) and make sure a vision model never shows up in the LLM list.
+fn dedupe_detected(
+    llm: &mut BTreeSet<String>,
+    vision: &mut BTreeSet<String>,
+    pairs: &mut BTreeMap<String, Option<String>>,
+) {
+    let canon = |p: &str| fs::canonicalize(p).unwrap_or_else(|_| PathBuf::from(p));
+
+    // Vision: keep one entry per real file, preferring one that has an mmproj pair.
+    let mut vision_by_canon: BTreeMap<PathBuf, String> = BTreeMap::new();
+    for v in std::mem::take(vision) {
+        let key = canon(&v);
+        match vision_by_canon.get(&key) {
+            Some(kept) => {
+                let kept_has = pairs.get(kept).is_some_and(|m| m.is_some());
+                let this_has = pairs.get(&v).is_some_and(|m| m.is_some());
+                if this_has && !kept_has {
+                    pairs.remove(kept);
+                    vision_by_canon.insert(key, v);
+                } else {
+                    pairs.remove(&v);
+                }
+            }
+            None => {
+                vision_by_canon.insert(key, v);
+            }
+        }
+    }
+    let vision_canon: BTreeSet<PathBuf> = vision_by_canon.keys().cloned().collect();
+    *vision = vision_by_canon.into_values().collect();
+
+    // LLM: drop anything that is a vision model, and collapse duplicates.
+    let mut seen = BTreeSet::new();
+    *llm = std::mem::take(llm)
+        .into_iter()
+        .filter(|m| {
+            let key = canon(m);
+            !vision_canon.contains(&key) && seen.insert(key)
+        })
+        .collect();
+}
+
+pub fn auto_detect_models_in(
     proc_settings: &processing::ProcessingSettings,
     data_dir: &Path,
+    search_dirs: &[PathBuf],
+    hf_cache_dir: Option<&Path>,
 ) -> DetectedModelsDto {
     let llama_server_path = find_llama_server(&proc_settings.llama_server_path, data_dir);
     let mut llm_models = BTreeSet::new();
     let mut vision_models = BTreeSet::new();
+    let mut vision_pairs_map = BTreeMap::new();
 
     if !proc_settings.llm.managed.model_path.trim().is_empty() {
         let p = Path::new(proc_settings.llm.managed.model_path.trim());
@@ -655,10 +925,52 @@ pub fn auto_detect_models_with(
     if !proc_settings.vision_model_path.trim().is_empty() {
         let p = Path::new(proc_settings.vision_model_path.trim());
         if p.is_file() {
-            vision_models.insert(p.to_string_lossy().into_owned());
+            let full = p.to_string_lossy().into_owned();
+            vision_models.insert(full.clone());
+            vision_pairs_map.entry(full).or_insert(None);
         }
     }
 
+    for dir in search_dirs {
+        scan_models_in_dir(dir, 0, &mut llm_models, &mut vision_models);
+    }
+    for v in &vision_models {
+        vision_pairs_map.entry(v.clone()).or_insert(None);
+    }
+    if let Some(cache_root) = hf_cache_dir {
+        scan_hf_cache(
+            cache_root,
+            &mut llm_models,
+            &mut vision_models,
+            &mut vision_pairs_map,
+        );
+    }
+
+    dedupe_detected(&mut llm_models, &mut vision_models, &mut vision_pairs_map);
+
+    let vision_pairs = vision_pairs_map
+        .into_iter()
+        .map(|(model_path, mmproj_path)| DetectedVisionModelDto {
+            model_path,
+            mmproj_path,
+        })
+        .collect();
+
+    DetectedModelsDto {
+        llama_server_path,
+        llm_models: llm_models.into_iter().collect(),
+        vision_models: vision_models.into_iter().collect(),
+        vision_pairs,
+        default_local_save_dir: local_export::default_local_save_dir(data_dir)
+            .to_string_lossy()
+            .into_owned(),
+    }
+}
+
+pub fn auto_detect_models_with(
+    proc_settings: &processing::ProcessingSettings,
+    data_dir: &Path,
+) -> DetectedModelsDto {
     let mut search_dirs = Vec::new();
     if !proc_settings.models_dir.trim().is_empty() {
         search_dirs.push(PathBuf::from(proc_settings.models_dir.trim()));
@@ -675,18 +987,8 @@ pub fn auto_detect_models_with(
         search_dirs.push(base.join("models"));
         search_dirs.push(base.join(".cache").join("lm-studio").join("models"));
     }
-    for dir in search_dirs {
-        scan_models_in_dir(&dir, 0, &mut llm_models, &mut vision_models);
-    }
-
-    DetectedModelsDto {
-        llama_server_path,
-        llm_models: llm_models.into_iter().collect(),
-        vision_models: vision_models.into_iter().collect(),
-        default_local_save_dir: local_export::default_local_save_dir(data_dir)
-            .to_string_lossy()
-            .into_owned(),
-    }
+    let hf_root = hf_cache_root();
+    auto_detect_models_in(proc_settings, data_dir, &search_dirs, hf_root.as_deref())
 }
 
 // ----- Tauri commands ----------------------------------------------------------------------
@@ -1111,7 +1413,7 @@ mod tests {
             models_dir: models_dir.to_string_lossy().into_owned(),
             ..Default::default()
         };
-        let detected = auto_detect_models_with(&proc_settings, dir.path());
+        let detected = auto_detect_models_in(&proc_settings, dir.path(), &[models_dir], None);
         assert_eq!(
             detected.llama_server_path.as_deref(),
             Some(exe.to_string_lossy().as_ref())
@@ -1120,5 +1422,224 @@ mod tests {
         assert!(detected.llm_models[0].contains("gemma-3-12b-q4.gguf"));
         assert_eq!(detected.vision_models.len(), 1);
         assert!(detected.vision_models[0].contains("qwen3-vl-8b-q4.gguf"));
+    }
+
+    #[test]
+    fn hf_cache_root_prefers_hub_cache_then_hf_home_then_userprofile() {
+        use std::ffi::OsString;
+        assert_eq!(
+            hf_cache_root_from(
+                Some(OsString::from("D:/hf-hub")),
+                Some(OsString::from("D:/hf-home")),
+                Some(OsString::from("C:/Users/demo")),
+            ),
+            Some(PathBuf::from("D:/hf-hub"))
+        );
+        assert_eq!(
+            hf_cache_root_from(
+                None,
+                Some(OsString::from("D:/hf-home")),
+                Some(OsString::from("C:/Users/demo")),
+            ),
+            Some(PathBuf::from("D:/hf-home").join("hub"))
+        );
+        assert_eq!(
+            hf_cache_root_from(None, None, Some(OsString::from("C:/Users/demo"))),
+            Some(
+                PathBuf::from("C:/Users/demo")
+                    .join(".cache")
+                    .join("huggingface")
+                    .join("hub")
+            )
+        );
+        assert_eq!(hf_cache_root_from(None, None, None), None);
+    }
+
+    #[test]
+    fn auto_detect_models_scans_hf_cache_snapshots_and_pairs_mmproj() {
+        let dir = test_tmp::TestDir::new("detect-hf-cache");
+        let hf_hub = dir.path().join("hf").join("hub");
+
+        // Vision model snapshot: plain name + mmproj in the same snapshot -> classified as vision.
+        let vision_snap = hf_hub
+            .join("models--Qwen--Qwen3-VL-8B-Instruct-GGUF")
+            .join("snapshots")
+            .join("f982a07559d4a2f6c8744d840bf6fccab30eea96");
+        fs::create_dir_all(&vision_snap).unwrap();
+        let vision_gguf = vision_snap.join("custom-multimodal-q4.gguf");
+        let mmproj_gguf = vision_snap.join("mmproj-Qwen3VL-8B-Instruct-F16.gguf");
+        fs::write(&vision_gguf, b"GGUF").unwrap();
+        fs::write(&mmproj_gguf, b"GGUF").unwrap();
+
+        // Blobs and refs inside the same repo must be skipped.
+        let blobs_dir = hf_hub
+            .join("models--Qwen--Qwen3-VL-8B-Instruct-GGUF")
+            .join("blobs");
+        let refs_dir = hf_hub
+            .join("models--Qwen--Qwen3-VL-8B-Instruct-GGUF")
+            .join("refs");
+        fs::create_dir_all(&blobs_dir).unwrap();
+        fs::create_dir_all(&refs_dir).unwrap();
+        fs::write(blobs_dir.join("ignored-blob.gguf"), b"GGUF").unwrap();
+        fs::write(refs_dir.join("main.gguf"), b"GGUF").unwrap();
+
+        // Empty snapshot must be ignored.
+        let empty_snap = hf_hub
+            .join("models--Org--Empty-Repo")
+            .join("snapshots")
+            .join("0000000000000000000000000000000000000000");
+        fs::create_dir_all(&empty_snap).unwrap();
+
+        // Regular LLM snapshot without mmproj -> classified as LLM.
+        let llm_snap = hf_hub
+            .join("models--Org--Gemma-GGUF")
+            .join("snapshots")
+            .join("1111111111111111111111111111111111111111");
+        fs::create_dir_all(&llm_snap).unwrap();
+        let llm_gguf = llm_snap.join("gemma-4-12b-q4.gguf");
+        fs::write(&llm_gguf, b"GGUF").unwrap();
+
+        let proc_settings = processing::ProcessingSettings::default();
+        let detected = auto_detect_models_in(&proc_settings, dir.path(), &[], Some(&hf_hub));
+
+        assert_eq!(detected.llm_models.len(), 1);
+        assert_eq!(PathBuf::from(&detected.llm_models[0]), llm_gguf);
+        assert_eq!(detected.vision_models.len(), 1);
+        assert_eq!(PathBuf::from(&detected.vision_models[0]), vision_gguf);
+        assert_eq!(detected.vision_pairs.len(), 1);
+        assert_eq!(
+            PathBuf::from(&detected.vision_pairs[0].model_path),
+            vision_gguf
+        );
+        assert_eq!(
+            detected.vision_pairs[0]
+                .mmproj_path
+                .as_deref()
+                .map(PathBuf::from),
+            Some(mmproj_gguf)
+        );
+    }
+
+    #[test]
+    fn hf_cache_root_trims_env_values() {
+        use std::ffi::OsString;
+        assert_eq!(
+            hf_cache_root_from(Some(OsString::from("  D:/hf-hub 	")), None, None),
+            Some(PathBuf::from("D:/hf-hub"))
+        );
+        assert_eq!(
+            hf_cache_root_from(None, Some(OsString::from(" D:/hf-home ")), None),
+            Some(PathBuf::from("D:/hf-home").join("hub"))
+        );
+    }
+
+    #[test]
+    fn vision_name_matching_covers_qwen_vl_variants() {
+        for n in [
+            "qwen3vl-8b-instruct-q4_k_m.gguf",
+            "qwen3-vl-8b-instruct-q4_k_m.gguf",
+            "qwen2.5vl-7b-q4.gguf",
+            "llava-1.5-7b.gguf",
+        ] {
+            assert!(is_vision_model_name(n), "{n}");
+        }
+        for n in ["gemma-4-12b-q4.gguf", "devlog-7b.gguf", "level-up-3b.gguf"] {
+            assert!(!is_vision_model_name(n), "{n}");
+        }
+    }
+
+    #[test]
+    fn auto_detect_dedupes_models_dir_and_hf_cache() {
+        let dir = test_tmp::TestDir::new("detect-dedupe");
+        let hf_hub = dir.path().join("hub");
+        let snap = hf_hub
+            .join("models--Qwen--Qwen3-VL-8B-Instruct-GGUF")
+            .join("snapshots")
+            .join("abc");
+        fs::create_dir_all(&snap).unwrap();
+        let vision = snap.join("Qwen3VL-8B-Instruct-Q4_K_M.gguf");
+        fs::write(&vision, b"GGUF").unwrap();
+        fs::write(snap.join("mmproj-F16.gguf"), b"GGUF").unwrap();
+
+        // The same snapshot is also reachable as a plain models folder.
+        let proc_settings = processing::ProcessingSettings::default();
+        let detected = auto_detect_models_in(
+            &proc_settings,
+            dir.path(),
+            std::slice::from_ref(&hf_hub),
+            Some(&hf_hub),
+        );
+        assert!(detected.llm_models.is_empty(), "{:?}", detected.llm_models);
+        assert_eq!(detected.vision_models.len(), 1);
+        assert_eq!(detected.vision_pairs.len(), 1);
+        assert!(detected.vision_pairs[0].mmproj_path.is_some());
+    }
+
+    fn try_symlink(target: &Path, link: &Path) -> bool {
+        #[cfg(windows)]
+        let r = if target.is_dir() {
+            std::os::windows::fs::symlink_dir(target, link)
+        } else {
+            std::os::windows::fs::symlink_file(target, link)
+        };
+        #[cfg(unix)]
+        let r = std::os::unix::fs::symlink(target, link);
+        r.is_ok()
+    }
+
+    #[test]
+    fn scan_hf_cache_follows_inside_symlinks_and_rejects_escaping_ones() {
+        let dir = test_tmp::TestDir::new("detect-hf-symlink");
+        let hf_hub = dir.path().join("hub");
+        let repo = hf_hub.join("models--Org--Gemma-GGUF");
+        let blobs = repo.join("blobs");
+        let snap = repo.join("snapshots").join("rev1");
+        fs::create_dir_all(&blobs).unwrap();
+        fs::create_dir_all(&snap).unwrap();
+        let blob = blobs.join("deadbeef");
+        fs::write(&blob, b"GGUF").unwrap();
+        let outside = dir.path().join("outside.gguf");
+        fs::write(&outside, b"GGUF").unwrap();
+
+        let good = snap.join("gemma-good-q4.gguf");
+        if !try_symlink(&blob, &good) {
+            eprintln!("skipping: symlink creation is not permitted");
+            return;
+        }
+        assert!(try_symlink(&outside, &snap.join("gemma-escape-q4.gguf")));
+
+        // Symlinked snapshot directory pointing outside the cache.
+        let outside_snap = dir.path().join("outside-snap");
+        fs::create_dir_all(&outside_snap).unwrap();
+        fs::write(outside_snap.join("evil-q4.gguf"), b"GGUF").unwrap();
+        assert!(try_symlink(
+            &outside_snap,
+            &repo.join("snapshots").join("rev2")
+        ));
+
+        // Symlinked repo directory.
+        let outside_repo = dir.path().join("outside-repo");
+        fs::create_dir_all(outside_repo.join("snapshots").join("r")).unwrap();
+        fs::write(
+            outside_repo
+                .join("snapshots")
+                .join("r")
+                .join("evil2-q4.gguf"),
+            b"GGUF",
+        )
+        .unwrap();
+        assert!(try_symlink(
+            &outside_repo,
+            &hf_hub.join("models--Org--Linked")
+        ));
+
+        let mut llm = BTreeSet::new();
+        let mut vision = BTreeSet::new();
+        let mut pairs = BTreeMap::new();
+        scan_hf_cache(&hf_hub, &mut llm, &mut vision, &mut pairs);
+
+        assert_eq!(llm.len(), 1, "{llm:?}");
+        assert_eq!(PathBuf::from(llm.iter().next().unwrap()), good);
+        assert!(vision.is_empty());
     }
 }
