@@ -91,9 +91,11 @@ pub async fn delete_project(
     .map_err(|e| IpcError::new("internal", format!("the deletion did not finish: {e}")))?
 }
 
-/// Order: refuse while busy and change the settings (saved at once, so a failing save stops
-/// everything before anything irreversible), then the database and clips, and the folder
-/// last, outside every lock.
+/// Lock order of the application is store, then settings (the publishing code takes them in
+/// that order), and the recorder's own lock before the store. So: the recorder is asked first,
+/// with nothing locked; then, in ONE store critical section, the project must be idle, the
+/// settings are changed and saved (a failing save stops everything before anything
+/// irreversible), and the database and clips go. The folder goes last, outside every lock.
 fn delete_project_blocking(
     app: &AppHandle,
     cycle_id: &str,
@@ -101,35 +103,24 @@ fn delete_project_blocking(
     delete_folder: bool,
 ) -> IpcResult<()> {
     let state = app.state::<AppState>();
-    let root = state.recordings_root().ok();
+    let root = state.recordings_root()?;
     let data_dir = state.data_dir().to_path_buf();
-    let folder = state.update_settings(|s| {
-        // Checked with the settings locked; a queue that cannot be read counts as busy.
-        let recording = state.recorder.is_recording();
-        let jobs: std::collections::HashMap<_, _> = state
-            .processing()
-            .queue_state()
-            .map_err(|e| {
-                IpcError::new(
-                    "busy",
-                    format!(
-                        "cannot tell whether a meeting is being processed: {}",
-                        e.message
-                    ),
-                )
-            })?
-            .jobs
-            .into_iter()
-            .map(|j| (j.meeting_id, j.state))
-            .collect();
-        state.with_store_ipc(|store| {
-            cycles::ensure_project_idle(store, cycle_id, recording, &jobs)
+    if state.recorder.is_recording() {
+        return Err(IpcError::new(
+            "busy",
+            "a recording is in progress; stop it before deleting a project",
+        ));
+    }
+    let (folder, finished) = state.with_store_ipc(|store| {
+        // Meetings being recorded, jobs and outbox operations are read from the locked store.
+        cycles::ensure_project_idle(store, cycle_id, false)?;
+        let folder = state.update_settings(|s| {
+            cycles::plan_project_deletion(s, &data_dir, cycle_id, delete_folder)
         })?;
-        cycles::plan_project_deletion(s, &data_dir, cycle_id, delete_folder)
+        let finished =
+            cycles::finish_project_deletion(store, Some(root.as_path()), cycle_id, delete_meetings);
+        Ok((folder, finished))
     })?;
-    let finished = state.with_store_ipc(|store| {
-        cycles::finish_project_deletion(store, root.as_deref(), cycle_id, delete_meetings)
-    });
     changed(app);
     crate::commands::emit_meetings_changed(app);
     finished?;

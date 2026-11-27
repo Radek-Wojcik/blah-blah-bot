@@ -1826,15 +1826,22 @@ pub fn delete_cycle_participant(
     Ok(())
 }
 
-/// Removes the `\\?\` prefix that `fs::canonicalize` adds on Windows, which the Shell API
-/// does not accept, but only from a local drive path (`\\?\C:\...`, any letter case).
-/// `\\?\UNC\...`, `\\?\Volume{...}\...` and everything else is returned unchanged.
+/// Removes the `\?\` prefix that `fs::canonicalize` adds on Windows, which the Shell API
+/// does not accept, but only from a local drive path (`\?\C:\...`, any letter case, with a
+/// separator after the drive). `\?\UNC\...`, `\?\Volume{...}\...`, `\?\C:foo` and
+/// everything else is returned unchanged. Works on path components, not on lossy text.
 pub fn strip_verbatim_prefix(path: &Path) -> PathBuf {
-    let text = path.to_string_lossy();
-    if let Some(rest) = text.strip_prefix(r"\\?\") {
-        let b = rest.as_bytes();
-        if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
-            return PathBuf::from(rest);
+    use std::path::{Component, Prefix};
+    let mut comps = path.components();
+    if let (Some(Component::Prefix(p)), Some(Component::RootDir)) =
+        (comps.next(), comps.clone().next())
+    {
+        if let Prefix::VerbatimDisk(letter) = p.kind() {
+            let mut out = PathBuf::from(format!("{}:\\", letter as char));
+            for c in comps.skip(1) {
+                out.push(c);
+            }
+            return out;
         }
     }
     path.to_path_buf()
@@ -1842,9 +1849,13 @@ pub fn strip_verbatim_prefix(path: &Path) -> PathBuf {
 
 /// Whether the path is an ordinary local drive path (`C:\...`, after `strip_verbatim_prefix`).
 pub fn is_local_drive_path(path: &Path) -> bool {
-    let text = strip_verbatim_prefix(path).to_string_lossy().into_owned();
-    let b = text.as_bytes();
-    b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')
+    use std::path::{Component, Prefix};
+    let stripped = strip_verbatim_prefix(path);
+    let mut comps = stripped.components();
+    matches!(
+        (comps.next(), comps.next()),
+        (Some(Component::Prefix(p)), Some(Component::RootDir)) if matches!(p.kind(), Prefix::Disk(_))
+    )
 }
 
 /// Moves a local directory to the Windows Recycle Bin. It never deletes for good silently:
@@ -1969,8 +1980,10 @@ pub fn managed_delete_target(data_dir: &Path, target: &Path) -> IpcResult<PathBu
     }
     // No link on the way: walk up from the target until the data folder.
     let mut cur: Option<&Path> = Some(&normal);
+    let mut reached = false;
     while let Some(dir) = cur {
         if std::fs::canonicalize(dir).is_ok_and(|c| c == data) {
+            reached = true;
             break;
         }
         if is_link(dir) {
@@ -1978,18 +1991,16 @@ pub fn managed_delete_target(data_dir: &Path, target: &Path) -> IpcResult<PathBu
         }
         cur = dir.parent();
     }
+    if !reached {
+        // An alias of the data folder (a substituted drive, say): cannot be proven safe.
+        return Err(refuse("its path does not lead through the data folder"));
+    }
     Ok(real)
 }
 
 /// Refuses to delete a project while something still works on it: a recording, a queued or
 /// running job of one of its meetings, or an outbox operation that is not finished.
-pub fn ensure_project_idle(
-    store: &Store,
-    cycle_id: &str,
-    recording: bool,
-    jobs: &std::collections::HashMap<String, crate::processing::JobState>,
-) -> IpcResult<()> {
-    use crate::processing::JobState;
+pub fn ensure_project_idle(store: &Store, cycle_id: &str, recording: bool) -> IpcResult<()> {
     use store::MeetingState;
     if recording {
         return Err(IpcError::new(
@@ -2004,10 +2015,11 @@ pub fn ensure_project_idle(
                 "a meeting of this project is being recorded",
             ));
         }
-        if matches!(
-            jobs.get(&m.id),
-            Some(JobState::Queued | JobState::Waiting | JobState::Running)
-        ) {
+        // Read from the store itself, so the answer holds while the caller keeps it locked.
+        let job_active = store
+            .get_job(&m.id)?
+            .is_some_and(|job| matches!(queue::next_step(&job), queue::Next::Run { .. }));
+        if job_active {
             return Err(IpcError::new(
                 "busy",
                 "a meeting of this project is being processed; wait for it to finish",
@@ -3609,6 +3621,7 @@ targets:
         }
     }
 
+    #[cfg(windows)]
     #[test]
     fn strip_verbatim_prefix_handles_drive_and_unc_paths() {
         assert_eq!(
@@ -3651,25 +3664,22 @@ targets:
 
     #[test]
     fn ensure_project_idle_blocks_recording_jobs_and_outbox() {
-        use crate::processing::JobState;
-        use std::collections::HashMap;
         let lab = Lab::new();
         meeting_in(&lab, "m-idle", "NOMAD");
-        let none = HashMap::new();
-        assert!(ensure_project_idle(&lab.store, "NOMAD", false, &none).is_ok());
+        assert!(ensure_project_idle(&lab.store, "NOMAD", false).is_ok());
         assert_eq!(
-            ensure_project_idle(&lab.store, "NOMAD", true, &none)
+            ensure_project_idle(&lab.store, "NOMAD", true)
                 .unwrap_err()
                 .code,
             "busy"
         );
-        let mut jobs = HashMap::new();
-        jobs.insert("m-idle".to_string(), JobState::Running);
-        assert!(ensure_project_idle(&lab.store, "NOMAD", false, &jobs).is_err());
-        jobs.insert("m-idle".to_string(), JobState::Done);
-        assert!(ensure_project_idle(&lab.store, "NOMAD", false, &jobs).is_ok());
+        // A job that still has a stage to run blocks; without a job nothing does.
+        lab.store.create_job("m-idle", &["asr"], "{}", 1).unwrap();
+        assert!(ensure_project_idle(&lab.store, "NOMAD", false).is_err());
+        lab.store.delete_job("m-idle").unwrap();
+        assert!(ensure_project_idle(&lab.store, "NOMAD", false).is_ok());
         // A job of another project's meeting does not matter.
-        assert!(ensure_project_idle(&lab.store, "OTHER", false, &jobs).is_ok());
+        assert!(ensure_project_idle(&lab.store, "OTHER", false).is_ok());
     }
 
     #[cfg(windows)]
@@ -3687,15 +3697,22 @@ targets:
     #[test]
     fn managed_delete_target_rejects_trailing_separator_and_intermediate_junctions() {
         let data = test_tmp::TestDir::new("cycles-junction2");
-        let other = test_tmp::TestDir::new("cycles-junction2-target");
-        std::fs::create_dir_all(other.path().join("deep")).unwrap();
+        // The junction lives INSIDE the data folder and points to a folder inside it too, so
+        // the "outside the data folder" rule cannot be what rejects it.
+        let real_dir = data.path().join("real");
+        std::fs::create_dir_all(real_dir.join("deep")).unwrap();
         let link = data.path().join("link");
-        if !junction(&link, other.path()) {
+        if !junction(&link, &real_dir) {
+            eprintln!("skipped: cannot create a junction here");
             return;
         }
         let with_sep = PathBuf::from(format!("{}\\", link.display()));
         assert!(managed_delete_target(data.path(), &with_sep).is_err());
+        assert!(managed_delete_target(data.path(), &link).is_err());
+        // An intermediate junction below the data folder.
         assert!(managed_delete_target(data.path(), &link.join("deep")).is_err());
+        // The real folder itself is fine.
+        assert!(managed_delete_target(data.path(), &real_dir.join("deep")).is_ok());
         let _ = std::fs::remove_dir(&link);
     }
 
@@ -3705,6 +3722,7 @@ targets:
         assert!(managed_delete_target(data.path(), Path::new("projects/p")).is_err());
     }
 
+    #[cfg(windows)]
     #[test]
     fn network_and_volume_paths_are_not_local_drive_paths() {
         for p in [
@@ -3712,6 +3730,7 @@ targets:
             r"\\?\UNC\srv\share\p",
             r"\\?\Volume{1234}\p",
             r"\\srv\share\p",
+            r"\\?\C:foo",
         ] {
             assert!(!is_local_drive_path(Path::new(p)), "{p}");
             assert_eq!(strip_verbatim_prefix(Path::new(p)), PathBuf::from(p));
@@ -3760,7 +3779,6 @@ targets:
         lab.store
             .set_meeting_state("m-rec", MeetingState::Recording, None)
             .unwrap();
-        let jobs = std::collections::HashMap::new();
-        assert!(ensure_project_idle(&lab.store, "NOMAD", false, &jobs).is_err());
+        assert!(ensure_project_idle(&lab.store, "NOMAD", false).is_err());
     }
 }
