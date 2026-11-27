@@ -636,16 +636,20 @@ pub fn download_pin_from(
     // connection (a blocked socket read cannot be interrupted). When the loop gives up, the
     // helper ends on its own once the connection closes or the body timeout expires.
     let mut reader = response.into_body().into_reader();
-    let (tx, rx) = std::sync::mpsc::sync_channel::<io::Result<Vec<u8>>>(4);
+    let (tx, rx) = std::sync::mpsc::sync_channel::<io::Result<Option<Vec<u8>>>>(4);
     std::thread::Builder::new()
         .name("download-reader".into())
         .spawn(move || loop {
             let mut chunk = vec![0u8; CHUNK_SIZE];
             match reader.read(&mut chunk) {
-                Ok(0) => break,
+                Ok(0) => {
+                    // Explicit end of body, so a reader that dies is not mistaken for EOF.
+                    let _ = tx.send(Ok(None));
+                    break;
+                }
                 Ok(n) => {
                     chunk.truncate(n);
-                    if tx.send(Ok(chunk)).is_err() {
+                    if tx.send(Ok(Some(chunk))).is_err() {
                         break;
                     }
                 }
@@ -664,7 +668,8 @@ pub fn download_pin_from(
             return Err(DownloadError::Cancelled);
         }
         let buf = match rx.recv_timeout(Duration::from_millis(200)) {
-            Ok(Ok(chunk)) => chunk,
+            Ok(Ok(Some(chunk))) => chunk,
+            Ok(Ok(None)) => break,
             Ok(Err(_)) => {
                 let _ = file.flush();
                 return Err(DownloadError::Failed(format!(
@@ -680,7 +685,12 @@ pub fn download_pin_from(
                 }
                 continue;
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                let _ = file.flush();
+                return Err(DownloadError::Failed(format!(
+                    "download from {host} was interrupted; you can retry to resume"
+                )));
+            }
         };
         last_data = Instant::now();
         let n = buf.len();
@@ -982,12 +992,16 @@ pub fn extract_archives_atomic(
             })?;
         }
         if let Err(e) = fs::rename(&staging, final_dir) {
+            let mut msg = format!("could not finish extracting the archives: {e}");
             if had_previous {
-                let _ = fs::rename(&backup, final_dir);
+                if let Err(re) = fs::rename(&backup, final_dir) {
+                    msg.push_str(&format!(
+                        "; restoring the previous installation also failed ({re}), it is kept in {}",
+                        backup.display()
+                    ));
+                }
             }
-            return Err(fail(format!(
-                "could not finish extracting the archives: {e}"
-            )));
+            return Err(fail(msg));
         }
         Ok(())
     })();

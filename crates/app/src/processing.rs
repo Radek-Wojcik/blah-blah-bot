@@ -433,13 +433,15 @@ impl BusyGuard {
 
 impl Drop for BusyGuard {
     fn drop(&mut self) {
-        // Flag first: a stale key list is harmless while the flag is clear, whereas an empty
-        // list with the flag set would mark every model as downloading.
-        self.flag.store(false, Ordering::SeqCst);
-        if let Some(keys) = &self.keys {
-            if let Ok(mut k) = keys.lock() {
+        // Take the key list first and clear the flag and the keys under it, so a download
+        // started meanwhile (which publishes its keys under the same lock) is never wiped.
+        match &self.keys {
+            Some(keys) => {
+                let mut k = keys.lock().unwrap_or_else(|e| e.into_inner());
+                self.flag.store(false, Ordering::SeqCst);
                 k.clear();
             }
+            None => self.flag.store(false, Ordering::SeqCst),
         }
     }
 }
@@ -1609,9 +1611,10 @@ impl Processing {
         if self.models_busy.swap(true, Ordering::SeqCst) {
             return Err(IpcError::new("busy", "a download is already running"));
         }
-        let busy_guard = BusyGuard::with_keys(&self.models_busy, &self.models_active);
         *active = keys.clone();
         drop(active);
+        // Created after the lock is released, so dropping it can never deadlock on it.
+        let busy_guard = BusyGuard::with_keys(&self.models_busy, &self.models_active);
         let cancel = self.models_cancel.clone();
         cancel.store(false, Ordering::SeqCst);
         let this = self.clone();
@@ -2663,5 +2666,26 @@ mod tests {
         }
         let base = ProcessingSettings::default().clip_max_days;
         assert_eq!(proc.settings_snapshot().clip_max_days, base + 8);
+    }
+
+    #[test]
+    fn busy_guard_with_keys_clears_flag_and_keys_together_even_after_a_panic() {
+        let flag = Arc::new(AtomicBool::new(true));
+        let keys = Arc::new(Mutex::new(vec!["whisper-turbo".to_string()]));
+        drop(BusyGuard::with_keys(&flag, &keys));
+        assert!(!flag.load(Ordering::SeqCst));
+        assert!(keys.lock().unwrap().is_empty());
+
+        flag.store(true, Ordering::SeqCst);
+        *keys.lock().unwrap() = vec!["vision".to_string()];
+        let guard = BusyGuard::with_keys(&flag, &keys);
+        let joined = std::thread::spawn(move || {
+            let _guard = guard;
+            panic!("simulated failure in the download thread");
+        })
+        .join();
+        assert!(joined.is_err());
+        assert!(!flag.load(Ordering::SeqCst));
+        assert!(keys.lock().unwrap().is_empty());
     }
 }
