@@ -6,7 +6,7 @@ Local meeting recorder and notes assistant for Windows that turns calls and reco
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 ![Version: 0.7.0](https://img.shields.io/badge/version-0.7.0-lightgrey)
 
-> **Project status:** Built on Stage 6 (`v0.7.0`) with the 12-point UX overhaul and Stage 8 first-run setup and installer prep. Verified on Windows 10 (build 19045; Windows 11 is untested). GitHub publishing and Discord webhooks were run once against a real test repository and webhook and otherwise tested against fake servers and local Git clones; browser tab capture, call detection, and extraction benchmarks rest on synthetic recordings, scripted traces, and mock E2E suites (see [Limitations](docs/LIMITATIONS.md)).
+> **Project status:** Built on Stage 6 (`v0.7.0`) with the 12-point UX overhaul and Stage 8 first-run setup and installer prep. Verified on Windows 10 (build 19045; Windows 11 is untested). GitHub publishing and Discord webhooks were run once against a real test repository and webhook and otherwise tested against fake servers and local Git clones; browser tab capture, call detection, and extraction benchmarks rest on synthetic recordings, scripted traces, and mock E2E suites (see [Limitations](docs/LIMITATIONS.md) and [Installing on Windows](docs/INSTALL.md)).
 
 ![Animated tour in demo mode: first-run setup, processing a meeting, naming voices and the report](docs/img/hero.gif)
 
