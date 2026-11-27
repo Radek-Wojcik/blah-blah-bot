@@ -6,9 +6,12 @@
 use tauri::{AppHandle, Emitter, State};
 
 use crate::cycle_commands::EVENT_CYCLES;
-use crate::cycles::{self, RepoDto, TargetsDto};
+use crate::cycles::{self, CycleDto, DiscordRefDto, NotionPropertiesDto, RepoDto, TargetsDto};
 use crate::ipc::{IpcError, IpcResult};
-use crate::publish_secrets::{self, GithubAccessDto, PublishingSecretsDto, WebhookCheckDto};
+use crate::publish_secrets::{
+    self, DiscordBotCheckDto, DiscordMemberDto, DiscordRoleDto, GithubAccessDto, NotionAccessDto,
+    NotionSchemaDto, PublishingSecretsDto, WebhookCheckDto,
+};
 use crate::publishing::{
     ConfirmDto, CorrectionsDto, CycleTasksDto, OutboxStateDto, PlanDto, PublishCorrectionsDto,
     PublishResultDto,
@@ -122,6 +125,143 @@ pub fn set_target_rule(
         tracing::warn!(error = %e, "could not emit the cycles change");
     }
     Ok(targets)
+}
+
+// ----- Notion and Discord bot setup -------------------------------------------------------
+
+/// Asks Notion whether the stored token can reach the database of the cycle's Notion target.
+/// Nothing is written. Expected failures are returned as a result with a message.
+#[tauri::command]
+pub async fn test_notion_access(
+    state: State<'_, AppState>,
+    cycle_id: String,
+) -> IpcResult<NotionAccessDto> {
+    let repos = state.cycle_repos();
+    tauri::async_runtime::spawn_blocking(move || {
+        publish_secrets::test_notion_access(&Credentials, &repos, &cycle_id, HttpClient::new())
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// Reads the properties of the cycle's Notion data source, proposes a field mapping and lists
+/// any problems with the current mapping.
+#[tauri::command]
+pub async fn notion_schema(
+    state: State<'_, AppState>,
+    cycle_id: String,
+) -> IpcResult<NotionSchemaDto> {
+    let repos = state.cycle_repos();
+    tauri::async_runtime::spawn_blocking(move || {
+        publish_secrets::notion_schema(&Credentials, &repos, &cycle_id, HttpClient::new())
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// Writes `targets.notion.data_source` and `targets.notion.properties` of the cycle and
+/// nothing else, returning the cycle's targets as saved.
+#[tauri::command]
+pub fn set_notion_mapping(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    cycle_id: String,
+    data_source: Option<String>,
+    properties: NotionPropertiesDto,
+) -> IpcResult<TargetsDto> {
+    let targets = cycles::set_notion_mapping(
+        &state.cycle_repos(),
+        &cycle_id,
+        data_source.as_deref(),
+        properties,
+    )?;
+    if let Err(e) = app.emit(EVENT_CYCLES, ()) {
+        tracing::warn!(error = %e, "could not emit the cycles change");
+    }
+    Ok(targets)
+}
+
+/// Checks the Discord bot token against the guild and channel of the cycle's Discord bot
+/// target and lists any missing channel permissions. Nothing is posted.
+#[tauri::command]
+pub async fn test_discord_bot(
+    state: State<'_, AppState>,
+    cycle_id: String,
+) -> IpcResult<DiscordBotCheckDto> {
+    let repos = state.cycle_repos();
+    tauri::async_runtime::spawn_blocking(move || {
+        publish_secrets::test_discord_bot(&Credentials, &repos, &cycle_id, HttpClient::new())
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// Searches Discord guild members whose username or nickname starts with `query` (at least 2
+/// characters, at most 10 results).
+#[tauri::command]
+pub async fn search_discord_members(
+    state: State<'_, AppState>,
+    cycle_id: String,
+    query: String,
+) -> IpcResult<Vec<DiscordMemberDto>> {
+    let repos = state.cycle_repos();
+    tauri::async_runtime::spawn_blocking(move || {
+        publish_secrets::search_discord_members(
+            &Credentials,
+            &repos,
+            &cycle_id,
+            &query,
+            HttpClient::new(),
+        )
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// Lists the roles of the Discord server (excluding `@everyone`), for mapping a participant
+/// to a role mention.
+#[tauri::command]
+pub async fn list_discord_roles(
+    state: State<'_, AppState>,
+    cycle_id: String,
+) -> IpcResult<Vec<DiscordRoleDto>> {
+    let repos = state.cycle_repos();
+    tauri::async_runtime::spawn_blocking(move || {
+        publish_secrets::list_discord_roles(&Credentials, &repos, &cycle_id, HttpClient::new())
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// Writes `participants[].discord` of one participant and nothing else (`None` removes the
+/// mapping), returning the cycle as saved.
+#[tauri::command]
+pub fn set_participant_discord(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    cycle_id: String,
+    participant_id: String,
+    discord: Option<DiscordRefDto>,
+) -> IpcResult<CycleDto> {
+    let cycle =
+        cycles::set_participant_discord(&state.cycle_repos(), &cycle_id, &participant_id, discord)?;
+    if let Err(e) = app.emit(EVENT_CYCLES, ()) {
+        tracing::warn!(error = %e, "could not emit the cycles change");
+    }
+    Ok(cycle)
+}
+
+/// Re-exports the tasks of a published meeting to Notion: updates mapped fields on existing
+/// pages while preserving their status, and leaves trashed pages untouched.
+#[tauri::command]
+pub async fn reexport_notion(
+    state: State<'_, AppState>,
+    meeting_id: String,
+) -> IpcResult<PublishResultDto> {
+    let publishing = state.publishing().clone();
+    tauri::async_runtime::spawn_blocking(move || publishing.reexport_notion(&meeting_id))
+        .await
+        .map_err(join_error)?
 }
 
 // ----- the publication ---------------------------------------------------------------------

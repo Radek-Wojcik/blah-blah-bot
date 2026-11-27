@@ -567,17 +567,31 @@ pub fn multipart_body(boundary: &str, payload: &Value, files: &[Attachment]) -> 
     body
 }
 
+/// The content type and the bytes of the request body for a message: JSON, or a hand-built
+/// `multipart/form-data` body when there are files. Shared by the webhook and the bot.
+pub fn message_request_body(message: &OutMessage) -> (String, Vec<u8>) {
+    payload_request_body(&message.payload(), &message.files)
+}
+
+/// Like [`message_request_body`] for a payload that was built (or extended) by the caller.
+pub fn payload_request_body(payload: &Value, files: &[Attachment]) -> (String, Vec<u8>) {
+    if files.is_empty() {
+        return (
+            "application/json".to_string(),
+            payload.to_string().into_bytes(),
+        );
+    }
+    let boundary = pick_boundary(payload.to_string().as_bytes(), files);
+    (
+        format!("multipart/form-data; boundary={boundary}"),
+        multipart_body(&boundary, payload, files),
+    )
+}
+
 fn request_for(hook: &Webhook, message: &OutMessage) -> Request {
     let url = format!("{}?wait=true", hook.url());
-    let payload = message.payload();
-    if message.files.is_empty() {
-        return Request::post_json(url, &payload);
-    }
-    let boundary = pick_boundary(payload.to_string().as_bytes(), &message.files);
-    Request::new(Method::Post, url).bytes(
-        &format!("multipart/form-data; boundary={boundary}"),
-        multipart_body(&boundary, &payload, &message.files),
-    )
+    let (content_type, body) = message_request_body(message);
+    Request::new(Method::Post, url).bytes(&content_type, body)
 }
 
 // ----- sending ---------------------------------------------------------------------------
@@ -619,7 +633,8 @@ pub struct SendFailure {
     pub sent: usize,
 }
 
-fn rate_limit_wait(error: &HttpError) -> Option<Duration> {
+/// The wait of a rate-limit error, when it names one.
+pub fn rate_limit_wait(error: &HttpError) -> Option<Duration> {
     match (error.kind, error.failure) {
         (
             ErrorKind::RateLimited,
@@ -632,7 +647,7 @@ fn rate_limit_wait(error: &HttpError) -> Option<Duration> {
 }
 
 /// The wait Discord announces before the next request, when this one used up the bucket.
-fn bucket_wait(response: &Response) -> Option<Duration> {
+pub fn bucket_wait(response: &Response) -> Option<Duration> {
     if response.header("x-ratelimit-remaining")? != "0" {
         return None;
     }
@@ -644,17 +659,16 @@ fn bucket_wait(response: &Response) -> Option<Duration> {
     (secs.is_finite() && secs > 0.0).then(|| Duration::from_secs_f64(secs))
 }
 
-fn send_one(
-    client: &HttpClient,
-    hook: &Webhook,
-    message: &OutMessage,
+/// Runs `attempt`; a rate limit with a short wait is slept through and the attempt repeated
+/// (at most [`Pacing::max_inline_retries`] times), anything else is returned as it is.
+pub fn retry_rate_limited<T>(
     pacing: &Pacing,
-) -> Result<Response, HttpError> {
-    let request = request_for(hook, message);
+    mut attempt: impl FnMut() -> Result<T, HttpError>,
+) -> Result<T, HttpError> {
     let mut retries = 0;
     loop {
-        match client.send(&request) {
-            Ok(response) => return Ok(response),
+        match attempt() {
+            Ok(value) => return Ok(value),
             Err(error) => match rate_limit_wait(&error) {
                 Some(wait)
                     if wait <= pacing.max_inline_wait && retries < pacing.max_inline_retries =>
@@ -666,6 +680,25 @@ fn send_one(
             },
         }
     }
+}
+
+/// Sends one request; a rate limit with a short wait is slept through and the request is
+/// repeated, see [`retry_rate_limited`].
+pub fn send_with_pacing(
+    client: &HttpClient,
+    request: &Request,
+    pacing: &Pacing,
+) -> Result<Response, HttpError> {
+    retry_rate_limited(pacing, || client.send(request))
+}
+
+fn send_one(
+    client: &HttpClient,
+    hook: &Webhook,
+    message: &OutMessage,
+    pacing: &Pacing,
+) -> Result<Response, HttpError> {
+    send_with_pacing(client, &request_for(hook, message), pacing)
 }
 
 /// Posts `messages[start..]` in order. `on_sent(count, id)` is called after each message that

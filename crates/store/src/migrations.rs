@@ -236,6 +236,55 @@ pub(crate) const MIGRATIONS: &[&str] = &[
         llm_model_override TEXT
     );
     ",
+    // Version 8: Notion export and editing a Discord message. A target and two more kinds of
+    // outbox operation (a CHECK constraint cannot be altered, so the table is rebuilt with its
+    // rows, ids and links kept), plus the table that remembers where a meeting's items and
+    // posts live in external services (ids only, never secrets). Written to be re-runnable:
+    // a database that already went through the former Stage 7 "version 7" has the same
+    // shape, and a leftover `outbox_v8` from an interrupted run is dropped first.
+    "
+    DROP TABLE IF EXISTS outbox_v8;
+    CREATE TABLE outbox_v8 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        target TEXT NOT NULL CHECK (target IN ('github','issues','discord','notion')),
+        kind TEXT NOT NULL
+            CHECK (kind IN ('commit_meeting','create_issue','set_issue_state','post_discord',
+                            'commit_correction','comment_correction','export_notion',
+                            'edit_discord')),
+        op_key TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}',
+        state TEXT NOT NULL CHECK (state IN ('queued','running','done','failed','cancelled')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_unix_ms INTEGER,
+        last_error TEXT,
+        result TEXT,
+        after_id INTEGER REFERENCES outbox(id) ON DELETE SET NULL,
+        created_unix_ms INTEGER NOT NULL,
+        updated_unix_ms INTEGER NOT NULL,
+        UNIQUE (meeting_id, op_key)
+    );
+    INSERT INTO outbox_v8 (id, meeting_id, target, kind, op_key, payload, state, attempts,
+                           next_attempt_unix_ms, last_error, result, after_id,
+                           created_unix_ms, updated_unix_ms)
+        SELECT id, meeting_id, target, kind, op_key, payload, state, attempts,
+               next_attempt_unix_ms, last_error, result, after_id,
+               created_unix_ms, updated_unix_ms FROM outbox;
+    DROP TABLE outbox;
+    ALTER TABLE outbox_v8 RENAME TO outbox;
+    CREATE INDEX IF NOT EXISTS idx_outbox_due ON outbox(state, next_attempt_unix_ms);
+
+    CREATE TABLE IF NOT EXISTS external_refs (
+        meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        target TEXT NOT NULL CHECK (target IN ('notion','discord')),
+        ref_key TEXT NOT NULL,
+        external_id TEXT NOT NULL,
+        url TEXT,
+        extra TEXT NOT NULL DEFAULT '{}',
+        updated_unix_ms INTEGER NOT NULL,
+        PRIMARY KEY (meeting_id, target, ref_key)
+    );
+    ",
 ];
 
 /// Schema version after all migrations have run.
@@ -260,7 +309,8 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         result?;
     }
     ensure_ux_schema(conn)?;
-    ensure_people_schema(conn)
+    ensure_people_schema(conn)?;
+    ensure_integrations_schema(conn)
 }
 
 fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
@@ -364,6 +414,24 @@ fn ensure_people_schema(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Idempotently ensures the `external_refs` table exists. The outbox rebuild that widens its
+/// CHECK constraints is only done by migration version 8, never here.
+fn ensure_integrations_schema(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS external_refs (
+            meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+            target TEXT NOT NULL CHECK (target IN ('notion','discord')),
+            ref_key TEXT NOT NULL,
+            external_id TEXT NOT NULL,
+            url TEXT,
+            extra TEXT NOT NULL DEFAULT '{}',
+            updated_unix_ms INTEGER NOT NULL,
+            PRIMARY KEY (meeting_id, target, ref_key)
+        );",
+    )?;
+    Ok(())
+}
+
 fn run_pending(conn: &Connection, current: u32) -> Result<()> {
     for (i, sql) in MIGRATIONS.iter().enumerate().skip(current as usize) {
         let tx = conn.unchecked_transaction()?;
@@ -430,7 +498,7 @@ mod tests {
     fn migrating_a_version_4_database_adds_the_publishing_tables_and_keeps_the_data() {
         let s = Store::init(v4_database()).unwrap();
         assert_eq!(s.schema_version().unwrap(), LATEST);
-        assert_eq!(LATEST, 7);
+        assert_eq!(LATEST, 8);
 
         // Existing data is untouched.
         let m = s.get_meeting("20261113-140501").unwrap().unwrap().meeting;
@@ -594,7 +662,7 @@ mod tests {
         )
         .unwrap();
         let s = Store::init(conn).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 7);
+        assert_eq!(s.schema_version().unwrap(), LATEST);
         assert!(s.set_job_schedule("m1", Some(123_456)).unwrap());
         assert_eq!(
             s.get_job("m1").unwrap().unwrap().scheduled_unix_ms,
@@ -679,5 +747,263 @@ mod tests {
         // Re-running ensure_people_schema is idempotent.
         ensure_people_schema(&s.conn).unwrap();
         assert_eq!(s.list_all_participants_with_profiles().unwrap().len(), 2);
+    }
+
+    const STAGE8_V7_ROWS: &str = r#"
+        INSERT INTO meetings (id, title, started_unix_ms, state, dir, cycle_id)
+          VALUES ('m1', 'Weekly', 5, 'stopped', 'm1', 'NOMAD');
+        INSERT INTO outbox (id, meeting_id, target, kind, op_key, payload, state, attempts,
+                            next_attempt_unix_ms, last_error, result, after_id,
+                            created_unix_ms, updated_unix_ms)
+          VALUES (7, 'm1', 'github', 'commit_meeting', 'commit', '{"a":1}',
+                  'done', 2, NULL, NULL, '{"folder":"f"}', NULL, 10, 11),
+                 (9, 'm1', 'discord', 'post_discord', 'discord', '{}',
+                  'failed', 8, 99, 'boom', NULL, 7, 12, 13),
+                 (12, 'm1', 'issues', 'create_issue', 'issue:i1', '{}',
+                  'queued', 0, 5, NULL, NULL, 7, 14, 15);
+        INSERT INTO publications (meeting_id, cycle_id, folder, snapshot_dir)
+          VALUES ('m1', 'NOMAD', 'f', 'm1/work/publish/1');
+        INSERT INTO project_prefs (cycle_id, local_save_enabled, local_save_dir)
+          VALUES ('NOMAD', 1, 'C:/Notes');
+        INSERT INTO task_completions (cycle_id, task_key, done, closed_by_meeting,
+                                      updated_unix_ms)
+          VALUES ('NOMAD', 'f/t1', 1, 'm1', 1000);"#;
+
+    /// A database as the current stage-8 line leaves it at version 7, with data everywhere.
+    fn stage8_v7_database() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        for sql in &MIGRATIONS[..7] {
+            conn.execute_batch(sql).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 7).unwrap();
+        ensure_ux_schema(&conn).unwrap();
+        conn.execute_batch(STAGE8_V7_ROWS).unwrap();
+        conn
+    }
+
+    fn outbox_dump(conn: &Connection) -> Vec<String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id || '|' || target || '|' || kind || '|' || op_key || '|' || state ||
+                        '|' || attempts || '|' || IFNULL(next_attempt_unix_ms, 'n') || '|' ||
+                        IFNULL(last_error, 'n') || '|' || IFNULL(result, 'n') || '|' ||
+                        IFNULL(after_id, 'n') FROM outbox ORDER BY id",
+            )
+            .unwrap();
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap();
+        rows.map(|r| r.unwrap()).collect()
+    }
+
+    #[test]
+    fn a_populated_stage_8_version_7_database_upgrades_to_8_and_keeps_everything() {
+        let conn = stage8_v7_database();
+        let before = outbox_dump(&conn);
+        assert_eq!(before.len(), 3);
+        let s = Store::init(conn).unwrap();
+        assert_eq!(s.schema_version().unwrap(), 8);
+        assert_eq!(outbox_dump(&s.conn), before);
+        let ops = s.list_ops(Some("m1")).unwrap();
+        assert_eq!(
+            (ops[1].id, ops[1].after_id, ops[1].attempts),
+            (9, Some(7), 8)
+        );
+        assert_eq!(ops[1].last_error.as_deref(), Some("boom"));
+        assert_eq!(ops[2].state, crate::OpState::Queued);
+        assert!(s.get_publication("m1").unwrap().is_some());
+        assert!(s.get_project_prefs("NOMAD").unwrap().local_save_enabled);
+        let done = s.list_task_completions("NOMAD").unwrap();
+        assert_eq!(done.len(), 1);
+        assert_eq!(done[0].closed_by_meeting.as_deref(), Some("m1"));
+        let fk: i64 = s
+            .conn
+            .pragma_query_value(None, "foreign_keys", |r| r.get(0))
+            .unwrap();
+        assert_eq!(fk, 1);
+        let index: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'idx_outbox_due'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(index, 1);
+        // The widened constraints and the continued ids work; deleting cascades.
+        let (op, created) = s
+            .enqueue_op(
+                &crate::NewOp {
+                    meeting_id: "m1".into(),
+                    target: crate::OutboxTarget::Notion,
+                    kind: crate::OutboxKind::ExportNotion,
+                    op_key: "notion:i1".into(),
+                    payload: "{}".into(),
+                    after_op_key: Some("commit".into()),
+                },
+                20,
+            )
+            .unwrap();
+        assert!(created && op.id > 12 && op.after_id == Some(7), "{op:?}");
+        s.conn
+            .execute(
+                "INSERT INTO external_refs (meeting_id, target, ref_key, external_id,
+                                            updated_unix_ms)
+                 VALUES ('m1', 'notion', 'task:i1', 'page', 1)",
+                [],
+            )
+            .unwrap();
+        s.delete_meeting("m1").unwrap();
+        assert_eq!(count(&s, "outbox"), 0);
+        assert_eq!(count(&s, "external_refs"), 0);
+    }
+
+    #[test]
+    fn a_stage_7_shaped_version_7_database_opens_and_keeps_its_notion_rows() {
+        // What the former Stage 7 branch called version 7: the outbox already accepts
+        // Notion, `external_refs` exists, and the UX columns of this line do not.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        for sql in &MIGRATIONS[..6] {
+            conn.execute_batch(sql).unwrap();
+        }
+        conn.execute_batch(
+            "
+            DROP TABLE outbox;
+            CREATE TABLE outbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+                target TEXT NOT NULL CHECK (target IN ('github','issues','discord','notion')),
+                kind TEXT NOT NULL
+                    CHECK (kind IN ('commit_meeting','create_issue','set_issue_state',
+                                    'post_discord','commit_correction','comment_correction',
+                                    'export_notion','edit_discord')),
+                op_key TEXT NOT NULL,
+                payload TEXT NOT NULL DEFAULT '{}',
+                state TEXT NOT NULL CHECK (state IN ('queued','running','done','failed',
+                                                     'cancelled')),
+                attempts INTEGER NOT NULL DEFAULT 0,
+                next_attempt_unix_ms INTEGER,
+                last_error TEXT,
+                result TEXT,
+                after_id INTEGER REFERENCES outbox(id) ON DELETE SET NULL,
+                created_unix_ms INTEGER NOT NULL,
+                updated_unix_ms INTEGER NOT NULL,
+                UNIQUE (meeting_id, op_key)
+            );
+            CREATE INDEX idx_outbox_due ON outbox(state, next_attempt_unix_ms);
+            CREATE TABLE external_refs (
+                meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+                target TEXT NOT NULL CHECK (target IN ('notion','discord')),
+                ref_key TEXT NOT NULL,
+                external_id TEXT NOT NULL,
+                url TEXT,
+                extra TEXT NOT NULL DEFAULT '{}',
+                updated_unix_ms INTEGER NOT NULL,
+                PRIMARY KEY (meeting_id, target, ref_key)
+            );
+            INSERT INTO meetings (id, title, started_unix_ms, state, dir)
+              VALUES ('m1', 'Weekly', 5, 'stopped', 'm1');
+            INSERT INTO outbox (id, meeting_id, target, kind, op_key, state,
+                                created_unix_ms, updated_unix_ms)
+              VALUES (3, 'm1', 'notion', 'export_notion', 'notion:i1', 'done', 1, 2);
+            INSERT INTO external_refs (meeting_id, target, ref_key, external_id,
+                                       updated_unix_ms)
+              VALUES ('m1', 'notion', 'task:i1', 'page', 1);",
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 7).unwrap();
+        let s = Store::init(conn).unwrap();
+        assert_eq!(s.schema_version().unwrap(), 8);
+        assert_eq!(count(&s, "outbox"), 1);
+        assert_eq!(count(&s, "external_refs"), 1);
+        assert!(has_column(&s.conn, "jobs", "scheduled_unix_ms").unwrap());
+        assert!(has_column(&s.conn, "participants", "sample_clip_file").unwrap());
+        assert_eq!(count(&s, "task_completions"), 0);
+        let ops = s.list_ops(Some("m1")).unwrap();
+        assert_eq!(
+            (ops[0].id, ops[0].kind),
+            (3, crate::OutboxKind::ExportNotion)
+        );
+    }
+
+    #[test]
+    fn reopening_a_version_8_database_changes_nothing() {
+        let dir = crate::test_tmp::TestDir::new("store-v8-reopen");
+        let path = dir.join("v7.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+            for sql in &MIGRATIONS[..7] {
+                conn.execute_batch(sql).unwrap();
+            }
+            conn.pragma_update(None, "user_version", 7).unwrap();
+            ensure_ux_schema(&conn).unwrap();
+            conn.execute_batch(STAGE8_V7_ROWS).unwrap();
+        }
+        let schema = |s: &Store| -> Vec<String> {
+            let mut stmt = s
+                .conn
+                .prepare(
+                    "SELECT type || ':' || name || ':' || IFNULL(sql, '')
+                     FROM sqlite_master ORDER BY type, name",
+                )
+                .unwrap();
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap();
+            rows.map(|r| r.unwrap()).collect()
+        };
+        let first = Store::open(&path).unwrap();
+        let (schema_1, rows_1) = (schema(&first), outbox_dump(&first.conn));
+        drop(first);
+        for _ in 0..2 {
+            let again = Store::open(&path).unwrap();
+            assert_eq!(again.schema_version().unwrap(), LATEST);
+            assert_eq!(schema(&again), schema_1);
+            assert_eq!(outbox_dump(&again.conn), rows_1);
+        }
+    }
+
+    #[test]
+    fn version_8_can_run_again_over_a_finished_or_interrupted_rebuild() {
+        let conn = stage8_v7_database();
+        let before = outbox_dump(&conn);
+        // A leftover of an interrupted run, then the whole step twice.
+        conn.execute_batch("CREATE TABLE outbox_v8 (junk INTEGER);")
+            .unwrap();
+        conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        run_pending(&conn, 7).unwrap();
+        conn.pragma_update(None, "user_version", 7).unwrap();
+        run_pending(&conn, 7).unwrap();
+        assert_eq!(outbox_dump(&conn), before);
+        let leftovers: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'outbox_v8'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(leftovers, 0);
+    }
+
+    #[test]
+    fn a_database_from_a_newer_schema_is_refused() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "user_version", 9).unwrap();
+        let err = Store::init(conn).err().unwrap();
+        assert!(matches!(
+            err,
+            StoreError::SchemaTooNew {
+                found: 9,
+                supported: 8
+            }
+        ));
+    }
+
+    #[test]
+    fn ensure_integrations_schema_is_idempotent_and_never_rebuilds_the_outbox() {
+        let s = Store::init(stage8_v7_database()).unwrap();
+        ensure_integrations_schema(&s.conn).unwrap();
+        ensure_integrations_schema(&s.conn).unwrap();
+        assert_eq!(count(&s, "external_refs"), 0);
+        assert_eq!(count(&s, "outbox"), 3);
     }
 }

@@ -54,7 +54,35 @@ report:
 targets:
   github: { path: meetings, publish: on-approval }
   discord: { webhook: "cred:discord/nomad", publish: on-approval, template: short }
-  notion: { database: "cred:notion/nomad-db", publish: on-approval }
+  notion: { token: "cred:notion/nomad", database: "0123456789abcdef0123456789abcdef", publish: on-approval }
+```
+
+A Discord target posts through a webhook (above) or through a bot, and a Notion target needs the token of an integration and the database it exports tasks to. The bot and the full Notion mapping look like this:
+
+```yaml
+targets:
+  discord:
+    bot:
+      token: cred:discord-bot/team          # secret reference, never the token
+      guild: "111111111111111111"           # server id, quoted
+      channel: "222222222222222222"         # text or announcement channel id, quoted
+      thread: true                          # default true: one thread per meeting under the summary
+      edit_on_correction: true              # default true: edit the summary when a correction is published
+    publish: on-approval
+  notion:
+    token: cred:notion/nomad
+    database: "0123456789abcdef0123456789abcdef"
+    data_source: "fedcba98-7654-3210-fedc-ba9876543210"   # only when the database has several data sources
+    publish: on-approval
+    properties:                             # Notion property names
+      title: Name                           # type title (default "Name")
+      key: BBB key                          # type rich_text (default "BBB key"), holds the idempotency key
+      assignee: Assignee                    # rich_text, select or multi_select
+      due: Due                              # date
+      status: Status                        # status or select, set when a page is created
+      status_value: Not started             # required when status is set
+      meeting: Meeting                      # url or rich_text
+      cycle: Cycle                          # select or rich_text
 ```
 
 Only `id` and `name` are required. Unknown keys are rejected, so a misspelled key is reported instead of ignored. Identifiers (`id`, participant ids, template names, meeting types) match `^[A-Za-z0-9][A-Za-z0-9_-]*$`; they are used in file names and keys, so spaces, dots and slashes are not allowed.
@@ -80,11 +108,22 @@ Only `id` and `name` are required. Unknown keys are rejected, so a misspelled ke
 | `targets.github.path` | relative path | `meetings` | Folder for meeting reports: a meeting is committed to `<path>/<ID>/<date>/`. Relative to the repository, names separated by `/` and made of letters, digits, `.`, `_` and `-`; no `.` or `..` name, no leading `/`, no drive letter or backslash, no `.git`, no name ending in a dot. Meetings already published under another path stay where they are, and both folders are read for the context of the next meeting. |
 | `targets.github.publish` | `auto`, `on-approval`, `off` | `on-approval` | Whether the report, the issues and the topics (and the corrections to a published meeting) are published automatically when the draft is complete, when you press Publish, or not at all. You choose it; until you do, `on-approval` is used. Status changes are never written back automatically. A cycle without `targets.github` still has this target with the default. See [Publishing rules](#publishing-rules). |
 | `targets.github.issues` | `true`, `false` | `true` | Whether task items become GitHub issues and approved status changes are written back to them. With `false` only the report is committed. |
-| `targets.discord.webhook` | `cred:` reference | required | Name of a secret, for example `cred:discord/nomad`. A URL is rejected: the webhook URL never appears in the repository. The webhook is entered in the publishing settings and stored in the Windows Credential Manager under `target:<name>` (`target:discord/nomad`), a namespace of its own, so a reference in a repository cannot reach any other secret of the application. |
+| `targets.discord.webhook` | `cred:` reference | none | Exactly one of `webhook` and `bot` is required. Name of a secret, for example `cred:discord/nomad`. A URL is rejected: the webhook URL never appears in the repository. The webhook is entered in the publishing settings and stored in the Windows Credential Manager under `target:<name>` (`target:discord/nomad`), a namespace of its own, so a reference in a repository cannot reach any other secret of the application. |
+| `targets.discord.bot.token` | `cred:` reference | required with `bot` | Name of the bot token, for example `cred:discord-bot/team`. A token itself is rejected. Stored in the Windows Credential Manager under `target:<name>` like the webhook. |
+| `targets.discord.bot.guild` | Discord snowflake | required with `bot` | The server id. Quote the number. |
+| `targets.discord.bot.channel` | Discord snowflake | required with `bot` | The text or announcement channel the summary is posted to. Quote the number. |
+| `targets.discord.bot.thread` | `true`, `false` | `true` | One thread per meeting under the summary. Left out of the file while true. |
+| `targets.discord.bot.edit_on_correction` | `true`, `false` | `true` | Edit the summary when a correction is published. Left out of the file while true. |
 | `targets.discord.publish` | as above | `on-approval` | A cycle without `targets.discord` has no Discord target: nothing is posted. |
 | `targets.discord.template` | template name | none | Separate template for the Discord message; without it the built-in short message is used (one message, see below). A template of your own should stay short as well: a long one is split into several messages. |
-| `targets.notion.database` | text | required | Database id, or a `cred:` reference to it. |
-| `targets.notion.publish` | as above | `on-approval` | |
+| `targets.notion.token` | `cred:` reference | required | Name of the integration token, for example `cred:notion/nomad`. A token itself is rejected. Stored in the Windows Credential Manager under `target:<name>`. |
+| `targets.notion.database` | Notion id | required | The database id: 32 hexadecimal digits, with or without dashes. It is not a secret. |
+| `targets.notion.data_source` | Notion id | none | The data source id; needed only when the database has more than one. |
+| `targets.notion.publish` | as above | `on-approval` | A cycle without `targets.notion` has no Notion target. Status changes are never exported. |
+| `targets.notion.properties.title` | property name | `Name` | The page title property (type `title`). Left out of the file while default. |
+| `targets.notion.properties.key` | property name | `BBB key` | The `rich_text` property that holds the key which makes an export idempotent. |
+| `targets.notion.properties.assignee`, `due`, `status`, `meeting`, `cycle` | property name | none | Optional fields: a field without a property name is not exported. |
+| `targets.notion.properties.status_value` | text | none | The status a new page gets; required when `properties.status` is set. |
 
 ### Checks beyond the schema
 
@@ -92,6 +131,8 @@ Only `id` and `name` are required. Unknown keys are rejected, so a misspelled ke
 * Every template named in `report.by_type` exists in `templates/`.
 * `report.default_template` exists when `default_mode` is `template` or `by-type`.
 * `id` equals the directory name.
+* `targets.discord` has exactly one of `webhook` and `bot`.
+* `targets.notion.properties.status_value` is set when `properties.status` is.
 
 A cycle that fails a check is still listed, with its issues (each with the path of the offending value, for example `participants[2].id`), so a broken cycle never hides the others. It cannot be used for a recording until it is fixed.
 
@@ -109,15 +150,15 @@ The application writes `cycle.yaml` only after validation. Keys are written in t
 | `on-approval` | Published when you press Publish for that target in the draft view. |
 | `off` | Never, even when you press Publish. |
 
-The defaults are `on-approval` for both targets ([ADR 0019](decisions/0019-default-publish-rule-per-target.md), accepted) and are constants in `crates/cycle-store/src/cycle.rs`, not part of `cycle.yaml`. A default is not a choice: a target that was just switched on, or a file without `publish`, behaves as `on-approval`, and a rule is `auto` only when somebody set it. Three things hold for every value:
+The defaults are `on-approval` for all three targets (`github`, `discord`, `notion`; [ADR 0019](decisions/0019-default-publish-rule-per-target.md) and [ADR 0020](decisions/0020-discord-bot-and-notion-export.md)) and are constants in `crates/cycle-store/src/cycle.rs`, not part of `cycle.yaml`. A default is not a choice: a target that was just switched on, or a file without `publish`, behaves as `on-approval`, and a rule is `auto` only when somebody set it. Three things hold for every value:
 
 * Status changes proposed from the transcript (an issue or topic reported as finished) are written back only when you approved that proposal and pressed Publish. `auto` does not publish them.
 * A repository that is public, or whose visibility cannot be read, needs your confirmation once before anything is published to it, also under `auto`.
 * After a meeting is published (or while any of its operations is queued) its draft is read-only.
 
-In the application the rule is a switch of three positions, **Off**, **On approval** and **Automatic**, in the **Targets** section of the cycle editor (where a GitHub or Discord target is switched on it shows **On approval** and is saved so unless you pick another), in the publishing panel of a draft and in **Settings**, **Publishing**, **When to publish**. Under the switch each rule is explained by what it does to you (Off: nothing is ever published, not even when you press Publish; On approval: nothing leaves the computer until you press Publish; Automatic: published as soon as the draft is complete, cannot be taken back, the people named are notified). A change goes through the `set_target_rule` command, which writes `targets.<name>.publish` and nothing else of `cycle.yaml` (a cycle without `targets.github` gets one with the default folder; Discord needs a target with a webhook reference, which the cycle editor adds). The panel says next to the switch that status changes are never written back automatically.
+In the application the rule is a switch of three positions, **Off**, **On approval** and **Automatic**, in the **Targets** section of the cycle editor (where a GitHub, Discord or Notion target is switched on it shows **On approval** and is saved so unless you pick another), in the publishing panel of a draft and in **Settings**, **Publishing**, **When to publish**. Under the switch each rule is explained by what it does to you (Off: nothing is ever published, not even when you press Publish; On approval: nothing leaves the computer until you press Publish; Automatic: published as soon as the draft is complete, cannot be taken back, the people named are notified). A change goes through the `set_target_rule` command, which writes `targets.<name>.publish` and nothing else of `cycle.yaml` (a cycle without `targets.github` gets one with the default folder; Discord and Notion need a target configured in the cycle editor first). The panel says next to the switch that status changes are never written back automatically.
 
-`github` covers the commit with the report, the transcript, the screenshots and `topics.yaml`, the issues, and the write-back of approved status changes. With `targets.github.issues: false` only the commit is made. Without a remote the commit stays in the local repository and no issues are created.
+`github` covers the commit with the report, the transcript, the screenshots and `topics.yaml`, the issues, and the write-back of approved status changes. With `targets.github.issues: false` only the commit is made. Without a remote the commit stays in the local repository and no issues are created. `notion` exports one database page per task item (`export_notion`), keyed by `bbb:v1:<cycle>:<meeting>:<item>` in the mapped `key` property so re-exporting (`reexport_notion`) updates the mapped fields on existing pages, keeps the status a person set in Notion, and skips pages that were moved to the trash. `discord` posts the summary either through a webhook (`targets.discord.webhook`) or through a bot (`targets.discord.bot`); in bot mode with `thread: true` the summary goes to the channel and the issue links and screenshots are posted inside a public thread opened under it.
 
 Before anything is published the panel shows `topics.yaml` before and after, topic by topic: the remote's version as last fetched (no network is used to look) against the version the commit writes, with the topics where the remote changed the same topic since your last pull marked, because your version replaces theirs. When the file cannot be compared, for example because the remote's `topics.yaml` is not readable, the topics are named instead and a note says so. The commit itself starts from a fresh fetch, so what a colleague pushed in the meantime shows up in the result.
 
@@ -163,7 +204,7 @@ Written on 2026-11-16. Refers to item i3 and issue #12.
 > The mount is redesigned, the new drawing is attached to the issue.
 ```
 
-When the note is about an item that became an issue, or names an issue, the same text is also posted as a comment on that issue (once, by its own marker; the issue stays open or closed as it was). A correction that was queued cannot be edited or deleted; one that was never queued can be deleted.
+When the note is about an item that became an issue, or names an issue, the same text is also posted as a comment on that issue (once, by its own marker; the issue stays open or closed as it was). When the cycle uses a Discord bot target with `edit_on_correction: true` and the meeting was posted to Discord, publishing a correction also edits the bot's summary message in place (appending a `Corrections` section) and posts a reply in the meeting's thread (`edit_discord`). A correction that was queued cannot be edited or deleted; one that was never queued can be deleted.
 
 For the next meeting the context gets an optional `corrections` list (`schemas/cycle-context.schema.json`): `meeting` (its date), `date`, `text`, the text of the `item` and the `issue`, newest first, at most 30, taken from the `corrections*.md` files of the earlier meetings in the repository and from the local notes (not yet published ones too). The extraction prompt shows them as information that replaces what the items of those meetings say; a cycle without corrections gets the context and the prompt it always had.
 

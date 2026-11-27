@@ -54,6 +54,8 @@ struct Case {
     repo: RepoFacts,
     existing: Vec<OutboxOp>,
     in_repository: bool,
+    discord_post_exists: bool,
+    discord_bot_token_set: bool,
 }
 
 impl Case {
@@ -64,6 +66,8 @@ impl Case {
             repo: facts(RepoVisibility::NotPublic, false),
             existing: vec![commit_op(OpState::Done)],
             in_repository: true,
+            discord_post_exists: false,
+            discord_bot_token_set: true,
         }
     }
 
@@ -78,6 +82,8 @@ impl Case {
             trigger,
             out_dir: "m1/work/corrections-out",
             in_repository: self.in_repository,
+            discord_post_exists: self.discord_post_exists,
+            discord_bot_token_set: self.discord_bot_token_set,
         })
     }
 }
@@ -102,7 +108,8 @@ fn an_explicit_publication_adds_the_file_and_the_comment_in_order() {
         CorrectionSummary {
             file: true,
             pushes: true,
-            comment: Some("i1".into())
+            comment: Some("i1".into()),
+            discord_edit: false,
         }
     );
     let payload: CorrectionPayload = serde_json::from_str(&plan.ops[0].payload).unwrap();
@@ -219,4 +226,75 @@ fn the_public_repository_check_applies_also_under_automatic() {
     };
     let plan = local.plan(Trigger::Explicit);
     assert!(!plan.is_blocked() && !plan.summary.pushes);
+}
+
+#[test]
+fn bot_mode_with_edit_on_correction_queues_edit_discord() {
+    let mut case = Case::new(Some(PublishMode::OnApproval));
+    case.cycle.targets.discord = Some(cycle_store::DiscordTarget {
+        webhook: None,
+        bot: Some(cycle_store::DiscordBot {
+            token: "cred:discord-bot/nomad".into(),
+            guild: "400000000000000001".into(),
+            channel: "300000000000000001".into(),
+            thread: true,
+            edit_on_correction: true,
+        }),
+        publish: PublishMode::OnApproval,
+        template: None,
+    });
+    case.discord_post_exists = true;
+
+    let plan = case.plan(Trigger::Explicit);
+    assert!(plan.blocks.is_empty(), "{:?}", plan.blocks);
+    assert!(plan.summary.discord_edit);
+    assert_eq!(
+        keys(&plan),
+        ["correction:c1", "correction-issue:c1", "discord-edit:c1"]
+    );
+    assert_eq!(plan.ops[2].kind, OutboxKind::EditDiscord);
+    assert_eq!(plan.ops[2].target, OutboxTarget::Discord);
+    assert_eq!(plan.ops[2].after_op_key.as_deref(), Some("correction:c1"));
+
+    // When the Discord post is still queued, the edit waits for the post instead.
+    case.existing.push(OutboxOp {
+        id: 2,
+        meeting_id: MEETING.into(),
+        target: OutboxTarget::Discord,
+        kind: OutboxKind::PostDiscord,
+        op_key: DISCORD_KEY.into(),
+        payload: "{}".into(),
+        state: OpState::Queued,
+        attempts: 0,
+        next_attempt_unix_ms: None,
+        last_error: None,
+        result: None,
+        after_id: None,
+        created_unix_ms: 2,
+        updated_unix_ms: 2,
+    });
+    let queued = case.plan(Trigger::Explicit);
+    assert_eq!(queued.ops[2].after_op_key.as_deref(), Some(DISCORD_KEY));
+
+    // Missing bot token blocks an explicit correction.
+    case.discord_bot_token_set = false;
+    assert_eq!(
+        case.plan(Trigger::Explicit).blocks,
+        [Block::DiscordBotTokenMissing]
+    );
+
+    // edit_on_correction: false skips EditDiscord cleanly.
+    case.discord_bot_token_set = true;
+    case.cycle
+        .targets
+        .discord
+        .as_mut()
+        .unwrap()
+        .bot
+        .as_mut()
+        .unwrap()
+        .edit_on_correction = false;
+    let disabled = case.plan(Trigger::Explicit);
+    assert!(!disabled.summary.discord_edit);
+    assert_eq!(keys(&disabled), ["correction:c1", "correction-issue:c1"]);
 }

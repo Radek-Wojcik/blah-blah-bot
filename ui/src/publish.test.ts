@@ -11,8 +11,11 @@ import type {
   Topic,
 } from "./ipc/types";
 import {
+  BOT_INTENTS_NOTE,
+  BOT_PERMISSIONS_VALUE,
   CORRECTION_STATE_LABELS,
   DEFAULT_PUBLISH_RULE,
+  NOTION_FIELD_SPECS,
   RULE_HELP,
   RULE_ORDER,
   STATUS_WRITE_BACK_NOTE,
@@ -20,6 +23,7 @@ import {
   apiHost,
   autoWarning,
   blockOf,
+  botTokenProblem,
   canCancel,
   canRetry,
   chosenTargets,
@@ -33,11 +37,18 @@ import {
   countOps,
   countProposals,
   decisionLabel,
+  discordChannelUrl,
+  discordInviteUrl,
+  discordMemberLabel,
   issueNumber,
   isCorrectionOp,
   issueUrl,
   lockedByOps,
+  maskBotToken,
+  maskNotionToken,
   maskWebhook,
+  missingBotPermissions,
+  notionTokenProblem,
   offlineText,
   opLink,
   opStatusLine,
@@ -51,6 +62,7 @@ import {
   planLines,
   proposalEffect,
   publicRepoBlock,
+  referenceKindByName,
   repoWarning,
   targetKind,
   targetsSent,
@@ -103,6 +115,9 @@ const plan = (patch: Partial<PublishPlan> = {}): PublishPlan => ({
     topicsAdded: ["m5-i07"],
     topicsSet: [{ id: "t-1", open: false }],
     discord: false,
+    discordMode: null,
+    discordThread: false,
+    notion: [],
     proposalsPending: 2,
   },
   blocks: [],
@@ -403,9 +418,9 @@ describe("plan", () => {
 
   it("sends only the targets that are ticked and allowed", () => {
     const p = plan();
-    expect(chosenTargets(p, { github: true, discord: true })).toEqual(["github"]);
-    expect(chosenTargets(p, { github: false, discord: true })).toEqual([]);
-    expect(chosenTargets(null, { github: true, discord: true })).toEqual([]);
+    expect(chosenTargets(p, { github: true, discord: true, notion: true })).toEqual(["github"]);
+    expect(chosenTargets(p, { github: false, discord: true, notion: true })).toEqual([]);
+    expect(chosenTargets(null, { github: true, discord: true, notion: true })).toEqual([]);
   });
 });
 
@@ -739,6 +754,185 @@ describe("corrections", () => {
     expect(RULE_HELP["on-approval"]).toMatch(/until you have looked at the draft/);
     expect(RULE_HELP["on-approval"]).toMatch(/used until you choose another rule/);
     expect(RULE_HELP.auto).toMatch(/cannot be taken back/);
-    expect(DEFAULT_PUBLISH_RULE).toEqual({ github: "on-approval", discord: "on-approval" });
+    expect(DEFAULT_PUBLISH_RULE).toEqual({
+      github: "on-approval",
+      discord: "on-approval",
+      notion: "on-approval",
+    });
+  });
+});
+
+describe("Stage 7: Discord bot and Notion helpers", () => {
+  const FAKE_BOT_TOKEN = [
+    "MTIzNDU2Nzg5MDEyMzQ1Njc4",
+    "GhIjKl",
+    "MnOpQrStUvWxYz0123456789abcdef",
+  ].join(".");
+  const FAKE_NOTION_TOKEN = ["ntn", "demo_fake_token_0123456789abcdef"].join("_");
+
+  it("validates and masks Discord bot and Notion tokens without leaking them", () => {
+    expect(referenceKindByName("cred:discord-bot/nomad")).toBe("discord-bot");
+    expect(referenceKindByName("cred:discord/nomad")).toBe("discord");
+    expect(referenceKindByName("cred:notion/nomad")).toBe("notion");
+    expect(referenceKindByName("cred:other/x")).toBeNull();
+
+    expect(botTokenProblem(FAKE_BOT_TOKEN)).toBeNull();
+    expect(botTokenProblem("bad-secret-value")).not.toContain("bad-secret-value");
+    expect(maskBotToken(FAKE_BOT_TOKEN)).toBe("bot MTIz...");
+
+    expect(notionTokenProblem(FAKE_NOTION_TOKEN)).toBeNull();
+    expect(notionTokenProblem("bad-notion-secret")).not.toContain("bad-notion-secret");
+    expect(maskNotionToken(FAKE_NOTION_TOKEN)).toBe("ntn_...cdef");
+  });
+
+  it("computes the exact Discord bot permission integer, invite URL and missing permissions", () => {
+    expect(BOT_PERMISSIONS_VALUE).toBe(309237746688);
+    expect(BOT_INTENTS_NOTE).toMatch(/no privileged intents/i);
+    expect(discordInviteUrl("123456789012345678")).toBe(
+      "https://discord.com/oauth2/authorize?client_id=123456789012345678&scope=bot&permissions=309237746688",
+    );
+    expect(discordInviteUrl("not-an-id")).toBeNull();
+    expect(missingBotPermissions(["VIEW_CHANNEL", "SEND_MESSAGES"], true)).toEqual([
+      "ATTACH_FILES",
+      "READ_MESSAGE_HISTORY",
+      "CREATE_PUBLIC_THREADS",
+      "SEND_MESSAGES_IN_THREADS",
+    ]);
+    expect(missingBotPermissions(["VIEW_CHANNEL", "SEND_MESSAGES"], false)).toEqual([
+      "ATTACH_FILES",
+      "READ_MESSAGE_HISTORY",
+    ]);
+  });
+
+  it("formats Discord member labels, channel links and Notion field metadata", () => {
+    expect(
+      discordMemberLabel({
+        userId: "1",
+        username: "kasia_demo",
+        globalName: "Kasia Demo",
+        nick: "Kasia (comms)",
+        bot: false,
+      }),
+    ).toBe("Kasia (comms) (@kasia_demo)");
+    expect(
+      discordMemberLabel({
+        userId: "2",
+        username: "nomad_notes",
+        globalName: null,
+        nick: "Nomad notes",
+        bot: true,
+      }),
+    ).toBe("Nomad notes (@nomad_notes) [bot]");
+    expect(discordChannelUrl("111", "222")).toBe("https://discord.com/channels/111/222");
+    expect(discordChannelUrl("111", "222", "333")).toBe("https://discord.com/channels/111/222/333");
+    expect(NOTION_FIELD_SPECS.map((s) => s.field)).toEqual([
+      "title",
+      "key",
+      "assignee",
+      "due",
+      "status",
+      "meeting",
+      "cycle",
+    ]);
+  });
+
+  it("describes Notion and Discord bot plans, links, status lines and correction edits", () => {
+    const p = plan({
+      summary: {
+        ...plan().summary,
+        commit: false,
+        issues: [],
+        statuses: [],
+        topicsAdded: [],
+        topicsSet: [],
+        discord: true,
+        discordMode: "bot",
+        discordThread: true,
+        notion: [
+          { itemId: "i1", title: "Order valves", existingUrl: null },
+          {
+            itemId: "i2",
+            title: "Check mount",
+            existingUrl: "https://www.notion.so/00000000000000000000000000000001",
+          },
+        ],
+      },
+    });
+    const lines = planLines(p);
+    expect(lines).toContain(
+      "Export 2 tasks to Notion, 1 already there (updated, the status is kept).",
+    );
+    expect(lines).toContain(
+      "Post the summary to Discord through the bot, with the issue links and the screenshots in a thread.",
+    );
+
+    const notionOp = op(1, {
+      target: "notion",
+      kind: "export_notion",
+      state: "done",
+      result: {
+        page_id: "p1",
+        url: "https://www.notion.so/p1",
+        updated: true,
+        removed: false,
+      },
+    });
+    expect(opLink(notionOp)).toEqual({ href: "https://www.notion.so/p1", text: "Notion page" });
+    expect(opStatusLine(notionOp, 0, false)).toBe("Updated the existing page (status kept).");
+
+    const removedOp = op(2, {
+      target: "notion",
+      kind: "export_notion",
+      state: "done",
+      result: { page_id: "p2", removed: true },
+    });
+    expect(opLink(removedOp)).toBeNull();
+    expect(opStatusLine(removedOp, 0, false)).toMatch(/moved to the trash/i);
+
+    const botOp = op(3, {
+      target: "discord",
+      kind: "post_discord",
+      state: "done",
+      result: { channel_id: "222", thread_id: "900", message_ids: ["900", "901"] },
+    });
+    expect(opLink(botOp, "111")).toEqual({
+      href: "https://discord.com/channels/111/900",
+      text: "Discord thread",
+    });
+    expect(opStatusLine(botOp, 0, false)).toBe("Posted through the bot with a thread.");
+
+    const editOp = op(4, {
+      target: "discord",
+      kind: "edit_discord",
+      state: "done",
+      result: { edited: true, replied: true, thread_id: "900" },
+    });
+    expect(isCorrectionOp(editOp)).toBe(true);
+    expect(targetsSent([notionOp, botOp, editOp])).toEqual(new Set(["notion", "discord"]));
+
+    const editedCorrection: Correction = {
+      id: "c1",
+      date: "2026-11-15",
+      text: "Updated delivery date",
+      item: null,
+      issue: null,
+      state: "published",
+      file: null,
+      comment: null,
+      discordEdit: {
+        opId: 4,
+        state: "done",
+        attempts: 1,
+        nextAttemptUnixMs: null,
+        lastError: null,
+        result: { edited: true, replied: true, thread_id: "900" },
+      },
+      fileName: "corrections.md",
+      url: "https://github.com/o/r/blob/main/x/corrections.md",
+      canDelete: false,
+    };
+    expect(correctionStatusLine(editedCorrection, "on-approval")).toBe(
+      "Published as corrections.md in the meeting folder. Discord summary edited and replied in the thread.",
+    );
   });
 });

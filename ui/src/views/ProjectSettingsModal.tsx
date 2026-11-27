@@ -250,7 +250,7 @@ export function ProjectSettingsModal({
     (githubRepoInput.trim() !== (currentRepo.githubRepo ?? "") ||
       githubApiInput.trim() !== (currentRepo.githubApi ?? ""));
 
-  const trimmedWebhookRef = discordRef?.webhook.trim() ?? "";
+  const trimmedWebhookRef = discordRef?.webhook?.trim() ?? "";
   const validWebhookRef = /^cred:[A-Za-z0-9][A-Za-z0-9_./-]*$/.test(trimmedWebhookRef);
   const matchedSecret = validWebhookRef
     ? secrets?.targets.find((t) => t.reference === trimmedWebhookRef)
@@ -1319,7 +1319,12 @@ export function ProjectSettingsModal({
                       onChange={(e) =>
                         setTargets({
                           notion: e.target.checked
-                            ? { database: "", publish: "on-approval" }
+                            ? {
+                                token: "",
+                                database: "",
+                                publish: "on-approval",
+                                properties: { title: "Name", key: "BBB key" },
+                              }
                             : null,
                         })
                       }

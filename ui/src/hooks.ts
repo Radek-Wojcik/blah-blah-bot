@@ -202,11 +202,13 @@ export function useOutbox(): OutboxState | null {
 export function useCycleFacts(cycleId: string | undefined): {
   tasks: CycleTasks | null;
   topics: Topic[];
+  discordGuildId: string | null;
   reload: () => void;
 } {
   const backend = useBackend();
   const [tasks, setTasks] = useState<CycleTasks | null>(null);
   const [topics, setTopics] = useState<Topic[]>([]);
+  const [discordGuildId, setDiscordGuildId] = useState<string | null>(null);
   const reload = useCallback(() => {
     if (!cycleId) return;
     void backend
@@ -215,8 +217,14 @@ export function useCycleFacts(cycleId: string | undefined): {
       .catch(() => setTasks(null));
     void backend
       .getCycle(cycleId)
-      .then((d) => setTopics(d.topics))
-      .catch(() => setTopics([]));
+      .then((d) => {
+        setTopics(d.topics);
+        setDiscordGuildId(d.cycle.targets.discord?.bot?.guild ?? null);
+      })
+      .catch(() => {
+        setTopics([]);
+        setDiscordGuildId(null);
+      });
   }, [backend, cycleId]);
   useEffect(() => {
     reload();
@@ -231,5 +239,5 @@ export function useCycleFacts(cycleId: string | undefined): {
       off?.();
     };
   }, [backend, reload]);
-  return { tasks, topics, reload };
+  return { tasks, topics, discordGuildId, reload };
 }

@@ -417,10 +417,22 @@ impl HttpClient {
     /// Like [`send_raw`](Self::send_raw), but a status outside 2xx is an error, classified
     /// by [`classify_status`].
     pub fn send(&self, request: &Request) -> Result<Response, HttpError> {
+        self.send_refined(request, &|err, _| err)
+    }
+
+    /// Like [`send`](Self::send), but `refine` may rewrite the classified error of a failing
+    /// answer (a service whose error bodies carry a code that changes what a status means).
+    /// The message of what it returns is redacted.
+    pub fn send_refined(
+        &self,
+        request: &Request,
+        refine: &dyn Fn(HttpError, &Response) -> HttpError,
+    ) -> Result<Response, HttpError> {
         let response = self.send_raw(request)?;
         match classify_status(&response, (self.now_ms)()) {
             None => Ok(response),
-            Some(mut err) => {
+            Some(err) => {
+                let mut err = refine(err, &response);
                 err.message = self.redacted(&err.message);
                 Err(err)
             }
@@ -646,13 +658,18 @@ pub fn api_message(body: &[u8]) -> Option<String> {
 
 const MASK: &str = "***";
 const TOKEN_PREFIXES: [&str; 6] = ["github_pat_", "ghp_", "gho_", "ghu_", "ghs_", "ghr_"];
+/// Notion token prefixes. Ordinary words can start with `secret_`, so only a run of at least
+/// [`LONG_TOKEN_MIN`] token characters after the prefix is masked.
+const LONG_TOKEN_PREFIXES: [&str; 2] = ["ntn_", "secret_"];
+const LONG_TOKEN_MIN: usize = 20;
 
 /// Removes secrets from a text that may be stored or shown.
 ///
 /// Every occurrence of a value in `secrets` is masked, and so are the shapes secrets take
 /// when the value itself is not known: the token part of a Discord webhook path
 /// (`/webhooks/<id>/<token>`), the value after `Bearer ` and `Basic `, `access_token=`
-/// and `token=` query values, and GitHub token prefixes (`ghp_`, `github_pat_`, ...).
+/// and `token=` query values, the value after `Bot ` (a Discord bot token), GitHub token
+/// prefixes (`ghp_`, `github_pat_`, ...) and Notion token prefixes (`ntn_`, `secret_`).
 pub fn redact(text: &str, secrets: &[&str]) -> String {
     let mut out = text.to_string();
     for secret in secrets.iter().filter(|s| !s.is_empty()) {
@@ -664,8 +681,13 @@ pub fn redact(text: &str, secrets: &[&str]) -> String {
     out = mask_after(&out, "basic ", 8);
     out = mask_after(&out, "access_token=", 1);
     out = mask_after(&out, "token=", 1);
+    // A bot token is far longer than any word that follows "bot ".
+    out = mask_after(&out, "bot ", LONG_TOKEN_MIN);
     for prefix in TOKEN_PREFIXES {
         out = mask_prefixed(&out, prefix);
+    }
+    for prefix in LONG_TOKEN_PREFIXES {
+        out = mask_prefixed_min(&out, prefix, LONG_TOKEN_MIN);
     }
     out
 }
@@ -734,16 +756,26 @@ fn mask_webhook_tokens(text: &str) -> String {
 
 /// Masks `prefix` and the characters that follow it.
 fn mask_prefixed(text: &str, prefix: &str) -> String {
+    mask_prefixed_min(text, prefix, 0)
+}
+
+/// Masks `prefix` and the characters that follow it, when at least `min_run` follow.
+fn mask_prefixed_min(text: &str, prefix: &str, min_run: usize) -> String {
     let mut out = String::with_capacity(text.len());
     let mut at = 0;
     while let Some(found) = text[at..].find(prefix) {
         let start = at + found;
-        out.push_str(&text[at..start]);
-        let run = text[start + prefix.len()..]
+        let after = start + prefix.len();
+        let run = text[after..]
             .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-            .unwrap_or(text.len() - start - prefix.len());
-        out.push_str(MASK);
-        at = start + prefix.len() + run;
+            .unwrap_or(text.len() - after);
+        if run >= min_run {
+            out.push_str(&text[at..start]);
+            out.push_str(MASK);
+        } else {
+            out.push_str(&text[at..after + run]);
+        }
+        at = after + run;
     }
     out.push_str(&text[at..]);
     out
@@ -1110,6 +1142,46 @@ mod tests {
             redact("the token expired, bearer of bad news", &[]),
             "the token expired, bearer of bad news"
         );
+    }
+
+    #[test]
+    fn notion_and_bot_tokens_are_masked_by_their_shape() {
+        let ntn = concat!("ntn_", "1234567890abcdefABCDEF1234567890abcdef");
+        let legacy = concat!("secret_", "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789ABCDEFG");
+        assert_eq!(
+            redact(&format!("the token {ntn} was refused"), &[]),
+            "the token *** was refused"
+        );
+        assert_eq!(
+            redact(&format!("old {legacy}, then ntn_{}.", "x".repeat(20)), &[]),
+            "old ***, then ***."
+        );
+        let bot = concat!(
+            "MTExMTExMTExMTExMTExMTEx",
+            ".GaBcDe.",
+            "Abcdefghijklmnopqrstuvwxyz0123456789"
+        );
+        assert_eq!(
+            redact(&format!("Authorization: Bot {bot} rejected"), &[]),
+            "Authorization: Bot *** rejected"
+        );
+        assert_eq!(
+            redact(&format!("authorization: bot {bot}"), &[]),
+            "authorization: bot ***"
+        );
+        // Words and short values stay readable.
+        for text in [
+            "the secret_x of the plan",
+            "a secret_ is not a token",
+            "ntn_short",
+            "this secret_key_is_a_name",
+            "the bot is missing a permission",
+            "Bot rejected",
+            "a robot arm",
+            "the bot Abcdefghij failed",
+        ] {
+            assert_eq!(redact(text, &[]), text);
+        }
     }
 
     #[test]

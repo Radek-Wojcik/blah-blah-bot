@@ -143,9 +143,9 @@ The `extraction` set is used to compare language models and prompts under identi
 
 ## 9. Publishing tests
 
-- Mock HTTP servers emulate the GitHub and Discord endpoints used by the publishers, including error and rate-limit responses (Notion arrives with its publisher in Stage 7); the Git side runs against local bare remotes. Details are in section 14.
-- Before each release the publishers run against a dedicated test repository and a test Discord webhook (and, from Stage 7, a test Notion database). Credentials for these exist only on the release machine, in the Windows Credential Manager.
-- Limits are tested at the boundary: message length, number of embeds, number and size of attachments.
+- Mock HTTP servers emulate the GitHub, Discord (webhook and bot) and Notion endpoints used by the publishers, including error and rate-limit responses; the Git side runs against local bare remotes. Details are in sections 14 and 15.
+- Before each release the publishers run against a dedicated test repository, a test Discord webhook, a test Discord bot and server, and a test Notion database. Credentials for these exist only on the release machine, in the Windows Credential Manager.
+- Limits are tested at the boundary: message length, number of embeds, number and size of attachments, Notion property length and option formatting.
 
 ## 10. Continuous integration
 
@@ -321,3 +321,35 @@ The regression suite, the report with the go/no-go recommendation and the ten ho
 **Not covered in the browser: key screenshots in publishing.** Publishing only the draft's key screenshots to GitHub and Discord is decided in the Rust publishers; the mock publisher sends every screenshot of a meeting and has no selection, so a browser test would show nothing real. `cargo test -p publishers` (including `full_loop`) covers it.
 
 **Regenerating only some pictures.** The screenshot script writes every picture it takes; run it with `-g` and check `git status` afterwards, so that only the intended files change. The pictures of the gap fixes run with the browser language set to English, because the decimal mark of a number field follows the language of the browser, not of the page.
+
+## 18. Stage 7 test commands
+
+| What | Command | Runs |
+|---|---|---|
+| Unit tests: Notion and Discord bot target validation and YAML round-trip in `cycle.yaml` (`cycle-store`); schema v8 migration from v7 and `external_refs` persistence (`store`); task export contract, Notion property mapping, auto-proposal, idempotency by task key, Discord bot permission bitmask (`309237746688`), invite URL, deterministic nonces, thread creation, summary edits and thread replies on correction, planning and outbox execution (`publishers`); secret discovery, shape validation, masking, Notion access and schema inspection, Discord bot channel check, member search, role listing and Notion re-export commands (`app`) | `cargo test -p cycle-store -p store -p publishers -p app` | CI |
+| Integration tests against in-process fake HTTP servers (`FakeNotion`, `FakeDiscordBot`, fake GitHub, local bare remote): Notion idempotent export and re-export preserving manual status changes and skipping trashed pages, duplicate key handling, data source selection, rate limits (`429` with `Retry-After`); Discord bot posting with public threads, attachment splitting, deterministic nonces, summary edit and thread reply on correction, missing permissions, member search and role listing; full-loop and resilience checks including secret scanning across logs, database, snapshots and Git history; release-check harness verified against the fakes | `cargo test -p publishers --test integrations --test full_loop --test resilience --test corrections && cargo test -p app the_integration_release_checks_pass_against_the_fakes` | CI |
+| UI unit tests and Playwright flows on the mock backend: Discord bot and Notion secret forms, invite link generator (`309237746688`, 0 privileged intents), cycle editor webhook/bot switch, Notion database inspection and property mapping, participant Discord member search picker with manual ID fallback, Notion task preview, idempotent re-export, and Discord bot thread post and summary edit after a correction | `cd ui && npm test && npm run test:e2e` | CI |
+| Reproducible demo screenshots of the Notion property mapping screen and the Discord bot setup (`docs/img/notion-mapping.png`, `docs/img/discord-bot-setup.png`) on the mock backend with fictional data | `cd ui && npx playwright test --project=screenshots -g "Notion mapping|Discord bot setup"` | Locally, when the screens change |
+| Ignored release checks against real services (ADR 0020): Notion database inspection, data-source resolution and idempotent task export/re-export (trashing the test page on cleanup); Discord bot REST member search with 0 privileged intents, deterministic `nonce` + `enforce_nonce: true`, public thread creation, thread reply and in-place summary edit without `MANAGE_MESSAGES`, plus log and output secret scan | `BBB_RELEASE_CHECK=yes BBB_RC_NOTION_REF=<cred:...> BBB_RC_NOTION_DB=<database_id> BBB_RC_DISCORD_BOT_REF=<cred:...> BBB_RC_DISCORD_GUILD=<guild_id> BBB_RC_DISCORD_CHANNEL=<channel_id> cargo test -p app -- --ignored --test-threads=1 --nocapture` | Locally before a release |
+
+**The Stage 7 fakes.** `crates/publishers/src/testing/` adds two stateful in-process HTTP servers on `TcpListener` and wires them into `Lab`:
+
+| Fake | What it models |
+|---|---|
+| `FakeNotion` (`testing/notion.rs`) | `GET /v1/users/me`, `GET /v1/databases/{id}`, `GET /v1/data_sources/{id}`, `POST /v1/data_sources/{id}/query` (filtering by `rich_text` key, sorting by `created_time`), `POST /v1/pages`, `PATCH /v1/pages/{id}`; enforces `Notion-Version: 2026-03-11`, bearer token check, property type and option validation, `in_trash` state, multi-source databases, `429` with `Retry-After` and fault injection |
+| `FakeDiscordBot` (`testing/discord_bot.rs`) | `GET /api/v10/users/@me`, `GET /api/v10/guilds/{id}`, `GET /api/v10/guilds/{id}/roles`, `GET /api/v10/guilds/{id}/members/search`, `GET /api/v10/channels/{id}`, `POST /api/v10/channels/{id}/messages` (JSON and multipart, 2000 character and 10 file limits, `allowed_mentions`, deterministic `nonce` + `enforce_nonce: true` deduplication), `PATCH /api/v10/channels/{id}/messages/{id}`, `POST /api/v10/channels/{id}/messages/{id}/threads`; models channel permission bitmasks (`VIEW_CHANNEL`, `SEND_MESSAGES`, `ATTACH_FILES`, `READ_MESSAGE_HISTORY`, `CREATE_PUBLIC_THREADS`, `SEND_MESSAGES_IN_THREADS`), forum channel rejection, deleted messages (`404`) and rate limits |
+
+**The Stage 7 release checks.** `crates/app/src/release_check/integrations.rs` defines two `#[ignore]`d tests (`notion_integration_idempotent_export_and_reexport` and `discord_bot_rest_search_nonce_thread_and_edit`) gated by `BBB_RELEASE_CHECK=yes`:
+
+| Variable | Meaning |
+|---|---|
+| `BBB_RELEASE_CHECK` | Must be `yes`; without it every release check stops at once. |
+| `BBB_RC_NOTION_REF` | The `cred:` reference of the Notion integration token in the Windows Credential Manager, for example `cred:notion/release-check`. |
+| `BBB_RC_NOTION_DB` | The 32-hex test Notion database id shared with the integration. |
+| `BBB_RC_NOTION_DATA_SOURCE` | Optional data source id when the test database has more than one data source. |
+| `BBB_RC_DISCORD_BOT_REF` | The `cred:` reference of the Discord bot token in the Windows Credential Manager, for example `cred:discord-bot/release-check`. |
+| `BBB_RC_DISCORD_GUILD` | The Discord test server (guild) snowflake id. |
+| `BBB_RC_DISCORD_CHANNEL` | The Discord test text or announcement channel snowflake id. |
+| `BBB_RC_DISCORD_SEARCH` | Optional 2+ character prefix for the `members/search` check (defaults to the first two characters of the bot's username). |
+
+

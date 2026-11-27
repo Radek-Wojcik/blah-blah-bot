@@ -10,7 +10,7 @@
 use cycle_store::corrections::CorrectionsFile;
 use cycle_store::time::{format_utc_date, now_unix_ms};
 use cycle_store::Correction;
-use publishers::correction::{comment_key, file_key};
+use publishers::correction::{comment_key, discord_edit_key, file_key};
 use publishers::flow::{self, PreparedCorrection};
 use publishers::outbox::Env;
 use publishers::rules::{PublishTarget, TargetRules, Trigger};
@@ -50,6 +50,8 @@ pub struct CorrectionDto {
     pub file: Option<CorrectionStepDto>,
     /// The comment on the issue, when one is planned.
     pub comment: Option<CorrectionStepDto>,
+    /// Bot mode: the edit of the Discord summary (and the reply in its thread).
+    pub discord_edit: Option<CorrectionStepDto>,
     /// The name of the file in the meeting folder once published (`corrections-2.md`).
     pub file_name: Option<String>,
     pub url: Option<String>,
@@ -162,8 +164,10 @@ impl Publishing {
             .map(|c| {
                 let file_op = find(file_key(&c.id));
                 let comment_op = find(comment_key(&c.id));
+                let discord_edit_op = find(discord_edit_key(&c.id));
                 let file_step = file_op.map(step);
-                let state = match file_op.map(|o| o.state) {
+                let primary_op = file_op.or(discord_edit_op);
+                let state = match primary_op.map(|o| o.state) {
                     None | Some(OpState::Cancelled) => "local",
                     Some(OpState::Queued) => "queued",
                     Some(OpState::Running) => "running",
@@ -188,7 +192,10 @@ impl Publishing {
                         .map(String::from),
                     file: file_step,
                     comment: comment_op.map(step),
-                    can_delete: file_op.is_none() && comment_op.is_none(),
+                    discord_edit: discord_edit_op.map(step),
+                    can_delete: file_op.is_none()
+                        && comment_op.is_none()
+                        && discord_edit_op.is_none(),
                 }
             })
             .collect();
@@ -266,7 +273,17 @@ impl Publishing {
         self.write_corrections(&loaded, &file)?;
         drop(guard);
 
-        if TargetRules::of(&loaded.ctx.cycle).allows(PublishTarget::Github, Trigger::Auto) {
+        let rules = TargetRules::of(&loaded.ctx.cycle);
+        let discord_auto = loaded
+            .ctx
+            .cycle
+            .targets
+            .discord
+            .as_ref()
+            .and_then(|d| d.bot.as_ref())
+            .is_some_and(|b| b.edit_on_correction)
+            && rules.allows(PublishTarget::Discord, Trigger::Auto);
+        if rules.allows(PublishTarget::Github, Trigger::Auto) || discord_auto {
             if let Err(e) = self.queue_correction(&loaded, &correction, Trigger::Auto) {
                 // A write that cannot go out yet is not an error of writing it.
                 tracing::info!(meeting = meeting_id, code = %e.code, "an automatic correction is waiting for the user");

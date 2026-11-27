@@ -70,6 +70,7 @@ export function PublishPanel(props: {
   const [ticked, setTicked] = useState<Record<PublishTargetName, boolean>>({
     github: true,
     discord: true,
+    notion: true,
   });
   const [confirming, setConfirming] = useState(false);
   const [ruleBusy, setRuleBusy] = useState(false);
@@ -148,7 +149,7 @@ export function PublishPanel(props: {
     if (commitId !== null) reloadFacts();
   }, [commitId, reloadFacts]);
 
-  const targets = chosenTargets(plan, ticked);
+  const targets = chosenTargets(plan, ticked).filter((t) => t !== "notion");
   const publicBlock = publicRepoBlock(plan);
   const needsConfirm = publicBlock !== null && targets.includes("github");
   const blockers = otherBlocks(plan);
@@ -203,16 +204,19 @@ export function PublishPanel(props: {
 
         {plan && (
           <ul className="targets-list" aria-label="Targets">
-            {plan.targets.map((t) => (
-              <TargetRow
-                key={t.target}
-                view={t}
-                ticked={ticked[t.target]}
-                onTick={(v) => setTicked({ ...ticked, [t.target]: v })}
-                onRule={(rule) => setRule(t.target, rule)}
-                ruleBusy={ruleBusy}
-              />
-            ))}
+            {/* Notion has no row until the Stage 7 UI is ported (WP-14c). */}
+            {plan.targets
+              .filter((t) => t.target !== "notion")
+              .map((t) => (
+                <TargetRow
+                  key={t.target}
+                  view={t}
+                  ticked={ticked[t.target]}
+                  onTick={(v) => setTicked({ ...ticked, [t.target]: v })}
+                  onRule={(rule) => setRule(t.target, rule)}
+                  ruleBusy={ruleBusy}
+                />
+              ))}
           </ul>
         )}
 

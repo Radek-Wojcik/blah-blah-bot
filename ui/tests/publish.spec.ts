@@ -17,6 +17,24 @@ interface Hooks {
   nextCorrections(
     cycleId: string,
   ): { text: string; item: string | null; issue: string | null; date: string }[];
+  notionPages(): {
+    id: string;
+    url: string;
+    key: string;
+    trashed: boolean;
+    title: string | null;
+    status: string | null;
+  }[];
+  trashNotionPage(id: string): void;
+  setNotionProperty(id: string, property: string, value: string | null): void;
+  discordBotMessages(): {
+    id: string;
+    channelId: string;
+    threadId: string | null;
+    content: string;
+  }[];
+  discordThreads(): { id: string; channelId: string; name: string; messageIds: string[] }[];
+  setBotPermissions(names: string[]): void;
 }
 const hooks = <T>(page: Page, run: (h: Hooks) => T): Promise<T> =>
   page.evaluate(`(${run.toString()})(window.__bbbMock)`) as Promise<T>;

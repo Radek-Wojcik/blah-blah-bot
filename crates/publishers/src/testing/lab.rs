@@ -11,10 +11,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use cycle_store::{
-    render, Correction, Cycle, Draft, PublishMode, RenderOptions, Repo, Topic, TopicStatus,
-    Variant, DEFAULT_TEMPLATE_TEXT,
+    render, Correction, Cycle, DiscordBot, DiscordTarget, Draft, NotionProperties, NotionTarget,
+    PublishMode, RenderOptions, Repo, Topic, TopicStatus, Variant, DEFAULT_TEMPLATE_TEXT,
 };
-use store::{Meeting, MeetingState, OutboxOp, Store};
+use store::{ExternalRef, Meeting, MeetingState, OutboxOp, Store};
 
 use crate::discord::Pacing;
 use crate::flow::{self, CorrectionOutcome, Outcome, Prepared, PreparedCorrection, StartError};
@@ -24,7 +24,8 @@ use crate::outbox::{Dispatcher, Env, RepoContext};
 use crate::plan::{GithubIdentity, PublishPlan};
 use crate::rules::{PublishTarget, Trigger};
 use crate::testing::fixtures::cycle as fixture_cycle;
-use crate::testing::{FakeDiscord, FakeGithub, Visibility};
+use crate::testing::notion::DATABASE_ID as NOTION_DATABASE_ID;
+use crate::testing::{FakeDiscord, FakeDiscordBot, FakeGithub, FakeNotion, Visibility};
 
 /// The GitHub token of the lab. Looks like a token, is not one.
 pub const TOKEN: &str = "ghp_LabTokenValue0123456789abcdef";
@@ -32,6 +33,10 @@ pub const TOKEN: &str = "ghp_LabTokenValue0123456789abcdef";
 pub const REPO: &str = "owner/rover";
 /// The `cred:` reference of the Discord webhook.
 pub const WEBHOOK_REF: &str = "cred:discord/nomad";
+/// The `cred:` reference of the Discord bot token.
+pub const DISCORD_BOT_REF: &str = "cred:discord-bot/nomad";
+/// The `cred:` reference of the Notion integration token.
+pub const NOTION_REF: &str = "cred:notion/nomad";
 /// The meeting of the lab.
 pub const MEETING: &str = "20261113-140501";
 
@@ -64,6 +69,14 @@ pub struct LabOptions {
     pub visibility: Visibility,
     pub github: PublishMode,
     pub discord: Option<PublishMode>,
+    /// Use the Discord bot target instead of a webhook when `discord` is `Some`.
+    pub discord_bot: bool,
+    /// In bot mode: create a public thread under the summary message.
+    pub discord_thread: bool,
+    /// In bot mode: edit the summary and reply in the thread on corrections.
+    pub discord_edit_on_correction: bool,
+    /// Configure a Notion target pointing at `FakeNotion`.
+    pub notion: Option<PublishMode>,
     /// The clone has a remote (false: a local-only repository).
     pub remote: bool,
     /// The repository is linked to the GitHub repository (issues).
@@ -78,6 +91,10 @@ impl Default for LabOptions {
             visibility: Visibility::Private,
             github: PublishMode::OnApproval,
             discord: Some(PublishMode::OnApproval),
+            discord_bot: false,
+            discord_thread: true,
+            discord_edit_on_correction: true,
+            notion: None,
             remote: true,
             linked: true,
             github_path: None,
@@ -92,10 +109,14 @@ pub struct LabEnv {
     repo: PathBuf,
     remote: PathBuf,
     api: String,
+    notion_api: String,
+    discord_api: String,
     remote_enabled: bool,
     linked: bool,
     pub token: Mutex<Option<String>>,
     pub webhook: Mutex<Option<String>>,
+    pub notion_token: Mutex<Option<String>>,
+    pub discord_bot_token: Mutex<Option<String>>,
     /// Every pause the dispatcher asked for.
     pub sleeps: Mutex<Vec<Duration>>,
     /// How many times the outbox announced a change.
@@ -126,6 +147,12 @@ impl LabEnv {
                 v.push(token.to_string());
             }
             v.push(w);
+        }
+        if let Some(t) = self.notion_token.lock().unwrap().clone() {
+            v.push(t);
+        }
+        if let Some(t) = self.discord_bot_token.lock().unwrap().clone() {
+            v.push(t);
         }
         v
     }
@@ -159,6 +186,22 @@ impl Env for LabEnv {
 
     fn webhook(&self, _reference: &str) -> Option<String> {
         self.webhook.lock().unwrap().clone()
+    }
+
+    fn notion_token(&self, _reference: &str) -> Option<String> {
+        self.notion_token.lock().unwrap().clone()
+    }
+
+    fn discord_bot_token(&self, _reference: &str) -> Option<String> {
+        self.discord_bot_token.lock().unwrap().clone()
+    }
+
+    fn notion_api(&self) -> String {
+        self.notion_api.clone()
+    }
+
+    fn discord_api(&self) -> String {
+        self.discord_api.clone()
     }
 
     fn snapshot_root(&self) -> PathBuf {
@@ -209,6 +252,8 @@ pub struct Lab {
     pub clone_dir: PathBuf,
     pub github: FakeGithub,
     pub discord: FakeDiscord,
+    pub discord_bot: FakeDiscordBot,
+    pub notion: FakeNotion,
     pub store: Arc<Mutex<Store>>,
     pub env: Arc<LabEnv>,
     pub dispatcher: Dispatcher,
@@ -239,9 +284,53 @@ impl Lab {
             &["init", "--bare", "--quiet", "--initial-branch=main"],
         );
 
+        let github = FakeGithub::start();
+        github.add_repo(REPO, options.visibility);
+        github.require_token(TOKEN);
+        let discord = FakeDiscord::start();
+        let discord_bot = FakeDiscordBot::start();
+        let notion = FakeNotion::start();
+
         let seed = Repo::init_local(tmp.path().join("seed")).unwrap();
-        let discord_ref = options.discord.map(|mode| (WEBHOOK_REF, mode));
+        let discord_ref = (!options.discord_bot)
+            .then_some(options.discord)
+            .flatten()
+            .map(|mode| (WEBHOOK_REF, mode));
         let mut cycle = fixture_cycle(Some(options.github), discord_ref);
+        if options.discord_bot {
+            if let Some(publish) = options.discord {
+                cycle.targets.discord = Some(DiscordTarget {
+                    webhook: None,
+                    bot: Some(DiscordBot {
+                        token: DISCORD_BOT_REF.into(),
+                        guild: discord_bot.guild_id(),
+                        channel: discord_bot.channel_id(),
+                        thread: options.discord_thread,
+                        edit_on_correction: options.discord_edit_on_correction,
+                    }),
+                    publish,
+                    template: None,
+                });
+            }
+        }
+        if let Some(publish) = options.notion {
+            cycle.targets.notion = Some(NotionTarget {
+                token: NOTION_REF.into(),
+                database: NOTION_DATABASE_ID.into(),
+                data_source: None,
+                publish,
+                properties: NotionProperties {
+                    title: "Name".into(),
+                    key: "BBB key".into(),
+                    assignee: Some("Assignee".into()),
+                    due: Some("Due".into()),
+                    status: Some("Status".into()),
+                    status_value: Some("Not started".into()),
+                    meeting: Some("Meeting".into()),
+                    cycle: Some("Cycle".into()),
+                },
+            });
+        }
         if let (Some(path), Some(github)) = (options.github_path, cycle.targets.github.as_mut()) {
             github.path = path.to_string();
         }
@@ -267,11 +356,6 @@ impl Lab {
             git(seed.root(), &["remote", "remove", "origin"]);
             seed.root().to_path_buf()
         };
-
-        let github = FakeGithub::start();
-        github.add_repo(REPO, options.visibility);
-        github.require_token(TOKEN);
-        let discord = FakeDiscord::start();
 
         let root = tmp.path().join("recordings");
         std::fs::create_dir_all(root.join(MEETING).join("img")).unwrap();
@@ -303,10 +387,14 @@ impl Lab {
             repo: clone_dir.clone(),
             remote: remote.clone(),
             api: github.api_base(),
+            notion_api: notion.api_base(),
+            discord_api: discord_bot.api_base(),
             remote_enabled: options.remote,
             linked: options.linked,
             token: Mutex::new(Some(TOKEN.to_string())),
             webhook: Mutex::new(Some(discord.webhook_url())),
+            notion_token: Mutex::new(Some(notion.token())),
+            discord_bot_token: Mutex::new(Some(discord_bot.bot_token())),
             sleeps: Mutex::new(Vec::new()),
             changes: Mutex::new(0),
             repo_changes: Mutex::new(Vec::new()),
@@ -319,6 +407,8 @@ impl Lab {
             clone_dir,
             github,
             discord,
+            discord_bot,
+            notion,
             store,
             env,
             dispatcher,
@@ -393,6 +483,29 @@ impl Lab {
         self.with_prepared(draft, trigger, targets, anchors, |store, prepared| {
             flow::publish(store, prepared)
         })
+    }
+
+    /// Re-exports the tasks of `draft` to Notion.
+    pub fn reexport_notion(
+        &self,
+        draft: &Draft,
+        anchors: &BTreeMap<String, String>,
+    ) -> Result<Outcome, StartError> {
+        self.with_prepared(
+            draft,
+            Trigger::Explicit,
+            &[PublishTarget::Notion],
+            anchors,
+            flow::reexport_notion,
+        )
+    }
+
+    pub fn external_refs(&self) -> Vec<ExternalRef> {
+        self.store
+            .lock()
+            .unwrap()
+            .list_external_refs(MEETING)
+            .unwrap()
     }
 
     /// The plan of publishing `draft`, as the screen shows it before the user presses Publish.

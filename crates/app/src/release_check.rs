@@ -14,6 +14,7 @@
 //! cannot be deleted through the API).
 
 mod full_loop;
+mod integrations;
 
 use std::path::Path;
 use std::process::Command;

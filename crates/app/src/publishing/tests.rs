@@ -134,7 +134,8 @@ fn the_plan_shows_the_rules_and_what_would_happen_without_changing_anything() {
         modes,
         [
             ("github", Some("on-approval"), true),
-            ("discord", Some("off"), false)
+            ("discord", Some("off"), false),
+            ("notion", None, false),
         ]
     );
     assert!(plan.summary.commit && !plan.summary.pushes);
@@ -267,7 +268,7 @@ fn a_target_that_is_off_or_missing_cannot_be_published() {
     assert_eq!(err.code, "nothing_to_publish");
     let err = rig
         .publishing
-        .publish(MEETING, &["notion".to_string()])
+        .publish(MEETING, &["slack".to_string()])
         .unwrap_err();
     assert_eq!(err.code, "invalid");
     let err = rig.publishing.publish(MEETING, &[]).unwrap_err();
@@ -848,4 +849,245 @@ fn the_corrections_the_interface_gets_hold_no_secret() {
     let view = serde_json::to_string(&rig.publishing.list_corrections(MEETING).unwrap()).unwrap();
     assert!(!view.contains(TOKEN), "{view}");
     assert!(view.contains("\"canDelete\":false"));
+}
+
+// ----- Stage 7: Notion export, re-export and Discord bot ----------------------------------------
+
+fn rig_with_apis(
+    cycle: Cycle,
+    notion_api: Option<String>,
+    discord_api: Option<String>,
+) -> (Rig, Lab) {
+    let lab = Lab::new();
+    lab.make_cycle("NOMAD");
+    lab.repo().save_cycle(&cycle).unwrap();
+    let root = lab.dir.path().join("recordings");
+    std::fs::create_dir_all(root.join(MEETING).join("work")).unwrap();
+    let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
+    store
+        .lock()
+        .unwrap()
+        .create_meeting(&Meeting {
+            id: MEETING.into(),
+            title: "Weekly".into(),
+            started_unix_ms: 1,
+            duration_ms: None,
+            state: MeetingState::Stopped,
+            dir: MEETING.into(),
+        })
+        .unwrap();
+    let repos = Arc::new(Mutex::new(lab.repos().to_vec()));
+    let secrets = Arc::new(MemorySecrets::default());
+    let (r, root2) = (repos.clone(), root.clone());
+    let mut env = AppEnv::new(
+        move || r.lock().unwrap().clone(),
+        move || root2.clone(),
+        secrets.clone(),
+    );
+    if let Some(api) = notion_api {
+        env = env.with_notion_api(api);
+    }
+    if let Some(api) = discord_api {
+        env = env.with_discord_api(api);
+    }
+    let publishing = Publishing::new(store.clone(), Arc::new(env));
+    let rig = Rig {
+        _keep: None,
+        root,
+        repos,
+        secrets,
+        store,
+        publishing,
+    };
+    (rig, lab)
+}
+
+#[test]
+fn notion_export_and_reexport_are_idempotent_preserve_status_and_respect_trash() {
+    use publishers::testing::notion::DATABASE_ID;
+    use publishers::testing::FakeNotion;
+
+    let notion = FakeNotion::start();
+    let mut cycle = fixture_cycle(Some(PublishMode::OnApproval), None);
+    cycle.targets.notion = Some(cycle_store::NotionTarget {
+        token: "cred:notion/nomad".into(),
+        database: DATABASE_ID.into(),
+        data_source: None,
+        publish: PublishMode::OnApproval,
+        properties: cycle_store::NotionProperties {
+            title: "Name".into(),
+            key: "BBB key".into(),
+            assignee: Some("Assignee".into()),
+            due: Some("Due".into()),
+            status: Some("Status".into()),
+            status_value: Some("Not started".into()),
+            meeting: Some("Meeting".into()),
+            cycle: None,
+        },
+    });
+    let (rig, _lab) = rig_with_apis(cycle, Some(notion.api_base()), None);
+    rig.save_draft(&draft());
+
+    // Cannot re-export before the meeting is published.
+    assert_eq!(
+        rig.publishing.reexport_notion(MEETING).unwrap_err().code,
+        "not_published"
+    );
+
+    // Without a token, planning reports notion_token_missing.
+    let blocked = rig
+        .publishing
+        .plan(MEETING, &["notion".to_string()])
+        .unwrap();
+    assert_eq!(blocked.blocks[0].code, "notion_token_missing");
+
+    // Store the Notion token and inspect the plan.
+    let token = notion.token();
+    rig.secrets
+        .set(
+            &crate::secrets::target_entry("cred:notion/nomad").unwrap(),
+            &token,
+        )
+        .unwrap();
+    let plan = rig.publishing.plan(MEETING, &[]).unwrap();
+    assert_eq!(plan.summary.notion.len(), 1);
+    assert_eq!(plan.summary.notion[0].item_id, "i1");
+    assert!(plan.summary.notion[0].existing_url.is_none());
+    let notion_target = plan.targets.iter().find(|t| t.target == "notion").unwrap();
+    assert_eq!(notion_target.mode, Some("on-approval"));
+    assert!(notion_target.available);
+
+    // Publish to Notion: creates 1 page and records external_refs.
+    let first = rig
+        .publishing
+        .publish(MEETING, &["notion".to_string()])
+        .unwrap();
+    assert_eq!(first.queued, 1);
+    assert_eq!(rig.tick().done, 1);
+    let pages = notion.pages();
+    assert_eq!(pages.len(), 1);
+    let page_id = pages[0].id.clone();
+    assert_eq!(pages[0].option("Status").as_deref(), Some("Not started"));
+
+    // Plan now shows existingUrl from external_refs.
+    let plan_after = rig
+        .publishing
+        .plan(MEETING, &["notion".to_string()])
+        .unwrap();
+    assert_eq!(
+        plan_after.summary.notion[0].existing_url.as_deref(),
+        Some(pages[0].url.as_str())
+    );
+
+    // A person changes Status in Notion to "In progress". Re-export updates without
+    // recreating the page and keeps the person's status.
+    notion.set_property(
+        &page_id,
+        "Status",
+        serde_json::json!({"type": "status", "status": {"name": "In progress"}}),
+    );
+    let reexported = rig.publishing.reexport_notion(MEETING).unwrap();
+    assert_eq!(reexported.queued, 1);
+    assert_eq!(rig.tick().done, 1);
+    assert_eq!(notion.pages().len(), 1);
+    assert_eq!(
+        notion.pages()[0].option("Status").as_deref(),
+        Some("In progress")
+    );
+
+    // A person moves the page to trash: re-export reports removed=true and does not recreate it.
+    notion.trash(&page_id);
+    let after_trash = rig.publishing.reexport_notion(MEETING).unwrap();
+    assert_eq!(after_trash.queued, 1);
+    assert_eq!(rig.tick().done, 1);
+    assert_eq!(notion.pages().len(), 1);
+    let state = rig.publishing.state().unwrap();
+    let last_notion = state
+        .ops
+        .iter()
+        .rev()
+        .find(|o| o.kind == "export_notion")
+        .unwrap();
+    assert_eq!(last_notion.result.as_ref().unwrap()["removed"], true);
+    assert!(!serde_json::to_string(&state).unwrap().contains(&token));
+}
+
+#[test]
+fn discord_bot_publishes_with_thread_and_edits_on_correction() {
+    use publishers::testing::FakeDiscordBot;
+
+    let bot = FakeDiscordBot::start();
+    let mut cycle = fixture_cycle(Some(PublishMode::OnApproval), None);
+    cycle.targets.discord = Some(cycle_store::DiscordTarget {
+        webhook: None,
+        bot: Some(cycle_store::DiscordBot {
+            token: "cred:discord-bot/nomad".into(),
+            guild: bot.guild_id(),
+            channel: bot.channel_id(),
+            thread: true,
+            edit_on_correction: true,
+        }),
+        publish: PublishMode::OnApproval,
+        template: None,
+    });
+    let (rig, _lab) = rig_with_apis(cycle, None, Some(bot.api_base()));
+    rig.save_draft(&draft());
+
+    // Missing bot token blocks the plan with discord_bot_token_missing.
+    let blocked = rig
+        .publishing
+        .plan(MEETING, &["discord".to_string()])
+        .unwrap();
+    assert_eq!(blocked.blocks[0].code, "discord_bot_token_missing");
+
+    let token = bot.bot_token();
+    rig.secrets
+        .set(
+            &crate::secrets::target_entry("cred:discord-bot/nomad").unwrap(),
+            &token,
+        )
+        .unwrap();
+    let plan = rig
+        .publishing
+        .plan(MEETING, &["github".to_string(), "discord".to_string()])
+        .unwrap();
+    assert!(plan.blocks.is_empty(), "{:?}", plan.blocks);
+    assert!(plan.summary.discord);
+    assert_eq!(plan.summary.discord_mode, Some("bot"));
+    assert!(plan.summary.discord_thread);
+
+    let published = rig
+        .publishing
+        .publish(MEETING, &["github".to_string(), "discord".to_string()])
+        .unwrap();
+    assert_eq!(published.queued, 2, "commit and Discord bot post");
+    assert_eq!(rig.tick().done, 2);
+
+    let msgs = bot.messages(&bot.channel_id());
+    assert_eq!(msgs.len(), 1);
+    let summary_id = msgs[0].id.clone();
+
+    // Add and publish a correction: edits the bot summary and exposes discordEdit step.
+    rig.publishing
+        .add_correction(MEETING, "Updated mount deadline.", None, None, None)
+        .unwrap();
+    let corr_pub = rig.publishing.publish_corrections(MEETING, &[]).unwrap();
+    assert_eq!(corr_pub.queued, 2, "correction file and Discord edit");
+    assert!(corr_pub.corrections.corrections[0].discord_edit.is_some());
+    assert!(!corr_pub.corrections.corrections[0].can_delete);
+
+    assert_eq!(rig.tick().done, 2);
+    let view = rig.publishing.list_corrections(MEETING).unwrap();
+    let edit_step = view.corrections[0].discord_edit.as_ref().unwrap();
+    assert_eq!(edit_step.state, "done");
+    assert_eq!(edit_step.result.as_ref().unwrap()["edited"], true);
+    let updated_msgs = bot.messages(&bot.channel_id());
+    assert_eq!(updated_msgs[0].id, summary_id);
+    assert!(updated_msgs[0].content.contains("Updated mount deadline."));
+
+    // Neither the outbox state nor the corrections view contains the bot token.
+    let outbox_json = serde_json::to_string(&rig.publishing.state().unwrap()).unwrap();
+    let corr_json = serde_json::to_string(&view).unwrap();
+    assert!(!outbox_json.contains(&token));
+    assert!(!corr_json.contains(&token));
 }
