@@ -734,6 +734,30 @@ mod tests {
     }
 
     #[test]
+    fn previous_items_carry_the_outside_assignee_name() {
+        let dir = test_tmp::TestDir::new("context");
+        let mut named = item("a", ItemType::Task, "send the invoice");
+        named.assignee_name = Some("Marta Outside".into());
+        let plain = item("b", ItemType::Task, "plain task");
+        write_meeting(
+            dir.path(),
+            "2026-11-13",
+            "m1",
+            "2026-11-13",
+            vec![named, plain],
+        );
+        let c = cycle();
+        let dirs = vec![dir.path().to_path_buf()];
+        let mut req = ContextRequest::new(&c, "2026-11-20");
+        req.previous_dirs = &dirs;
+        let ctx = build_context(&req).unwrap();
+        assert!(schema::validate(Schema::Context, &ctx.value).is_empty());
+        let items = ctx.value["previous_items"].as_array().unwrap();
+        assert_eq!(items[0]["assignee_name"], "Marta Outside");
+        assert!(items[1].get("assignee_name").is_none());
+    }
+
+    #[test]
     fn default_cap_is_eighty_items() {
         let dir = test_tmp::TestDir::new("context");
         let items: Vec<_> = (0..100)

@@ -512,7 +512,8 @@ pub fn create_participant(
     cycle_id: Option<String>,
 ) -> IpcResult<ParticipantDto> {
     let repos = state.cycle_repos();
-    let created = state.with_store_ipc(|s| create_participant_in(&repos, s, cycle_id.as_deref(), &name))?;
+    let created =
+        state.with_store_ipc(|s| create_participant_in(&repos, s, cycle_id.as_deref(), &name))?;
     if let Err(e) = app.emit(crate::cycle_commands::EVENT_CYCLES, ()) {
         tracing::warn!(error = %e, "emit cycles-changed failed");
     }

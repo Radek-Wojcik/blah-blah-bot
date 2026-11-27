@@ -196,10 +196,18 @@ pub fn merge_tasks(
     let mut seen: HashSet<(String, String)> = HashSet::new();
     let mut done = Vec::new();
     for task in meeting {
-        let key = (
-            normalize_text(&task.text),
-            task.participant.clone().unwrap_or_default(),
-        );
+        let owner = task
+            .participant
+            .clone()
+            .filter(|p| !p.is_empty())
+            .or_else(|| {
+                task.assignee_name
+                    .as_deref()
+                    .map(normalize_text)
+                    .filter(|n| !n.is_empty())
+            })
+            .unwrap_or_default();
+        let key = (normalize_text(&task.text), owner);
         if !seen.insert(key) {
             continue;
         }
@@ -220,6 +228,9 @@ pub fn merge_tasks(
                     }
                     if issue.github.is_none() && issue.participant.is_none() {
                         issue.participant = task.participant;
+                        if issue.participant.is_none() {
+                            issue.assignee_name = task.assignee_name;
+                        }
                     }
                     if issue.meeting.is_none() {
                         issue.meeting = task.meeting;
@@ -462,6 +473,31 @@ mod tests {
 
     fn ids(group: &TaskGroup) -> Vec<&str> {
         group.tasks.iter().map(|t| t.id.as_str()).collect()
+    }
+
+    #[test]
+    fn the_same_task_for_different_outside_assignees_is_kept_twice() {
+        let mut a = task("m1/1", "Send the invoice", None, None);
+        a.assignee_name = Some("Marta Outside".into());
+        let mut b = task("m1/2", "Send the invoice", None, None);
+        b.assignee_name = Some("Piotr Outside".into());
+        let mut again = task("m0/1", "send  the invoice", None, None);
+        again.assignee_name = Some("marta outside".into());
+        let merged = merge_tasks(&[], true, vec![a, b, again], &[]);
+        assert_eq!(merged.open.len(), 2);
+    }
+
+    #[test]
+    fn a_meeting_task_lends_its_outside_assignee_to_an_unassigned_issue() {
+        let mut t = task("m1/1", "Wiring", None, None);
+        t.assignee_name = Some("Marta Outside".into());
+        t.issue = Some(5);
+        let merged = merge_tasks(&[issue(5, "Wiring", None)], true, vec![t], &[]);
+        assert_eq!(merged.open.len(), 1);
+        assert_eq!(
+            merged.open[0].assignee_name.as_deref(),
+            Some("Marta Outside")
+        );
     }
 
     #[test]
