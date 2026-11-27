@@ -1093,24 +1093,10 @@ function ReportPane({ meetingId, view }: { meetingId: string; view: DraftView })
   const exportMarkdown = () => void note.save(noteFileName(view.draft.cycle, view.draft.date));
   return (
     <section className="report-pane" aria-label="Report">
-      <div className="report-tools">
-        <label className="inline-field">
-          Format
-          <select
-            aria-label="Report format"
-            value={variant}
-            onChange={(e) => setVariant(e.target.value as RenderVariant)}
-          >
-            {VARIANTS.map((v) => (
-              <option key={v.value} value={v.value}>
-                {v.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <span className="chip">{MODE_LABELS[view.draft.mode]}</span>
-        <span className="pane-toggle" role="group" aria-label="Report view">
+      <div className="report-tools" role="toolbar" aria-label="Report toolbar">
+        <span className="report-tools-left pane-toggle" role="group" aria-label="Report view">
           <button
+            type="button"
             className={rendered ? "btn btn-small btn-ghost" : "btn btn-small btn-stop"}
             aria-pressed={!rendered}
             onClick={() => setRendered(false)}
@@ -1118,6 +1104,7 @@ function ReportPane({ meetingId, view }: { meetingId: string; view: DraftView })
             Text
           </button>
           <button
+            type="button"
             className={rendered ? "btn btn-small btn-stop" : "btn btn-small btn-ghost"}
             aria-pressed={rendered}
             onClick={() => setRendered(true)}
@@ -1125,29 +1112,50 @@ function ReportPane({ meetingId, view }: { meetingId: string; view: DraftView })
             Preview
           </button>
         </span>
-        {copied && <span role="status">{copied}</span>}
-        {note.savedPath && (
-          <span className="valid-note" role="status">
-            Saved note to {note.savedPath}
-          </span>
-        )}
-        {note.error && (
-          <span className="error" role="alert">
-            {note.error}
-          </span>
-        )}
-        <button className="btn btn-small" onClick={copy}>
-          Copy
-        </button>
-        <button
-          className="btn btn-small btn-record"
-          type="button"
-          disabled={note.saving}
-          onClick={exportMarkdown}
-        >
-          {note.saving ? "Saving…" : "Download note (.md)"}
-        </button>
+        <div className="report-tools-right">
+          <label className="report-format-field">
+            <span>Format</span>
+            <select
+              aria-label="Report format"
+              value={variant}
+              onChange={(e) => setVariant(e.target.value as RenderVariant)}
+            >
+              {VARIANTS.map((v) => (
+                <option key={v.value} value={v.value}>
+                  {v.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <span className="chip">{MODE_LABELS[view.draft.mode]}</span>
+          <button type="button" className="btn btn-small" onClick={copy}>
+            Copy
+          </button>
+          <button
+            className="btn btn-small btn-record"
+            type="button"
+            disabled={note.saving}
+            onClick={exportMarkdown}
+          >
+            {note.saving ? "Saving…" : "Download note (.md)"}
+          </button>
+        </div>
       </div>
+      {(copied || note.savedPath || note.error) && (
+        <div className="report-status">
+          {copied && <span role="status">{copied}</span>}
+          {note.savedPath && (
+            <span className="valid-note" role="status">
+              Saved note to {note.savedPath}
+            </span>
+          )}
+          {note.error && (
+            <span className="error" role="alert">
+              {note.error}
+            </span>
+          )}
+        </div>
+      )}
       {rendered ? (
         <MarkdownView
           source={text}
