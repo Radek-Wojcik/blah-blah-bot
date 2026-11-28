@@ -330,6 +330,21 @@ class InstallerContentCheck(unittest.TestCase):
         self.assertFalse(self.flagged_key(noise))
         self.assertLess(time.monotonic() - start, 5.0)
 
+    def test_header_followed_by_many_newline_lines_does_not_backtrack(self) -> None:
+        import time
+
+        for line_break in (chr(13) + chr(10), chr(10) * 2, chr(92) + "n"):
+            noise = self.guard("BEGIN") + ("ab:" + line_break) * 20000
+            start = time.monotonic()
+            self.assertFalse(self.flagged_key(noise))
+            self.assertLess(time.monotonic() - start, 5.0)
+
+    def test_encrypted_legacy_header_with_escaped_newlines_is_flagged(self) -> None:
+        bs_n = chr(92) + "n"
+        text = (self.guard("BEGIN", "RSA ") + bs_n + "Proc-Type: 4,ENCRYPTED" + bs_n
+                + "DEK-Info: AES-128-CBC,AB" + bs_n + bs_n + self.BODY * 2)
+        self.assertTrue(self.flagged_key(text))
+
     def test_bare_header_in_error_text_is_not_flagged(self) -> None:
         text = f"expected '{self.guard('BEGIN')}' and '{self.guard('END')}' PEM guards"
         self.assertFalse(self.flagged_key(text))

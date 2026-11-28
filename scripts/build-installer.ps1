@@ -207,7 +207,7 @@ $SecretPatterns = [ordered]@{
     "Hugging Face token"  = 'hf_[A-Za-z0-9]{30,}'
     "GitHub token"        = '(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}'
     "API key"             = 'sk-[A-Za-z0-9_-]{24,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}'
-    "private key"         = '-----BEGIN [A-Z ]*PRIVATE KEY-----(?:\s|\\[rn])*(?:[A-Za-z-]+:[^\r\n]*[\r\n]+(?:\s|\\[rn])*)*(?:[A-Za-z0-9+/=](?:\s|\\[rn])*){64,}'
+    "private key"         = '-----BEGIN [A-Z ]*PRIVATE KEY-----(?:\s|\\[rn])*(?:[A-Za-z-]+:[^\r\n\\]*(?:[\r\n]|\\[rn])(?:\s|\\[rn])*)*(?:[A-Za-z0-9+/=](?:\s|\\[rn])*){64,}'
     "Discord webhook URL" = 'discord(app)?\.com/api/webhooks/\d+/[A-Za-z0-9_-]+'
 }
 $AbsolutePath = '(?i)[A-Za-z]:[\\/]+(Users|Documents and Settings)[\\/]+[^\\/\s"<>|*?]+|(?<![A-Za-z0-9_.-])(?!(?-i:/users/me/))/(home|Users)/[A-Za-z0-9._-]+/'
