@@ -621,8 +621,9 @@ fn the_message_of_a_failing_answer_is_redacted() {
     });
     let api = Notion::with_client(client(), &format!("{}/v1", server.base_url()), token).unwrap();
     let err = api.current_user().unwrap_err();
-    assert!(err.message.contains("bad header"), "{}", err.message);
-    assert!(!err.message.contains(token), "{}", err.message);
+    // A message with a token-shaped value is withheld whole.
+    assert!(!err.message.contains("EchoedToken"), "{}", err.message);
+    assert!(err.message.contains("withheld"), "{}", err.message);
 }
 
 #[test]

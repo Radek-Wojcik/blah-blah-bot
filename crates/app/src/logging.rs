@@ -16,7 +16,7 @@ fn build_filter(env_val: Option<&str>, clamp_http: bool) -> EnvFilter {
         .and_then(|v| EnvFilter::try_new(v).ok())
         .unwrap_or_else(|| EnvFilter::new("info"));
     if clamp_http {
-        // Release builds never trace HTTP client headers/bodies via BBB_LOG.
+        // No build traces HTTP client headers/bodies via BBB_LOG.
         for d in ["ureq=warn", "ureq_proto=warn"] {
             if let Ok(parsed) = d.parse() {
                 filter = filter.add_directive(parsed);
@@ -32,7 +32,7 @@ pub fn init(log_dir: &Path) {
     let _ = GUARD.set(guard);
 
     let env_val = std::env::var("BBB_LOG").ok();
-    let filter = build_filter(env_val.as_deref(), !cfg!(debug_assertions));
+    let filter = build_filter(env_val.as_deref(), true);
     let file_layer = fmt::layer().with_ansi(false).with_writer(writer);
     let registry = tracing_subscriber::registry().with(filter).with(file_layer);
 

@@ -26,6 +26,7 @@ import {
   botTokenProblem,
   canCancel,
   canRetry,
+  checkNotionMapping,
   chosenTargets,
   committedOp,
   conflictRows,
@@ -77,6 +78,8 @@ import {
   topicsSummary,
   waitText,
   webBase,
+  safeHttpUrl,
+  safeHttpsUrl,
 } from "./publish";
 
 const op = (id: number, patch: Partial<OutboxOp> = {}): OutboxOp => ({
@@ -170,7 +173,7 @@ describe("Discord webhook", () => {
     ["not a url", /not a web address/],
     ["ftp://discord.com/api/webhooks/000000000000000001/t", /must start with https/],
     ["https://example.org/api/webhooks/000000000000000001/t", /not a Discord address/],
-    ["http://example.org/api/webhooks/000000000000000001/t", /only accepted for this machine/],
+    ["http://example.org/api/webhooks/000000000000000001/t", /webhook address must use https/],
     ["https://discord.com:8443/api/webhooks/000000000000000001/t", /no port/],
     ["https://user@discord.com/api/webhooks/000000000000000001/t", /credentials/],
     ["https://discord.com/api/webhooks/000000000000000001/t?wait=true", /query or a fragment/],
@@ -934,5 +937,43 @@ describe("Stage 7: Discord bot and Notion helpers", () => {
     expect(correctionStatusLine(editedCorrection, "on-approval")).toBe(
       "Published as corrections.md in the meeting folder. Discord summary edited and replied in the thread.",
     );
+  });
+});
+
+describe("safeHttpsUrl", () => {
+  it("keeps https links and drops http, other schemes, junk and empty values", () => {
+    expect(safeHttpsUrl("https://discord.com/developers/applications")).toBe(
+      "https://discord.com/developers/applications",
+    );
+    expect(safeHttpsUrl("http://example.com/x")).toBeNull();
+    expect(safeHttpsUrl("javascript:alert(1)")).toBeNull();
+    expect(safeHttpsUrl("data:text/html,x")).toBeNull();
+    expect(safeHttpsUrl("not a url")).toBeNull();
+    expect(safeHttpsUrl("")).toBeNull();
+    expect(safeHttpsUrl(null)).toBeNull();
+    expect(safeHttpsUrl(undefined)).toBeNull();
+  });
+
+  it("is stricter than safeHttpUrl only about http", () => {
+    expect(safeHttpUrl("http://example.com/x")).not.toBeNull();
+  });
+});
+
+describe("checkNotionMapping", () => {
+  it("flags a missing property and a status without a value", () => {
+    const problems = checkNotionMapping({ title: "Name", key: "Key", status: "Gone" }, [
+      { name: "Name", type: "title" },
+      { name: "Key", type: "rich_text" },
+    ]);
+    expect(problems.map((p) => p.field)).toEqual(["status", "statusValue"]);
+  });
+
+  it("accepts a valid mapping", () => {
+    expect(
+      checkNotionMapping({ title: "Name", key: "Key" }, [
+        { name: "Name", type: "title" },
+        { name: "Key", type: "rich_text" },
+      ]),
+    ).toEqual([]);
   });
 });

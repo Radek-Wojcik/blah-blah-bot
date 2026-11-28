@@ -555,6 +555,11 @@ pub fn set_target_secret(
         }
         None => {}
     }
+    // An unknown reference gets no shape rule, but a value that looks like a webhook address,
+    // a bot token or a Notion token must not be stored under a name that hides what it is.
+    if value.contains("://") || value.chars().any(char::is_whitespace) {
+        return Err(IpcError::new("invalid", "this value is not acceptable"));
+    }
     if value.is_empty() || value.len() > 4096 || value.chars().any(char::is_control) {
         return Err(IpcError::new("invalid", "this value is not acceptable"));
     }
@@ -1471,6 +1476,10 @@ mod tests {
             store.get("target:huggingface-token").as_deref(),
             Some("something")
         );
+        // An unknown reference refuses a URL or text with spaces.
+        for bad in ["https://x.test/FAKE", "two words"] {
+            assert!(set_target_secret(&store, lab.repos(), "cred:other-ref", bad).is_err());
+        }
         clear_target_secret(&store, "cred:huggingface-token").unwrap();
         assert_eq!(store.get(secrets::HF_TOKEN).as_deref(), Some("hf-secret"));
     }

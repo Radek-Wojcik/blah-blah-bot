@@ -2,7 +2,6 @@ import { useMemo, useState } from "react";
 import { useBackend } from "../backend-context";
 import { issuesOf } from "../cycles";
 import { errorMessage } from "../hooks";
-import { checkNotionMapping } from "../ipc/mock-integrations";
 import type {
   CycleIssue,
   CycleTargets,
@@ -11,7 +10,7 @@ import type {
   NotionProperties,
   NotionSchema,
 } from "../ipc/types";
-import { NOTION_FIELD_SPECS } from "../publish";
+import { NOTION_FIELD_SPECS, checkNotionMapping } from "../publish";
 import { RuleChoice } from "./RuleChoice";
 
 type NotionTarget = NonNullable<CycleTargets["notion"]>;
@@ -87,18 +86,13 @@ export function NotionTargetFields(props: {
         setSchema(s);
         const nextDataSource =
           a.dataSources.length > 1 ? (notion.dataSource ?? s.dataSourceId) : notion.dataSource;
-        if (checkNotionMapping(s.proposed, s.properties).length === 0) {
-          await backend
-            .setNotionMapping(cycleId, nextDataSource ?? null, s.proposed)
-            .catch(() => undefined);
-        }
         onChange({
           ...notion,
           ...(nextDataSource ? { dataSource: nextDataSource } : {}),
           properties: { ...s.proposed },
         });
         setInspectStatus({
-          text: `${a.message} Loaded ${s.properties.length} properties and applied suggested mapping.`,
+          text: `${a.message} Loaded ${s.properties.length} properties and applied suggested mapping. Save the project settings to keep it.`,
           kind: "status",
         });
       })

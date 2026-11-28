@@ -88,7 +88,7 @@ pub async fn delete_project(
         delete_project_blocking(&app, &cycle_id, delete_meetings, delete_folder)
     })
     .await
-    .map_err(|e| IpcError::new("internal", format!("the deletion did not finish: {e}")))?
+    .map_err(|e| crate::ipc::background_task_error(&e))?
 }
 
 /// Lock order of the application is store, then settings (the publishing code takes them in
