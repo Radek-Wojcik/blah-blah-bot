@@ -27,4 +27,4 @@ At the same time, storing the multi-gigabyte Python environment (`worker-venv`) 
 
 - **Pins not yet verified by an actual download:** The pinned sizes and SHA256 hashes in `crates/app/src/downloads.rs` have not been verified against live downloads yet. Because verification fails closed, any mismatch will block first-run downloads until verified and updated.
 - **Plain `tauri build` is not guarded:** Running `tauri build` directly without `TAURI_CONFIG` or `BBB_INSTALLER_BUILD=1` bypasses `build.rs`. Installers must always be built through `scripts/build-installer.ps1`.
-- **Defender and SmartScreen:** False-positive detections and unsigned-binary warnings for the installer and bundled `uv.exe` are tracked separately under WP-02 ([ADR 0024](0024-installer-signing.md)).
+- **Defender and SmartScreen:** False-positive detections and unsigned-binary warnings for the installer and bundled `uv.exe` are tracked separately as part of installer hardening in the installer docs ([INSTALL.md](../INSTALL.md), [ADR 0024](0024-installer-signing.md)).
