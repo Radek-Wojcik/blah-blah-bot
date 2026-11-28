@@ -26,6 +26,7 @@ Each record states the context, the decision, its consequences and the alternati
 | [0020](0020-bridge-protocol-and-pairing.md) | Bridge protocol version 2, pairing and pushed tab tracks | Accepted |
 | [0021](0021-extension-distribution.md) | Browser extension: distribution, identity and defaults | Accepted |
 | [0022](0022-meeting-detection.md) | Meeting detection: rules, sensitivity and the default | Accepted |
+| [0023](0023-discord-bot-and-notion-export.md) | Discord bot and Notion export | Accepted |
 | [0024](0024-installer-signing.md) | Installer signing | Proposed |
 | [0025](0025-model-revision-pinning.md) | Model revision pinning | Accepted |
 | [0026](0026-global-people-and-voice-profiles.md) | Global people and voice profiles | Proposed |

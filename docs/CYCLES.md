@@ -150,7 +150,7 @@ The application writes `cycle.yaml` only after validation. Keys are written in t
 | `on-approval` | Published when you press Publish for that target in the draft view. |
 | `off` | Never, even when you press Publish. |
 
-The defaults are `on-approval` for all three targets (`github`, `discord`, `notion`; [ADR 0019](decisions/0019-default-publish-rule-per-target.md) and [ADR 0020](decisions/0020-discord-bot-and-notion-export.md)) and are constants in `crates/cycle-store/src/cycle.rs`, not part of `cycle.yaml`. A default is not a choice: a target that was just switched on, or a file without `publish`, behaves as `on-approval`, and a rule is `auto` only when somebody set it. Three things hold for every value:
+The defaults are `on-approval` for all three targets (`github`, `discord`, `notion`; [ADR 0019](decisions/0019-default-publish-rule-per-target.md) and [ADR 0023](decisions/0023-discord-bot-and-notion-export.md)) and are constants in `crates/cycle-store/src/cycle.rs`, not part of `cycle.yaml`. A default is not a choice: a target that was just switched on, or a file without `publish`, behaves as `on-approval`, and a rule is `auto` only when somebody set it. Three things hold for every value:
 
 * Status changes proposed from the transcript (an issue or topic reported as finished) are written back only when you approved that proposal and pressed Publish. `auto` does not publish them.
 * A repository that is public, or whose visibility cannot be read, needs your confirmation once before anything is published to it, also under `auto`.
