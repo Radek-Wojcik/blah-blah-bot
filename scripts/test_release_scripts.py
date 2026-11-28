@@ -220,6 +220,21 @@ class SigningHookContract(unittest.TestCase):
         self.assertIn("-DisableRemediation", text)
 
 
+class NsisHookSyntax(unittest.TestCase):
+    def test_messagebox_sd_option_follows_the_text(self) -> None:
+        # makensis requires `MessageBox <flags> "text" /SD <id>`; `/SD` before the text
+        # fails with "could not resolve label".
+        nsis_dir = check_versions.ROOT / "crates" / "app" / "nsis"
+        files = sorted([*nsis_dir.glob("*.nsh"), *nsis_dir.glob("*.nsi")])
+        self.assertTrue(files, "no NSIS scripts found")
+        bad = []
+        for path in files:
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if re.match(r"\s*MessageBox\s.*\s/SD\s+\w+\s+[\"'`]", line):
+                    bad.append(f"{path.name}:{number}")
+        self.assertEqual(bad, [], "MessageBox /SD must come after the message text")
+
+
 class InstallerMetadata(unittest.TestCase):
     APP_DIR = Path(__file__).resolve().parent.parent / "crates" / "app"
 
