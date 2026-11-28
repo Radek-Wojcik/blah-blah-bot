@@ -10,6 +10,8 @@ import type {
   CycleListItem,
   CycleRepoView,
   CycleTargets,
+  EffectivePublishRule,
+  GlobalPublishRules,
   MouseButtonsMode,
   PublishMode,
   PublishTargetName,
@@ -19,7 +21,7 @@ import type {
   Settings,
 } from "../../ipc/types";
 import {
-  DEFAULT_PUBLISH_RULE,
+  DEFAULT_GLOBAL_RULES,
   STATUS_WRITE_BACK_NOTE,
   UNCONFIGURED_TARGET_HINT,
   isDiscordConfigured,
@@ -70,14 +72,19 @@ function ProjectPublishRules({
   repo,
   reposLoaded,
   version,
+  globalVersion,
 }: {
   cycle: CycleListItem;
   repo?: CycleRepoView;
   reposLoaded: boolean;
   version: unknown;
+  /** Changes when a global rule changes, so the effective rules are read again. */
+  globalVersion: unknown;
 }) {
   const backend = useBackend();
   const [targets, setTargets] = useState<CycleTargets | null>(null);
+  /** The rule in force per target and where it comes from, resolved by the backend. */
+  const [effective, setEffective] = useState<EffectivePublishRule[] | null>(null);
   const [secrets, setSecrets] = useState<PublishingSecrets | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -86,11 +93,16 @@ function ProjectPublishRules({
     let cancelled = false;
     // The targets and the stored secrets arrive together, so a switch never shows a
     // configured target as unconfigured for a moment.
-    Promise.all([backend.getCycle(cycle.id), backend.publishingSecrets().catch(() => null)])
-      .then(([d, sec]) => {
+    Promise.all([
+      backend.getCycle(cycle.id),
+      backend.publishingSecrets().catch(() => null),
+      backend.effectivePublishRules(cycle.id),
+    ])
+      .then(([d, sec, rules]) => {
         if (cancelled) return;
         setSecrets(sec);
         setTargets(d.cycle.targets);
+        setEffective(rules);
       })
       .catch((e) => {
         if (!cancelled) setError(errorMessage(e));
@@ -98,22 +110,31 @@ function ProjectPublishRules({
     return () => {
       cancelled = true;
     };
-  }, [backend, cycle.id, version]);
+  }, [backend, cycle.id, version, globalVersion]);
 
-  const change = (target: PublishTargetName, mode: PublishMode) => {
+  /** `null` removes the project's own rule: it uses the global setting again. */
+  const change = (target: PublishTargetName, mode: PublishMode | null) => {
     setError(null);
     setBusy(true);
     backend
       .setTargetRule(cycle.id, target, mode)
       .then(setTargets)
+      .then(() => backend.effectivePublishRules(cycle.id))
+      .then(setEffective)
       .catch((e) => setError(errorMessage(e)))
       .finally(() => setBusy(false));
   };
 
-  if (!targets) return error ? <p className="error">{error}</p> : null;
-  const github = targets.github?.publish ?? DEFAULT_PUBLISH_RULE.github;
-  const discord = targets.discord?.publish ?? null;
-  const notion = targets.notion?.publish ?? null;
+  if (!targets || !effective) return error ? <p className="error">{error}</p> : null;
+  const ruleOf = (target: PublishTargetName) => effective.find((r) => r.target === target) ?? null;
+  const github = ruleOf("github");
+  const discord = ruleOf("discord");
+  const notion = ruleOf("notion");
+  const inheritOf = (rule: EffectivePublishRule, target: PublishTargetName) => ({
+    global: rule.global,
+    source: rule.source,
+    onInherit: () => change(target, null),
+  });
   const githubConfigured = Boolean(repo?.remote || repo?.githubRepo);
   const webhookRef = targets.discord?.webhook?.trim() ?? "";
   const webhookSet = Boolean(secrets?.targets.find((t) => t.reference === webhookRef)?.set);
@@ -131,7 +152,8 @@ function ProjectPublishRules({
           <RuleChoice
             name={`GitHub, project ${cycle.name}`}
             target="github"
-            value={github}
+            value={github?.mode ?? DEFAULT_GLOBAL_RULES.github}
+            inherit={github ? inheritOf(github, "github") : undefined}
             disabled={busy || !reposLoaded}
             disabledReason={
               !reposLoaded || githubConfigured ? undefined : UNCONFIGURED_TARGET_HINT.github
@@ -145,7 +167,8 @@ function ProjectPublishRules({
             <RuleChoice
               name={`Discord, project ${cycle.name}`}
               target="discord"
-              value={discord}
+              value={discord.mode}
+              inherit={inheritOf(discord, "discord")}
               disabled={busy}
               disabledReason={discordConfigured ? undefined : UNCONFIGURED_TARGET_HINT.discord}
               onChange={(m) => change("discord", m)}
@@ -162,7 +185,8 @@ function ProjectPublishRules({
             <RuleChoice
               name={`Notion, project ${cycle.name}`}
               target="notion"
-              value={notion}
+              value={notion.mode}
+              inherit={inheritOf(notion, "notion")}
               disabled={busy}
               disabledReason={notionConfigured ? undefined : UNCONFIGURED_TARGET_HINT.notion}
               onChange={(m) => change("notion", m)}
@@ -184,12 +208,84 @@ function ProjectPublishRules({
 }
 
 /**
+ * The global "When to publish" rules: what each target does in every project that has no rule of
+ * its own. A change is saved at once and tells the project list below to read its rules again.
+ */
+function GlobalPublishRulesEditor({ onChanged }: { onChanged: () => void }) {
+  const backend = useBackend();
+  const [rules, setRules] = useState<GlobalPublishRules | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    backend
+      .getSettings()
+      .then((s) => {
+        if (!cancelled) setRules(s.publishRules ?? DEFAULT_GLOBAL_RULES);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(errorMessage(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [backend]);
+
+  const change = (target: PublishTargetName, mode: PublishMode) => {
+    setError(null);
+    setBusy(true);
+    backend
+      .setGlobalPublishRule(target, mode)
+      .then((next) => {
+        setRules(next);
+        onChanged();
+      })
+      .catch((e) => setError(errorMessage(e)))
+      .finally(() => setBusy(false));
+  };
+
+  if (!rules) return error ? <p className="error">{error}</p> : null;
+  const rows: [PublishTargetName, string][] = [
+    ["github", "GitHub"],
+    ["discord", "Discord"],
+    ["notion", "Notion"],
+  ];
+  return (
+    <div className="panel quiet">
+      <div className="panel-body">
+        <p className="token-state">Default for all projects</p>
+        {rows.map(([target, label]) => (
+          <div className="rule-row" key={target}>
+            <span className="field-label">{label}</span>
+            <RuleChoice
+              name={`${label}, all projects`}
+              target={target}
+              value={rules[target]}
+              disabled={busy}
+              onChange={(m) => change(target, m)}
+            />
+          </div>
+        ))}
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
  * Preferences settings tab: Local Folder Auto-Save, app hotkeys & recordings folder,
  * Chrome extension bridge settings, per-project publish defaults, and meeting detection.
  */
 export function PreferencesTab({ onDirtyChange, registerHandle }: EditableTabProps) {
   const backend = useBackend();
   const { cycles, repos, reposLoaded, reload: reloadCycles } = useCycles();
+  /** Bumped when a global publish rule changes, so each project reads its effective rules again. */
+  const [globalRulesVersion, setGlobalRulesVersion] = useState(0);
   const [saved, setSaved] = useState<Settings | null>(null);
   const [draft, setDraft] = useState<Settings | null>(null);
   const [message, setMessage] = useState<{ text: string; kind: "status" | "error" } | null>(null);
@@ -479,9 +575,13 @@ export function PreferencesTab({ onDirtyChange, registerHandle }: EditableTabPro
           </HelpPopover>
         </div>
         <p className="section-hint">
-          Choose per project whether publishing is Off, On approval, or Automatic.{" "}
+          Choose here whether publishing to each target is Off, On approval, or Automatic. This is
+          the default for every project; a project can override it below or in its project settings,
+          and a project set to "Use global setting" follows what you choose here.{" "}
           {STATUS_WRITE_BACK_NOTE}
         </p>
+        <GlobalPublishRulesEditor onChanged={() => setGlobalRulesVersion((v) => v + 1)} />
+        <h4 className="sub-head">Projects</h4>
         {validCycles.length === 0 ? (
           <p className="empty">No usable projects yet. Create one on the Projects page.</p>
         ) : (
@@ -493,6 +593,7 @@ export function PreferencesTab({ onDirtyChange, registerHandle }: EditableTabPro
                 repo={repos.find((r) => r.id === c.repoId)}
                 reposLoaded={reposLoaded}
                 version={cycles}
+                globalVersion={globalRulesVersion}
               />
             ))}
           </div>

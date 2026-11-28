@@ -4,6 +4,7 @@
  * gate and participants. No files and no Git.
  */
 import { githubPathProblem } from "../cycles";
+import { resolvePublishRule } from "../publish";
 import { DEFAULT_TEMPLATE_TEXT, PLACEHOLDERS, validateTemplateDto } from "./mock-render";
 import { IDENTIFIER, fail } from "./mock-util";
 import type {
@@ -15,8 +16,11 @@ import type {
   CycleParticipant,
   CycleRepoView,
   CycleTargets,
+  EffectivePublishRule,
+  GlobalPublishRules,
   LastReport,
   PublishMode,
+  PublishTargetName,
   PullResult,
   ReportChoice,
   ReportDefaults,
@@ -115,7 +119,8 @@ export function validateCycle(c: CycleDto, templates: string[]): CycleIssue[] {
   if (t.github) {
     const pathProblem = githubPathProblem(t.github.path);
     if (pathProblem) add("targets.github.path", pathProblem);
-    if (!PUBLISH.includes(t.github.publish)) add("targets.github.publish", "unknown publish rule");
+    if (t.github.publish !== undefined && !PUBLISH.includes(t.github.publish))
+      add("targets.github.publish", "unknown publish rule");
   }
   if (t.discord) {
     if (t.discord.webhook !== undefined && !CREDENTIAL.test(t.discord.webhook))
@@ -139,7 +144,7 @@ export function validateCycle(c: CycleDto, templates: string[]): CycleIssue[] {
       if (!SNOWFLAKE.test(bot.channel))
         add("targets.discord.bot.channel", `"${bot.channel}" is not a Discord id (digits only)`);
     }
-    if (!PUBLISH.includes(t.discord.publish))
+    if (t.discord.publish !== undefined && !PUBLISH.includes(t.discord.publish))
       add("targets.discord.publish", "unknown publish rule");
     if (t.discord.template !== undefined && !IDENTIFIER.test(t.discord.template))
       add("targets.discord.template", `the template name ${BAD_ID}`);
@@ -156,7 +161,8 @@ export function validateCycle(c: CycleDto, templates: string[]): CycleIssue[] {
       add("targets.notion.database", "is not a Notion database id (32 hexadecimal digits)");
     if (t.notion.dataSource !== undefined && !NOTION_ID.test(t.notion.dataSource))
       add("targets.notion.data_source", "is not a Notion data source id (32 hexadecimal digits)");
-    if (!PUBLISH.includes(t.notion.publish)) add("targets.notion.publish", "unknown publish rule");
+    if (t.notion.publish !== undefined && !PUBLISH.includes(t.notion.publish))
+      add("targets.notion.publish", "unknown publish rule");
     const props = t.notion.properties;
     if (props.status && !props.statusValue)
       add("targets.notion.properties.status_value", "give the status a new page gets");
@@ -232,7 +238,9 @@ export function demoCycle(): CycleDto {
       byType: { budget: "budget-review", casual: "default", technical: "default" },
     },
     targets: {
-      github: { path: "meetings", publish: "on-approval" },
+      // GitHub follows the global rule; Discord keeps its own, as a project from before the global
+      // rules would.
+      github: { path: "meetings" },
       discord: { webhook: "cred:discord/nomad", publish: "on-approval" },
     },
   };
@@ -340,9 +348,15 @@ export interface CycleStore {
   repoOf(cycleId: string): CycleRepoView;
   /**
    * Sets `targets.<target>.publish` and nothing else, as `set_target_rule` does: a cycle without
-   * a GitHub target gets one with the default folder; Discord and Notion need a target.
+   * a GitHub target gets one with the default folder; Discord and Notion need a target. `null`
+   * removes the key (the project uses the global rule again).
    */
-  setTargetRule(cycleId: string, target: string, mode: PublishMode): CycleTargets;
+  setTargetRule(cycleId: string, target: string, mode: PublishMode | null): CycleTargets;
+  /** The global "When to publish" rules of the preferences. */
+  globalPublishRules(): GlobalPublishRules;
+  setGlobalPublishRule(target: string, mode: PublishMode): GlobalPublishRules;
+  /** The rule in force for each target the cycle has, and where it comes from. */
+  effectiveRules(cycleId: string): EffectivePublishRule[];
   /** Links a repository to a GitHub repository (`owner/name`) and API address; empty clears. */
   setGithubRepo(repoId: string, githubRepo?: string, githubApi?: string): CycleRepoView;
 }
@@ -408,6 +422,11 @@ export function createCycleStore(): CycleStore {
     topics: [],
   });
   let last: LastReport | null = { cycleId: "NOMAD", mode: "fixed" };
+  let globalRules: GlobalPublishRules = {
+    github: "on-approval",
+    discord: "on-approval",
+    notion: "on-approval",
+  };
 
   const repoOf = (id: string): RepoState =>
     repos.find((r) => r.id === id) ?? fail("not_found", "this cycle repository is not registered");
@@ -713,9 +732,16 @@ export function createCycleStore(): CycleStore {
     topics: (cycleId) => structuredClone(entryOf(cycleId).topics),
     setTargetRule: (cycleId, target, mode) => {
       const e = entryOf(cycleId);
-      if (!PUBLISH.includes(mode)) fail("invalid", `${String(mode)} is not a publish rule`);
+      if (mode !== null && !PUBLISH.includes(mode))
+        fail("invalid", `${String(mode)} is not a publish rule`);
+      // `null` removes the key: the project follows the global rule.
+      const own = mode ?? undefined;
       if (target === "github") {
-        e.cycle.targets.github = { path: "meetings", ...e.cycle.targets.github, publish: mode };
+        if (e.cycle.targets.github || own !== undefined) {
+          const github = { path: "meetings", ...e.cycle.targets.github, publish: own };
+          if (own === undefined) delete github.publish;
+          e.cycle.targets.github = github;
+        }
       } else if (target === "discord") {
         const discord = e.cycle.targets.discord;
         if (!discord)
@@ -723,12 +749,14 @@ export function createCycleStore(): CycleStore {
             "no_target",
             "this cycle has no Discord target: add one in the cycle settings first",
           );
-        else discord.publish = mode;
+        else if (own === undefined) delete discord.publish;
+        else discord.publish = own;
       } else if (target === "notion") {
         const notion = e.cycle.targets.notion;
         if (!notion)
           fail("no_target", "this cycle has no Notion target: add one in the cycle settings first");
-        else notion.publish = mode;
+        else if (own === undefined) delete notion.publish;
+        else notion.publish = own;
       } else {
         fail(
           "invalid",
@@ -736,6 +764,38 @@ export function createCycleStore(): CycleStore {
         );
       }
       return structuredClone(e.cycle.targets);
+    },
+    globalPublishRules: () => ({ ...globalRules }),
+    setGlobalPublishRule: (target, mode) => {
+      if (target !== "github" && target !== "discord" && target !== "notion")
+        fail(
+          "invalid",
+          `${target} is not a target with a publishing rule (github, discord or notion)`,
+        );
+      if (!PUBLISH.includes(mode)) fail("invalid", `${String(mode)} is not a publish rule`);
+      globalRules = { ...globalRules, [target as PublishTargetName]: mode };
+      return { ...globalRules };
+    },
+    effectiveRules: (cycleId) => {
+      const t = entryOf(cycleId).cycle.targets;
+      const own: [PublishTargetName, { publish?: PublishMode } | null | undefined][] = [
+        ["github", t.github ?? {}],
+        ["discord", t.discord],
+        ["notion", t.notion],
+      ];
+      return own.flatMap(([target, v]) => {
+        if (!v) return [];
+        const eff = resolvePublishRule(v.publish ?? null, globalRules[target]);
+        return [
+          {
+            target,
+            project: v.publish ?? null,
+            global: globalRules[target],
+            mode: eff.mode,
+            source: eff.source,
+          },
+        ];
+      });
     },
     setTopics: (cycleId, topics) => void (entryOf(cycleId).topics = structuredClone(topics)),
     repoOf: (cycleId) => ({ ...repoOf(entryOf(cycleId).repoId) }),

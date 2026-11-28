@@ -10,6 +10,8 @@ import type {
   CycleDto,
   CycleListItem,
   CycleTargets,
+  EffectivePublishRule,
+  GlobalPublishRules,
   CycleTasks,
   CycleRepoView,
   DetectedModels,
@@ -329,14 +331,27 @@ export interface Backend {
    * Sets when a target of a cycle is published (`targets.<target>.publish` of `cycle.yaml`) and
    * nothing else; returns the cycle's targets as saved. `github` covers the report, the issues
    * and the write-back of approved status changes, `discord` needs a Discord target
-   * (`no_target`), and so does `notion`. No value writes a status change back without approval and an explicit
+   * (`no_target`), and so does `notion`. A `null` mode removes the project's own rule: it uses the
+   * global setting again. No value writes a status change back without approval and an explicit
    * publication, and the public-repository check applies to every value.
    */
   setTargetRule(
     cycleId: string,
     target: PublishTargetName,
-    mode: PublishMode,
+    mode: PublishMode | null,
   ): Promise<CycleTargets>;
+
+  /**
+   * Sets the global rule of one target: what it does in every project that has no rule of its
+   * own. Returns the global rules as saved.
+   */
+  setGlobalPublishRule(target: PublishTargetName, mode: PublishMode): Promise<GlobalPublishRules>;
+
+  /**
+   * The rule in force for each target of a project and where it comes from (the project's own
+   * rule or the global one), as the backend resolves it for publishing.
+   */
+  effectivePublishRules(cycleId: string): Promise<EffectivePublishRule[]>;
 
   /**
    * Asks Notion whether the stored token can reach the database of the cycle's Notion target.

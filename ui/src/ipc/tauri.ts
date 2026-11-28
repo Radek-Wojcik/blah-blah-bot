@@ -121,6 +121,8 @@ export function createTauriBackend(): Backend {
     clearTargetSecret: (reference) => invoke("clear_target_secret", { reference }),
     testDiscordWebhook: (reference) => invoke("test_discord_webhook", { reference }),
     setTargetRule: (cycleId, target, mode) => invoke("set_target_rule", { cycleId, target, mode }),
+    setGlobalPublishRule: (target, mode) => invoke("set_global_publish_rule", { target, mode }),
+    effectivePublishRules: (cycleId) => invoke("effective_publish_rules", { cycleId }),
     testNotionAccess: (cycleId) => invoke("test_notion_access", { cycleId }),
     notionSchema: (cycleId) => invoke("notion_schema", { cycleId }),
     setNotionMapping: (cycleId, dataSource, properties) =>

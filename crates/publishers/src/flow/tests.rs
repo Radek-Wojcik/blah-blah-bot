@@ -36,6 +36,7 @@ fn plan_for(visibility: RepoVisibility, confirmed: bool, snapshot: &str) -> plan
         meeting_id: MEETING,
         draft: &d,
         cycle: &c,
+        global_rules: Default::default(),
         local_topics: &[],
         repo: &RepoFacts {
             github: Some(GithubIdentity {

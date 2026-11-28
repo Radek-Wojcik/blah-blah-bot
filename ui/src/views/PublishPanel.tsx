@@ -135,7 +135,7 @@ export function PublishPanel(props: {
     work.then(() => loadPlan()).catch((e) => setError(errorMessage(e)));
   };
 
-  const setRule = (target: PublishTargetName, mode: PublishMode) => {
+  const setRule = (target: PublishTargetName, mode: PublishMode | null) => {
     setError(null);
     setRuleBusy(true);
     backend
@@ -229,6 +229,7 @@ export function PublishPanel(props: {
                 ticked={ticked[t.target]}
                 onTick={(v) => setTicked({ ...ticked, [t.target]: v })}
                 onRule={(rule) => setRule(t.target, rule)}
+                onInherit={() => setRule(t.target, null)}
                 ruleBusy={ruleBusy}
               />
             ))}
@@ -358,6 +359,8 @@ function TargetRow(props: {
   ticked: boolean;
   onTick: (v: boolean) => void;
   onRule: (rule: PublishMode) => void;
+  /** Remove the project's own rule: the global setting applies again. */
+  onInherit: () => void;
   ruleBusy: boolean;
 }) {
   const { view } = props;
@@ -394,6 +397,7 @@ function TargetRow(props: {
               view.configured === false ? UNCONFIGURED_TARGET_HINT[view.target] : undefined
             }
             onChange={props.onRule}
+            inherit={{ global: view.global, source: view.source, onInherit: props.onInherit }}
           />
           {view.target === "github" && view.configured !== false && (
             <span className="target-rule-help">{STATUS_WRITE_BACK_NOTE}</span>

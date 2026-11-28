@@ -95,7 +95,20 @@ impl AppState {
         } else {
             Arc::new(WasapiBackend)
         };
-        let loaded = Settings::load(&settings_path);
+        let mut loaded = Settings::load(&settings_path);
+        // Projects that predate the global publish rules and were never touched follow them.
+        let (migrated_repos, migrated) = crate::publish_rules::migrate_untouched(&mut loaded);
+        if migrated_repos {
+            if migrated > 0 {
+                tracing::info!(
+                    projects = migrated,
+                    "untouched projects now use the global publish rule"
+                );
+            }
+            if let Err(e) = loaded.save(&settings_path) {
+                tracing::warn!(error = %e, "could not save the publish rule migration");
+            }
+        }
         // Browser tabs come from the bridge, in demo mode as well.
         let browser_host = Arc::new(AppHost::default());
         let browser = Browser::new(&loaded.bridge, browser_host.clone());
@@ -126,24 +139,33 @@ impl AppState {
             },
         );
         let env_settings = settings.clone();
+        let env_rules = settings.clone();
         let env_app = app.clone();
         let publishing = Publishing::new(
             store.clone(),
-            Arc::new(AppEnv::new(
-                move || {
-                    env_settings
+            Arc::new(
+                AppEnv::new(
+                    move || {
+                        env_settings
+                            .lock()
+                            .map(|s| s.cycle_repos.clone())
+                            .unwrap_or_default()
+                    },
+                    move || {
+                        env_app
+                            .state::<AppState>()
+                            .recordings_root()
+                            .unwrap_or_default()
+                    },
+                    Arc::new(crate::secrets::Credentials),
+                )
+                .with_global_rules(move || {
+                    env_rules
                         .lock()
-                        .map(|s| s.cycle_repos.clone())
+                        .map(|s| s.publish_rules)
                         .unwrap_or_default()
-                },
-                move || {
-                    env_app
-                        .state::<AppState>()
-                        .recordings_root()
-                        .unwrap_or_default()
-                },
-                Arc::new(crate::secrets::Credentials),
-            )),
+                }),
+            ),
         );
         Ok(Self {
             recorder: Recorder::new(store.clone(), backend, demo),

@@ -416,6 +416,85 @@ test.describe("publishing on the mock backend", () => {
     await expect(rule(page, "GitHub").getByRole("radio", { name: "Automatic" })).toBeChecked();
   });
 
+  test("the global rule is the default of a project and a project can override it", async ({
+    page,
+  }) => {
+    await page.goto(MAIN + "&page=settings&tab=preferences");
+    const globalGithub = page.getByRole("radiogroup", {
+      name: "GitHub, all projects publishing rule",
+    });
+    const projectGithub = page.getByRole("radiogroup", {
+      name: "GitHub, project Nomad rover publishing rule",
+    });
+    const useGlobal = page.getByRole("checkbox", {
+      name: "GitHub, project Nomad rover: use global setting",
+    });
+    await expect(page.getByText("This is the default for every project")).toBeVisible();
+    // The demo project follows the global rule, so the global switch moves it.
+    await expect(useGlobal).toBeChecked();
+    await globalGithub.getByRole("radio", { name: "Automatic" }).click();
+    await expect(projectGithub.getByRole("radio", { name: "Automatic" })).toBeChecked();
+    await expect(page.getByText("Use global setting (currently: Automatic)").first()).toBeVisible();
+
+    // Choosing a rule for the project overrides the global one; the global switch no longer moves it.
+    await projectGithub.getByRole("radio", { name: "Off" }).click();
+    await expect(useGlobal).not.toBeChecked();
+    await globalGithub.getByRole("radio", { name: "On approval" }).click();
+    await expect(projectGithub.getByRole("radio", { name: "Off" })).toBeChecked();
+
+    // Back to the global setting: the project shows the global rule again.
+    await useGlobal.check();
+    await expect(projectGithub.getByRole("radio", { name: "On approval" })).toBeChecked();
+
+    // The meeting's publishing panel shows the same choice and where the rule comes from.
+    await globalGithub.getByRole("radio", { name: "Automatic" }).click();
+    await page.getByRole("button", { name: "Projects", exact: true }).click();
+    await page
+      .getByRole("article", { name: "Project Nomad rover" })
+      .getByRole("button", { name: "Open project" })
+      .click();
+    await page
+      .getByRole("list", { name: "Meetings list" })
+      .getByRole("listitem")
+      .filter({ hasText: "ORBIT weekly sync" })
+      .getByRole("button", { name: "Open" })
+      .click();
+    await expect(rule(page, "GitHub").getByRole("radio", { name: "Automatic" })).toBeChecked();
+    await expect(
+      panel(page).getByRole("checkbox", { name: "GitHub: use global setting" }),
+    ).toBeChecked();
+    await rule(page, "GitHub").getByRole("radio", { name: "Off" }).click();
+    await expect(
+      panel(page).getByRole("checkbox", { name: "GitHub: use global setting" }),
+    ).not.toBeChecked();
+  });
+
+  test("project settings offer Use global setting and a new target starts on it", async ({
+    page,
+  }) => {
+    await page.goto(`${MAIN}&page=project&cycle=NOMAD`);
+    await page.getByRole("button", { name: "Project settings" }).click();
+    await page.getByRole("tab", { name: "Integrations" }).click();
+    await page.getByRole("button", { name: "GitHub details" }).click();
+    const useGlobal = page.getByRole("checkbox", { name: "GitHub: use global setting" });
+    const switchOf = page.getByRole("radiogroup", { name: "GitHub publishing rule" });
+    await expect(useGlobal).toBeChecked();
+    await expect(
+      page.getByText("Use global setting (currently: On approval)").first(),
+    ).toBeVisible();
+    await switchOf.getByRole("radio", { name: "Automatic" }).click();
+    await expect(useGlobal).not.toBeChecked();
+    await expect(page.getByText("set for this project only").first()).toBeVisible();
+    await useGlobal.check();
+    await expect(useGlobal).toBeChecked();
+    await expect(switchOf.getByRole("radio", { name: "On approval" })).toBeChecked();
+    // The Discord target of this project has its own rule.
+    await page.getByRole("button", { name: "Discord details" }).click();
+    await expect(
+      page.getByRole("checkbox", { name: "Discord: use global setting" }),
+    ).not.toBeChecked();
+  });
+
   test("a cleared webhook leaves Discord out of the publication", async ({ page }) => {
     await page.goto(`${MAIN}&page=project&cycle=NOMAD`);
     await page.getByRole("button", { name: "Project settings" }).click();

@@ -9,8 +9,16 @@ import type {
   NotionMappingProblem,
   NotionProperties,
   NotionSchema,
+  PublishMode,
 } from "../ipc/types";
-import { NOTION_FIELD_SPECS, UNCONFIGURED_TARGET_HINT, checkNotionMapping } from "../publish";
+import {
+  DEFAULT_GLOBAL_RULES,
+  NOTION_FIELD_SPECS,
+  UNCONFIGURED_TARGET_HINT,
+  checkNotionMapping,
+  inheritOf,
+  resolvePublishRule,
+} from "../publish";
 import { RuleChoice } from "./RuleChoice";
 
 type NotionTarget = NonNullable<CycleTargets["notion"]>;
@@ -33,12 +41,15 @@ function FieldProblems({ issues, path }: { issues: CycleIssue[]; path: string })
 export function NotionTargetFields(props: {
   cycleId: string;
   notion: NotionTarget;
+  /** The global rule for Notion, which the project follows until it sets its own. */
+  globalRule?: PublishMode;
   /** True when token or database differs from the last saved cycle. */
   connectionDirty: boolean;
   issues: CycleIssue[];
   onChange: (next: NotionTarget) => void;
 }) {
   const { cycleId, notion, connectionDirty, issues, onChange } = props;
+  const globalRule = props.globalRule ?? DEFAULT_GLOBAL_RULES.notion;
   const backend = useBackend();
   const [inspecting, setInspecting] = useState(false);
   const [access, setAccess] = useState<NotionAccess | null>(null);
@@ -291,7 +302,8 @@ export function NotionTargetFields(props: {
         <RuleChoice
           name="Notion"
           target="notion"
-          value={notion.publish}
+          value={resolvePublishRule(notion.publish, globalRule).mode}
+          inherit={inheritOf(notion.publish, globalRule, () => patch({ publish: undefined }))}
           disabledReason={notion.database.trim() ? undefined : UNCONFIGURED_TARGET_HINT.notion}
           onChange={(publish) => patch({ publish })}
         />

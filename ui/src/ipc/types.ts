@@ -123,6 +123,8 @@ export interface Settings {
   bridge?: BridgeSettings;
   /** Meeting detection. Read-only for the settings screen: it changes through `saveDetectionSettings`. */
   detection?: DetectionSettings;
+  /** The global "When to publish" rules. Read-only here: they change through `setGlobalPublishRule`. */
+  publishRules?: GlobalPublishRules;
 }
 
 export type GeneralSettings = Settings;
@@ -624,6 +626,24 @@ export interface VoicesData {
 export type ReportMode = "fixed" | "template" | "auto" | "by-type";
 export type LanguageSetting = "auto" | "pl" | "en";
 export type PublishMode = "auto" | "on-approval" | "off";
+
+/** The global "When to publish" rules: what each target does in a project without its own rule. */
+export type GlobalPublishRules = Record<"github" | "discord" | "notion", PublishMode>;
+
+/** Where the rule in force comes from: the project's own `publish`, or the global setting. */
+export type RuleSource = "project" | "global";
+
+/** The rule in force for one target of a saved project (resolved by the backend). */
+export interface EffectivePublishRule {
+  target: "github" | "discord" | "notion";
+  /** The project's own rule; null when it uses the global setting. */
+  project: PublishMode | null;
+  /** The global rule for this target. */
+  global: PublishMode;
+  /** The rule in force. */
+  mode: PublishMode;
+  source: RuleSource;
+}
 export type RepoKind = "local" | "clone";
 export type LlmKind = "managed" | "external" | "cloud";
 
@@ -742,12 +762,13 @@ export interface NotionProperties {
 
 export interface CycleTargets {
   /** `issues` (default true): create issues for tasks and write back status changes. */
-  github?: { path: string; publish: PublishMode; issues?: boolean } | null;
+  github?: { path: string; publish?: PublishMode; issues?: boolean } | null;
   /** Exactly one of `webhook` and `bot`. `webhook` is a `cred:` reference, never a URL. */
   discord?: {
     webhook?: string;
     bot?: DiscordBotTarget;
-    publish: PublishMode;
+    /** Absent: the project uses the global rule of the preferences. */
+    publish?: PublishMode;
     template?: string;
   } | null;
   notion?: {
@@ -757,7 +778,8 @@ export interface CycleTargets {
     database: string;
     /** Needed when the database has more than one data source. */
     dataSource?: string;
-    publish: PublishMode;
+    /** Absent: the project uses the global rule of the preferences. */
+    publish?: PublishMode;
     properties: NotionProperties;
   } | null;
 }
@@ -1141,8 +1163,12 @@ export type PublishTargetName = "github" | "discord" | "notion";
 
 export interface PublishTargetView {
   target: PublishTargetName;
-  /** The rule of the cycle; null when the cycle has no such target. */
+  /** The rule in force for the cycle; null when the cycle has no such target. */
   mode: PublishMode | null;
+  /** Where `mode` comes from: the project's own rule or the global setting. */
+  source: RuleSource;
+  /** The global rule for this target (what `mode` is while the project follows it). */
+  global: PublishMode;
   /** An explicit publication may use it. */
   available: boolean;
   /** Whether the target has the required configuration (remote/repo, webhook/channel, database). */

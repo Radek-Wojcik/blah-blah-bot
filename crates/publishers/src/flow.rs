@@ -169,6 +169,7 @@ pub fn discord_webhook_secret_set(env: &dyn Env, cycle: &Cycle) -> bool {
 pub fn target_rules(env: &dyn Env, ctx: &RepoContext) -> TargetRules {
     TargetRules::for_repo(
         &ctx.cycle,
+        &env.global_publish_rules(),
         ctx.has_remote || ctx.github.is_some(),
         discord_webhook_secret_set(env, &ctx.cycle),
     )
@@ -333,6 +334,7 @@ fn plan_input<'a>(
         cycle: &p.ctx.cycle,
         local_topics: topics,
         repo: facts,
+        global_rules: p.env.global_publish_rules(),
         discord_webhook_set: webhook,
         discord_bot_token_set,
         notion_token_set,
@@ -646,6 +648,7 @@ fn correction_input<'a>(
         meeting_id: p.meeting_id,
         meeting_date: p.meeting_date,
         cycle: &p.ctx.cycle,
+        global_rules: env.global_publish_rules(),
         correction: p.correction,
         repo: facts,
         existing,

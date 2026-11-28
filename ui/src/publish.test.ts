@@ -105,8 +105,14 @@ const plan = (patch: Partial<PublishPlan> = {}): PublishPlan => ({
   meetingId: "m5",
   cycleId: "NOMAD",
   targets: [
-    { target: "github", mode: "on-approval", available: true },
-    { target: "discord", mode: "off", available: false },
+    {
+      target: "github",
+      mode: "on-approval",
+      source: "global",
+      global: "on-approval",
+      available: true,
+    },
+    { target: "discord", mode: "off", source: "project", global: "on-approval", available: false },
   ],
   summary: {
     commit: true,

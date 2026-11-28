@@ -50,6 +50,7 @@ pub enum Notice {
 }
 
 type Repos = Box<dyn Fn() -> Vec<CycleRepoSetting> + Send + Sync>;
+type GlobalRules = Box<dyn Fn() -> publishers::rules::GlobalPublishRules + Send + Sync>;
 type Notify = Box<dyn Fn(Notice) + Send + Sync>;
 
 /// The [`Env`] of the application.
@@ -57,6 +58,7 @@ pub struct AppEnv {
     repos: Repos,
     root: Box<dyn Fn() -> PathBuf + Send + Sync>,
     secrets: Arc<dyn SecretStore + Send + Sync>,
+    global_rules: Option<GlobalRules>,
     notify: OnceLock<Notify>,
     notion_api: String,
     discord_api: String,
@@ -72,10 +74,20 @@ impl AppEnv {
             repos: Box::new(repos),
             root: Box::new(root),
             secrets,
+            global_rules: None,
             notify: OnceLock::new(),
             notion_api: publishers::notion::DEFAULT_API.to_string(),
             discord_api: publishers::discord_bot::DEFAULT_API.to_string(),
         }
+    }
+
+    /// Where the global publish rules of the preferences are read from (defaults without it).
+    pub fn with_global_rules(
+        mut self,
+        rules: impl Fn() -> publishers::rules::GlobalPublishRules + Send + Sync + 'static,
+    ) -> Self {
+        self.global_rules = Some(Box::new(rules));
+        self
     }
 
     #[cfg(test)]
@@ -126,6 +138,10 @@ impl Env for AppEnv {
 
     fn webhook(&self, reference: &str) -> Option<String> {
         secrets::resolve_cred(self.secrets.as_ref(), reference)
+    }
+
+    fn global_publish_rules(&self) -> publishers::rules::GlobalPublishRules {
+        self.global_rules.as_ref().map(|f| f()).unwrap_or_default()
     }
 
     fn notion_token(&self, reference: &str) -> Option<String> {
@@ -204,6 +220,8 @@ pub struct TargetDto {
     pub target: &'static str,
     /// `auto`, `on-approval` or `off`; `None` when the cycle has no such target.
     pub mode: Option<&'static str>,
+    /// Where the rule comes from: `project` (its own `publish`) or `global` (the preferences).
+    pub source: &'static str,
     /// An explicit publication may use it.
     pub available: bool,
     /// Whether the target has the required configuration (GitHub remote/repo, Discord webhook/bot channel, Notion database).
@@ -387,7 +405,7 @@ impl From<&OutboxOp> for OutboxOpDto {
     }
 }
 
-fn mode_name(mode: cycle_store::PublishMode) -> &'static str {
+pub(crate) fn mode_name(mode: cycle_store::PublishMode) -> &'static str {
     match mode {
         cycle_store::PublishMode::Auto => "auto",
         cycle_store::PublishMode::OnApproval => "on-approval",
@@ -759,6 +777,10 @@ impl Publishing {
             TargetDto {
                 target: t.as_str(),
                 mode: mode.map(mode_name),
+                source: match plan.rules.source(t) {
+                    publishers::rules::RuleSource::Project => "project",
+                    publishers::rules::RuleSource::Global => "global",
+                },
                 available: plan.rules.allows(t, Trigger::Explicit),
                 configured: plan.rules.is_configured(t),
             }

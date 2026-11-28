@@ -672,6 +672,65 @@ impl Repo {
         }
     }
 
+    /// Whether nobody ever chose a publish rule for `cycle_id`: `cycle.yaml` is tracked by Git
+    /// without uncommitted changes and no revision of it ever held a `publish` value other than
+    /// the old default `on-approval`. This is the only trace a rule choice leaves (the file
+    /// reads the same whether the default was kept or picked), so whenever the history cannot be
+    /// read (no Git, not tracked, edited since the last commit) the answer is `false`: an
+    /// explicit value is then kept as it is.
+    pub fn publish_rule_untouched(&self, cycle_id: &str) -> bool {
+        let Ok(dir) = self.cycle_dir(cycle_id) else {
+            return false;
+        };
+        let Ok(rel) = dir
+            .join("cycle.yaml")
+            .strip_prefix(&self.root)
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+        else {
+            return false;
+        };
+        if !self.is_git_repo() {
+            return false;
+        }
+        let tracked = git::run(
+            Some(&self.root),
+            ["ls-files", "--error-unmatch", "--", &rel],
+        )
+        .is_ok_and(|o| o.ok);
+        if !tracked {
+            return false;
+        }
+        let clean = git::run(
+            Some(&self.root),
+            [
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=no",
+                "--",
+                &rel,
+            ],
+        )
+        .is_ok_and(|o| o.ok && o.stdout.trim().is_empty());
+        if !clean {
+            return false;
+        }
+        let Ok(log) = git::run(
+            Some(&self.root),
+            [
+                "log",
+                "--format=",
+                "-p",
+                "--no-color",
+                "--no-ext-diff",
+                "--",
+                &rel,
+            ],
+        ) else {
+            return false;
+        };
+        log.ok && !log.stdout.trim().is_empty() && !log_has_other_publish_value(&log.stdout)
+    }
+
     /// Writes `cycle.yaml` of an existing cycle after validating it against the schema, the
     /// participant rules and the templates that exist.
     pub fn save_cycle(&self, cycle: &Cycle) -> Result<()> {
@@ -763,6 +822,27 @@ impl Repo {
     }
 }
 
+/// Whether a `git log -p` of `cycle.yaml` has an added or removed line with a `publish:` value
+/// that is not `on-approval` (block style `publish: auto` or flow style `{ ..., publish: auto }`).
+fn log_has_other_publish_value(patch: &str) -> bool {
+    patch
+        .lines()
+        .filter(|l| {
+            (l.starts_with('+') && !l.starts_with("+++"))
+                || (l.starts_with('-') && !l.starts_with("---"))
+        })
+        .any(|l| {
+            l[1..].match_indices("publish:").any(|(at, key)| {
+                let value: String = l[1 + at + key.len()..]
+                    .trim_start()
+                    .chars()
+                    .take_while(|c| !matches!(c, ',' | '}' | '#') && !c.is_whitespace())
+                    .collect();
+                value.trim_matches(|c| c == '"' || c == '\'') != "on-approval"
+            })
+        })
+}
+
 /// `main...origin/main [ahead 1, behind 2]`, `No commits yet on main`, `HEAD (no branch)`.
 fn parse_branch_line(line: &str, status: &mut RepoStatus) {
     if let Some(rest) = line.strip_prefix("No commits yet on ") {
@@ -851,6 +931,58 @@ mod tests {
         origin.create_cycle(&cycle("NOMAD")).unwrap();
         commit_all(origin.root(), "add NOMAD");
         origin
+    }
+
+    #[test]
+    fn the_publish_rule_is_untouched_only_when_the_history_shows_just_the_old_default() {
+        use crate::cycle::{GithubTarget, PublishMode};
+        let tmp = test_tmp::TestDir::new("repo");
+        let origin = new_origin(tmp.path());
+        let mut c = cycle("NOMAD");
+        c.targets.github = Some(GithubTarget {
+            publish: Some(PublishMode::OnApproval),
+            ..GithubTarget::default()
+        });
+        origin.save_cycle(&c).unwrap();
+        // Uncommitted edit: the history does not describe the file, so it cannot be told.
+        assert!(!origin.publish_rule_untouched("NOMAD"));
+        commit_all(origin.root(), "github target");
+        assert!(origin.publish_rule_untouched("NOMAD"));
+        // Somebody chose another rule once, even if it was set back: touched.
+        c.targets.github.as_mut().unwrap().publish = Some(PublishMode::Auto);
+        origin.save_cycle(&c).unwrap();
+        commit_all(origin.root(), "auto");
+        c.targets.github.as_mut().unwrap().publish = Some(PublishMode::OnApproval);
+        origin.save_cycle(&c).unwrap();
+        commit_all(origin.root(), "back");
+        assert!(!origin.publish_rule_untouched("NOMAD"));
+        assert!(!origin.publish_rule_untouched("GHOST"));
+    }
+
+    #[test]
+    fn without_git_history_the_publish_rule_counts_as_touched() {
+        let tmp = test_tmp::TestDir::new("repo");
+        // Not committed at all.
+        let repo = Repo::init_local(tmp.path().join("r")).unwrap();
+        repo.create_cycle(&cycle("NOMAD")).unwrap();
+        assert!(!repo.publish_rule_untouched("NOMAD"));
+    }
+
+    #[test]
+    fn publish_values_are_read_from_block_and_flow_style_log_lines() {
+        assert!(!log_has_other_publish_value(
+            "+  publish: on-approval\n-    publish: \"on-approval\"\n"
+        ));
+        assert!(log_has_other_publish_value("+  publish: auto\n"));
+        assert!(log_has_other_publish_value(
+            "-  github: { path: m, publish: off }\n"
+        ));
+        assert!(!log_has_other_publish_value(
+            "+  github: { path: m, publish: on-approval }\n"
+        ));
+        assert!(!log_has_other_publish_value(
+            " context publish: auto\n+++ b/x\n"
+        ));
     }
 
     #[test]

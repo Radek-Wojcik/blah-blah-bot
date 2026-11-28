@@ -12,6 +12,7 @@ Draft notes for 1.0.0. Nothing here is released yet.
 
 Summary of fixes merged on `stage/8-release` toward 1.0.0:
 
+- Publishing: "When to publish" in Preferences is now a global default per target; a project follows it ("Use global setting") and overrides it only with its own rule. Untouched older projects are moved to the global setting once.
 - Sample clip playback: allowed `blob:` in `media-src` in the Tauri CSP so voice sample clips play in the UI.
 - Extraction and draft editing for non-participant assignees: added `assignee_name` for task owners outside the project participant list, preserved outside assignees in briefing merges, added "Add to project people" and clear actions in the draft editor, raised inferred certainty for resolved names, and rejected underscore speaker labels.
 - Global voice profiles across projects: added per-project badges, kept `cycle.yaml`, speaker merges, and renames consistent across projects, reset speaker undo state, and hid own-project suggestions.

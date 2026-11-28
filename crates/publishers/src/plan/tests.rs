@@ -48,6 +48,7 @@ struct Case {
     cycle: Cycle,
     topics: Vec<Topic>,
     repo: RepoFacts,
+    global_rules: GlobalPublishRules,
     webhook: bool,
     bot_token: bool,
     notion_token: bool,
@@ -69,6 +70,7 @@ impl Case {
             cycle,
             topics: vec![topic("t-1", "Wheel size")],
             repo: private(),
+            global_rules: GlobalPublishRules::default(),
             webhook: true,
             bot_token: true,
             notion_token: true,
@@ -84,6 +86,7 @@ impl Case {
             draft: &self.draft,
             cycle: &self.cycle,
             local_topics: &self.topics,
+            global_rules: self.global_rules,
             repo: &self.repo,
             discord_webhook_set: self.webhook,
             discord_bot_token_set: self.bot_token,
@@ -495,7 +498,7 @@ fn notion_export_plans_one_op_per_task_and_chains_after_commit() {
         token: "cred:notion/nomad".into(),
         database: "0123456789abcdef0123456789abcdef".into(),
         data_source: None,
-        publish: PublishMode::OnApproval,
+        publish: Some(PublishMode::OnApproval),
         properties: cycle_store::NotionProperties::default(),
     });
     let mut case = Case::new(c);
@@ -542,7 +545,7 @@ fn missing_notion_and_bot_tokens_block_explicit_and_note_auto() {
         token: "cred:notion/nomad".into(),
         database: "0123456789abcdef0123456789abcdef".into(),
         data_source: None,
-        publish: PublishMode::Auto,
+        publish: Some(PublishMode::Auto),
         properties: cycle_store::NotionProperties::default(),
     });
     c.targets.discord = Some(cycle_store::DiscordTarget {
@@ -554,7 +557,7 @@ fn missing_notion_and_bot_tokens_block_explicit_and_note_auto() {
             thread: true,
             edit_on_correction: true,
         }),
-        publish: PublishMode::Auto,
+        publish: Some(PublishMode::Auto),
         template: None,
     });
     let mut case = Case::new(c);
@@ -592,14 +595,14 @@ fn local_only_project_with_auto_rules_plans_no_ops() {
     c.targets.discord = Some(cycle_store::DiscordTarget {
         webhook: Some("".into()),
         bot: None,
-        publish: PublishMode::Auto,
+        publish: Some(PublishMode::Auto),
         template: None,
     });
     c.targets.notion = Some(cycle_store::NotionTarget {
         token: "cred:notion/nomad".into(),
         database: "".into(),
         data_source: None,
-        publish: PublishMode::Auto,
+        publish: Some(PublishMode::Auto),
         properties: cycle_store::NotionProperties::default(),
     });
     let mut case = Case::new(c);
@@ -631,4 +634,52 @@ fn local_only_project_with_auto_rules_plans_no_ops() {
         .notes
         .iter()
         .any(|n| n.contains("GitHub repository")));
+}
+
+#[test]
+fn a_project_without_its_own_rule_plans_by_the_global_one() {
+    use cycle_store::GithubTarget;
+    let mut case = Case::new(cycle(None, None));
+    case.cycle.targets.github = Some(GithubTarget::default());
+    // Global on-approval (the default): an automatic trigger queues nothing for GitHub.
+    let plan = case.plan(Trigger::Auto, &[]);
+    assert!(keys(&plan).is_empty(), "{:?}", keys(&plan));
+    // The global rule changes to automatic: the same project now queues the commit by itself.
+    case.global_rules.github = PublishMode::Auto;
+    let plan = case.plan(Trigger::Auto, &[]);
+    assert!(keys(&plan).contains(&"commit"), "{:?}", keys(&plan));
+    // The global rule is off: not even an explicit request goes through.
+    case.global_rules.github = PublishMode::Off;
+    let plan = case.explicit(&GITHUB);
+    assert!(keys(&plan).is_empty(), "{:?}", keys(&plan));
+}
+
+#[test]
+fn an_explicit_project_rule_beats_the_global_one_in_the_plan() {
+    let mut case = Case::new(cycle(Some(PublishMode::OnApproval), None));
+    case.global_rules.github = PublishMode::Auto;
+    // The project said on-approval: the global automatic rule does not apply to it.
+    let plan = case.plan(Trigger::Auto, &[]);
+    assert!(keys(&plan).is_empty(), "{:?}", keys(&plan));
+    case.cycle.targets.github.as_mut().unwrap().publish = Some(PublishMode::Auto);
+    case.global_rules.github = PublishMode::Off;
+    let plan = case.plan(Trigger::Auto, &[]);
+    assert!(keys(&plan).contains(&"commit"), "{:?}", keys(&plan));
+}
+
+#[test]
+fn the_global_rule_does_not_publish_to_an_unconfigured_target() {
+    use cycle_store::GithubTarget;
+    // WP-08a: no remote and no linked repository means no GitHub publication, whatever the rule.
+    let mut case = Case::new(cycle(None, None));
+    case.cycle.targets.github = Some(GithubTarget::default());
+    case.global_rules.github = PublishMode::Auto;
+    case.repo = RepoFacts {
+        github: None,
+        has_remote: false,
+        visibility: RepoVisibility::NotPublic,
+        confirmed: false,
+    };
+    let plan = case.plan(Trigger::Auto, &[]);
+    assert!(!keys(&plan).contains(&"commit"), "{:?}", keys(&plan));
 }

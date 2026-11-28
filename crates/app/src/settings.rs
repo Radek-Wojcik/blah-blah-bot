@@ -280,6 +280,13 @@ pub struct Settings {
     /// Meeting detection. Changed through the detection commands: a settings save from the
     /// settings screen keeps the stored value.
     pub detection: DetectionSettings,
+    /// The global "When to publish" rules: what each target does in every project that has no
+    /// rule of its own. Changed through `set_global_publish_rule`: a settings save from the
+    /// settings screen keeps the stored value.
+    pub publish_rules: publishers::rules::GlobalPublishRules,
+    /// Ids of the repositories whose projects were already looked at for the move to the
+    /// global rules (`publish_rules::migrate_untouched`); each is looked at once.
+    pub publish_rules_migrated: Vec<String>,
 }
 
 impl Default for Settings {
@@ -297,6 +304,8 @@ impl Default for Settings {
             last_report: None,
             bridge: BridgeSettings::default(),
             detection: DetectionSettings::default(),
+            publish_rules: publishers::rules::GlobalPublishRules::default(),
+            publish_rules_migrated: Vec::new(),
         }
     }
 }
@@ -355,6 +364,8 @@ impl Settings {
         self.last_report = current.last_report.clone();
         self.bridge.clients = current.bridge.clients.clone();
         self.detection = current.detection.clone();
+        self.publish_rules = current.publish_rules;
+        self.publish_rules_migrated = current.publish_rules_migrated.clone();
         self.hotkeys_migrated = true;
         if self.last_source_keys.is_empty() {
             self.last_source_keys = current.last_source_keys.clone();
@@ -459,6 +470,11 @@ mod tests {
                 opted_out: vec!["zoom".into()],
                 ..DetectionSettings::default()
             },
+            publish_rules: publishers::rules::GlobalPublishRules {
+                github: cycle_store::PublishMode::Auto,
+                ..publishers::rules::GlobalPublishRules::default()
+            },
+            publish_rules_migrated: vec!["local".into()],
         };
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), s);
@@ -653,6 +669,16 @@ mod tests {
         current.detection.opted_out.push("discord".into());
         let merged = Settings::default().keeping_managed_from(&current);
         assert_eq!(merged.detection, current.detection);
+    }
+
+    #[test]
+    fn a_settings_save_keeps_the_publish_rules() {
+        let mut current = Settings::default();
+        current.publish_rules.discord = cycle_store::PublishMode::Off;
+        current.publish_rules_migrated.push("local".into());
+        let merged = Settings::default().keeping_managed_from(&current);
+        assert_eq!(merged.publish_rules, current.publish_rules);
+        assert_eq!(merged.publish_rules_migrated, ["local"]);
     }
 
     #[test]

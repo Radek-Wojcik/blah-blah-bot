@@ -97,6 +97,11 @@ pub trait Env: Send + Sync {
     fn github_token(&self, api: &str) -> Option<String>;
     /// The webhook URL behind a `cred:` reference.
     fn webhook(&self, reference: &str) -> Option<String>;
+    /// The global publish rules of the preferences: what a target does in every project that
+    /// has no rule of its own for it.
+    fn global_publish_rules(&self) -> crate::rules::GlobalPublishRules {
+        crate::rules::GlobalPublishRules::default()
+    }
     /// The Notion integration token behind a `cred:` reference.
     fn notion_token(&self, _reference: &str) -> Option<String> {
         None

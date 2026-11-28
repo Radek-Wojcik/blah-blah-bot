@@ -13,7 +13,7 @@ use cycle_store::Correction;
 use publishers::correction::{comment_key, discord_edit_key, file_key};
 use publishers::flow::{self, PreparedCorrection};
 use publishers::outbox::Env;
-use publishers::rules::{PublishTarget, TargetRules, Trigger};
+use publishers::rules::{PublishTarget, Trigger};
 use serde::Serialize;
 use serde_json::Value;
 use store::{OpState, OutboxOp};
@@ -204,7 +204,7 @@ impl Publishing {
             cycle_id: loaded.ctx.cycle.id.clone(),
             locked: flow::ops_lock_draft(&ops),
             in_repository,
-            rule: mode_name(TargetRules::of(&loaded.ctx.cycle).github),
+            rule: mode_name(flow::target_rules(self.env.as_ref(), &loaded.ctx).github),
             corrections,
         })
     }

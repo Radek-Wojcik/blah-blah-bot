@@ -113,7 +113,9 @@ impl Default for ReportDto {
 #[serde(rename_all = "camelCase")]
 pub struct GithubTargetDto {
     pub path: String,
-    pub publish: PublishMode,
+    /// `None` (absent): the project follows the global rule of the preferences.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publish: Option<PublishMode>,
     /// Create issues for task items and write back status changes.
     #[serde(default = "default_true")]
     pub issues: bool,
@@ -131,7 +133,9 @@ pub struct DiscordTargetDto {
     pub webhook: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bot: Option<DiscordBotDto>,
-    pub publish: PublishMode,
+    /// `None` (absent): the project follows the global rule of the preferences.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publish: Option<PublishMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template: Option<String>,
 }
@@ -157,7 +161,9 @@ pub struct NotionTargetDto {
     pub database: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_source: Option<String>,
-    pub publish: PublishMode,
+    /// `None` (absent): the project follows the global rule of the preferences.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publish: Option<PublishMode>,
     #[serde(default)]
     pub properties: NotionPropertiesDto,
 }
@@ -944,7 +950,9 @@ pub fn save_cycle<S: ParticipantSync + ?Sized>(
 }
 
 /// Sets the publish rule of one target of a cycle (`targets.<target>.publish` of
-/// `cycle.yaml`) and nothing else, and returns the targets as they are written. The rules
+/// `cycle.yaml`) and nothing else, and returns the targets as they are written. `None` is
+/// "use the global setting": the key is removed from the file and the global rule of the
+/// preferences applies. The rules
 /// are the ones of ADR 0019: `github` covers the report, the issues and the status
 /// write-back, but no mode lets a status change go out without the user's approval and an
 /// explicit publication; the public-repository check applies to every mode.
@@ -957,7 +965,7 @@ pub fn set_target_rule(
     repos: &[CycleRepoSetting],
     cycle_id: &str,
     target: &str,
-    mode: PublishMode,
+    mode: Option<PublishMode>,
 ) -> IpcResult<TargetsDto> {
     let located = locate_or_err(repos, cycle_id)?;
     let mut cycle = load_valid(&located)?;
@@ -968,7 +976,12 @@ pub fn set_target_rule(
                 .targets
                 .github
                 .get_or_insert_with(GithubTarget::default);
-            let changed = !existed || github.publish != mode;
+            // Inheriting on a cycle that has no GitHub target needs no target: nothing to write.
+            let changed = if existed {
+                github.publish != mode
+            } else {
+                mode.is_some()
+            };
             github.publish = mode;
             changed
         }
@@ -2511,35 +2524,39 @@ pub(crate) mod tests {
         assert!(!before.contains("targets"), "a new cycle has no targets");
 
         // GitHub: the target is created with the default folder, then only the rule changes.
-        let t = set_target_rule(lab.repos(), "NOMAD", "github", PublishMode::Auto).unwrap();
+        let t = set_target_rule(lab.repos(), "NOMAD", "github", Some(PublishMode::Auto)).unwrap();
         let github = t.github.unwrap();
         assert_eq!(
             (github.publish, github.path.as_str(), github.issues),
-            (PublishMode::Auto, "meetings", true)
+            (Some(PublishMode::Auto), "meetings", true)
         );
         let written = repo.load_cycle("NOMAD").unwrap();
-        assert_eq!(written.targets.github.unwrap().publish, PublishMode::Auto);
-        let t = set_target_rule(lab.repos(), "NOMAD", "github", PublishMode::Off).unwrap();
-        assert_eq!(t.github.unwrap().publish, PublishMode::Off);
+        assert_eq!(
+            written.targets.github.unwrap().publish,
+            Some(PublishMode::Auto)
+        );
+        let t = set_target_rule(lab.repos(), "NOMAD", "github", Some(PublishMode::Off)).unwrap();
+        assert_eq!(t.github.unwrap().publish, Some(PublishMode::Off));
         // Setting the value it already has writes nothing.
         let text = yaml(&repo);
-        set_target_rule(lab.repos(), "NOMAD", "github", PublishMode::Off).unwrap();
+        set_target_rule(lab.repos(), "NOMAD", "github", Some(PublishMode::Off)).unwrap();
         assert_eq!(yaml(&repo), text);
 
         // Discord needs a target with a webhook reference.
-        let e = set_target_rule(lab.repos(), "NOMAD", "discord", PublishMode::Auto).unwrap_err();
+        let e =
+            set_target_rule(lab.repos(), "NOMAD", "discord", Some(PublishMode::Auto)).unwrap_err();
         assert_eq!(e.code, "no_target");
         let mut cycle = repo.load_cycle("NOMAD").unwrap();
         cycle.targets.discord = Some(DiscordTarget {
             webhook: Some("cred:discord/nomad".into()),
             bot: None,
-            publish: PublishMode::OnApproval,
+            publish: Some(PublishMode::OnApproval),
             template: Some("short".into()),
         });
         repo.save_cycle(&cycle).unwrap();
-        let t = set_target_rule(lab.repos(), "NOMAD", "discord", PublishMode::Auto).unwrap();
+        let t = set_target_rule(lab.repos(), "NOMAD", "discord", Some(PublishMode::Auto)).unwrap();
         let discord = t.discord.unwrap();
-        assert_eq!(discord.publish, PublishMode::Auto);
+        assert_eq!(discord.publish, Some(PublishMode::Auto));
         assert_eq!(
             discord.webhook.as_deref(),
             Some("cred:discord/nomad"),
@@ -2548,42 +2565,48 @@ pub(crate) mod tests {
         assert_eq!(discord.template.as_deref(), Some("short"));
 
         // Notion needs a target with a token and a database.
-        let e = set_target_rule(lab.repos(), "NOMAD", "notion", PublishMode::Auto).unwrap_err();
+        let e =
+            set_target_rule(lab.repos(), "NOMAD", "notion", Some(PublishMode::Auto)).unwrap_err();
         assert_eq!(e.code, "no_target");
         let mut cycle = repo.load_cycle("NOMAD").unwrap();
         cycle.targets.notion = Some(NotionTarget {
             token: "cred:notion/nomad".into(),
             database: "0123456789abcdef0123456789abcdef".into(),
             data_source: None,
-            publish: PublishMode::OnApproval,
+            publish: Some(PublishMode::OnApproval),
             properties: NotionProperties::default(),
         });
         repo.save_cycle(&cycle).unwrap();
-        let t = set_target_rule(lab.repos(), "NOMAD", "notion", PublishMode::Off).unwrap();
+        let t = set_target_rule(lab.repos(), "NOMAD", "notion", Some(PublishMode::Off)).unwrap();
         let notion = t.notion.unwrap();
-        assert_eq!(notion.publish, PublishMode::Off);
+        assert_eq!(notion.publish, Some(PublishMode::Off));
         assert_eq!(notion.token, "cred:notion/nomad", "the reference is kept");
         assert_eq!(notion.properties, NotionPropertiesDto::default());
         let text = yaml(&repo);
-        set_target_rule(lab.repos(), "NOMAD", "notion", PublishMode::Off).unwrap();
+        set_target_rule(lab.repos(), "NOMAD", "notion", Some(PublishMode::Off)).unwrap();
         assert_eq!(yaml(&repo), text, "the same rule writes nothing");
 
         // The rest of the file is as it was, and the other targets kept their rules.
         let after = repo.load_cycle("NOMAD").unwrap();
-        assert_eq!(after.targets.github.unwrap().publish, PublishMode::Off);
+        assert_eq!(
+            after.targets.github.unwrap().publish,
+            Some(PublishMode::Off)
+        );
         assert_eq!(
             after.targets.discord.unwrap().publish,
-            PublishMode::Auto,
+            Some(PublishMode::Auto),
             "a Notion rule leaves Discord alone"
         );
         assert_eq!(after.name, "Nomad rover");
 
         // Other targets and unknown cycles are refused.
         for bad in ["", "Github", "slack"] {
-            let e = set_target_rule(lab.repos(), "NOMAD", bad, PublishMode::Auto).unwrap_err();
+            let e =
+                set_target_rule(lab.repos(), "NOMAD", bad, Some(PublishMode::Auto)).unwrap_err();
             assert_eq!(e.code, "invalid", "{bad:?}");
         }
-        let e = set_target_rule(lab.repos(), "GHOST", "github", PublishMode::Auto).unwrap_err();
+        let e =
+            set_target_rule(lab.repos(), "GHOST", "github", Some(PublishMode::Auto)).unwrap_err();
         assert_eq!(e.code, "not_found");
     }
 
@@ -2602,9 +2625,37 @@ targets:
         )
         .unwrap();
         let before = std::fs::read_to_string(&path).unwrap();
-        let e = set_target_rule(lab.repos(), "NOMAD", "github", PublishMode::Auto).unwrap_err();
+        let e =
+            set_target_rule(lab.repos(), "NOMAD", "github", Some(PublishMode::Auto)).unwrap_err();
         assert_eq!(e.code, "cycle_invalid");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn inheriting_removes_the_rule_from_cycle_yaml_and_is_the_new_cycles_default() {
+        let lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        let repo = lab.repo();
+        let yaml = |repo: &Repo| {
+            std::fs::read_to_string(repo.cycle_dir("NOMAD").unwrap().join("cycle.yaml")).unwrap()
+        };
+        // Inheriting on a cycle without a GitHub target writes nothing.
+        let before = yaml(&repo);
+        let t = set_target_rule(lab.repos(), "NOMAD", "github", None).unwrap();
+        assert_eq!(t.github.unwrap().publish, None);
+        assert_eq!(yaml(&repo), before);
+        // An explicit rule is written, inheriting removes the key again.
+        set_target_rule(lab.repos(), "NOMAD", "github", Some(PublishMode::Auto)).unwrap();
+        assert!(yaml(&repo).contains("publish: auto"));
+        let t = set_target_rule(lab.repos(), "NOMAD", "github", None).unwrap();
+        assert_eq!(t.github.unwrap().publish, None);
+        assert!(!yaml(&repo).contains("publish"), "{}", yaml(&repo));
+        // The UI form round trip keeps the absence: no key in, no key out.
+        let json =
+            serde_json::to_string(&CycleDto::from(&repo.load_cycle("NOMAD").unwrap())).unwrap();
+        assert!(!json.contains("\"publish\""), "{json}");
+        let back: CycleDto = serde_json::from_str(&json).unwrap();
+        assert_eq!(Cycle::from(back).targets.github.unwrap().publish, None);
     }
 
     #[test]
@@ -2650,7 +2701,7 @@ targets:
         dto.targets.discord = Some(DiscordTargetDto {
             webhook: Some("cred:discord/nomad".into()),
             bot: None,
-            publish: PublishMode::OnApproval,
+            publish: Some(PublishMode::OnApproval),
             template: None,
         });
         let r = save_cycle(lab.repos(), &lab.store, dto.clone()).unwrap();
@@ -2691,14 +2742,14 @@ targets:
                 thread: true,
                 edit_on_correction: false,
             }),
-            publish: PublishMode::OnApproval,
+            publish: Some(PublishMode::OnApproval),
             template: None,
         });
         dto.targets.notion = Some(NotionTargetDto {
             token: "cred:notion/nomad".into(),
             database: "0123456789abcdef0123456789abcdef".into(),
             data_source: Some("fedcba98-7654-3210-fedc-ba9876543210".into()),
-            publish: PublishMode::Auto,
+            publish: Some(PublishMode::Auto),
             properties: NotionPropertiesDto {
                 assignee: Some("Assignee".into()),
                 status: Some("Status".into()),

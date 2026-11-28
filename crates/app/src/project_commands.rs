@@ -7,9 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use cycle_store::schema::is_identifier;
-use cycle_store::{
-    Cycle, DiscordTarget, GithubTarget, LanguageSetting, PublishMode, Repo, ReportMode,
-};
+use cycle_store::{Cycle, DiscordTarget, GithubTarget, LanguageSetting, Repo, ReportMode};
 use queue::worker::{
     IngestMode, IngestRequest, IngestResponse, IngestScreenshot, IngestSegment, IngestTrack,
     JobOptions,
@@ -200,7 +198,7 @@ fn apply_wizard_cycle_overrides(cycle: &mut Cycle, req: &WizardCreateProjectDto)
         if cycle.targets.github.is_none() {
             cycle.targets.github = Some(GithubTarget {
                 path: cycle_store::DEFAULT_MEETINGS_PATH.to_string(),
-                publish: PublishMode::OnApproval,
+                publish: None,
                 issues: true,
             });
         }
@@ -214,7 +212,7 @@ fn apply_wizard_cycle_overrides(cycle: &mut Cycle, req: &WizardCreateProjectDto)
         cycle.targets.discord = Some(DiscordTarget {
             webhook: Some(normalize_webhook_ref(wh)),
             bot: None,
-            publish: PublishMode::OnApproval,
+            publish: None,
             template: None,
         });
     }
