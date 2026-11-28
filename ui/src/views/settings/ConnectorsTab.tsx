@@ -5,8 +5,15 @@ import { errorMessage, useCycles } from "../../hooks";
 import type { CycleListItem, ProcessingSettings, PublishingSecrets } from "../../ipc/types";
 import { validateLlmSettings } from "../../llm";
 import { botTokenProblem, notionTokenProblem, safeHttpsUrl, tokenProblem } from "../../publish";
+import {
+  cloudKeyPage,
+  GITHUB_PERMISSIONS,
+  GITHUB_TOKEN_PAGE,
+  HF_TOKEN_PAGE,
+} from "../../tokenPages";
 import { DiscordInviteBox } from "../DiscordInviteBox";
 import type { EditableTabProps } from "../Settings";
+import { GithubConnect } from "./GithubConnect";
 
 const DISCORD_TOKEN_PAGE = safeHttpsUrl("https://discord.com/developers/applications");
 const NOTION_TOKEN_PAGE = safeHttpsUrl("https://www.notion.so/profile/integrations");
@@ -36,9 +43,13 @@ function SecretCard(props: {
   onTest?: () => Promise<CheckResult>;
   testLabel?: string;
   testDisabledReason?: string;
+  /** The provider page that issues this credential: absent = no button, null = not known yet. */
+  tokenPage?: string | null;
   onDraft?: (label: string, draft: SecretDraft | null) => void;
 }) {
   const { label, isSet } = props;
+  // The provider's name only: the field itself is labelled with the full `label`.
+  const service = label.replace(/ (Token|API Key).*$/, "");
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ text: string; kind: "status" | "error" } | null>(null);
@@ -128,6 +139,28 @@ function SecretCard(props: {
         </p>
       )}
       <div className="actions">
+        {props.tokenPage !== undefined &&
+          (props.tokenPage ? (
+            <a
+              className="btn btn-ghost"
+              href={props.tokenPage}
+              aria-label={`Open token page for ${service}`}
+              target="_blank"
+              rel="noreferrer noopener"
+            >
+              Open token page
+            </a>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled
+              aria-label={`Open token page for ${service}: not known for this provider`}
+              title="The token page of this provider is not known: open it from the provider's website"
+            >
+              Open token page
+            </button>
+          ))}
         {props.onTest && (
           <button
             type="button"
@@ -175,6 +208,8 @@ export function ConnectorsTab({ onDirtyChange, registerHandle }: Partial<Editabl
   const backend = useBackend();
   const { cycles, repos } = useCycles();
   const [secrets, setSecrets] = useState<PublishingSecrets | null>(null);
+  // Bumped when a GitHub token is stored or cleared in its field (see GithubConnect).
+  const [githubEpoch, setGithubEpoch] = useState(0);
   const [processing, setProcessing] = useState<ProcessingSettings | null>(null);
   const [extUrl, setExtUrl] = useState("");
   const [extModel, setExtModel] = useState("");
@@ -330,7 +365,7 @@ export function ConnectorsTab({ onDirtyChange, registerHandle }: Partial<Editabl
             </h3>
             <HelpPopover
               title="GitHub Token & Windows Credential Manager"
-              recommended="Fine-grained personal access token with Contents and Issues read/write"
+              recommended="Connect your account, or a fine-grained token with Administration, Contents and Issues read/write"
             >
               <p>
                 Tokens are written directly to the <strong>Windows Credential Manager</strong> and
@@ -338,9 +373,32 @@ export function ConnectorsTab({ onDirtyChange, registerHandle }: Partial<Editabl
               </p>
               <p>
                 Required permissions: <strong>Contents (Read &amp; Write)</strong> to push meeting
-                reports and <strong>Issues (Read &amp; Write)</strong> to create and update tasks.
+                reports, <strong>Issues (Read &amp; Write)</strong> to create and update tasks and
+                <strong> Administration (Read &amp; Write)</strong> to create a private repository
+                from the new project wizard.
+              </p>
+              <p>
+                "Connect account" signs in with GitHub in your browser and needs no token. The token
+                field is the fallback.
               </p>
             </HelpPopover>
+          </div>
+          <GithubConnect
+            tokenSet={
+              secrets?.github.some((h) => h.api === "https://api.github.com" && h.tokenSet) ?? false
+            }
+            tokenEpoch={githubEpoch}
+            onChanged={load}
+          />
+          <div className="person-meta" data-testid="github-permissions">
+            <p style={{ margin: "8px 0 4px" }}>
+              Or paste a fine-grained token. It needs these repository permissions:
+            </p>
+            <ul style={{ margin: 0, paddingLeft: 20 }}>
+              {GITHUB_PERMISSIONS.map((p) => (
+                <li key={p}>{p}</li>
+              ))}
+            </ul>
           </div>
           {secrets ? (
             <div className="secret-list">
@@ -356,16 +414,23 @@ export function ConnectorsTab({ onDirtyChange, registerHandle }: Partial<Editabl
                     placeholder="github_pat_…"
                     help="Used to push reports and manage issues for linked repositories."
                     validate={tokenProblem}
+                    tokenPage={h.api === "https://api.github.com" ? GITHUB_TOKEN_PAGE : undefined}
                     onDraft={onDraft}
                     onStore={(tok) =>
                       backend
                         .setGithubToken(tok, h.api === "https://api.github.com" ? undefined : h.api)
-                        .then(load)
+                        .then(() => {
+                          setGithubEpoch((n) => n + 1);
+                          return load();
+                        })
                     }
                     onClear={() =>
                       backend
                         .clearGithubToken(h.api === "https://api.github.com" ? undefined : h.api)
-                        .then(load)
+                        .then(() => {
+                          setGithubEpoch((n) => n + 1);
+                          return load();
+                        })
                     }
                     onTest={testCycle ? () => backend.testGithubAccess(testCycle.id) : undefined}
                     testLabel="Test access"
@@ -410,6 +475,7 @@ export function ConnectorsTab({ onDirtyChange, registerHandle }: Partial<Editabl
               placeholder="hf_…"
               help="Used only during model downloads for gated diarization weights."
               validate={tokenProblem}
+              tokenPage={HF_TOKEN_PAGE}
               onDraft={onDraft}
               onStore={(tok) => backend.setHfToken(tok).then(load)}
               onClear={() => backend.clearHfToken().then(load)}
@@ -538,6 +604,7 @@ export function ConnectorsTab({ onDirtyChange, registerHandle }: Partial<Editabl
                   storedText="API key stored"
                   emptyText="No API key stored"
                   isSet={processing.llm.cloudKeySet}
+                  tokenPage={cloudKeyPage(processing.llm.cloud.baseUrl)}
                   placeholder="API key"
                   help="Stored in Windows Credential Manager for per-meeting cloud extraction."
                   onDraft={onDraft}

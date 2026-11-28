@@ -24,6 +24,9 @@ import type {
   DiscordRole,
   DraftView,
   GithubAccess,
+  GithubConnectStatus,
+  GithubDevicePoll,
+  GithubDeviceStart,
   GlobalVoiceProfile,
   ImportMeetingInput,
   JobView,
@@ -310,6 +313,14 @@ export interface Backend {
   /** Write-only. `api` absent means github.com. A token with spaces or line breaks is refused. */
   setGithubToken(token: string, api?: string): Promise<void>;
   clearGithubToken(api?: string): Promise<void>;
+  /** Whether a GitHub OAuth client id is configured, so "Connect account" can be offered. */
+  githubConnectStatus(): Promise<GithubConnectStatus>;
+  /** Starts the device flow (rejects with `not_configured` without a client id). */
+  githubDeviceStart(): Promise<GithubDeviceStart>;
+  /** One poll; on approval the token is stored in the credential store and only the login returns. */
+  githubDevicePoll(): Promise<GithubDevicePoll>;
+  /** Forgets a connection in progress. */
+  githubDeviceCancel(): Promise<void>;
   /** Checks the stored token against the GitHub repository of the cycle. A failure is a result, not an error. */
   testGithubAccess(cycleId: string): Promise<GithubAccess>;
   /** Links a registered repository to a GitHub repository (`owner/name`); empty values clear the link. */
