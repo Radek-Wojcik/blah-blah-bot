@@ -114,6 +114,10 @@ export function createTauriBackend(): Backend {
     publishingSecrets: () => invoke("publishing_secrets"),
     setGithubToken: (token, api) => invoke("set_github_token", { token, api }),
     clearGithubToken: (api) => invoke("clear_github_token", { api }),
+    githubConnectStatus: () => invoke("github_connect_status"),
+    githubDeviceStart: () => invoke("github_device_start"),
+    githubDevicePoll: () => invoke("github_device_poll"),
+    githubDeviceCancel: () => invoke("github_device_cancel"),
     testGithubAccess: (cycleId) => invoke("test_github_access", { cycleId }),
     setGithubRepo: (repoId, githubRepo, githubApi) =>
       invoke("set_github_repo", { repoId, githubRepo, githubApi }),

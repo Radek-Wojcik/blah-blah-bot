@@ -43,6 +43,7 @@ import type {
   DiscordBotTarget,
   Draft,
   DraftView,
+  GithubDevicePoll,
   OpKind,
   OpResult,
   OpState,
@@ -71,6 +72,10 @@ type PublishMethods = Pick<
   | "publishingSecrets"
   | "setGithubToken"
   | "clearGithubToken"
+  | "githubConnectStatus"
+  | "githubDeviceStart"
+  | "githubDevicePoll"
+  | "githubDeviceCancel"
   | "testGithubAccess"
   | "setGithubRepo"
   | "setTargetSecret"
@@ -121,6 +126,11 @@ export interface FakeDiscordPost {
 export interface MockHooks extends IntegrationHooks {
   /** No target answers while it is on. Turning it off lets waiting operations run again. */
   setOffline(offline: boolean): void;
+  /**
+   * The GitHub sign-in: whether a client id is configured, and the answers of the next polls
+   * (the default is one "pending" and then "connected" as `demo-user`).
+   */
+  setGithubConnect(options: { configured?: boolean; script?: GithubDevicePoll[] }): void;
   /** A colleague closes (or reopens) an issue on GitHub. It shows in the tasks after a pull. */
   closeIssue(number: number): void;
   reopenIssue(number: number): void;
@@ -284,6 +294,16 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
   world.remoteTopics = demoRemoteTopics(cycles.topics("NOMAD"));
   /** Only whether a token is stored, never the token. */
   const tokens = new Set<string>([apiHost(DEFAULT_API)!]);
+  /** The fake GitHub device flow: configured or not, the polls left and whether one is running. */
+  const deviceFlow = {
+    configured: true,
+    script: null as GithubDevicePoll[] | null,
+    running: false,
+  };
+  const defaultDeviceScript = (): GithubDevicePoll[] => [
+    { state: "pending" },
+    { state: "connected", login: "demo-user" },
+  ];
   /** Only the masked form of a stored target secret (webhook, bot token, Notion token). */
   const targetSecrets = new Map<string, string>([
     ["cred:discord/nomad", maskWebhook({ host: "discord.com", id: "000000000000000007" })],
@@ -1565,6 +1585,38 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
       tokens.add(hostOf(api));
     },
     clearGithubToken: async (api) => void tokens.delete(hostOf(api)),
+    githubConnectStatus: async () => ({ configured: deviceFlow.configured }),
+    githubDeviceStart: async () => {
+      if (!deviceFlow.configured)
+        fail(
+          "not_configured",
+          "GitHub sign-in is not configured in this build: use a token instead",
+        );
+      if (world.offline) fail("github", "Could not reach github.com: the network is offline.");
+      deviceFlow.running = true;
+      deviceFlow.script ??= defaultDeviceScript();
+      return {
+        userCode: "WDJB-MJHT",
+        verificationUri: "https://github.com/login/device",
+        interval: 1,
+        expiresIn: 900,
+      };
+    },
+    githubDevicePoll: async (): Promise<GithubDevicePoll> => {
+      if (!deviceFlow.running)
+        fail("not_found", "no GitHub connection is in progress: start again");
+      const next = deviceFlow.script?.shift() ?? { state: "pending" as const };
+      if (next.state === "connected") tokens.add(apiHost(DEFAULT_API)!);
+      if (next.state === "connected" || next.state === "denied" || next.state === "expired") {
+        deviceFlow.running = false;
+        deviceFlow.script = null;
+      }
+      return next;
+    },
+    githubDeviceCancel: async () => {
+      deviceFlow.running = false;
+      deviceFlow.script = null;
+    },
     testGithubAccess: async (cycleId) => {
       const info = repoInfo(cycleId);
       const host = apiHost(info.api ?? DEFAULT_API);
@@ -1743,6 +1795,10 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
 
   const hooks: MockHooks = {
     ...integrations.hooks,
+    setGithubConnect: ({ configured, script }) => {
+      if (configured !== undefined) deviceFlow.configured = configured;
+      if (script) deviceFlow.script = structuredClone(script);
+    },
     setOffline: (offline) => {
       world.offline = offline;
       if (!offline) {
