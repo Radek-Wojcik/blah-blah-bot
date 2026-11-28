@@ -234,8 +234,10 @@ impl DeviceFlow {
         let bad = || DeviceError::new("GitHub's answer does not describe a device code");
         let verification_uri = text("verification_uri").ok_or_else(bad)?;
         // The page the user is sent to must be GitHub's own.
-        allowed_url(&verification_uri, OAUTH_HOST, VERIFICATION_PATH, false)
-            .map_err(|_| DeviceError::new("GitHub named a page that is not on github.com"))?;
+        let verification_uri = allowed_url(&verification_uri, OAUTH_HOST, VERIFICATION_PATH, false)
+            .ok()
+            .filter(|u| u.ends_with(VERIFICATION_PATH))
+            .ok_or_else(|| DeviceError::new("GitHub named a page that is not on github.com"))?;
         Ok(DeviceCode {
             device_code: text("device_code").ok_or_else(bad)?,
             user_code: text("user_code").ok_or_else(bad)?,

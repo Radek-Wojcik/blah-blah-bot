@@ -105,16 +105,31 @@ pub fn status(client_id: Option<&str>) -> GithubConnectStatusDto {
     }
 }
 
+/// Opens a new attempt: forgets the old one and returns the generation the answer of this
+/// start must still carry. The command calls it before the work is handed to another thread,
+/// so a cancel that arrives in between is not overwritten.
+pub fn begin(conn: &Connection) -> u64 {
+    let mut state = lock(&conn.state);
+    state.generation += 1;
+    state.session = None;
+    state.polling = false;
+    state.generation
+}
+
+/// [`begin`] and [`start_attempt`] in one (the command splits them across a thread).
+#[cfg(test)]
+fn start(conn: &Connection, flow: &DeviceFlow, now_ms: i64) -> IpcResult<DeviceStartDto> {
+    start_attempt(conn, flow, begin(conn), now_ms)
+}
+
 /// Asks GitHub for a code and remembers the device code. A cancel or another start while the
 /// request is out wins: the answer is then dropped.
-pub fn start(conn: &Connection, flow: &DeviceFlow, now_ms: i64) -> IpcResult<DeviceStartDto> {
-    let generation = {
-        let mut state = lock(&conn.state);
-        state.generation += 1;
-        state.session = None;
-        state.polling = false;
-        state.generation
-    };
+pub fn start_attempt(
+    conn: &Connection,
+    flow: &DeviceFlow,
+    generation: u64,
+    now_ms: i64,
+) -> IpcResult<DeviceStartDto> {
     let code = flow.start().map_err(|e| github_error(e.message))?;
     let dto = DeviceStartDto {
         user_code: code.user_code.clone(),
@@ -177,12 +192,19 @@ pub fn poll(
         PollOutcome::Denied => Ok(DevicePollDto::Denied),
         PollOutcome::Expired => Ok(DevicePollDto::Expired),
         PollOutcome::Token(token) => {
+            drop(state);
+            // Whose token it is comes first, outside the lock: a cancel during this request
+            // must still keep the token out of the store. Not learning the login (the network)
+            // does not stop the connection.
+            let login = flow.login_of(&token).ok();
             // Storing is local and quick, so it happens under the lock: a cancel either comes
             // before (nothing stored) or after (the person is connected).
+            let state = lock(&conn.state);
+            if state.generation != generation {
+                return Err(cancelled());
+            }
             publish_secrets::set_github_token(store, Some(flow.api_base()), token.expose())?;
             drop(state);
-            // The token is valid and stored; failing to learn whose it is does not undo that.
-            let login = flow.login_of(&token).ok();
             Ok(DevicePollDto::Connected { login })
         }
     }
@@ -230,9 +252,13 @@ pub fn github_connect_status() -> GithubConnectStatusDto {
 #[tauri::command]
 pub async fn github_device_start() -> IpcResult<DeviceStartDto> {
     let flow = flow()?;
-    tauri::async_runtime::spawn_blocking(move || start(connection(), &flow, now_ms()))
-        .await
-        .map_err(|e| crate::ipc::background_task_error(&e))?
+    // Synchronously, before the work moves to another thread: see `begin`.
+    let generation = begin(connection());
+    tauri::async_runtime::spawn_blocking(move || {
+        start_attempt(connection(), &flow, generation, now_ms())
+    })
+    .await
+    .map_err(|e| crate::ipc::background_task_error(&e))?
 }
 
 /// One poll of the connection in progress.
@@ -508,7 +534,9 @@ mod tests {
             release.send(()).unwrap();
             release.send(()).unwrap();
             let results = [first.join().unwrap(), second.join().unwrap()];
-            assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+            let [first, second] = results;
+            assert_eq!(first.unwrap_err().code, "cancelled");
+            assert!(second.is_ok());
         });
         assert!(lock(&conn.state).session.is_some());
     }
@@ -530,5 +558,39 @@ mod tests {
             json_of(&GithubConnectStatusDto { configured: true }),
             r#"{"configured":true}"#
         );
+    }
+
+    #[test]
+    fn a_cancel_before_the_worker_starts_is_not_overwritten() {
+        let rig = rig();
+        let generation = begin(&rig.conn);
+        cancel(&rig.conn);
+        assert_eq!(
+            start_attempt(&rig.conn, &rig.flow, generation, 0)
+                .unwrap_err()
+                .code,
+            "cancelled"
+        );
+        assert!(lock(&rig.conn.state).session.is_none());
+    }
+
+    #[test]
+    fn a_cancel_while_the_login_is_asked_stores_no_token() {
+        // One server for both bases: the token comes at once, the login request waits.
+        let (server, entered, release) = gated("/user");
+        let flow =
+            DeviceFlow::with_bases("Iv1.testclientid", &server.base_url(), &server.base_url())
+                .unwrap()
+                .with_timeouts(Duration::from_secs(5), Duration::from_secs(20));
+        let (conn, store) = (Connection::default(), MemorySecrets::default());
+        start(&conn, &flow, 0).unwrap();
+        std::thread::scope(|scope| {
+            let poller = scope.spawn(|| poll(&conn, &flow, &store, || 5_000));
+            entered.recv_timeout(Duration::from_secs(10)).unwrap();
+            cancel(&conn);
+            release.send(()).unwrap();
+            assert_eq!(poller.join().unwrap().unwrap_err().code, "cancelled");
+        });
+        assert!(store.names().is_empty());
     }
 }

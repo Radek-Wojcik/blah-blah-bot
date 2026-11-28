@@ -276,6 +276,8 @@ fn a_verification_page_on_this_machine_or_with_a_port_is_refused() {
         "https://localhost/login/device",
         "https://github.com:8443/login/device",
         "https://github.com/evil",
+        "https://github.com",
+        "https://github.com/",
     ] {
         oauth.set_start_answer(serde_json::json!({
             "device_code": DEVICE_CODE, "user_code": USER_CODE,
@@ -297,11 +299,21 @@ fn huge_or_zero_numbers_from_the_json_cannot_overflow() {
     let code = flow.start().unwrap();
     assert_eq!(code.interval_secs, MAX_INTERVAL_SECS);
     assert_eq!(code.expires_in_secs, MAX_EXPIRES_SECS);
-    let mut session = DeviceSession::new(code, i64::MAX - 10);
+    // A clock at the end of time saturates: expired at once, no panic, no wrap.
+    let mut late = DeviceSession::new(code.clone(), i64::MAX - 10);
+    assert_eq!(late.poll(&flow, i64::MAX).unwrap(), PollOutcome::Expired);
+    // GitHub asking for an absurd interval is capped, and the session keeps to the cap.
+    let mut session = DeviceSession::new(code, 0);
     oauth.script(&[Answer::SlowDown(u64::MAX)]);
-    // Neither the clock nor the interval wraps.
-    let _ = session.poll(&flow, i64::MAX);
-    assert!(session.interval_secs() <= MAX_INTERVAL_SECS);
+    assert_eq!(
+        session.poll(&flow, 300_000).unwrap(),
+        PollOutcome::SlowDown {
+            interval_secs: MAX_INTERVAL_SECS
+        }
+    );
+    assert_eq!(session.interval_secs(), MAX_INTERVAL_SECS);
+    // Not before the capped interval has passed again.
+    assert_eq!(session.poll(&flow, 599_999).unwrap(), PollOutcome::Pending);
     oauth.set_start_answer(serde_json::json!({
         "device_code": DEVICE_CODE, "user_code": USER_CODE,
         "verification_uri": "https://github.com/login/device",
@@ -317,4 +329,18 @@ fn the_client_id_shape_is_checked_without_a_flow() {
     for id in ["", "  ", "a b", "x\"y"] {
         assert!(!DeviceFlow::client_id_is_valid(id), "{id:?}");
     }
+}
+
+#[test]
+fn the_verification_page_is_stored_normalised() {
+    let (oauth, api) = servers();
+    let flow = flow(&oauth, &api);
+    oauth.set_start_answer(serde_json::json!({
+        "device_code": DEVICE_CODE, "user_code": USER_CODE,
+        "verification_uri": " https://github.com/login/device/ ", "expires_in": 900, "interval": 5,
+    }));
+    assert_eq!(
+        flow.start().unwrap().verification_uri,
+        "https://github.com/login/device"
+    );
 }

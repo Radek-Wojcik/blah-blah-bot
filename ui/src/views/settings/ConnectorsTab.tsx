@@ -208,6 +208,8 @@ export function ConnectorsTab({ onDirtyChange, registerHandle }: Partial<Editabl
   const backend = useBackend();
   const { cycles, repos } = useCycles();
   const [secrets, setSecrets] = useState<PublishingSecrets | null>(null);
+  // Bumped when a GitHub token is stored or cleared in its field (see GithubConnect).
+  const [githubEpoch, setGithubEpoch] = useState(0);
   const [processing, setProcessing] = useState<ProcessingSettings | null>(null);
   const [extUrl, setExtUrl] = useState("");
   const [extModel, setExtModel] = useState("");
@@ -385,6 +387,7 @@ export function ConnectorsTab({ onDirtyChange, registerHandle }: Partial<Editabl
             tokenSet={
               secrets?.github.some((h) => h.api === "https://api.github.com" && h.tokenSet) ?? false
             }
+            tokenEpoch={githubEpoch}
             onChanged={load}
           />
           <div className="person-meta" data-testid="github-permissions">
@@ -416,12 +419,18 @@ export function ConnectorsTab({ onDirtyChange, registerHandle }: Partial<Editabl
                     onStore={(tok) =>
                       backend
                         .setGithubToken(tok, h.api === "https://api.github.com" ? undefined : h.api)
-                        .then(load)
+                        .then(() => {
+                          setGithubEpoch((n) => n + 1);
+                          return load();
+                        })
                     }
                     onClear={() =>
                       backend
                         .clearGithubToken(h.api === "https://api.github.com" ? undefined : h.api)
-                        .then(load)
+                        .then(() => {
+                          setGithubEpoch((n) => n + 1);
+                          return load();
+                        })
                     }
                     onTest={testCycle ? () => backend.testGithubAccess(testCycle.id) : undefined}
                     testLabel="Test access"
