@@ -1,6 +1,6 @@
-# 0020. Discord bot and Notion export
+# 0023. Discord bot and Notion export
 
-**Status:** Accepted (Stage 7). REST-only Discord bot with zero privileged intents, permissions `309237746688`, and `on-approval` as the default publish rule for both targets. The webhook path and the outbox are described in [0010](0010-discord-webhook-and-bot.md) and [0018](0018-publishing.md); the publish rules in [0019](0019-default-publish-rule-per-target.md).
+**Status:** Accepted (Stage 7). REST-only Discord bot with zero privileged intents, permissions `309237746688`, and `on-approval` as the default publish rule for both targets. The webhook path and the outbox are described in [0010](0010-discord-webhook-and-bot.md) and [0018](0018-publishing.md); the publish rules in [0019](0019-default-publish-rule-per-target.md); global people and cross-project voice profiles in [0026](0026-global-people-and-voice-profiles.md) (for mapping Discord participants onto global people).
 
 ## Context
 
@@ -18,7 +18,7 @@ Both services change quickly and their documentation moved (see Discrepancies be
 A `TaskExporter` trait in `crates/publishers/src/export.rs` is the shape every task target has: `get(id)`, `find(key)`, `create(task)`, `update(id, task)`. A `TaskRecord` is built once, as a pure function, from a draft item; every target maps it to its own fields.
 
 - **Idempotency key.** Every exported task carries the text `bbb:v1:<cycle>:<meeting>:<item>`, parsed and built by `TaskKey`. It is the same for a retry, a restart and a re-export, and different for any other item.
-- **`external_refs`.** The outbox database (schema version 7) gains a table `external_refs (meeting_id, target, ref_key, external_id, url, extra)` that holds where an item or a post lives in a service: `task:<item>` for Notion, `post` for the Discord message. It holds ids and links only, never a secret. The row is written as soon as the page or message exists, before the operation is marked done.
+- **`external_refs`.** The outbox database (schema version 8) gains a table `external_refs (meeting_id, target, ref_key, external_id, url, extra)` that holds where an item or a post lives in a service: `task:<item>` for Notion, `post` for the Discord message. It holds ids and links only, never a secret. The row is written as soon as the page or message exists, before the operation is marked done.
 - **One algorithm, `upsert`.** A stored id is looked up first (live: update; in the trash: reported as removed and never recreated; gone: a permanent error that says the page was deleted or is no longer shared). Without a stored id the key is searched (several hits: the oldest is used and a duplicate count is reported, nothing is deleted). Without a hit the task is created and its id is stored at once. A lost answer or a crash between create and completion therefore never produces a second task.
 - **GitHub.** Issues keep the Stage 5 path unchanged; an adapter implements the same trait so the algorithm is tested against both, and nothing in Stage 5 changes behaviour.
 
@@ -59,7 +59,7 @@ The sum is 309237746688.
 | MENTION_EVERYONE | Needed only to ping roles that are not marked mentionable. `@everyone` and `@here` are neutralised anyway; the documented advice is to make the role mentionable. |
 | EMBED_LINKS | Link previews are suppressed on purpose. |
 
-- **Mentions.** Every message sets `allowed_mentions` explicitly (never the default, which would parse users, roles and everyone), and mentions come only from the participant mapping in `cycle.yaml`.
+- **Mentions.** Every message sets `allowed_mentions` explicitly (never the default, which would parse users, roles and everyone), and mentions come only from the participant mapping in `cycle.yaml` (mapping Discord participants onto global people follows [0026](0026-global-people-and-voice-profiles.md)).
 - **Idempotency of a post.** Each message carries a `nonce` (at most 25 characters, derived from the meeting, the operation and the piece index) and `enforce_nonce: true`, so Discord returns the earlier message instead of a duplicate when an answer was lost. The dedup window is short, so the stored progress (message ids per piece) remains the main protection.
 - **One thread per meeting.** The summary goes to the channel, a public thread is created from that message (the thread id equals the message id; text and announcement channels only, not forum or media channels), and the remaining text, issue links and screenshots go into the thread. A second create for the same message (error 160004) counts as success; an archived thread is unarchived once and retried.
 - **Edit after a correction, in bot mode only.** When a correction is published and the Discord target is a bot, the summary message is edited in place (deterministic re-render plus a "Corrections" block) and one reply is posted in the thread. A bot token cannot edit a webhook message, so webhook mode does not edit in this stage; editing through the webhook's own id and token is possible and is recorded as a later option.

@@ -7,7 +7,7 @@
 //! reference names and public ids (`BBB_RC_NOTION_DB`, `BBB_RC_DISCORD_GUILD`,
 //! `BBB_RC_DISCORD_CHANNEL`).
 //!
-//! What these checks verify from ADR 0020 ("Must be confirmed by the release check on a real
+//! What these checks verify from ADR 0023 ("Must be confirmed by the release check on a real
 //! server"):
 //!
 //! 1. Discord REST `members/search` works with all three privileged intents turned off.
