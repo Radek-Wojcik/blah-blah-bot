@@ -27,6 +27,8 @@ const MEETING: &str = "20261113-140501";
 struct Rig {
     root: PathBuf,
     repos: Arc<Mutex<Vec<CycleRepoSetting>>>,
+    /// The global publish rules of the preferences, as the environment reads them.
+    global: Arc<Mutex<publishers::rules::GlobalPublishRules>>,
     secrets: Arc<MemorySecrets>,
     store: Arc<Mutex<Store>>,
     publishing: Arc<Publishing>,
@@ -53,16 +55,22 @@ impl Rig {
         let repos = Arc::new(Mutex::new(repos));
         let secrets = Arc::new(MemorySecrets::default());
         let (r, root2) = (repos.clone(), root.clone());
-        let env = Arc::new(AppEnv::new(
-            move || r.lock().unwrap().clone(),
-            move || root2.clone(),
-            secrets.clone(),
-        ));
+        let global = Arc::new(Mutex::new(publishers::rules::GlobalPublishRules::default()));
+        let g = global.clone();
+        let env = Arc::new(
+            AppEnv::new(
+                move || r.lock().unwrap().clone(),
+                move || root2.clone(),
+                secrets.clone(),
+            )
+            .with_global_rules(move || *g.lock().unwrap()),
+        );
         let publishing = Publishing::new(store.clone(), env);
         Rig {
             _keep: keep,
             root,
             repos,
+            global,
             secrets,
             store,
             publishing,
@@ -586,7 +594,7 @@ fn the_public_repository_check_holds_when_the_user_switches_a_target_to_automati
     // The default is on-approval: a completed draft publishes nothing by itself.
     assert_eq!(rig.publishing.auto_publish(MEETING).unwrap(), 0);
 
-    crate::cycles::set_target_rule(&repos(), "NOMAD", "github", PublishMode::Auto).unwrap();
+    crate::cycles::set_target_rule(&repos(), "NOMAD", "github", Some(PublishMode::Auto)).unwrap();
     let plan = rig.publishing.plan(MEETING, &github_only()).unwrap();
     assert_eq!(plan.targets[0].mode, Some("auto"));
     // Automatic, but the repository is public and nobody confirmed it: nothing is queued,
@@ -608,10 +616,63 @@ fn the_public_repository_check_holds_when_the_user_switches_a_target_to_automati
     let (off, _lab) = gated(Visibility::Private);
     off.save_draft(&draft());
     let repos = off.repos.lock().unwrap().clone();
-    crate::cycles::set_target_rule(&repos, "NOMAD", "github", PublishMode::Off).unwrap();
+    crate::cycles::set_target_rule(&repos, "NOMAD", "github", Some(PublishMode::Off)).unwrap();
     let err = off.publishing.publish(MEETING, &github_only()).unwrap_err();
     assert_eq!(err.code, "nothing_to_publish");
     assert!(off.ops().is_empty());
+}
+
+#[test]
+fn a_project_without_its_own_rule_publishes_by_the_global_rule() {
+    let (rig, _lab) = gated(Visibility::Private);
+    rig.save_draft(&draft());
+    let repos = || rig.repos.lock().unwrap().clone();
+    // The project's explicit on-approval goes back to "use the global setting".
+    crate::cycles::set_target_rule(&repos(), "NOMAD", "github", None).unwrap();
+    let plan = rig.publishing.plan(MEETING, &github_only()).unwrap();
+    assert_eq!(plan.targets[0].mode, Some("on-approval"));
+    assert_eq!(plan.targets[0].source, "global");
+    assert_eq!(plan.targets[0].global, "on-approval");
+    assert_eq!(rig.publishing.auto_publish(MEETING).unwrap(), 0);
+
+    // The global rule becomes automatic: the same project now publishes by itself.
+    rig.global.lock().unwrap().github = PublishMode::Auto;
+    let plan = rig.publishing.plan(MEETING, &github_only()).unwrap();
+    assert_eq!(plan.targets[0].mode, Some("auto"));
+    assert_eq!(plan.targets[0].source, "global");
+    assert_eq!(plan.targets[0].global, "auto");
+    // The contract the UI reads: every target row carries source and global.
+    let json = serde_json::to_value(&plan).unwrap();
+    for row in json["targets"].as_array().unwrap() {
+        assert!(
+            row["source"].is_string() && row["global"].is_string(),
+            "{row}"
+        );
+    }
+    assert_eq!(json["targets"][0]["global"], "auto");
+    assert_eq!(rig.publishing.auto_publish(MEETING).unwrap(), 2);
+}
+
+#[test]
+fn the_global_off_blocks_inheriting_projects_and_an_explicit_project_rule_still_wins() {
+    let (rig, _lab) = gated(Visibility::Private);
+    rig.save_draft(&draft());
+    let repos = || rig.repos.lock().unwrap().clone();
+    crate::cycles::set_target_rule(&repos(), "NOMAD", "github", None).unwrap();
+    rig.global.lock().unwrap().github = PublishMode::Off;
+    let err = rig.publishing.publish(MEETING, &github_only()).unwrap_err();
+    assert_eq!(err.code, "nothing_to_publish");
+    assert!(rig.ops().is_empty());
+
+    // The project overrides the global off with its own rule.
+    crate::cycles::set_target_rule(&repos(), "NOMAD", "github", Some(PublishMode::OnApproval))
+        .unwrap();
+    let plan = rig.publishing.plan(MEETING, &github_only()).unwrap();
+    assert_eq!(plan.targets[0].mode, Some("on-approval"));
+    assert_eq!(plan.targets[0].source, "project");
+    assert_eq!(plan.targets[0].global, "off");
+    rig.publishing.publish(MEETING, &github_only()).unwrap();
+    assert_eq!(rig.tick().done, 2);
 }
 
 #[test]
@@ -802,7 +863,7 @@ fn a_correction_waits_for_the_user_then_goes_out_as_a_file_and_an_issue_comment(
 fn the_rule_decides_whether_a_correction_is_queued_when_it_is_written() {
     let (rig, lab) = published_rig();
     let repos = rig.repos.lock().unwrap().clone();
-    crate::cycles::set_target_rule(&repos, "NOMAD", "github", PublishMode::Auto).unwrap();
+    crate::cycles::set_target_rule(&repos, "NOMAD", "github", Some(PublishMode::Auto)).unwrap();
     let view = rig
         .publishing
         .add_correction(MEETING, "Automatic.", Some("i1"), None, None)
@@ -813,7 +874,7 @@ fn the_rule_decides_whether_a_correction_is_queued_when_it_is_written() {
     assert!(remote_paths(&lab).contains("corrections.md"));
 
     // Off: written and kept, never published, not even when asked.
-    crate::cycles::set_target_rule(&repos, "NOMAD", "github", PublishMode::Off).unwrap();
+    crate::cycles::set_target_rule(&repos, "NOMAD", "github", Some(PublishMode::Off)).unwrap();
     let view = rig
         .publishing
         .add_correction(MEETING, "Off.", None, None, None)
@@ -850,7 +911,7 @@ fn a_correction_for_a_repository_that_became_public_waits_for_the_confirmation()
 
     // Automatic does not get around it: the note is written, nothing is queued.
     let repos = rig.repos.lock().unwrap().clone();
-    crate::cycles::set_target_rule(&repos, "NOMAD", "github", PublishMode::Auto).unwrap();
+    crate::cycles::set_target_rule(&repos, "NOMAD", "github", Some(PublishMode::Auto)).unwrap();
     let view = rig
         .publishing
         .add_correction(MEETING, "Auto.", None, None, None)
@@ -989,6 +1050,7 @@ fn rig_with_apis(
         _keep: None,
         root,
         repos,
+        global: Default::default(),
         secrets,
         store,
         publishing,
@@ -1007,7 +1069,7 @@ fn notion_export_and_reexport_are_idempotent_preserve_status_and_respect_trash()
         token: "cred:notion/nomad".into(),
         database: DATABASE_ID.into(),
         data_source: None,
-        publish: PublishMode::OnApproval,
+        publish: Some(PublishMode::OnApproval),
         properties: cycle_store::NotionProperties {
             title: "Name".into(),
             key: "BBB key".into(),
@@ -1121,7 +1183,7 @@ fn discord_bot_publishes_with_thread_and_edits_on_correction() {
             thread: true,
             edit_on_correction: true,
         }),
-        publish: PublishMode::OnApproval,
+        publish: Some(PublishMode::OnApproval),
         template: None,
     });
     let (rig, _lab) = rig_with_apis(cycle, None, Some(bot.api_base()));
@@ -1398,7 +1460,7 @@ fn auto_publish_with_a_notion_database_but_no_token_freezes_nothing() {
         token: "cred:notion/nomad".into(),
         database: "0123456789abcdef0123456789abcdef".into(),
         data_source: None,
-        publish: PublishMode::Auto,
+        publish: Some(PublishMode::Auto),
         properties: cycle_store::NotionProperties::default(),
     });
     let (rig, _lab) = Rig::local(Some(cycle));

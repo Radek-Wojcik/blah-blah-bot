@@ -9,7 +9,10 @@
   "$defs": {
     "identifier": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
     "language": { "enum": ["auto", "pl", "en"] },
-    "publish": { "enum": ["auto", "on-approval", "off"] },
+    "publish": {
+      "enum": ["auto", "on-approval", "off"],
+      "description": "When to publish to this target. Optional: when the key is absent the project uses the global rule of Settings > Preferences > When to publish."
+    },
     "credential": {
       "type": "string",
       "description": "Reference to a secret in the Windows Credential Manager, never the secret itself",

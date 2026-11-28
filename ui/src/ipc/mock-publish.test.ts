@@ -198,9 +198,30 @@ describe("plan and the public repository gate", () => {
     await approveAll(b);
     const plan = await b.publishPlan("m5");
     expect(plan.targets).toEqual([
-      { target: "github", mode: "on-approval", available: true, configured: true },
-      { target: "discord", mode: "on-approval", available: true, configured: true },
-      { target: "notion", mode: null, available: false, configured: false },
+      {
+        target: "github",
+        mode: "on-approval",
+        source: "global",
+        global: "on-approval",
+        available: true,
+        configured: true,
+      },
+      {
+        target: "discord",
+        mode: "on-approval",
+        source: "project",
+        global: "on-approval",
+        available: true,
+        configured: true,
+      },
+      {
+        target: "notion",
+        mode: null,
+        source: "global",
+        global: "on-approval",
+        available: false,
+        configured: false,
+      },
     ]);
     expect(plan.summary.commit && plan.summary.pushes).toBe(true);
     expect(plan.summary.files).toContain("transcript.md");
@@ -615,7 +636,8 @@ describe("the publishing rule of a target", () => {
     await b.onCyclesChanged(() => void (changes += 1));
     const targets = await b.setTargetRule("NOMAD", "discord", "auto");
     expect(targets.discord).toMatchObject({ webhook: "cred:discord/nomad", publish: "auto" });
-    expect(targets.github).toMatchObject({ publish: "on-approval", path: "meetings" });
+    expect(targets.github).toMatchObject({ path: "meetings" });
+    expect(targets.github?.publish).toBeUndefined();
     expect(changes).toBe(1);
     const saved = (await b.getCycle("NOMAD")).cycle;
     expect(saved.targets.discord?.publish).toBe("auto");
@@ -678,6 +700,92 @@ describe("the publishing rule of a target", () => {
     const plan = await b.publishPlan("m5");
     expect(plan.summary.statuses).toEqual([]);
     expect(plan.summary.proposalsPending).toBe(3);
+  });
+});
+
+describe("the global publishing rule (BUG-23)", () => {
+  const rule = async (b: Backend, target: "github" | "discord") =>
+    (await b.effectivePublishRules("NOMAD")).find((r) => r.target === target)!;
+
+  it("a project without its own rule follows the global one and an explicit rule overrides it", async () => {
+    const b = fresh();
+    // The demo project follows the global GitHub rule and has its own Discord rule.
+    expect(await rule(b, "github")).toEqual({
+      target: "github",
+      project: null,
+      global: "on-approval",
+      mode: "on-approval",
+      source: "global",
+    });
+    expect((await rule(b, "discord")).source).toBe("project");
+    expect((await b.getSettings()).publishRules).toEqual({
+      github: "on-approval",
+      discord: "on-approval",
+      notion: "on-approval",
+    });
+
+    // Changing the global rule changes the project that inherits it, and only that one.
+    expect(await b.setGlobalPublishRule("github", "auto")).toMatchObject({ github: "auto" });
+    await b.setGlobalPublishRule("discord", "off");
+    expect(await rule(b, "github")).toMatchObject({ mode: "auto", source: "global" });
+    expect(await rule(b, "discord")).toMatchObject({
+      mode: "on-approval",
+      project: "on-approval",
+      global: "off",
+      source: "project",
+    });
+    const plan = await b.publishPlan("m5");
+    expect(plan.targets.map((t) => [t.target, t.mode, t.source, t.global])).toEqual([
+      ["github", "auto", "global", "auto"],
+      ["discord", "on-approval", "project", "off"],
+      ["notion", null, "global", "on-approval"],
+    ]);
+
+    // An explicit rule beats the global one; going back removes the key.
+    await b.setTargetRule("NOMAD", "github", "off");
+    expect(await rule(b, "github")).toMatchObject({ mode: "off", source: "project" });
+    const back = await b.setTargetRule("NOMAD", "github", null);
+    expect(back.github?.publish).toBeUndefined();
+    expect("publish" in (back.github ?? {})).toBe(false);
+    expect(await rule(b, "github")).toMatchObject({ mode: "auto", source: "global" });
+  });
+
+  it("Off as the global rule blocks an inheriting project, also for a click", async () => {
+    const b = fresh();
+    await b.setGlobalPublishRule("github", "off");
+    const plan = await b.publishPlan("m5");
+    expect(plan.targets.find((t) => t.target === "github")).toMatchObject({
+      mode: "off",
+      available: false,
+    });
+    expect(await codeOf(b.publishMeeting("m5", ["github"]))).toBe("nothing_to_publish");
+  });
+
+  it("an unconfigured target stays unavailable whatever the global rule is", async () => {
+    const b = fresh();
+    await b.setGlobalPublishRule("github", "auto");
+    await b.setGlobalPublishRule("notion", "auto");
+    const plan = await b.publishPlan("m5");
+    expect(plan.targets.find((t) => t.target === "notion")).toMatchObject({
+      mode: null,
+      available: false,
+      configured: false,
+    });
+  });
+
+  it("refuses an unknown target or rule, and a missing target keeps inheriting", async () => {
+    const b = fresh();
+    expect(await codeOf(b.setGlobalPublishRule("slack" as never, "auto"))).toBe("invalid");
+    expect(await codeOf(b.setGlobalPublishRule("github", "sometimes" as never))).toBe("invalid");
+    await b.createCycle("PLAIN", "Plain");
+    // Inheriting on a cycle that has no GitHub target writes no target.
+    const t = await b.setTargetRule("PLAIN", "github", null);
+    expect(t.github ?? null).toBeNull();
+    expect(await codeOf(b.setTargetRule("PLAIN", "discord", null))).toBe("no_target");
+    // The effective rules of a cycle without targets still show GitHub, from the global rule.
+    expect((await b.effectivePublishRules("PLAIN")).map((r) => [r.target, r.source])).toEqual([
+      ["github", "global"],
+    ]);
   });
 });
 

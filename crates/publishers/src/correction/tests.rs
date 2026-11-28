@@ -76,6 +76,7 @@ impl Case {
             meeting_id: MEETING,
             meeting_date: "2026-11-13",
             cycle: &self.cycle,
+            global_rules: Default::default(),
             correction: &self.correction,
             repo: &self.repo,
             existing: &self.existing,
@@ -251,7 +252,7 @@ fn bot_mode_with_edit_on_correction_queues_edit_discord() {
             thread: true,
             edit_on_correction: true,
         }),
-        publish: PublishMode::OnApproval,
+        publish: Some(PublishMode::OnApproval),
         template: None,
     });
     case.discord_post_exists = true;

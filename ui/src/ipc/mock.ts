@@ -1475,6 +1475,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       lastReport: cycles.lastReport(),
       bridge: bridge.settings(),
       detection: detection.settings(),
+      publishRules: cycles.globalPublishRules(),
     }),
     // The repository list, the last report and the paired extensions are not saved from the
     // settings screen.
@@ -1721,12 +1722,11 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       }
       if (req.githubRepo && req.githubRepo.trim() !== "") {
         cycles.setGithubRepo(details.repoId, req.githubRepo.trim());
-        cycle.targets.github = { path: "meetings", publish: "on-approval", issues: true };
+        cycle.targets.github = { path: "meetings", issues: true };
       }
       if (req.discordWebhookRef && req.discordWebhookRef.trim() !== "") {
         cycle.targets.discord = {
           webhook: req.discordWebhookRef.trim(),
-          publish: "on-approval",
         };
       }
       const saved = cycles.saveCycle(cycle);
@@ -2268,6 +2268,12 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
       emitCycles();
       return targets;
     },
+    setGlobalPublishRule: async (target, mode) => {
+      const rules = cycles.setGlobalPublishRule(target, mode);
+      emitCycles();
+      return rules;
+    },
+    effectivePublishRules: async (cycleId) => cycles.effectiveRules(cycleId),
     listTemplates: async (cycleId) => cycles.listTemplates(cycleId),
     getTemplate: async (cycleId, name) => cycles.getTemplate(cycleId, name),
     saveTemplate: async (cycleId, template) => {

@@ -32,6 +32,7 @@ import {
   opLocksDraft,
   parseWebhook,
   referenceKindByName,
+  resolvePublishRule,
   tokenProblem,
   webBase,
 } from "../publish";
@@ -884,26 +885,37 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
       targetSecrets.has(cycle?.targets.discord?.webhook?.trim() ?? ""),
     );
     const notionConfigured = Boolean(cycle?.targets.notion?.database?.trim());
-    const github = cycle?.targets.github?.publish ?? "on-approval";
-    const discord = cycle?.targets.discord?.publish ?? null;
-    const notion = cycle?.targets.notion?.publish ?? null;
+    const global = cycles.globalPublishRules();
+    const github = resolvePublishRule(cycle?.targets.github?.publish, global.github);
+    const discord = cycle?.targets.discord
+      ? resolvePublishRule(cycle.targets.discord.publish, global.discord)
+      : null;
+    const notion = cycle?.targets.notion
+      ? resolvePublishRule(cycle.targets.notion.publish, global.notion)
+      : null;
     return [
       {
         target: "github",
-        mode: github,
-        available: githubConfigured && github !== "off",
+        mode: github.mode,
+        source: github.source,
+        global: global.github,
+        available: githubConfigured && github.mode !== "off",
         configured: githubConfigured,
       },
       {
         target: "discord",
-        mode: discord,
-        available: discordConfigured && discord !== null && discord !== "off",
+        mode: discord?.mode ?? null,
+        source: discord?.source ?? "global",
+        global: global.discord,
+        available: discordConfigured && discord !== null && discord.mode !== "off",
         configured: discordConfigured,
       },
       {
         target: "notion",
-        mode: notion,
-        available: notionConfigured && notion !== null && notion !== "off",
+        mode: notion?.mode ?? null,
+        source: notion?.source ?? "global",
+        global: global.notion,
+        available: notionConfigured && notion !== null && notion.mode !== "off",
         configured: notionConfigured,
       },
     ];
@@ -1103,7 +1115,10 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
 
   // ----- corrections -----
   const githubRule = (cycleId: string) =>
-    cycles.cycle(cycleId)?.targets.github?.publish ?? "on-approval";
+    resolvePublishRule(
+      cycles.cycle(cycleId)?.targets.github?.publish,
+      cycles.globalPublishRules().github,
+    ).mode;
 
   function correctionsView(meetingId: string): Corrections {
     const entry = corrections.get(meetingId);

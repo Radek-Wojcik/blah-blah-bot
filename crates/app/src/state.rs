@@ -126,24 +126,33 @@ impl AppState {
             },
         );
         let env_settings = settings.clone();
+        let env_rules = settings.clone();
         let env_app = app.clone();
         let publishing = Publishing::new(
             store.clone(),
-            Arc::new(AppEnv::new(
-                move || {
-                    env_settings
+            Arc::new(
+                AppEnv::new(
+                    move || {
+                        env_settings
+                            .lock()
+                            .map(|s| s.cycle_repos.clone())
+                            .unwrap_or_default()
+                    },
+                    move || {
+                        env_app
+                            .state::<AppState>()
+                            .recordings_root()
+                            .unwrap_or_default()
+                    },
+                    Arc::new(crate::secrets::Credentials),
+                )
+                .with_global_rules(move || {
+                    env_rules
                         .lock()
-                        .map(|s| s.cycle_repos.clone())
+                        .map(|s| s.publish_rules)
                         .unwrap_or_default()
-                },
-                move || {
-                    env_app
-                        .state::<AppState>()
-                        .recordings_root()
-                        .unwrap_or_default()
-                },
-                Arc::new(crate::secrets::Credentials),
-            )),
+                }),
+            ),
         );
         Ok(Self {
             recorder: Recorder::new(store.clone(), backend, demo),

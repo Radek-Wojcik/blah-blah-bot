@@ -308,7 +308,7 @@ impl Lab {
                         thread: options.discord_thread,
                         edit_on_correction: options.discord_edit_on_correction,
                     }),
-                    publish,
+                    publish: Some(publish),
                     template: None,
                 });
             }
@@ -318,7 +318,7 @@ impl Lab {
                 token: NOTION_REF.into(),
                 database: NOTION_DATABASE_ID.into(),
                 data_source: None,
-                publish,
+                publish: Some(publish),
                 properties: NotionProperties {
                     title: "Name".into(),
                     key: "BBB key".into(),

@@ -109,7 +109,8 @@ pub async fn test_discord_webhook(reference: String) -> IpcResult<WebhookCheckDt
 }
 
 /// Sets when a target of a cycle is published (`targets.<target>.publish` of `cycle.yaml`:
-/// `auto`, `on-approval` or `off`) and returns the cycle's targets as saved. Status changes
+/// `auto`, `on-approval` or `off`; no `mode` means "use the global setting") and returns the
+/// cycle's targets as saved. Status changes
 /// are never written back automatically with any value, and the public-repository check
 /// applies to all of them.
 #[tauri::command]
@@ -118,13 +119,40 @@ pub fn set_target_rule(
     state: State<'_, AppState>,
     cycle_id: String,
     target: String,
-    mode: PublishMode,
+    mode: Option<PublishMode>,
 ) -> IpcResult<TargetsDto> {
     let targets = cycles::set_target_rule(&state.cycle_repos(), &cycle_id, &target, mode)?;
     if let Err(e) = app.emit(EVENT_CYCLES, ()) {
         tracing::warn!(error = %e, "could not emit the projects change");
     }
     Ok(targets)
+}
+
+/// Sets the global rule of one target: what it does in every project that has no rule of its
+/// own. Returns the global rules as saved.
+#[tauri::command]
+pub fn set_global_publish_rule(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target: String,
+    mode: PublishMode,
+) -> IpcResult<publishers::rules::GlobalPublishRules> {
+    let rules =
+        state.update_settings(|s| crate::publish_rules::set_global_rule(s, &target, mode))?;
+    if let Err(e) = app.emit(EVENT_CYCLES, ()) {
+        tracing::warn!(error = %e, "could not emit the projects change");
+    }
+    Ok(rules)
+}
+
+/// The rule in force for each target of a cycle and where it comes from (the project's own
+/// rule or the global one).
+#[tauri::command]
+pub fn effective_publish_rules(
+    state: State<'_, AppState>,
+    cycle_id: String,
+) -> IpcResult<Vec<crate::publish_rules::EffectiveRuleDto>> {
+    crate::publish_rules::effective_rules_of(&state.settings()?, &cycle_id)
 }
 
 // ----- Notion and Discord bot setup -------------------------------------------------------

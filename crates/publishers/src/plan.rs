@@ -30,7 +30,7 @@ use store::{ExternalRef, NewOp, OpState, OutboxKind, OutboxOp, OutboxTarget, Ref
 
 use crate::gate::{self, RepoVisibility};
 use crate::github::RepoRef;
-use crate::rules::{PublishTarget, TargetRules, Trigger};
+use crate::rules::{GlobalPublishRules, PublishTarget, TargetRules, Trigger};
 
 /// `op_key` of the commit.
 pub const COMMIT_KEY: &str = "commit";
@@ -213,6 +213,8 @@ pub struct PlanInput<'a> {
     /// The topics of the cycle as they are in this clone.
     pub local_topics: &'a [Topic],
     pub repo: &'a RepoFacts,
+    /// The global rules of the preferences, which a target without its own rule follows.
+    pub global_rules: GlobalPublishRules,
     /// A webhook is stored under the cycle's Discord reference.
     pub discord_webhook_set: bool,
     /// A bot token is stored under the cycle's Discord bot reference.
@@ -500,7 +502,12 @@ pub fn is_unpushed_local_commit(op: &OutboxOp) -> bool {
 
 pub fn build(input: &PlanInput<'_>) -> PublishPlan {
     let github_configured = input.repo.has_remote || input.repo.github.is_some();
-    let rules = TargetRules::for_repo(input.cycle, github_configured, input.discord_webhook_set);
+    let rules = TargetRules::for_repo(
+        input.cycle,
+        &input.global_rules,
+        github_configured,
+        input.discord_webhook_set,
+    );
     let mut plan = PublishPlan {
         rules,
         ops: Vec::new(),

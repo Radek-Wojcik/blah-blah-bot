@@ -392,13 +392,13 @@ impl Rig {
         ];
         dto.targets.github = Some(GithubTargetDto {
             path: DEFAULT_MEETINGS_PATH.to_string(),
-            publish: PublishMode::OnApproval,
+            publish: Some(PublishMode::OnApproval),
             issues: true,
         });
         dto.targets.discord = Some(DiscordTargetDto {
             webhook: Some(webhook_ref.to_string()),
             bot: None,
-            publish: PublishMode::OnApproval,
+            publish: Some(PublishMode::OnApproval),
             template: None,
         });
         let saved = cycles::save_cycle(&repos, &*self.store.lock().unwrap(), dto).unwrap();

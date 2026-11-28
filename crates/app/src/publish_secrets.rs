@@ -1183,7 +1183,7 @@ mod tests {
         cycle.targets.discord = Some(cycle_store::DiscordTarget {
             webhook: Some(reference.into()),
             bot: None,
-            publish: cycle_store::PublishMode::OnApproval,
+            publish: Some(cycle_store::PublishMode::OnApproval),
             template: None,
         });
         repo.save_cycle(&cycle).unwrap();
@@ -1550,7 +1550,7 @@ mod tests {
             token: reference.into(),
             database: database.into(),
             data_source: None,
-            publish: cycle_store::PublishMode::OnApproval,
+            publish: Some(cycle_store::PublishMode::OnApproval),
             properties: cycle_store::NotionProperties::default(),
         });
         repo.save_cycle(&cycle).unwrap();
@@ -1574,7 +1574,7 @@ mod tests {
                 thread,
                 edit_on_correction: true,
             }),
-            publish: cycle_store::PublishMode::OnApproval,
+            publish: Some(cycle_store::PublishMode::OnApproval),
             template: None,
         });
         repo.save_cycle(&cycle).unwrap();

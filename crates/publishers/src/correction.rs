@@ -22,7 +22,7 @@ use store::{NewOp, OpState, OutboxKind, OutboxOp, OutboxTarget};
 
 use crate::gate;
 use crate::plan::{to_json, Block, RepoFacts, COMMIT_KEY, DISCORD_KEY};
-use crate::rules::{PublishTarget, TargetRules, Trigger};
+use crate::rules::{GlobalPublishRules, PublishTarget, TargetRules, Trigger};
 
 /// `op_key` of the file operation of a correction.
 pub fn file_key(correction_id: &str) -> String {
@@ -56,6 +56,8 @@ pub struct CorrectionPlanInput<'a> {
     pub meeting_id: &'a str,
     pub meeting_date: &'a str,
     pub cycle: &'a Cycle,
+    /// The global rules of the preferences, which a target without its own rule follows.
+    pub global_rules: GlobalPublishRules,
     pub correction: &'a Correction,
     pub repo: &'a RepoFacts,
     /// What the outbox already holds for the meeting.
@@ -108,7 +110,7 @@ fn live(op: &OutboxOp) -> bool {
 pub fn build(input: &CorrectionPlanInput<'_>) -> CorrectionPlan {
     let github_configured = input.repo.has_remote || input.repo.github.is_some();
     // Corrections reach Discord only through a bot, so the webhook secret is irrelevant here.
-    let rules = TargetRules::for_repo(input.cycle, github_configured, false);
+    let rules = TargetRules::for_repo(input.cycle, &input.global_rules, github_configured, false);
     let mut plan = CorrectionPlan {
         rules,
         ops: Vec::new(),
