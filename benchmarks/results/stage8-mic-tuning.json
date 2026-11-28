@@ -48,7 +48,7 @@
     "per_minute": 0.323
   },
   "result": "no effect: 5 flags in 15 min in both runs (0.33 per minute; the 10 h soak had 0.32 per minute). Audio stayed continuous in both runs (stored length 900.07 s and 900.00 s, no silence filled, continuity ok, worst packet gap 11.7 and 10.1 ms).",
-  "limits": "One run per condition; with about 5 flags per run a difference of 1 to 2 flags is within noise, but a removal of the flags (the criterion of WP-13) would have shown as 0.",
+  "limits": "One run per condition; with about 5 flags per run a difference of 1 to 2 flags is within noise, but a removal of the flags (the zero-discontinuity criterion) would have shown as 0.",
   "recommendation": "Do not make the tuning the default. Keep it available as an opt-in experiment. Accept rec-dropped for the microphone (driver or USB clock adjustment: flags with no audible or measurable loss, no silence fill, continuous length) with --accepted and document it in LIMITATIONS (done).",
   "pass": false
 }

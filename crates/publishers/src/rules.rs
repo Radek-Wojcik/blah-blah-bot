@@ -540,7 +540,7 @@ targets:
 
     #[test]
     fn an_unconfigured_target_stays_blocked_whatever_the_global_rule_says() {
-        // WP-08a: the global rule never makes an unconfigured target publish.
+        // the global rule never makes an unconfigured target publish.
         let cycle = Cycle::from_yaml_str(
             "id: NOMAD
 name: Nomad

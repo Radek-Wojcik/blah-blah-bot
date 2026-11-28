@@ -670,7 +670,7 @@ fn an_explicit_project_rule_beats_the_global_one_in_the_plan() {
 #[test]
 fn the_global_rule_does_not_publish_to_an_unconfigured_target() {
     use cycle_store::GithubTarget;
-    // WP-08a: no remote and no linked repository means no GitHub publication, whatever the rule.
+    // no remote and no linked repository means no GitHub publication, whatever the rule.
     let mut case = Case::new(cycle(None, None));
     case.cycle.targets.github = Some(GithubTarget::default());
     case.global_rules.github = PublishMode::Auto;
