@@ -207,10 +207,10 @@ $SecretPatterns = [ordered]@{
     "Hugging Face token"  = 'hf_[A-Za-z0-9]{30,}'
     "GitHub token"        = '(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}'
     "API key"             = 'sk-[A-Za-z0-9_-]{24,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}'
-    "private key"         = '-----BEGIN [A-Z ]*PRIVATE KEY-----\s*(?:[A-Za-z-]+:[^\r\n]*\s*)*(?:[A-Za-z0-9+/=]\s*){64,}'
+    "private key"         = '-----BEGIN [A-Z ]*PRIVATE KEY-----(?:\s|\\[rn])*(?:[A-Za-z-]+:[^\r\n]*[\r\n]+(?:\s|\\[rn])*)*(?:[A-Za-z0-9+/=](?:\s|\\[rn])*){64,}'
     "Discord webhook URL" = 'discord(app)?\.com/api/webhooks/\d+/[A-Za-z0-9_-]+'
 }
-$AbsolutePath = '(?i)[A-Za-z]:[\\/]+(Users|Documents and Settings)[\\/]+[^\\/\s"<>|*?]+|(?<![A-Za-z0-9_.-])(?!/users/me/)/(home|Users)/[A-Za-z0-9._-]+/'
+$AbsolutePath = '(?i)[A-Za-z]:[\\/]+(Users|Documents and Settings)[\\/]+[^\\/\s"<>|*?]+|(?<![A-Za-z0-9_.-])(?!(?-i:/users/me/))/(home|Users)/[A-Za-z0-9._-]+/'
 
 function Test-Installer([string]$installer) {
     $problems = New-Object System.Collections.Generic.List[string]
@@ -254,7 +254,7 @@ function Test-Installer([string]$installer) {
         $m = [regex]::Match($text, $AbsolutePath)
         if ($m.Success) { $problems.Add("absolute path in $($f.Path): $($m.Value)") }
         foreach ($kind in $SecretPatterns.Keys) {
-            if ([regex]::IsMatch($text, $SecretPatterns[$kind])) { $problems.Add("$kind found in $($f.Path)") }
+            if ([regex]::IsMatch($text, $SecretPatterns[$kind], [Text.RegularExpressions.RegexOptions]::None, [TimeSpan]::FromMinutes(2))) { $problems.Add("$kind found in $($f.Path)") }
         }
     }
 
@@ -277,7 +277,7 @@ function Test-Installer([string]$installer) {
         $hits = [regex]::Matches($ascii, $AbsolutePath) | ForEach-Object { $_.Value } | Sort-Object -Unique
         foreach ($h in $hits) { $problems.Add("absolute user path in $($f.Path): $h") }
         foreach ($kind in $SecretPatterns.Keys) {
-            if ([regex]::IsMatch($ascii, $SecretPatterns[$kind])) { $problems.Add("$kind found in $($f.Path)") }
+            if ([regex]::IsMatch($ascii, $SecretPatterns[$kind], [Text.RegularExpressions.RegexOptions]::None, [TimeSpan]::FromMinutes(2))) { $problems.Add("$kind found in $($f.Path)") }
         }
     }
     Remove-Item -LiteralPath $verifyDir -Recurse -Force

@@ -314,6 +314,22 @@ class InstallerContentCheck(unittest.TestCase):
         legacy = self.guard("BEGIN", "RSA ") + "\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,AB\n\n"
         self.assertTrue(self.flagged_key(legacy + self.BODY * 2))
 
+    def test_escaped_newlines_and_minimum_body_are_flagged(self) -> None:
+        head = self.guard("BEGIN")
+        backslash_n = chr(92) + "n"  # a literal backslash and n, as in JSON-embedded keys
+        escaped = head + backslash_n + self.BODY + backslash_n + self.BODY + backslash_n
+        self.assertTrue(self.flagged_key(escaped))
+        self.assertTrue(self.flagged_key(head + chr(10) + self.BODY))  # exactly 64 base64 characters
+        self.assertFalse(self.flagged_key(head + chr(10) + self.BODY[:40]))
+
+    def test_header_followed_by_long_noise_does_not_backtrack(self) -> None:
+        import time
+
+        noise = self.guard("BEGIN") + "ab:" * 30000
+        start = time.monotonic()
+        self.assertFalse(self.flagged_key(noise))
+        self.assertLess(time.monotonic() - start, 5.0)
+
     def test_bare_header_in_error_text_is_not_flagged(self) -> None:
         text = f"expected '{self.guard('BEGIN')}' and '{self.guard('END')}' PEM guards"
         self.assertFalse(self.flagged_key(text))
@@ -322,10 +338,10 @@ class InstallerContentCheck(unittest.TestCase):
 
     def test_real_user_paths_are_flagged(self) -> None:
         for path in (
-            r"C:\Users\Radek\project\x.rs",
-            "c:/users/radek/x",
-            "/home/radek/src/x.rs",
-            "/Users/radek/src/x.rs",
+            r"C:\Users\someone\project\x.rs",
+            "c:/users/someone/x",
+            "/home/someone/src/x.rs",
+            "/Users/someone/src/x.rs",
             "/home/me/x",
         ):
             self.assertTrue(self.flagged_path(path), path)
@@ -333,8 +349,8 @@ class InstallerContentCheck(unittest.TestCase):
     def test_notion_api_path_is_not_flagged(self) -> None:
         self.assertFalse(self.flagged_path("/users/me/bot/workspace_name"))
         self.assertFalse(self.flagged_path("/users/me/"))
-        self.assertFalse(self.flagged_path("/USERS/ME/bot"))
-        self.assertTrue(self.flagged_path("/users/me/bot /home/radek/x"))
+        self.assertTrue(self.flagged_path("/Users/me/x"))
+        self.assertTrue(self.flagged_path("/users/me/bot /home/someone/x"))
         self.assertTrue(self.flagged_path("/users/meg/x"))
 
 
