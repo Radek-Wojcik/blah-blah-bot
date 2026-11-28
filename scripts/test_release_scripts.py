@@ -282,5 +282,56 @@ class InstallerMetadata(unittest.TestCase):
         )
 
 
+class InstallerContentCheck(unittest.TestCase):
+    """The secret and absolute-path patterns of build-installer.ps1, run with Python re."""
+
+    SCRIPT = (Path(__file__).resolve().parent / "build-installer.ps1").read_text(encoding="utf-8")
+
+    @classmethod
+    def pattern(cls, name: str) -> str:
+        m = re.search(r"^\s*(?:\$%s|\"%s\")\s*=\s*'(.*)'\s*$" % (name, name), cls.SCRIPT, re.M)
+        assert m, name
+        return m.group(1)
+
+    def flagged_key(self, text: str) -> bool:
+        return re.search(self.pattern("private key"), text) is not None
+
+    def flagged_path(self, text: str) -> bool:
+        return re.search(self.pattern("AbsolutePath"), text) is not None
+
+    BODY = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj"
+
+    def test_real_pem_bodies_are_flagged(self) -> None:
+        for kind in ("", "RSA ", "EC ", "OPENSSH ", "ENCRYPTED "):
+            head = f"-----BEGIN {kind}PRIVATE KEY-----"
+            self.assertTrue(self.flagged_key(f"{head}\n{self.BODY * 2}\n"), kind)
+            self.assertTrue(self.flagged_key(f"{head}\r\n{self.BODY}\r\n{self.BODY}\r\n"), kind)
+        legacy = "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,AB\n\n"
+        self.assertTrue(self.flagged_key(legacy + self.BODY * 2))
+
+    def test_bare_header_in_error_text_is_not_flagged(self) -> None:
+        text = "expected '-----BEGIN PRIVATE KEY-----' and '-----END PRIVATE KEY-----' PEM guards"
+        self.assertFalse(self.flagged_key(text))
+        self.assertFalse(self.flagged_key("-----BEGIN PRIVATE KEY-----"))
+        self.assertFalse(self.flagged_key("-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----"))
+
+    def test_real_user_paths_are_flagged(self) -> None:
+        for path in (
+            r"C:\Users\Radek\project\x.rs",
+            "c:/users/radek/x",
+            "/home/radek/src/x.rs",
+            "/Users/radek/src/x.rs",
+            "/home/me/x",
+        ):
+            self.assertTrue(self.flagged_path(path), path)
+
+    def test_notion_api_path_is_not_flagged(self) -> None:
+        self.assertFalse(self.flagged_path("/users/me/bot/workspace_name"))
+        self.assertFalse(self.flagged_path("/users/me/"))
+        self.assertFalse(self.flagged_path("/USERS/ME/bot"))
+        self.assertTrue(self.flagged_path("/users/me/bot /home/radek/x"))
+        self.assertTrue(self.flagged_path("/users/meg/x"))
+
+
 if __name__ == "__main__":
     unittest.main()
