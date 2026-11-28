@@ -7,7 +7,7 @@
 
 use serde_json::Value;
 
-use crate::http::{is_loopback_host, HttpClient, HttpError, Request};
+use crate::http::{plain_http_allowed, HttpClient, HttpError, Request};
 
 /// Hosts a Discord webhook can live on.
 pub const DISCORD_HOSTS: [&str; 4] = [
@@ -79,8 +79,8 @@ impl Webhook {
             if has_port {
                 return Err("a Discord webhook address has no port".into());
             }
-        } else if !is_loopback_host(&host) {
-            return Err("plain http is only accepted for this machine, use https".into());
+        } else if !plain_http_allowed(&host) {
+            return Err("the webhook address must use https".into());
         }
 
         let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
