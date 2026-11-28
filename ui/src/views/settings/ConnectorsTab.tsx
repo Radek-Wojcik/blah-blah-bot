@@ -4,8 +4,12 @@ import { HelpPopover } from "../../components/HelpPopover";
 import { errorMessage, useCycles } from "../../hooks";
 import type { CycleListItem, ProcessingSettings, PublishingSecrets } from "../../ipc/types";
 import { validateLlmSettings } from "../../llm";
-import { tokenProblem } from "../../publish";
+import { botTokenProblem, notionTokenProblem, safeHttpsUrl, tokenProblem } from "../../publish";
+import { DiscordInviteBox } from "../DiscordInviteBox";
 import type { EditableTabProps } from "../Settings";
+
+const DISCORD_TOKEN_PAGE = safeHttpsUrl("https://discord.com/developers/applications");
+const NOTION_TOKEN_PAGE = safeHttpsUrl("https://www.notion.so/profile/integrations");
 
 interface CheckResult {
   ok: boolean;
@@ -547,13 +551,164 @@ export function ConnectorsTab({ onDirtyChange, registerHandle }: Partial<Editabl
 
       <div className="panel quiet">
         <div className="panel-body">
+          <div
+            className="field-label-row"
+            style={{ marginBottom: 8, justifyContent: "space-between" }}
+          >
+            <span className="field-label-row">
+              <h3 className="sub-head" style={{ margin: 0 }}>
+                Discord Bot Token
+              </h3>
+              <HelpPopover
+                title="Discord Bot Token"
+                recommended="Switch a project's Discord target to Bot mode in Project Settings, then store the token here"
+              >
+                <p>
+                  Bot tokens are stored in <strong>Windows Credential Manager</strong> under a{" "}
+                  <code>cred:discord-bot/…</code> reference and never written to project files or
+                  shown again.
+                </p>
+                <p>Zero privileged intents are required.</p>
+              </HelpPopover>
+            </span>
+            {DISCORD_TOKEN_PAGE && (
+              <a
+                className="btn btn-small btn-ghost"
+                href={DISCORD_TOKEN_PAGE}
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                Open token page
+              </a>
+            )}
+          </div>
+          {secrets ? (
+            <div className="secret-list">
+              {(() => {
+                const bots = secrets.targets.filter((t) => t.kind === "discord-bot");
+                return bots.length === 0 ? (
+                  <p className="empty">
+                    No project uses a Discord bot. Switch a project&apos;s Discord target to Bot
+                    mode in Project Settings, then store its bot token here.
+                  </p>
+                ) : (
+                  bots.map((t) => (
+                    <SecretCard
+                      key={t.reference}
+                      label={`Bot token for ${t.reference}`}
+                      storedText={t.masked ? `Bot token stored: ${t.masked}` : "Bot token stored"}
+                      emptyText={`No bot token stored (used by project ${t.cycleId})`}
+                      isSet={t.set}
+                      placeholder="MTIzNDU2Nzg5MDEyMzQ1Njc4…"
+                      help={`Used by project ${t.cycleId}. Checked before it is stored; the token itself is never shown again.`}
+                      validate={botTokenProblem}
+                      onDraft={onDraft}
+                      onStore={(value) => backend.setTargetSecret(t.reference, value).then(load)}
+                      onClear={() => backend.clearTargetSecret(t.reference).then(load)}
+                      onTest={async () => {
+                        const r = await backend.testDiscordBot(t.cycleId);
+                        const detail =
+                          r.missing.length > 0 && !r.message.includes(r.missing[0])
+                            ? ` Missing permissions: ${r.missing.join(", ")}.`
+                            : "";
+                        return { ok: r.ok, message: `${r.message}${detail}` };
+                      }}
+                      testLabel="Test bot"
+                    />
+                  ))
+                );
+              })()}
+              <DiscordInviteBox />
+            </div>
+          ) : (
+            <p className="person-meta">Loading Discord bot targets…</p>
+          )}
+        </div>
+      </div>
+
+      <div className="panel quiet">
+        <div className="panel-body">
+          <div
+            className="field-label-row"
+            style={{ marginBottom: 8, justifyContent: "space-between" }}
+          >
+            <span className="field-label-row">
+              <h3 className="sub-head" style={{ margin: 0 }}>
+                Notion Integration Token
+              </h3>
+              <HelpPopover
+                title="Notion Integration Token"
+                recommended="Internal integration token shared with your Notion tasks database"
+              >
+                <p>
+                  Notion tokens are stored in <strong>Windows Credential Manager</strong> under a{" "}
+                  <code>cred:notion/…</code> reference and never written to project files or shown
+                  again.
+                </p>
+                <p>
+                  Share your Notion database with the integration (<code>… &gt; Connections</code>)
+                  before inspecting or exporting tasks.
+                </p>
+              </HelpPopover>
+            </span>
+            {NOTION_TOKEN_PAGE && (
+              <a
+                className="btn btn-small btn-ghost"
+                href={NOTION_TOKEN_PAGE}
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                Open token page
+              </a>
+            )}
+          </div>
+          {secrets ? (
+            (() => {
+              const notions = secrets.targets.filter((t) => t.kind === "notion");
+              return notions.length === 0 ? (
+                <p className="empty">
+                  No project exports tasks to Notion. Add a Notion target in Project Settings, then
+                  store its integration token here.
+                </p>
+              ) : (
+                <div className="secret-list">
+                  {notions.map((t) => (
+                    <SecretCard
+                      key={t.reference}
+                      label={`Notion token for ${t.reference}`}
+                      storedText={t.masked ? `Token stored: ${t.masked}` : "Token stored"}
+                      emptyText={`No Notion token stored (used by project ${t.cycleId})`}
+                      isSet={t.set}
+                      placeholder="ntn_…"
+                      help={`Used by project ${t.cycleId}. Share the Notion database with this integration (... > Connections).`}
+                      validate={notionTokenProblem}
+                      onDraft={onDraft}
+                      onStore={(value) => backend.setTargetSecret(t.reference, value).then(load)}
+                      onClear={() => backend.clearTargetSecret(t.reference).then(load)}
+                      onTest={async () => {
+                        const r = await backend.testNotionAccess(t.cycleId);
+                        return { ok: r.ok, message: r.message };
+                      }}
+                      testLabel="Test access"
+                    />
+                  ))}
+                </div>
+              );
+            })()
+          ) : (
+            <p className="person-meta">Loading Notion targets…</p>
+          )}
+        </div>
+      </div>
+
+      <div className="panel quiet">
+        <div className="panel-body">
           <h3 className="sub-head" style={{ marginTop: 0 }}>
-            Discord &amp; Notion targets
+            Discord webhooks
           </h3>
           <p className="notice" style={{ margin: 0 }}>
-            There is no global Discord webhook here. Discord webhooks and Notion database targets
-            are configured per project inside <strong>Project Settings</strong> on the Projects
-            page.
+            There is no global Discord webhook here. Discord webhooks are configured per project
+            inside <strong>Project Settings</strong> on the Projects page.
           </p>
         </div>
       </div>

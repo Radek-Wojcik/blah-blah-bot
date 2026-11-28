@@ -93,6 +93,7 @@ function ProjectPublishRules({ cycle, version }: { cycle: CycleListItem; version
   if (!targets) return error ? <p className="error">{error}</p> : null;
   const github = targets.github?.publish ?? DEFAULT_PUBLISH_RULE.github;
   const discord = targets.discord?.publish ?? null;
+  const notion = targets.notion?.publish ?? null;
 
   return (
     <div className="panel quiet">
@@ -124,6 +125,22 @@ function ProjectPublishRules({ cycle, version }: { cycle: CycleListItem; version
         ) : (
           <p className="target-rule-help">
             No Discord target on this project. Configure Discord inside Project Settings if needed.
+          </p>
+        )}
+        {notion !== null ? (
+          <div className="rule-row">
+            <span className="field-label">Notion</span>
+            <RuleChoice
+              name={`Notion, project ${cycle.name}`}
+              target="notion"
+              value={notion}
+              disabled={busy}
+              onChange={(m) => change("notion", m)}
+            />
+          </div>
+        ) : (
+          <p className="target-rule-help">
+            No Notion target on this project. Configure Notion inside Project Settings if needed.
           </p>
         )}
         {error && (

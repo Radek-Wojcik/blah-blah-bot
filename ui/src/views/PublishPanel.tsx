@@ -37,6 +37,7 @@ import {
   planTopicsSummary,
   publicRepoBlock,
   repoWarning,
+  safeHttpUrl,
   targetsSent,
   topicDifference,
   topicLine,
@@ -62,7 +63,7 @@ export function PublishPanel(props: {
   const { meetingId, cycleId, draftVersion, hasNewDraft } = props;
   const backend = useBackend();
   const outbox = useOutbox();
-  const { topics, reload: reloadFacts } = useCycleFacts(cycleId);
+  const { topics, discordGuildId, reload: reloadFacts } = useCycleFacts(cycleId);
   const [plan, setPlan] = useState<PublishPlan | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -143,13 +144,23 @@ export function PublishPanel(props: {
       .finally(() => setRuleBusy(false));
   };
 
+  const reexportNotion = () => {
+    setError(null);
+    setBusy(true);
+    backend
+      .reexportNotion(meetingId)
+      .then((r) => setPlan(r.plan))
+      .catch((e) => setError(errorMessage(e)))
+      .finally(() => setBusy(false));
+  };
+
   // The topics change when the commit is done.
   const commitId = committedOp(ops)?.id ?? null;
   useEffect(() => {
     if (commitId !== null) reloadFacts();
   }, [commitId, reloadFacts]);
 
-  const targets = chosenTargets(plan, ticked).filter((t) => t !== "notion");
+  const targets = chosenTargets(plan, ticked);
   const publicBlock = publicRepoBlock(plan);
   const needsConfirm = publicBlock !== null && targets.includes("github");
   const blockers = otherBlocks(plan);
@@ -160,6 +171,7 @@ export function PublishPanel(props: {
   // Publishing again is idempotent, but there is nothing to do when everything chosen was sent.
   const sent = targetsSent(ops);
   const allSent = targets.length > 0 && targets.every((t) => sent.has(t));
+  const notionAvailable = plan?.targets.some((t) => t.target === "notion" && t.available) ?? false;
   const canPublish =
     plan !== null &&
     targets.length > 0 &&
@@ -176,6 +188,11 @@ export function PublishPanel(props: {
           {plan?.repo.github && (
             <span className="chip" title="The GitHub repository the report goes to">
               {plan.repo.github} · {plan.repo.visibility}
+            </span>
+          )}
+          {plan?.summary.discordMode === "bot" && (
+            <span className="chip">
+              {plan.summary.discordThread ? "Discord bot · thread" : "Discord bot"}
             </span>
           )}
           {locked && <span className="chip chip-locked">Draft locked</span>}
@@ -204,19 +221,16 @@ export function PublishPanel(props: {
 
         {plan && (
           <ul className="targets-list" aria-label="Targets">
-            {/* Notion has no row until the Stage 7 UI is ported (WP-14c). */}
-            {plan.targets
-              .filter((t) => t.target !== "notion")
-              .map((t) => (
-                <TargetRow
-                  key={t.target}
-                  view={t}
-                  ticked={ticked[t.target]}
-                  onTick={(v) => setTicked({ ...ticked, [t.target]: v })}
-                  onRule={(rule) => setRule(t.target, rule)}
-                  ruleBusy={ruleBusy}
-                />
-              ))}
+            {plan.targets.map((t) => (
+              <TargetRow
+                key={t.target}
+                view={t}
+                ticked={ticked[t.target]}
+                onTick={(v) => setTicked({ ...ticked, [t.target]: v })}
+                onRule={(rule) => setRule(t.target, rule)}
+                ruleBusy={ruleBusy}
+              />
+            ))}
           </ul>
         )}
 
@@ -239,6 +253,32 @@ export function PublishPanel(props: {
             )}
             {/* Once the commit is done the result below shows what it changed. */}
             {!committedOp(ops) && <TopicsPlanView plan={plan.summary.topics ?? null} />}
+            {plan.summary.notion.length > 0 && (
+              <div className="notion-plan">
+                <h4 className="sub-head tight">Planned Notion tasks</h4>
+                <ul className="plan-lines" aria-label="Planned Notion tasks">
+                  {plan.summary.notion.map((n) => {
+                    const existingHref = safeHttpUrl(n.existingUrl);
+                    return (
+                      <li key={n.itemId}>
+                        {n.title}{" "}
+                        {existingHref ? (
+                          <span className="person-meta">
+                            (
+                            <a href={existingHref} target="_blank" rel="noreferrer noopener">
+                              existing page
+                            </a>{" "}
+                            — updated, status kept)
+                          </span>
+                        ) : (
+                          <span className="person-meta">(new page)</span>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
             {pending && <p className="section-hint">{pending}</p>}
             {plan.notes.map((n, i) => (
               <p key={i} className="notice">
@@ -267,11 +307,23 @@ export function PublishPanel(props: {
           >
             Publish
           </button>
+          {locked && notionAvailable && (
+            <button
+              className="btn btn-ghost"
+              type="button"
+              disabled={busy || hasNewDraft}
+              title="Update exported Notion pages with current mapped fields while keeping manual status changes and skipping trashed pages."
+              onClick={reexportNotion}
+            >
+              Re-export tasks
+            </button>
+          )}
         </div>
 
         {ops.length > 0 && (
           <Outbox
             ops={ops}
+            guildId={discordGuildId}
             now={outbox?.nowUnixMs ?? 0}
             offline={(outbox?.offline.length ?? 0) > 0}
             canRetryAny={waiting}
@@ -304,7 +356,12 @@ function TargetRow(props: {
   ruleBusy: boolean;
 }) {
   const { view } = props;
-  const name = view.target === "github" ? "GitHub" : "Discord";
+  const name =
+    view.target === "github" ? "GitHub" : view.target === "discord" ? "Discord" : "Notion";
+  const missingHint =
+    view.target === "notion"
+      ? "The project has no Notion target. Add one in the project settings, under Integrations, then store its integration token in Settings > Connectors."
+      : "The project has no Discord target. Add one in the project settings, under Integrations.";
   return (
     <li className="target-row">
       <label className="check">
@@ -320,9 +377,7 @@ function TargetRow(props: {
         </span>
       </label>
       {view.mode === null ? (
-        <p className="target-rule-help">
-          The project has no Discord target. Add one in the project settings, under Integrations.
-        </p>
+        <p className="target-rule-help">{missingHint}</p>
       ) : (
         <>
           <RuleChoice
@@ -343,6 +398,7 @@ function TargetRow(props: {
 
 function Outbox(props: {
   ops: OutboxOp[];
+  guildId: string | null;
   now: number;
   offline: boolean;
   canRetryAny: boolean;
@@ -374,13 +430,14 @@ function Outbox(props: {
 
 function OpRow(props: {
   op: OutboxOp;
+  guildId: string | null;
   now: number;
   offline: boolean;
   onRetry: (id?: number) => void;
   onCancel: (id: number) => void;
 }) {
   const { op } = props;
-  const link = opLink(op);
+  const link = opLink(op, props.guildId);
   const line = opStatusLine(op, props.now, props.offline);
   return (
     <li className={`op op-${op.state}`}>

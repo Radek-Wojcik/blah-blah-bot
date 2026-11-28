@@ -532,6 +532,12 @@ export function safeHttpUrl(raw: string | null | undefined): string | null {
   }
 }
 
+/** Keeps only `https:` links (for external token/setup pages). */
+export function safeHttpsUrl(raw: string | null | undefined): string | null {
+  const url = safeHttpUrl(raw);
+  return url && url.startsWith("https://") ? url : null;
+}
+
 /** The link an operation produced, with its text, when it has one. */
 export function opLink(
   op: OutboxOp,

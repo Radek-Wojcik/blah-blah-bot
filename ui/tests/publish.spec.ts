@@ -819,3 +819,238 @@ test.describe("corrections to a published meeting", () => {
     });
   });
 });
+
+test.describe("Stage 7: Notion and Discord bot integrations", () => {
+  const NOTION_TOKEN = ["ntn", "demoSecretIntegrationToken0123456789"].join("_");
+  const BOT_TOKEN = [
+    "MTIzNDU2Nzg5MDEyMzQ1Njc4",
+    "Gdemo1",
+    "DemoBotSecretSignature0123456789abcdef",
+  ].join(".");
+
+  const openNomadSettings = async (page: Page, tab: "Integrations" | "People & Glossary") => {
+    await page.getByRole("button", { name: "Project settings" }).click();
+    await page.getByRole("tab", { name: tab }).click();
+  };
+
+  const closeModal = async (page: Page) => {
+    await page.getByRole("button", { name: "Close", exact: true }).first().click();
+  };
+
+  const openOrbitDraftFromProject = async (page: Page) => {
+    await page
+      .getByRole("list", { name: "Meetings list" })
+      .getByRole("listitem")
+      .filter({ hasText: "ORBIT weekly sync" })
+      .getByRole("button", { name: "Open" })
+      .click();
+  };
+
+  test("Notion mapping and idempotent re-export preserve status and skip trashed pages", async ({
+    page,
+  }) => {
+    await page.goto(`${MAIN}&page=project&cycle=NOMAD`);
+    await openNomadSettings(page, "Integrations");
+    await page.getByRole("checkbox", { name: "Export tasks to a Notion database" }).check();
+    await page.getByRole("button", { name: "Notion details" }).click();
+    await page.getByLabel("Database id").fill("0123456789abcdef0123456789abcdef");
+    await page.getByRole("button", { name: "Save project settings" }).click();
+    await expect(
+      page.getByRole("status").filter({ hasText: "Project settings saved." }),
+    ).toBeVisible();
+    await closeModal(page);
+
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("tab", { name: "Connectors" }).click();
+    const notionForm = page.getByRole("form", { name: "Notion token for cred:notion/nomad" });
+    await notionForm.getByLabel("Notion token for cred:notion/nomad").fill(NOTION_TOKEN);
+    await notionForm.getByRole("button", { name: "Store" }).click();
+    await expect(notionForm).toContainText("Token stored: ntn_...6789");
+
+    await page.getByRole("button", { name: "Projects", exact: true }).click();
+    await page
+      .getByRole("article", { name: /Project .*NOMAD/i })
+      .getByRole("button", { name: "Open project" })
+      .click();
+    await openNomadSettings(page, "Integrations");
+    await page.getByRole("button", { name: "Notion details" }).click();
+    await page.getByRole("button", { name: "Inspect database & auto-map" }).click();
+    await expect(
+      page.getByText(/Connected to Notion as "Nomad notes": database "Tasks"/),
+    ).toBeVisible();
+    await expect(page.getByLabel("Notion Task title property")).toHaveValue("Name");
+    await expect(page.getByLabel("Notion Key (idempotency) property")).toHaveValue("BBB key");
+    await expect(page.getByLabel("Notion Status property")).toHaveValue("Status");
+    await expect(page.getByLabel("Notion initial status value")).toHaveValue("Not started");
+    await page.getByRole("button", { name: "Save project settings" }).click();
+    await expect(
+      page.getByRole("status").filter({ hasText: "Project settings saved." }),
+    ).toBeVisible();
+    await closeModal(page);
+
+    await openOrbitDraftFromProject(page);
+    await expect(panel(page).getByRole("checkbox", { name: /Publish to Notion/ })).toBeChecked();
+    const plannedNotion = panel(page).getByRole("list", { name: "Planned Notion tasks" });
+    await expect(plannedNotion.getByRole("listitem")).toHaveCount(4);
+
+    await publishConfirmed(page);
+    await expect(panel(page).getByText("Published: everything was sent.")).toBeVisible({
+      timeout: 20_000,
+    });
+    const outbox = panel(page).getByRole("list", { name: "Outbox" });
+    await expect(outbox.getByRole("link", { name: "Notion page" })).toHaveCount(4);
+
+    const firstExport = await hooks(page, (h) => h.notionPages());
+    expect(firstExport).toHaveLength(4);
+    expect(firstExport[0].status).toBe("Not started");
+
+    await hooks(page, (h) => {
+      const pages = h.notionPages();
+      h.setNotionProperty(pages[0].id, "Status", "In progress");
+      h.trashNotionPage(pages[1].id);
+    });
+
+    await panel(page).getByRole("button", { name: "Re-export tasks" }).click();
+    await expect(
+      panel(page).getByText("Updated the existing page (status kept).").first(),
+    ).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(
+      panel(page).getByText("Page was moved to the trash in Notion; left alone and not recreated."),
+    ).toBeVisible();
+
+    const afterReexport = await hooks(page, (h) => h.notionPages());
+    expect(afterReexport).toHaveLength(4);
+    expect(afterReexport[0].status).toBe("In progress");
+    expect(afterReexport[1].trashed).toBe(true);
+  });
+
+  test("Discord member search maps a participant and manual ID entry still works", async ({
+    page,
+  }) => {
+    await page.goto(`${MAIN}&page=project&cycle=NOMAD`);
+    await openNomadSettings(page, "Integrations");
+    await page.getByRole("button", { name: "Discord details" }).click();
+    await page
+      .getByRole("radiogroup", { name: "Discord delivery mode" })
+      .getByRole("radio", { name: "Bot" })
+      .click();
+    await page.getByLabel("Server (guild) id").fill("111111111111111111");
+    await page.getByLabel("Channel id").fill("222222222222222222");
+    await page.getByRole("button", { name: "Save project settings" }).click();
+    await expect(
+      page.getByRole("status").filter({ hasText: "Project settings saved." }),
+    ).toBeVisible();
+    await closeModal(page);
+
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("tab", { name: "Connectors" }).click();
+    const botForm = page.getByRole("form", { name: "Bot token for cred:discord-bot/nomad" });
+    await botForm.getByLabel("Bot token for cred:discord-bot/nomad").fill(BOT_TOKEN);
+    await botForm.getByRole("button", { name: "Store" }).click();
+    await expect(botForm).toContainText("Bot token stored: bot MTIz...");
+
+    await page.getByRole("button", { name: "Projects", exact: true }).click();
+    await page
+      .getByRole("article", { name: /Project .*NOMAD/i })
+      .getByRole("button", { name: "Open project" })
+      .click();
+    await openNomadSettings(page, "Integrations");
+    await page.getByRole("button", { name: "Discord details" }).click();
+    await page.getByRole("button", { name: "Check channel & permissions" }).click();
+    await expect(
+      page.getByText('Connected as "Nomad notes" to #meetings in Nomad team.'),
+    ).toBeVisible();
+
+    await page.getByRole("tab", { name: "People & Glossary" }).click();
+    await page.getByRole("button", { name: "Search Discord for Alex Demo" }).click();
+    const picker = page.locator('[aria-label="Participant 1 Discord search"]');
+    await picker.getByLabel("Participant 1 Discord member search").fill("al");
+    await picker.getByRole("button", { name: "Search", exact: true }).click();
+    const results = page.getByRole("list", { name: "Participant 1 Discord member results" });
+    await expect(results).toContainText("Alex (@alex_demo)");
+    await results.getByRole("button", { name: /Alex \(@alex_demo\)/ }).click();
+
+    await expect(page.getByLabel("Participant 1 Discord kind")).toHaveValue("user");
+    await expect(page.getByLabel("Participant 1 Discord id")).toHaveValue("000000000000000001");
+
+    // Manual ID entry remains available alongside the picker.
+    await page.getByLabel("Participant 1 Discord id").fill("000000000000000099");
+    await page.getByRole("button", { name: "Save project settings" }).click();
+    await expect(
+      page.getByRole("status").filter({ hasText: "Project settings saved." }),
+    ).toBeVisible();
+    await expect(page.getByLabel("Participant 1 Discord id")).toHaveValue("000000000000000099");
+  });
+
+  test("Discord bot posts with a thread and edits the summary after a correction", async ({
+    page,
+  }) => {
+    await page.goto(`${MAIN}&page=project&cycle=NOMAD`);
+    await openNomadSettings(page, "Integrations");
+    await page.getByRole("button", { name: "Discord details" }).click();
+    await page
+      .getByRole("radiogroup", { name: "Discord delivery mode" })
+      .getByRole("radio", { name: "Bot" })
+      .click();
+    await page.getByLabel("Server (guild) id").fill("111111111111111111");
+    await page.getByLabel("Channel id").fill("222222222222222222");
+    await page.getByRole("button", { name: "Save project settings" }).click();
+    await expect(
+      page.getByRole("status").filter({ hasText: "Project settings saved." }),
+    ).toBeVisible();
+    await closeModal(page);
+
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("tab", { name: "Connectors" }).click();
+    const botForm = page.getByRole("form", { name: "Bot token for cred:discord-bot/nomad" });
+    await botForm.getByLabel("Bot token for cred:discord-bot/nomad").fill(BOT_TOKEN);
+    await botForm.getByRole("button", { name: "Store" }).click();
+    await expect(botForm).toContainText("Bot token stored: bot MTIz...");
+
+    await page.getByRole("button", { name: "Projects", exact: true }).click();
+    await page
+      .getByRole("article", { name: /Project .*NOMAD/i })
+      .getByRole("button", { name: "Open project" })
+      .click();
+    await openOrbitDraftFromProject(page);
+    await expect(panel(page)).toContainText("Discord bot · thread");
+    await expect(panel(page).getByRole("list", { name: "What will happen" })).toContainText(
+      "Post the summary to Discord through the bot, with the issue links and the screenshots in a thread.",
+    );
+
+    await publishConfirmed(page);
+    await expect(panel(page).getByText("Published: everything was sent.")).toBeVisible({
+      timeout: 20_000,
+    });
+    const outbox = panel(page).getByRole("list", { name: "Outbox" });
+    await expect(outbox.getByText("Posted through the bot with a thread.")).toBeVisible();
+    await expect(outbox.getByRole("link", { name: "Discord thread" })).toHaveAttribute(
+      "href",
+      /https:\/\/discord\.com\/channels\/111111111111111111\//,
+    );
+
+    const corrections = page.getByRole("region", { name: "Corrections" });
+    await corrections.getByRole("button", { name: "Add correction" }).click();
+    const form = corrections.getByRole("form", { name: "New correction" });
+    await form.getByLabel("Correction text").fill("The test window moved to Monday morning.");
+    await form.getByRole("button", { name: "Add correction" }).click();
+
+    const row = corrections.getByRole("listitem", { name: "Correction c1" });
+    await row.getByRole("button", { name: "Publish correction c1" }).click();
+    await expect(row).toContainText("Discord summary edited and replied in the thread.", {
+      timeout: 20_000,
+    });
+    await expect(row).toContainText("Discord edited");
+    await expect(row.getByRole("link", { name: "Discord thread" })).toHaveAttribute(
+      "href",
+      /https:\/\/discord\.com\/channels\/111111111111111111\//,
+    );
+
+    const messages = await hooks(page, (h) => h.discordBotMessages());
+    expect(messages[0].content).toContain("Corrections:");
+    expect(messages[0].content).toContain("The test window moved to Monday morning.");
+    expect(messages.at(-1)?.content).toContain("The test window moved to Monday morning.");
+  });
+});
