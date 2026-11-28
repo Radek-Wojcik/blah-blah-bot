@@ -11,6 +11,7 @@ mod cycles;
 mod detection;
 mod downloads;
 mod draft_commands;
+mod github_connect;
 mod hotkeys;
 mod ipc;
 mod issue_sync;
@@ -319,6 +320,10 @@ pub fn run() {
             publish_commands::publishing_secrets,
             publish_commands::set_github_token,
             publish_commands::clear_github_token,
+            github_connect::github_connect_status,
+            github_connect::github_device_start,
+            github_connect::github_device_poll,
+            github_connect::github_device_cancel,
             publish_commands::test_github_access,
             publish_commands::set_github_repo,
             publish_commands::set_target_rule,

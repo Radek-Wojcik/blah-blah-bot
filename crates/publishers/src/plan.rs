@@ -392,8 +392,6 @@ pub struct PlanSummary {
 pub enum Block {
     /// The repository is public or its visibility is unknown, and not confirmed.
     PublicRepoUnconfirmed { visibility: String },
-    /// A Discord post was asked for and no webhook is stored for the reference.
-    DiscordWebhookMissing,
     /// A Discord bot post or edit was asked for and no bot token is stored for the reference.
     DiscordBotTokenMissing,
     /// A Notion export was asked for and no integration token is stored for the reference.
@@ -409,7 +407,6 @@ impl Block {
     pub fn code(&self) -> &'static str {
         match self {
             Self::PublicRepoUnconfirmed { .. } => gate::PUBLIC_REPO_CODE,
-            Self::DiscordWebhookMissing => "discord_webhook_missing",
             Self::DiscordBotTokenMissing => "discord_bot_token_missing",
             Self::NotionTokenMissing => "notion_token_missing",
             Self::NothingToPublish => "nothing_to_publish",
@@ -422,10 +419,6 @@ impl Block {
             Self::PublicRepoUnconfirmed { visibility } => format!(
                 "the repository is {visibility}, so what is published is visible to everybody: confirm publishing to it first"
             ),
-            Self::DiscordWebhookMissing => {
-                "no Discord webhook is stored for this cycle: add it in the publishing settings"
-                    .into()
-            }
             Self::DiscordBotTokenMissing => {
                 "no Discord bot token is stored for this cycle: add it in the publishing settings"
                     .into()
@@ -819,12 +812,8 @@ pub fn build(input: &PlanInput<'_>) -> PublishPlan {
                     after_op_key: after_commit,
                 });
             }
-            Some((_, DiscordMode::Webhook(_))) if explicit => {
-                plan.blocks.push(Block::DiscordWebhookMissing);
-            }
-            Some((_, DiscordMode::Webhook(_))) => plan
-                .notes
-                .push("no Discord webhook is stored: the message is not posted".into()),
+            // A webhook without a stored secret is an unconfigured target: `wants` is false.
+            Some((_, DiscordMode::Webhook(_))) => {}
             Some((target, DiscordMode::Bot(bot))) if input.discord_bot_token_set => {
                 if !github && !live_commit && rules.github != PublishMode::Off {
                     plan.notes.push(

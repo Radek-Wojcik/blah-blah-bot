@@ -244,6 +244,15 @@ describe("outbox", () => {
     ).toBe(true);
   });
 
+  it("does not count a commit that stayed on this computer as sent", () => {
+    const local = op(1, { kind: "commit_meeting", state: "done", result: { pushed: false } });
+    expect(targetsSent([local]).has("github")).toBe(false);
+    expect(committedOp([local])).toBeNull();
+    const pushed = op(1, { kind: "commit_meeting", state: "done", result: { pushed: true } });
+    expect(targetsSent([pushed]).has("github")).toBe(true);
+    expect(committedOp([pushed])?.id).toBe(1);
+  });
+
   it("treats a Discord webhook as configured only when its secret is stored", () => {
     expect(isDiscordConfigured(undefined, true)).toBe(false);
     expect(isDiscordConfigured({ webhook: "cred:discord/x" }, false)).toBe(false);
@@ -419,12 +428,12 @@ describe("plan", () => {
     const blocked = plan({
       blocks: [
         { code: "public_repo_unconfirmed", message: "public", visibility: "public" },
-        { code: "discord_webhook_missing", message: "no webhook", visibility: null },
+        { code: "discord_bot_token_missing", message: "no token", visibility: null },
       ],
     });
     expect(publicRepoBlock(blocked)?.visibility).toBe("public");
     expect(blockOf(blocked, "nothing_to_publish")).toBeNull();
-    expect(otherBlocks(blocked).map((b) => b.code)).toEqual(["discord_webhook_missing"]);
+    expect(otherBlocks(blocked).map((b) => b.code)).toEqual(["discord_bot_token_missing"]);
     expect(publicRepoBlock(null)).toBeNull();
     expect(pendingStatusNote(plan())).toBe(
       "2 status changes are not approved and will not be written back.",

@@ -636,8 +636,9 @@ impl Publishing {
                 ),
             }
         }
-        // Always tell the screen: even a partial clean-up changed the outbox.
-        self.env.outbox_changed();
+        if cancelled > 0 {
+            self.env.outbox_changed();
+        }
         Ok(cancelled)
     }
 

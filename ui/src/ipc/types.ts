@@ -253,6 +253,10 @@ export type IpcErrorCode =
   | "busy"
   | "invalid_state"
   | "secrets"
+  /** GitHub sign-in (device flow): no client id in this build. */
+  | "not_configured"
+  /** GitHub refused or could not be reached during the sign-in. */
+  | "github"
   /** The desktop capture of the screenshot overlay is black or fully transparent. */
   | "blank_capture"
   // Stage 4: cycles, report modes, language-model backends and drafts.
@@ -274,7 +278,6 @@ export type IpcErrorCode =
   | "published"
   /** The repository is public (or its visibility is unknown) and the user has not confirmed it. */
   | "public_repo_unconfirmed"
-  | "discord_webhook_missing"
   | "nothing_to_publish"
   /** A newer draft waits for a decision. */
   | "new_draft_pending"
@@ -1140,6 +1143,29 @@ export interface PublishingSecrets {
   targets: TargetSecret[];
 }
 
+/** Whether "Connect account" (the GitHub device flow) is available in this build. */
+export interface GithubConnectStatus {
+  configured: boolean;
+}
+
+/** What to show while the person approves in the browser. The device code stays in the backend. */
+export interface GithubDeviceStart {
+  userCode: string;
+  verificationUri: string;
+  /** Seconds between polls. */
+  interval: number;
+  /** Seconds until the code stops working. */
+  expiresIn: number;
+}
+
+/** One poll of the connection in progress. No token is ever part of it. */
+export type GithubDevicePoll =
+  | { state: "pending" }
+  | { state: "slowDown"; interval: number }
+  | { state: "denied" }
+  | { state: "expired" }
+  | { state: "connected"; login: string | null };
+
 /** An expected failure is a result with a message, not an error. */
 export interface GithubAccess {
   ok: boolean;
@@ -1260,7 +1286,6 @@ export interface PlanSummary {
 
 export type PlanBlockCode =
   | "public_repo_unconfirmed"
-  | "discord_webhook_missing"
   | "discord_bot_token_missing"
   | "notion_token_missing"
   | "nothing_to_publish"

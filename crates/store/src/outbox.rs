@@ -154,7 +154,9 @@ impl OpState {
         }
     }
 
-    /// Whether the machine has an edge from `self` to `to`. `Done` and `Cancelled` are final.
+    /// Whether the machine has an edge from `self` to `to`. `Done` and `Cancelled` are final for
+    /// the machine; only [`Store::supersede_done_op`] turns a done operation into a cancelled one
+    /// (a commit that stayed on this computer), outside this graph.
     pub fn can_become(self, to: OpState) -> bool {
         matches!(
             (self, to),
