@@ -23,16 +23,19 @@ import type {
   DetectedModels,
   DiscordBotCheck,
   DiscordBotTarget,
+  GlobalPublishRules,
   LanguageSetting,
   ProjectPrefs,
   PublishingSecrets,
   ReportMode,
 } from "../ipc/types";
 import {
-  DEFAULT_PUBLISH_RULE,
+  DEFAULT_GLOBAL_RULES,
   UNCONFIGURED_TARGET_HINT,
+  inheritOf,
   isDiscordConfigured,
   parseWebhook,
+  resolvePublishRule,
 } from "../publish";
 import { MODE_HELP, MODE_NAMES, REPORT_MODES } from "../report-gate";
 import { DeleteProjectSection } from "./DeleteProjectSection";
@@ -98,6 +101,8 @@ export function ProjectSettingsModal({
 
   const [repos, setRepos] = useState<CycleRepoView[]>([]);
   const [secrets, setSecrets] = useState<PublishingSecrets | null>(null);
+  /** The global "When to publish" rules of the preferences, which a project follows by default. */
+  const [globalRules, setGlobalRules] = useState<GlobalPublishRules>(DEFAULT_GLOBAL_RULES);
   /** The repositories and secrets are loaded: until then the configured state is unknown. */
   const [integrationsLoaded, setIntegrationsLoaded] = useState(false);
   const integrationsSeq = useRef(0);
@@ -136,11 +141,16 @@ export function ProjectSettingsModal({
   const loadIntegrations = useCallback(
     (repoId?: string) => {
       const seq = ++integrationsSeq.current;
-      void Promise.all([backend.listCycleRepos(), backend.publishingSecrets()])
-        .then(([repoList, sec]) => {
+      void Promise.all([
+        backend.listCycleRepos(),
+        backend.publishingSecrets(),
+        backend.getSettings().catch(() => null),
+      ])
+        .then(([repoList, sec, prefs]) => {
           if (seq !== integrationsSeq.current) return;
           setRepos(repoList);
           setSecrets(sec);
+          if (prefs?.publishRules) setGlobalRules(prefs.publishRules);
           setIntegrationsLoaded(true);
           if (repoId) {
             const match = repoList.find((r) => r.id === repoId);
@@ -1126,9 +1136,7 @@ export function ProjectSettingsModal({
                       checked={github != null}
                       onChange={(e) =>
                         setTargets({
-                          github: e.target.checked
-                            ? { path: "meetings", publish: DEFAULT_PUBLISH_RULE.github }
-                            : null,
+                          github: e.target.checked ? { path: "meetings" } : null,
                         })
                       }
                     />
@@ -1248,7 +1256,10 @@ export function ProjectSettingsModal({
                           <RuleChoice
                             name="GitHub"
                             target="github"
-                            value={github.publish ?? DEFAULT_PUBLISH_RULE.github}
+                            value={resolvePublishRule(github.publish, globalRules.github).mode}
+                            inherit={inheritOf(github.publish, globalRules.github, () =>
+                              setTargets({ github: { ...github, publish: undefined } }),
+                            )}
                             disabled={!integrationsLoaded}
                             disabledReason={
                               !integrationsLoaded || currentRepo?.remote || currentRepo?.githubRepo
@@ -1290,7 +1301,6 @@ export function ProjectSettingsModal({
                           discord: e.target.checked
                             ? {
                                 webhook: `cred:discord/${cycle.id.toLowerCase()}`,
-                                publish: DEFAULT_PUBLISH_RULE.discord,
                               }
                             : null,
                         });
@@ -1544,7 +1554,10 @@ export function ProjectSettingsModal({
                       <RuleChoice
                         name="Discord"
                         target="discord"
-                        value={discordRef.publish ?? DEFAULT_PUBLISH_RULE.discord}
+                        value={resolvePublishRule(discordRef.publish, globalRules.discord).mode}
+                        inherit={inheritOf(discordRef.publish, globalRules.discord, () =>
+                          setTargets({ discord: { ...discordRef, publish: undefined } }),
+                        )}
                         disabled={!integrationsLoaded}
                         disabledReason={
                           !integrationsLoaded || isDiscordConfigured(discordRef, isWebhookSet)
@@ -1579,7 +1592,6 @@ export function ProjectSettingsModal({
                             ? {
                                 token: `cred:notion/${slug}`,
                                 database: "",
-                                publish: DEFAULT_PUBLISH_RULE.notion,
                                 properties: { title: "Name", key: "BBB key" },
                               }
                             : null,
@@ -1603,6 +1615,8 @@ export function ProjectSettingsModal({
                     <NotionTargetFields
                       cycleId={cycleId}
                       notion={notion}
+                      globalRule={globalRules.notion}
+                      rulesLoading={!integrationsLoaded}
                       connectionDirty={notionConnectionDirty}
                       issues={issues}
                       onChange={(next) => setTargets({ notion: next })}

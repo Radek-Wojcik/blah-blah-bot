@@ -210,6 +210,52 @@ describe("when to publish (Preferences tab)", () => {
     expect(checked(github())).toEqual(["Off"]);
   });
 
+  it("explains that the rules are global defaults and shows the global rules as switches", async () => {
+    await mount(createMockBackend({ clockRate: 0 }), "preferences");
+    expect(host.textContent).toContain("This is the default for every project");
+    expect(host.textContent).toContain("Use global setting");
+    const global = group("GitHub, all projects publishing rule");
+    expect(checked(global)).toEqual(["On approval"]);
+    expect(checked(group("Notion, all projects publishing rule"))).toEqual(["On approval"]);
+  });
+
+  it("a global change is saved at once and moves every project that follows it", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    const set = vi.spyOn(backend, "setGlobalPublishRule");
+    await mount(backend, "preferences");
+    await click(radio(group("GitHub, all projects publishing rule"), "Automatic"));
+    expect(set).toHaveBeenCalledWith("github", "auto");
+    expect((await backend.getSettings()).publishRules?.github).toBe("auto");
+    // Nomad follows the global GitHub rule: its switch shows the new rule, marked as global.
+    const project = group("GitHub, project Nomad rover publishing rule");
+    expect(checked(project)).toEqual(["Automatic"]);
+    expect(host.textContent).toContain("Use global setting (currently: Automatic)");
+    // Its Discord rule is its own, so the global Discord rule does not move it.
+    await click(radio(group("Discord, all projects publishing rule"), "Off"));
+    expect(checked(group("Discord, project Nomad rover publishing rule"))).toEqual(["On approval"]);
+  });
+
+  it("a project overrides the global rule and can go back to it", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    const set = vi.spyOn(backend, "setTargetRule");
+    await mount(backend, "preferences");
+    const box = (name: string) =>
+      host.querySelector<HTMLInputElement>(`input[aria-label="${name}: use global setting"]`)!;
+    const github = () => group("GitHub, project Nomad rover publishing rule");
+    expect(box("GitHub, project Nomad rover").checked).toBe(true);
+    await click(radio(github(), "Off"));
+    expect(set).toHaveBeenLastCalledWith("NOMAD", "github", "off");
+    expect(box("GitHub, project Nomad rover").checked).toBe(false);
+    expect(host.textContent).toContain("set for this project only");
+    // Discord of this project has its own rule from the start.
+    expect(box("Discord, project Nomad rover").checked).toBe(false);
+    await click(box("GitHub, project Nomad rover"));
+    expect(set).toHaveBeenLastCalledWith("NOMAD", "github", null);
+    expect(box("GitHub, project Nomad rover").checked).toBe(true);
+    expect(checked(github())).toEqual(["On approval"]);
+    expect((await backend.getCycle("NOMAD")).cycle.targets.github?.publish).toBeUndefined();
+  });
+
   it("offers no Discord switch for a project without a Discord target", async () => {
     const backend = createMockBackend({ clockRate: 0 });
     await backend.createCycle("PLAIN", "Plain project");

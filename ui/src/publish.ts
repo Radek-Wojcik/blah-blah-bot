@@ -4,6 +4,7 @@ import type {
   CycleTask,
   CycleTasks,
   DiscordMember,
+  GlobalPublishRules,
   NotionMappingProblem,
   NotionProperties,
   NotionPropertyType,
@@ -19,6 +20,7 @@ import type {
   PublishMode,
   PublishPlan,
   PublishTargetName,
+  RuleSource,
   StatusProposal,
   Topic,
   TopicConflictDetail,
@@ -67,6 +69,34 @@ export const DEFAULT_PUBLISH_RULE: Record<PublishTargetName, PublishMode> = {
   discord: "on-approval",
   notion: "on-approval",
 };
+
+/**
+ * The rule in force: the project's own `publish` when it has one, otherwise the global rule.
+ * Mirrors `resolve_rule` of the backend, which decides for publishing and for saved projects
+ * (`effectivePublishRules`); the UI only needs it for a draft that is not saved yet.
+ */
+export function resolvePublishRule(
+  project: PublishMode | null | undefined,
+  global: PublishMode,
+): { mode: PublishMode; source: RuleSource } {
+  return project ? { mode: project, source: "project" } : { mode: global, source: "global" };
+}
+
+/** The global rules until the user changes them (the same constants as the backend's defaults). */
+export const DEFAULT_GLOBAL_RULES: GlobalPublishRules = {
+  github: "on-approval",
+  discord: "on-approval",
+  notion: "on-approval",
+};
+
+/** The `inherit` prop of `RuleChoice` for a project value that may be absent. */
+export function inheritOf(
+  project: PublishMode | null | undefined,
+  global: PublishMode,
+  onInherit: () => void,
+): { global: PublishMode; source: RuleSource; onInherit: () => void } {
+  return { global, source: resolvePublishRule(project, global).source, onInherit };
+}
 
 export const RULE_SHORT: Record<PublishMode, string> = {
   off: "Off",

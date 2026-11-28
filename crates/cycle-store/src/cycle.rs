@@ -80,26 +80,14 @@ impl Default for Report {
     }
 }
 
-/// What `targets.github.publish` is when the cycle does not set it: the report, the transcript
-/// and the issues wait for the user to press Publish. The one place that decides it; the
-/// parser and the publishing rules both read it.
+/// What the global GitHub rule is until the user changes it in the preferences: the report,
+/// the transcript and the issues wait for the user to press Publish. A target without its own
+/// `publish` key inherits the global rule, so this is the rule such a target has until then.
 pub const DEFAULT_GITHUB_PUBLISH: PublishMode = PublishMode::OnApproval;
-/// What `targets.discord.publish` is when the cycle does not set it.
+/// What the global Discord rule is until the user changes it.
 pub const DEFAULT_DISCORD_PUBLISH: PublishMode = PublishMode::OnApproval;
-/// What `targets.notion.publish` is when the cycle does not set it.
+/// What the global Notion rule is until the user changes it.
 pub const DEFAULT_NOTION_PUBLISH: PublishMode = PublishMode::OnApproval;
-
-fn default_github_publish() -> PublishMode {
-    DEFAULT_GITHUB_PUBLISH
-}
-
-fn default_discord_publish() -> PublishMode {
-    DEFAULT_DISCORD_PUBLISH
-}
-
-fn default_notion_publish() -> PublishMode {
-    DEFAULT_NOTION_PUBLISH
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -115,8 +103,9 @@ pub enum PublishMode {
 pub struct GithubTarget {
     #[serde(default = "default_github_path")]
     pub path: String,
-    #[serde(default = "default_github_publish")]
-    pub publish: PublishMode,
+    /// `None` (the key is absent): use the global rule of the preferences.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publish: Option<PublishMode>,
     /// Create GitHub issues for task items and write back status changes. Left out of the
     /// file while true, so existing files keep their bytes.
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
@@ -188,7 +177,7 @@ impl Default for GithubTarget {
     fn default() -> Self {
         Self {
             path: default_github_path(),
-            publish: DEFAULT_GITHUB_PUBLISH,
+            publish: None,
             issues: true,
         }
     }
@@ -204,8 +193,9 @@ pub struct DiscordTarget {
     /// Post through a bot instead of a webhook.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bot: Option<DiscordBot>,
-    #[serde(default = "default_discord_publish")]
-    pub publish: PublishMode,
+    /// `None` (the key is absent): use the global rule of the preferences.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publish: Option<PublishMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template: Option<String>,
 }
@@ -259,8 +249,9 @@ pub struct NotionTarget {
     /// The data source id; needed when the database has more than one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_source: Option<String>,
-    #[serde(default = "default_notion_publish")]
-    pub publish: PublishMode,
+    /// `None` (the key is absent): use the global rule of the preferences.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publish: Option<PublishMode>,
     /// Names of the Notion properties the fields go to; left out while all are default.
     #[serde(default, skip_serializing_if = "NotionProperties::is_default")]
     pub properties: NotionProperties,
@@ -615,7 +606,7 @@ targets:
         );
         assert_eq!(
             cycle.targets.notion.as_ref().unwrap().publish,
-            PublishMode::Off
+            Some(PublishMode::Off)
         );
     }
 
@@ -876,7 +867,7 @@ targets:
         let mut target = DiscordTarget {
             webhook: Some("cred:discord/nomad".into()),
             bot: Some(bot.clone()),
-            publish: PublishMode::Off,
+            publish: Some(PublishMode::Off),
             template: None,
         };
         assert_eq!(target.mode(), Some(DiscordMode::Bot(&bot)));
@@ -966,7 +957,7 @@ targets:
         );
         let c = Cycle::from_yaml_str(&minimal).unwrap();
         let n = c.targets.notion.as_ref().unwrap();
-        assert_eq!(n.publish, DEFAULT_NOTION_PUBLISH);
+        assert_eq!(n.publish, None, "no key: the global rule applies");
         assert_eq!(n.data_source, None);
         assert_eq!(n.properties, NotionProperties::default());
         assert_eq!(n.properties.title, DEFAULT_NOTION_TITLE);
@@ -1055,6 +1046,42 @@ targets:
             yaml.contains("discord:\n    webhook: cred:discord/nomad\n    publish: on-approval\n    template: short\n"),
             "{yaml}"
         );
+    }
+
+    #[test]
+    fn a_target_without_publish_inherits_the_global_rule_and_stays_without_it() {
+        let text = "id: NOMAD
+name: Nomad rover
+targets:
+  github: { path: meetings }
+  discord: { webhook: \"cred:discord/nomad\" }
+  notion: { token: \"cred:notion/nomad\", database: \"0123456789abcdef0123456789abcdef\" }
+";
+        let cycle = Cycle::from_yaml_str(text).unwrap();
+        assert_eq!(cycle.targets.github.as_ref().unwrap().publish, None);
+        assert_eq!(cycle.targets.discord.as_ref().unwrap().publish, None);
+        assert_eq!(cycle.targets.notion.as_ref().unwrap().publish, None);
+        let yaml = cycle.to_yaml().unwrap();
+        assert!(!yaml.contains("publish"), "{yaml}");
+        assert_eq!(Cycle::from_yaml_str(&yaml).unwrap(), cycle);
+        // A new cycle's GitHub target also leaves the rule to the preferences.
+        let mut fresh = Cycle::new("NOMAD", "Nomad");
+        fresh.targets.github = Some(GithubTarget::default());
+        assert!(!fresh.to_yaml().unwrap().contains("publish"));
+        // An explicit value is written and read back.
+        let explicit = text.replace("{ path: meetings }", "{ path: meetings, publish: off }");
+        let c = Cycle::from_yaml_str(&explicit).unwrap();
+        assert_eq!(
+            c.targets.github.as_ref().unwrap().publish,
+            Some(PublishMode::Off)
+        );
+        assert!(c.to_yaml().unwrap().contains("publish: off"));
+        // An unknown value is still refused.
+        let bad = text.replace(
+            "{ path: meetings }",
+            "{ path: meetings, publish: sometimes }",
+        );
+        assert!(Cycle::from_yaml_str(&bad).is_err());
     }
 
     #[test]

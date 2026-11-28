@@ -24,6 +24,7 @@ mod processing_commands;
 mod project_commands;
 mod project_github;
 mod publish_commands;
+mod publish_rules;
 mod publish_secrets;
 mod publishing;
 mod recording;
@@ -326,6 +327,8 @@ pub fn run() {
             publish_commands::test_github_access,
             publish_commands::set_github_repo,
             publish_commands::set_target_rule,
+            publish_commands::set_global_publish_rule,
+            publish_commands::effective_publish_rules,
             publish_commands::set_target_secret,
             publish_commands::clear_target_secret,
             publish_commands::test_discord_webhook,

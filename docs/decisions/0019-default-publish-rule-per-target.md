@@ -104,3 +104,7 @@ Nothing here is code that a user has to touch:
 - **A correction as an edited `meeting.json`:** the same reasons; a separate file is also what makes the correction visible as such.
 - **One file with all the corrections of a meeting:** it would have to be changed every time. One file per correction is only ever added.
 - **A default that depends on the repository (`auto` for private ones):** the visibility can change, and the rule would then change under the user. The user chooses; the gate for public repositories stays separate.
+
+## Update: global default with a per-project override
+
+The rule above is now the global default of the preferences (one per target, `on-approval` until changed). A project follows it while its `cycle.yaml` has no `publish` key for the target, and overrides it only with an explicit key; one resolver in `crates/publishers/src/rules.rs` (`resolve_rule`) decides and names the source. The three constants stay the defaults of the global rules. Existing files keep working: a missing key now means "use the global setting", which is `on-approval` by default, so behaviour does not change until the user changes a global rule. Projects that already store an explicit rule keep it; nothing is rewritten at start, and a project can go back to the global setting with one click.
