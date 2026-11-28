@@ -420,15 +420,15 @@ impl Block {
                 "the repository is {visibility}, so what is published is visible to everybody: confirm publishing to it first"
             ),
             Self::DiscordBotTokenMissing => {
-                "no Discord bot token is stored for this cycle: add it in the publishing settings"
+                "no Discord bot token is stored for this project: add it in the publishing settings"
                     .into()
             }
             Self::NotionTokenMissing => {
-                "no Notion token is stored for this cycle: add it in the publishing settings"
+                "no Notion token is stored for this project: add it in the publishing settings"
                     .into()
             }
             Self::NothingToPublish => {
-                "there is nothing to publish with the rules of this cycle".into()
+                "there is nothing to publish with the rules of this project".into()
             }
             Self::MeetingNotInRepository => {
                 "the meeting is not in the repository: publish it to GitHub first, then its corrections can follow"
@@ -524,7 +524,7 @@ pub fn build(input: &PlanInput<'_>) -> PublishPlan {
         for t in input.targets {
             if !rules.allows(*t, Trigger::Explicit) {
                 plan.notes.push(match rules.mode(*t) {
-                    None => format!("this cycle has no {} target", t.as_str()),
+                    None => format!("this project has no {} target", t.as_str()),
                     Some(_) if !rules.is_configured(*t) => match t {
                         PublishTarget::Github => "connect a GitHub repository first".into(),
                         PublishTarget::Discord => {
@@ -532,7 +532,9 @@ pub fn build(input: &PlanInput<'_>) -> PublishPlan {
                         }
                         PublishTarget::Notion => "configure a Notion database first".into(),
                     },
-                    Some(_) => format!("{} is off in cycle.yaml and was left out", t.as_str()),
+                    Some(_) => {
+                        format!("{} is off in project settings and was left out", t.as_str())
+                    }
                 });
             }
         }

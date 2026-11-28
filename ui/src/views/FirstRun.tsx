@@ -1200,18 +1200,20 @@ function CycleStep({ ctx, onFinish }: { ctx: Ctx; onFinish: () => void }) {
   return (
     <>
       <p>
-        A cycle is a series of meetings that share participants and a report format. Every recording
-        belongs to one. You can create the first one now, or later on the Cycles page.
+        A project is a series of meetings that share participants and a report format. Every
+        recording belongs to one. You can create the first one now, or later on the Projects page.
       </p>
       {existing > 0 && created === null && (
         <p className="setup-note" role="status">
-          {existing === 1 ? "There is already 1 cycle." : `There are already ${existing} cycles.`}{" "}
+          {existing === 1
+            ? "There is already 1 project."
+            : `There are already ${existing} projects.`}{" "}
           You do not need to create another one.
         </p>
       )}
       {created !== null ? (
         <p className="setup-note" role="status">
-          Cycle {created} was created.
+          Project {created} was created.
         </p>
       ) : (
         <form
@@ -1228,17 +1230,17 @@ function CycleStep({ ctx, onFinish }: { ctx: Ctx; onFinish: () => void }) {
           }}
         >
           <label>
-            Cycle id
+            Project id
             <input value={id} spellCheck={false} onChange={(e) => setId(e.target.value)} />
             <small>Letters, digits, - and _, for example WEEKLY.</small>
           </label>
           <label>
-            Cycle name
+            Project name
             <input value={name} onChange={(e) => setName(e.target.value)} />
           </label>
           <div className="actions">
             <button type="submit" className="btn btn-small" disabled={problem !== null}>
-              Create first cycle
+              Create first project
             </button>
           </div>
         </form>

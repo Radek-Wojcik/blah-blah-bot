@@ -271,7 +271,7 @@ test.describe("processing pipeline on the mock backend", () => {
     // A meeting without a cycle has nothing to extract: the two stages say so.
     const skipped = stages
       .getByRole("listitem")
-      .filter({ hasText: "Skipped: the meeting has no cycle" });
+      .filter({ hasText: "Skipped: the meeting has no project" });
     await expect(skipped).toHaveCount(2);
     await expect(stages.getByRole("listitem").filter({ hasText: "Extract items" })).toHaveCount(1);
     await expect(stages.getByRole("listitem").filter({ hasText: "Build draft" })).toHaveCount(1);

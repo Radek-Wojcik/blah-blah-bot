@@ -63,7 +63,7 @@ impl From<cycle_store::CycleError> for IpcError {
             E::Io { .. } => "io",
             E::Other(_) => "internal",
         };
-        tracing::warn!(error = %e, code, "cycle repository error");
+        tracing::warn!(error = %e, code, "project repository error");
         Self::new(code, e.to_string())
     }
 }

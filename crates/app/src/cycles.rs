@@ -624,7 +624,7 @@ fn find_setting<'a>(repos: &'a [CycleRepoSetting], id: &str) -> IpcResult<&'a Cy
     repos
         .iter()
         .find(|r| r.id == id)
-        .ok_or_else(|| IpcError::new("not_found", "this cycle repository is not registered"))
+        .ok_or_else(|| IpcError::new("not_found", "this project repository is not registered"))
 }
 
 /// A cycle found in a registered repository.
@@ -666,7 +666,7 @@ fn locate_or_err(repos: &[CycleRepoSetting], cycle_id: &str) -> IpcResult<Locate
     locate(repos, cycle_id)?.ok_or_else(|| {
         IpcError::new(
             "not_found",
-            format!("the cycle {cycle_id} is not in any registered repository"),
+            format!("the project {cycle_id} is not in any registered repository"),
         )
     })
 }
@@ -677,9 +677,9 @@ fn load_valid(located: &Located) -> IpcResult<Cycle> {
         (Some(c), None) => Ok(c.clone()),
         (_, Some(first)) => Err(IpcError::new(
             "cycle_invalid",
-            format!("the cycle cannot be used until it is fixed: {first}"),
+            format!("the project cannot be used until it is fixed: {first}"),
         )),
-        (None, None) => Err(IpcError::new("cycle_invalid", "the cycle cannot be read")),
+        (None, None) => Err(IpcError::new("cycle_invalid", "the project cannot be read")),
     }
 }
 
@@ -811,7 +811,7 @@ pub fn create_cycle(
     if !is_identifier(id) {
         return Err(IpcError::new(
             "invalid",
-            "the cycle id may contain letters, digits, - and _ and must start with a letter or digit",
+            "the project id may contain letters, digits, - and _ and must start with a letter or digit",
         ));
     }
     if name.is_empty() || name.chars().count() > 120 {
@@ -823,7 +823,7 @@ pub fn create_cycle(
     if locate(repos, id)?.is_some() {
         return Err(IpcError::new(
             "duplicate",
-            format!("a cycle with the id {id} already exists"),
+            format!("a project with the id {id} already exists"),
         ));
     }
     let repo = Repo::open(&target.path)?;
@@ -990,7 +990,7 @@ pub fn set_target_rule(
             let discord = cycle.targets.discord.as_mut().ok_or_else(|| {
                 IpcError::new(
                     "no_target",
-                    "this cycle has no Discord target: add one in the cycle settings first",
+                    "this project has no Discord target: add one in the project settings first",
                 )
             })?;
             let changed = discord.publish != mode;
@@ -1001,7 +1001,7 @@ pub fn set_target_rule(
             let notion = cycle.targets.notion.as_mut().ok_or_else(|| {
                 IpcError::new(
                     "no_target",
-                    "this cycle has no Notion target: add one in the cycle settings first",
+                    "this project has no Notion target: add one in the project settings first",
                 )
             })?;
             let changed = notion.publish != mode;
@@ -1037,7 +1037,7 @@ pub fn set_notion_mapping(
     let notion = cycle.targets.notion.as_mut().ok_or_else(|| {
         IpcError::new(
             "no_target",
-            "this cycle has no Notion target: add one in the cycle settings first",
+            "this project has no Notion target: add one in the project settings first",
         )
     })?;
     let next_ds = data_source
@@ -1276,7 +1276,7 @@ pub fn resolve_choice(
             meeting_type: l.meeting_type.clone(),
             output_language: None,
         }),
-        _ => Err(gate("choose a cycle and a report mode before recording")),
+        _ => Err(gate("choose a project and a report mode before recording")),
     }
 }
 
@@ -1311,7 +1311,7 @@ pub fn validate_report(
     choice: &ReportChoice,
 ) -> IpcResult<ReportSettings> {
     if choice.cycle_id.trim().is_empty() {
-        return Err(gate("choose a cycle before recording"));
+        return Err(gate("choose a project before recording"));
     }
     let mode = parse_mode(&choice.mode)?;
     let language = match choice.output_language.as_deref() {
@@ -1320,7 +1320,7 @@ pub fn validate_report(
         Some(other) => return Err(gate(format!("unknown output language {other:?}"))),
     };
     let located = locate(repos, &choice.cycle_id)?
-        .ok_or_else(|| gate(format!("the cycle {} does not exist", choice.cycle_id)))?;
+        .ok_or_else(|| gate(format!("the project {} does not exist", choice.cycle_id)))?;
     let cycle = load_valid(&located).map_err(|e| gate(e.message))?;
     let templates = located.repo.list_templates(&cycle.id)?;
     let has = |name: &str| templates.iter().any(|t| t == name);
@@ -1328,7 +1328,7 @@ pub fn validate_report(
     let mut template = choice.template.clone().filter(|t| !t.is_empty());
     if let Some(t) = &template {
         if !has(t) {
-            return Err(gate(format!("the cycle has no template named {t:?}")));
+            return Err(gate(format!("the project has no template named {t:?}")));
         }
     }
     let mut meeting_type = None;
@@ -1338,7 +1338,7 @@ pub fn validate_report(
                 .clone()
                 .unwrap_or_else(|| cycle.report.default_template.clone());
             if !has(&name) {
-                return Err(gate(format!("the cycle has no template named {name:?}")));
+                return Err(gate(format!("the project has no template named {name:?}")));
             }
             template = Some(name);
         }
@@ -1350,7 +1350,7 @@ pub fn validate_report(
                 .ok_or_else(|| gate("choose the meeting type for the by-type report"))?;
             if !cycle.report.by_type.contains_key(&kind) {
                 return Err(gate(format!(
-                    "the cycle does not define the meeting type {kind:?}"
+                    "the project does not define the meeting type {kind:?}"
                 )));
             }
             // The meeting type picks the template.
@@ -1653,7 +1653,7 @@ fn log_pull(cycle_id: &str, result: cycle_store::Result<cycle_store::PullReport>
             cycle_store::PullOutcome::SkippedDirty => {
                 tracing::info!(
                     cycle = cycle_id,
-                    "cycle edits are not committed: not pulling, using the local state"
+                    "project edits are not committed: not pulling, using the local state"
                 );
             }
             other => {
@@ -1748,7 +1748,7 @@ pub fn pull_repo(setting: &CycleRepoSetting) -> IpcResult<PullResult> {
         cycle_store::PullOutcome::SkippedDirty => {
             return Err(IpcError::new(
                 "repo_dirty",
-                "the cycle edits in this repository are not committed yet, so it was not updated; commit or discard them (for example in your Git client) and pull again",
+                "the project edits in this repository are not committed yet, so it was not updated; commit or discard them (for example in your Git client) and pull again",
             ));
         }
     };
@@ -1907,7 +1907,7 @@ pub fn rename_cycle_participant(
     if cycle_ids.is_empty() {
         return Err(IpcError::new(
             "invalid",
-            "this participant does not belong to a cycle",
+            "this participant does not belong to a project",
         ));
     }
 
@@ -2043,7 +2043,7 @@ pub fn delete_cycle_participant(
     let cycle_id = info
         .cycle_id
         .as_deref()
-        .ok_or_else(|| IpcError::new("invalid", "this participant does not belong to a cycle"))?;
+        .ok_or_else(|| IpcError::new("invalid", "this participant does not belong to a project"))?;
     if let Some(id) = info.cycle_participant_id.as_deref() {
         if let Some(located) = locate(repos, cycle_id)? {
             let mut cycle = load_valid(&located)?;

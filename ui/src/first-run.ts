@@ -12,7 +12,7 @@ export const STEPS: ReadonlyArray<{ id: StepId; title: string }> = [
   { id: "llm", title: "Language model" },
   { id: "vision", title: "Screenshot analysis" },
   { id: "summary", title: "Summary" },
-  { id: "cycle", title: "First cycle" },
+  { id: "cycle", title: "First project" },
 ];
 
 /** The step that fixes the setup item with this key, or null for a key the wizard does not know. */

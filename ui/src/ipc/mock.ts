@@ -845,7 +845,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
    * confirmation for this meeting and endpoint.
    */
   function planLlm(id: string, requested: LlmKind | undefined): LlmPlan {
-    if (cycleOf(id) === null) return { kind: null, skip: "the meeting has no cycle" };
+    if (cycleOf(id) === null) return { kind: null, skip: "the meeting has no project" };
     const settings = llm();
     const kind = requested ?? settings.defaultKind;
     const missing = missingForKind(settings, kind);
@@ -2227,7 +2227,7 @@ export function createMockBackend(opts: MockOptions = {}): Backend {
         previousItemCount,
         includesAudio: false,
         includesImages: false,
-        summaryText: `This will send ${amount} to ${host} (model ${model}), together with the names, glossary, instruction and open topics of the cycle, and ${previous} (text, assignee and due date) from earlier meetings of the cycle, including meetings you processed only locally. No audio and no images are sent. Nothing is sent without this confirmation.`,
+        summaryText: `This will send ${amount} to ${host} (model ${model}), together with the names, glossary, instruction and open topics of the project, and ${previous} (text, assignee and due date) from earlier meetings of the project, including meetings you processed only locally. No audio and no images are sent. Nothing is sent without this confirmation.`,
         confirmed: confirmed.get(meetingId) === host,
         transcriptReady,
       };

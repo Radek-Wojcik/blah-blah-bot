@@ -184,7 +184,7 @@ pub fn run() {
                     },
                     move |_| {
                         if let Err(e) = to_cycles.emit(cycle_commands::EVENT_CYCLES, ()) {
-                            tracing::warn!(error = %e, "could not emit the cycles change");
+                            tracing::warn!(error = %e, "could not emit the projects change");
                         }
                     },
                 );

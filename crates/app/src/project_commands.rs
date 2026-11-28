@@ -435,7 +435,7 @@ where
 pub fn get_project_prefs_in(store: &Store, cycle_id: &str) -> IpcResult<ProjectPrefsDto> {
     let cid = cycle_id.trim();
     if cid.is_empty() {
-        return Err(IpcError::new("invalid", "cycle_id cannot be empty"));
+        return Err(IpcError::new("invalid", "project id cannot be empty"));
     }
     Ok(store.get_project_prefs(cid)?.into())
 }
@@ -443,7 +443,7 @@ pub fn get_project_prefs_in(store: &Store, cycle_id: &str) -> IpcResult<ProjectP
 pub fn save_project_prefs_in(store: &Store, prefs: ProjectPrefsDto) -> IpcResult<ProjectPrefsDto> {
     let cid = prefs.cycle_id.trim().to_string();
     if cid.is_empty() {
-        return Err(IpcError::new("invalid", "cycle_id cannot be empty"));
+        return Err(IpcError::new("invalid", "project id cannot be empty"));
     }
     let domain: ProjectPrefs = prefs.into();
     store.set_project_prefs(&domain).map_err(|e| match e {
@@ -1033,7 +1033,7 @@ pub fn import_meeting(
 ) -> IpcResult<MeetingDetails> {
     let cycle_id = req.cycle_id.trim().to_string();
     if cycle_id.is_empty() {
-        return Err(IpcError::new("invalid", "cycleId cannot be empty"));
+        return Err(IpcError::new("invalid", "project id cannot be empty"));
     }
     let file_path = req.file_path.trim().to_string();
     if file_path.is_empty() {

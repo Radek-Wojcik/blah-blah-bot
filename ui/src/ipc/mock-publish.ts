@@ -661,7 +661,9 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
   ): OpResult {
     const notion = cycles.cycle(snap.cycleId)?.targets.notion;
     if (!notion)
-      return refuse("This cycle has no Notion target: add one in the cycle settings, then retry.");
+      return refuse(
+        "This project has no Notion target: add one in the project settings, then retry.",
+      );
     const commitOp = ops.find(
       (o) => o.meetingId === op.meetingId && o.kind === "commit_meeting" && o.state === "done",
     );
@@ -687,7 +689,7 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
   function post(op: OutboxOp, snap: Snapshot, reference: string): OpResult {
     if (!targetSecrets.has(reference))
       return refuse(
-        "No Discord webhook is stored for this cycle: add it in the publishing settings.",
+        "No Discord webhook is stored for this project: add it in the publishing settings.",
       );
     const links = ops
       .filter(
@@ -1053,7 +1055,7 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
           blocks.push({
             code: "notion_token_missing",
             message:
-              "No Notion integration token is stored for this cycle: add it in the publishing settings.",
+              "No Notion integration token is stored for this project: add it in the publishing settings.",
             visibility: null,
           });
         for (const item of draft.items.filter((i) => i.type === "task")) {
@@ -1073,7 +1075,7 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
           blocks.push({
             code: "discord_bot_token_missing",
             message:
-              "No Discord bot token is stored for this cycle: add it in the publishing settings.",
+              "No Discord bot token is stored for this project: add it in the publishing settings.",
             visibility: null,
           });
         summary.discord = true;
@@ -1088,7 +1090,7 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
     if (!summary.commit && !summary.discord && summary.notion.length === 0)
       blocks.push({
         code: "nothing_to_publish",
-        message: "There is nothing to publish with the rules of this cycle.",
+        message: "There is nothing to publish with the rules of this project.",
         visibility: null,
       });
     return {
@@ -1183,7 +1185,7 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
     const rule = githubRule(cycleId);
     if (rule === "off" || !isGithubConfigured(cycleId)) {
       if (explicit)
-        fail("nothing_to_publish", "There is nothing to publish with the rules of this cycle.");
+        fail("nothing_to_publish", "There is nothing to publish with the rules of this project.");
       return 0;
     }
     if (!explicit && rule !== "auto") return 0;
@@ -1519,7 +1521,10 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
     const view = await drafts.methods.getDraft(meetingId);
     const cycle = cycles.cycle(view.draft.cycle);
     if (!cycle?.targets.notion)
-      fail("no_target", "This cycle has no Notion target: add one in the cycle settings first.");
+      fail(
+        "no_target",
+        "This project has no Notion target: add one in the project settings first.",
+      );
     const preview = await plan(meetingId, ["notion"]);
     const block = preview.blocks[0];
     if (block) fail(block.code, block.message);

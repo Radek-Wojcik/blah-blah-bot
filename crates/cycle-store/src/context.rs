@@ -165,7 +165,7 @@ pub fn build_context(req: &ContextRequest<'_>) -> Result<Context> {
 
     let issues = schema::validate(Schema::Context, &value);
     if !issues.is_empty() {
-        return Err(CycleError::invalid("cycle context", issues));
+        return Err(CycleError::invalid("project context", issues));
     }
     Ok(Context { value, warnings })
 }

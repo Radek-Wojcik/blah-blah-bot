@@ -884,10 +884,10 @@ test("hero GIF", async ({ page }) => {
   await expect(page.getByText("Everything needed is ready.")).toBeVisible();
   await gif.hold(200);
   await page.getByRole("button", { name: "Continue", exact: true }).click();
-  await page.getByLabel("Cycle id").fill("ORBIT");
-  await page.getByLabel("Cycle name").fill("Orbit weekly");
-  await page.getByRole("button", { name: "Create first cycle" }).click();
-  await expect(page.getByText("Cycle ORBIT was created.")).toBeVisible();
+  await page.getByLabel("Project id").fill("ORBIT");
+  await page.getByLabel("Project name").fill("Orbit weekly");
+  await page.getByRole("button", { name: "Create first project" }).click();
+  await expect(page.getByText("Project ORBIT was created.")).toBeVisible();
   await gif.snap(TRANSITION_MS, 80);
   await page.getByRole("button", { name: "Finish" }).click();
   await expect(page.getByRole("heading", { name: "Projects", level: 2 })).toBeVisible();

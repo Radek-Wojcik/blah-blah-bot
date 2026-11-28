@@ -85,11 +85,11 @@ test.describe("first-run wizard on the mock backend", () => {
     await page.getByRole("button", { name: "Continue", exact: true }).click();
 
     // First cycle, then the main window without a readiness banner.
-    await expect(title(page, "First cycle")).toBeVisible();
-    await page.getByLabel("Cycle id").fill("WEEKLY");
-    await page.getByLabel("Cycle name").fill("Weekly sync");
-    await page.getByRole("button", { name: "Create first cycle" }).click();
-    await expect(page.getByText("Cycle WEEKLY was created.")).toBeVisible();
+    await expect(title(page, "First project")).toBeVisible();
+    await page.getByLabel("Project id").fill("WEEKLY");
+    await page.getByLabel("Project name").fill("Weekly sync");
+    await page.getByRole("button", { name: "Create first project" }).click();
+    await expect(page.getByText("Project WEEKLY was created.")).toBeVisible();
     await page.getByRole("button", { name: "Finish" }).click();
     await expect(page.getByRole("heading", { name: "Projects", level: 2 })).toBeVisible();
     await expect(page.getByText(/Setup is incomplete/)).toHaveCount(0);
@@ -110,7 +110,7 @@ test.describe("first-run wizard on the mock backend", () => {
     ).toHaveCount(1);
     await page.getByRole("button", { name: "Continue", exact: true }).click();
     // The demo already has cycles: the step says so and only offers to finish.
-    await expect(page.getByText(/There are already \d+ cycles\./)).toBeVisible();
+    await expect(page.getByText(/There are already \d+ projects\./)).toBeVisible();
     await page.getByRole("button", { name: "Finish", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Projects", level: 2 })).toBeVisible();
     await expect(page.getByText(/Setup is incomplete/)).toHaveCount(0);

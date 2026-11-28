@@ -67,7 +67,7 @@ pub fn effective_rules_of(settings: &Settings, cycle_id: &str) -> IpcResult<Vec<
     let located = cycles::locate(&settings.cycle_repos, cycle_id)?.ok_or_else(|| {
         IpcError::new(
             "not_found",
-            format!("the cycle {cycle_id} is not in any registered repository"),
+            format!("the project {cycle_id} is not in any registered repository"),
         )
     })?;
     let cycle = located
@@ -78,7 +78,7 @@ pub fn effective_rules_of(settings: &Settings, cycle_id: &str) -> IpcResult<Vec<
         .ok_or_else(|| {
             IpcError::new(
                 "cycle_invalid",
-                "the cycle cannot be used until it is fixed",
+                "the project cannot be used until it is fixed",
             )
         })?;
     Ok(effective_rules(&cycle, &settings.publish_rules))

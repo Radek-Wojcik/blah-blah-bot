@@ -548,7 +548,7 @@ fn valid_date(date: &str) -> bool {
 
 fn validate(req: &PublishRequest) -> Result<(), PublishError> {
     if !is_identifier(req.cycle_id) {
-        return Err(PublishError::permanent("the cycle id is not valid"));
+        return Err(PublishError::permanent("the project id is not valid"));
     }
     if let Some(problem) = crate::cycle::repo_path_problem(req.base_path) {
         return Err(PublishError::permanent(format!(
@@ -1089,7 +1089,7 @@ fn valid_part(part: &str) -> bool {
 
 fn validate_add(req: &AddFileRequest) -> Result<(), PublishError> {
     if !is_identifier(req.cycle_id) {
-        return Err(PublishError::permanent("the cycle id is not valid"));
+        return Err(PublishError::permanent("the project id is not valid"));
     }
     if let Some(problem) = crate::cycle::repo_path_problem(req.base_path) {
         return Err(PublishError::permanent(format!(
@@ -1339,7 +1339,7 @@ pub fn preview_topics(
     ours: &[Topic],
 ) -> Result<TopicsPreview, PublishError> {
     if !is_identifier(cycle_id) {
-        return Err(PublishError::permanent("the cycle id is not valid"));
+        return Err(PublishError::permanent("the project id is not valid"));
     }
     let g = Git {
         root: repo.root(),

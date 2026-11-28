@@ -50,7 +50,7 @@ const BAD_ID = "must start with a letter or digit and contain only letters, digi
 export function validateCycle(c: CycleDto, templates: string[]): CycleIssue[] {
   const issues: CycleIssue[] = [];
   const add = (path: string, message: string) => issues.push({ path, message });
-  if (!IDENTIFIER.test(c.id)) add("id", `the cycle id ${BAD_ID}`);
+  if (!IDENTIFIER.test(c.id)) add("id", `the project id ${BAD_ID}`);
   if (c.name.trim() === "") add("name", "the name must not be empty");
   if (!LANGS.includes(c.languages.asr)) add("languages.asr", "must be auto, pl or en");
   if (!LANGS.includes(c.languages.output)) add("languages.output", "must be auto, pl or en");
@@ -429,9 +429,10 @@ export function createCycleStore(): CycleStore {
   };
 
   const repoOf = (id: string): RepoState =>
-    repos.find((r) => r.id === id) ?? fail("not_found", "this cycle repository is not registered");
+    repos.find((r) => r.id === id) ??
+    fail("not_found", "this project repository is not registered");
   const entryOf = (id: string): Entry =>
-    entries.get(id) ?? fail("not_found", `the cycle ${id} is not in any registered repository`);
+    entries.get(id) ?? fail("not_found", `the project ${id} is not in any registered repository`);
   const issuesOf = (e: Entry) => validateCycle(e.cycle, [...e.templates.keys()]);
 
   const summaries = (e: Entry): TemplateSummary[] =>
@@ -465,10 +466,10 @@ export function createCycleStore(): CycleStore {
   /** The cycle when it has no issues; else `cycle_invalid` (the gate turns that into its own code). */
   const validCycle = (id: string, code: "cycle_invalid" | "report_mode_required"): Entry => {
     const e = entries.get(id);
-    if (!e) fail("report_mode_required", `the cycle ${id} does not exist`);
+    if (!e) fail("report_mode_required", `the project ${id} does not exist`);
     const first = issuesOf(e)[0];
     if (first)
-      fail(code, `the cycle cannot be used until it is fixed: ${first.path}: ${first.message}`);
+      fail(code, `the project cannot be used until it is fixed: ${first.path}: ${first.message}`);
     return e;
   };
 
@@ -502,11 +503,11 @@ export function createCycleStore(): CycleStore {
       if (!IDENTIFIER.test(id))
         fail(
           "invalid",
-          "the cycle id may contain letters, digits, - and _ and must start with a letter or digit",
+          "the project id may contain letters, digits, - and _ and must start with a letter or digit",
         );
       if (name === "" || [...name].length > 120)
         fail("invalid", "enter a name of 1 to 120 characters");
-      if (entries.has(id)) fail("duplicate", `a cycle with the id ${id} already exists`);
+      if (entries.has(id)) fail("duplicate", `a project with the id ${id} already exists`);
       const target = repoId ? repoOf(repoId).id : DEFAULT_REPO_ID;
       const e: Entry = {
         repoId: target,
@@ -605,7 +606,7 @@ export function createCycleStore(): CycleStore {
       if (!entries.has(cycleId)) {
         entries.set(cycleId, {
           repoId: id,
-          cycle: emptyCycle(cycleId, "Cloned cycle"),
+          cycle: emptyCycle(cycleId, "Cloned project"),
           templates: templatesOf(DEFAULT_TEMPLATE),
           topics: [],
         });
@@ -644,7 +645,7 @@ export function createCycleStore(): CycleStore {
     },
     validateReport: (choice) => {
       const cycleId = (choice.cycleId ?? "").trim();
-      if (cycleId === "") gate("choose a cycle before recording");
+      if (cycleId === "") gate("choose a project before recording");
       const mode = choice.mode as string | undefined;
       if (!mode) gate("choose a report mode");
       if (!MODES.includes(mode as ReportMode)) gate(`unknown report mode "${mode}"`);
@@ -654,17 +655,17 @@ export function createCycleStore(): CycleStore {
       const cycle = e.cycle;
       let template = choice.template || null;
       if (template && !e.templates.has(template))
-        gate(`the cycle has no template named "${template}"`);
+        gate(`the project has no template named "${template}"`);
       let meetingType: string | null = null;
       if (mode === "template") {
         const name = template ?? cycle.report.defaultTemplate;
-        if (!e.templates.has(name)) gate(`the cycle has no template named "${name}"`);
+        if (!e.templates.has(name)) gate(`the project has no template named "${name}"`);
         template = name;
       } else if (mode === "by-type") {
         const kind = choice.meetingType || null;
         if (!kind) gate("choose the meeting type for the by-type report");
         if (!(kind! in cycle.report.byType))
-          gate(`the cycle does not define the meeting type "${kind}"`);
+          gate(`the project does not define the meeting type "${kind}"`);
         // The meeting type picks the template.
         template = null;
         meetingType = kind;
@@ -687,7 +688,7 @@ export function createCycleStore(): CycleStore {
           meetingType: last.meetingType,
         });
       }
-      return gate("choose a cycle and a report mode before recording");
+      return gate("choose a project and a report mode before recording");
     },
     lastReport: () => (last ? { ...last } : null),
     setLastReport: (l) => void (last = l ? { ...l } : null),
@@ -747,14 +748,17 @@ export function createCycleStore(): CycleStore {
         if (!discord)
           fail(
             "no_target",
-            "this cycle has no Discord target: add one in the cycle settings first",
+            "this project has no Discord target: add one in the project settings first",
           );
         else if (own === undefined) delete discord.publish;
         else discord.publish = own;
       } else if (target === "notion") {
         const notion = e.cycle.targets.notion;
         if (!notion)
-          fail("no_target", "this cycle has no Notion target: add one in the cycle settings first");
+          fail(
+            "no_target",
+            "this project has no Notion target: add one in the project settings first",
+          );
         else if (own === undefined) delete notion.publish;
         else notion.publish = own;
       } else {

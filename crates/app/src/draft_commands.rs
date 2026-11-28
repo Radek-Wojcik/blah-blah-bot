@@ -448,7 +448,7 @@ fn check_assignee(
         if !cycle.participants.iter().any(|p| p.id == id) {
             return Err(IpcError::new(
                 "invalid",
-                format!("{id} is not a participant of the cycle"),
+                format!("{id} is not a participant of the project"),
             ));
         }
     }
@@ -541,7 +541,7 @@ pub fn add_proposal(
             if !topics.iter().any(|t| t.id == target) {
                 return Err(IpcError::new(
                     "invalid",
-                    format!("{target} is not a topic of the cycle (issues are written #12)"),
+                    format!("{target} is not a topic of the project (issues are written #12)"),
                 ));
             }
         }

@@ -518,7 +518,7 @@ fn a_meeting_without_a_cycle_skips_both_stages_as_done() {
         let row = lab.stage(stage);
         assert_eq!(row.status, StageStatus::Done);
         assert_eq!(row.error, None);
-        assert_eq!(row.note.as_deref(), Some("the meeting has no cycle"));
+        assert_eq!(row.note.as_deref(), Some("the meeting has no project"));
     }
 }
 

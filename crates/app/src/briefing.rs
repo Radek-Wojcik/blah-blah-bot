@@ -99,7 +99,7 @@ impl CycleStoreSource {
         cycles::locate(&(self.repos)(), cycle_id)?.ok_or_else(|| {
             IpcError::new(
                 "not_found",
-                format!("the cycle {cycle_id} is not in any registered repository"),
+                format!("the project {cycle_id} is not in any registered repository"),
             )
         })
     }
@@ -275,7 +275,7 @@ pub fn build_briefing(
     let located = cycles::locate(repos, cycle_id)?.ok_or_else(|| {
         IpcError::new(
             "not_found",
-            format!("the cycle {cycle_id} is not in any registered repository"),
+            format!("the project {cycle_id} is not in any registered repository"),
         )
     })?;
     let is_clone = located.setting.kind == RepoKind::Clone;
@@ -300,14 +300,14 @@ pub fn build_briefing(
 
     // The pull may have changed the files: the cycle is read afresh.
     let located = cycles::locate(repos, cycle_id)?
-        .ok_or_else(|| IpcError::new("not_found", format!("the cycle {cycle_id} is gone")))?;
+        .ok_or_else(|| IpcError::new("not_found", format!("the project {cycle_id} is gone")))?;
     let (name, people) = match &located.entry.cycle {
         Some(c) => (c.name.clone(), c.participants.clone()),
         None => (cycle_id.to_string(), Vec::new()),
     };
     if let Some(first) = located.entry.issues.first() {
         warnings.push(format!(
-            "the cycle has problems, so people may be missing from the groups: {first}"
+            "the project has problems, so people may be missing from the groups: {first}"
         ));
     }
 
@@ -408,7 +408,7 @@ pub fn set_task_done(
     state.with_store(|s| s.set_task_done(&cycle_id, &task_key, done, None, now))?;
 
     if let Err(e) = app.emit(EVENT_CYCLES, ()) {
-        tracing::warn!(error = %e, "could not emit the cycles change");
+        tracing::warn!(error = %e, "could not emit the projects change");
     }
     Ok(())
 }
@@ -445,7 +445,7 @@ pub async fn get_briefing(
             tracing::warn!(cycle = %cycle_id, error = %e, "participants not synced after the pull");
         }
         if let Err(e) = app.emit(EVENT_CYCLES, ()) {
-            tracing::warn!(error = %e, "could not emit the cycles change");
+            tracing::warn!(error = %e, "could not emit the projects change");
         }
     }
     Ok(result)
@@ -456,7 +456,7 @@ pub async fn get_briefing(
 #[tauri::command]
 pub fn open_briefing(app: AppHandle, cycle_id: String) -> IpcResult<()> {
     if !is_identifier(&cycle_id) {
-        return Err(IpcError::new("invalid", "this is not a cycle id"));
+        return Err(IpcError::new("invalid", "this is not a project id"));
     }
     crate::show_main(&app);
     app.emit_to("main", EVENT_OPEN, cycle_id)

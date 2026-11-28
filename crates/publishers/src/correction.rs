@@ -148,8 +148,9 @@ pub fn build(input: &CorrectionPlanInput<'_>) -> CorrectionPlan {
         let about = correction.issue.clone().or_else(|| correction.item.clone());
         if let Some(about) = about {
             if !rules.issues {
-                plan.notes
-                    .push("issues are off for this cycle: no comment is made on the issue".into());
+                plan.notes.push(
+                    "issues are off for this project: no comment is made on the issue".into(),
+                );
             } else if input.repo.github.is_none() {
                 plan.notes.push(
                     "this repository is not linked to GitHub: no comment is made on an issue"
@@ -219,7 +220,8 @@ pub fn build(input: &CorrectionPlanInput<'_>) -> CorrectionPlan {
         if !github_allowed {
             plan.notes
                 .push(if rules.is_configured(PublishTarget::Github) {
-                    "github is off in cycle.yaml: the correction stays on this computer".into()
+                    "github is off in project settings: the correction stays on this computer"
+                        .into()
                 } else {
                     "connect a GitHub repository first: the correction stays on this computer"
                         .into()

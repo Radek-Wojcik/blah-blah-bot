@@ -53,9 +53,9 @@ pub enum CycleError {
     GitUnavailable(io::Error),
     #[error("git {command} failed: {message}")]
     Git { command: String, message: String },
-    #[error("cycle {0} already exists")]
+    #[error("project {0} already exists")]
     CycleExists(String),
-    #[error("cycle {0} was not found")]
+    #[error("project {0} was not found")]
     CycleNotFound(String),
     #[error("template {0} was not found")]
     TemplateNotFound(String),

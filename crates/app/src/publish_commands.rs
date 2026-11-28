@@ -77,7 +77,7 @@ pub fn set_github_repo(
         )
     })?;
     if let Err(e) = app.emit(EVENT_CYCLES, ()) {
-        tracing::warn!(error = %e, "could not emit the cycles change");
+        tracing::warn!(error = %e, "could not emit the projects change");
     }
     Ok(cycles::repo_dto(&setting))
 }
@@ -123,7 +123,7 @@ pub fn set_target_rule(
 ) -> IpcResult<TargetsDto> {
     let targets = cycles::set_target_rule(&state.cycle_repos(), &cycle_id, &target, mode)?;
     if let Err(e) = app.emit(EVENT_CYCLES, ()) {
-        tracing::warn!(error = %e, "could not emit the cycles change");
+        tracing::warn!(error = %e, "could not emit the projects change");
     }
     Ok(targets)
 }
@@ -140,7 +140,7 @@ pub fn set_global_publish_rule(
     let rules =
         state.update_settings(|s| crate::publish_rules::set_global_rule(s, &target, mode))?;
     if let Err(e) = app.emit(EVENT_CYCLES, ()) {
-        tracing::warn!(error = %e, "could not emit the cycles change");
+        tracing::warn!(error = %e, "could not emit the projects change");
     }
     Ok(rules)
 }
@@ -204,7 +204,7 @@ pub fn set_notion_mapping(
         properties,
     )?;
     if let Err(e) = app.emit(EVENT_CYCLES, ()) {
-        tracing::warn!(error = %e, "could not emit the cycles change");
+        tracing::warn!(error = %e, "could not emit the projects change");
     }
     Ok(targets)
 }
@@ -274,7 +274,7 @@ pub fn set_participant_discord(
     let cycle =
         cycles::set_participant_discord(&state.cycle_repos(), &cycle_id, &participant_id, discord)?;
     if let Err(e) = app.emit(EVENT_CYCLES, ()) {
-        tracing::warn!(error = %e, "could not emit the cycles change");
+        tracing::warn!(error = %e, "could not emit the projects change");
     }
     Ok(cycle)
 }

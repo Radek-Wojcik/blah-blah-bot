@@ -384,7 +384,7 @@ pub fn test_github_access(
     let located = cycles::locate(repos, cycle_id)?.ok_or_else(|| {
         IpcError::new(
             "not_found",
-            format!("the cycle {cycle_id} is not in any registered repository"),
+            format!("the project {cycle_id} is not in any registered repository"),
         )
     })?;
     let mut out = GithubAccessDto {
@@ -620,20 +620,20 @@ fn load_cycle(repos: &[CycleRepoSetting], cycle_id: &str) -> IpcResult<Cycle> {
     let located = cycles::locate(repos, cycle_id)?.ok_or_else(|| {
         IpcError::new(
             "not_found",
-            format!("the cycle {cycle_id} is not in any registered repository"),
+            format!("the project {cycle_id} is not in any registered repository"),
         )
     })?;
     located
         .entry
         .cycle
-        .ok_or_else(|| IpcError::new("cycle_invalid", "the cycle cannot be read"))
+        .ok_or_else(|| IpcError::new("cycle_invalid", "the project cannot be read"))
 }
 
 fn notion_target(repos: &[CycleRepoSetting], cycle_id: &str) -> IpcResult<NotionTarget> {
     load_cycle(repos, cycle_id)?.targets.notion.ok_or_else(|| {
         IpcError::new(
             "no_target",
-            "this cycle has no Notion target: add one in the cycle settings first",
+            "this project has no Notion target: add one in the project settings first",
         )
     })
 }
@@ -646,7 +646,7 @@ fn discord_bot_target(repos: &[CycleRepoSetting], cycle_id: &str) -> IpcResult<D
         .ok_or_else(|| {
             IpcError::new(
                 "no_target",
-                "this cycle has no Discord bot: choose Bot for the Discord target in the cycle settings first",
+                "this project has no Discord bot: choose Bot for the Discord target in the project settings first",
             )
         })
 }
@@ -1131,7 +1131,7 @@ pub fn set_github_repo(
     let setting = repos
         .iter_mut()
         .find(|r| r.id == repo_id)
-        .ok_or_else(|| IpcError::new("not_found", "this cycle repository is not registered"))?;
+        .ok_or_else(|| IpcError::new("not_found", "this project repository is not registered"))?;
     setting.github_repo = repo;
     setting.github_api = api.filter(|a| a != github::DEFAULT_API);
     Ok(setting.clone())

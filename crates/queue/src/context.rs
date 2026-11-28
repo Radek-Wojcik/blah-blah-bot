@@ -160,7 +160,7 @@ pub fn cycle_id_of(store: &Store, meeting_id: &str) -> Result<Option<String>, Ru
 pub fn load_cycle(source: &dyn CycleSource, cycle_id: &str) -> Result<CycleData, RunError> {
     source.load(cycle_id)?.ok_or_else(|| {
         RunError::new(format!(
-            "the cycle {cycle_id} is not available: its repository is not registered"
+            "the project {cycle_id} is not available: its repository is not registered"
         ))
     })
 }

@@ -306,7 +306,7 @@ export function demoDraft(meetingId: string, cycle = "NOMAD"): Draft {
       { code: "quote_unverified", message: "Two quotes were not found in the transcript." },
       {
         code: "assignee_unknown",
-        message: "One assignee was not a participant of the cycle and was cleared.",
+        message: "One assignee was not a participant of the project and was cleared.",
       },
     ],
   };
@@ -527,7 +527,7 @@ export function addStatusProposal(
     if (/^[0-9]+$/.test(t) || !IDENTIFIER.test(t))
       fail("invalid", "the target is an issue number such as #12 or the id of a topic");
     if (!topics.includes(t))
-      fail("invalid", `${t} is not a topic of the cycle (issues are written #12)`);
+      fail("invalid", `${t} is not a topic of the project (issues are written #12)`);
   }
   const list = (draft.statusProposals ??= []);
   if (list.some((p) => p.target === t)) fail("invalid", `${t} has a status change already`);
