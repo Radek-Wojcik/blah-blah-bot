@@ -788,7 +788,9 @@ mod tests {
                 "SELECT id || '|' || target || '|' || kind || '|' || op_key || '|' || state ||
                         '|' || attempts || '|' || IFNULL(next_attempt_unix_ms, 'n') || '|' ||
                         IFNULL(last_error, 'n') || '|' || IFNULL(result, 'n') || '|' ||
-                        IFNULL(after_id, 'n') FROM outbox ORDER BY id",
+                        IFNULL(after_id, 'n') || '|' || meeting_id || '|' || payload ||
+                        '|' || created_unix_ms || '|' || updated_unix_ms
+                 FROM outbox ORDER BY id",
             )
             .unwrap();
         let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap();
@@ -811,7 +813,19 @@ mod tests {
         assert_eq!(ops[1].last_error.as_deref(), Some("boom"));
         assert_eq!(ops[2].state, crate::OpState::Queued);
         assert!(s.get_publication("m1").unwrap().is_some());
-        assert!(s.get_project_prefs("NOMAD").unwrap().local_save_enabled);
+        let prefs = s.get_project_prefs("NOMAD").unwrap();
+        assert!(prefs.local_save_enabled);
+        assert_eq!(prefs.audio_retention, None);
+        assert!(has_column(&s.conn, "project_prefs", "audio_retention").unwrap());
+        let people_table: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'project_people'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(people_table, 1);
         let done = s.list_task_completions("NOMAD").unwrap();
         assert_eq!(done.len(), 1);
         assert_eq!(done[0].closed_by_meeting.as_deref(), Some("m1"));
@@ -829,7 +843,32 @@ mod tests {
             )
             .unwrap();
         assert_eq!(index, 1);
+        // after_id keeps ON DELETE SET NULL after the rebuild.
+        let fk_action: String = s
+            .conn
+            .query_row(
+                "SELECT \"on_delete\" FROM pragma_foreign_key_list('outbox')
+                 WHERE \"from\" = 'after_id'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(fk_action, "SET NULL");
         // The widened constraints and the continued ids work; deleting cascades.
+        let (edit, _) = s
+            .enqueue_op(
+                &crate::NewOp {
+                    meeting_id: "m1".into(),
+                    target: crate::OutboxTarget::Discord,
+                    kind: crate::OutboxKind::EditDiscord,
+                    op_key: "discord:edit".into(),
+                    payload: "{}".into(),
+                    after_op_key: None,
+                },
+                19,
+            )
+            .unwrap();
+        assert_eq!(edit.kind, crate::OutboxKind::EditDiscord);
         let (op, created) = s
             .enqueue_op(
                 &crate::NewOp {
@@ -852,6 +891,24 @@ mod tests {
                 [],
             )
             .unwrap();
+        let ref_row: (String, String) = s
+            .conn
+            .query_row(
+                "SELECT external_id, ref_key FROM external_refs WHERE meeting_id = 'm1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(ref_row, ("page".to_string(), "task:i1".to_string()));
+        // Deleting the op that op 9 follows clears its after_id instead of cascading.
+        s.conn
+            .execute("DELETE FROM outbox WHERE id = 7", [])
+            .unwrap();
+        let after: Option<i64> = s
+            .conn
+            .query_row("SELECT after_id FROM outbox WHERE id = 9", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(after, None);
         s.delete_meeting("m1").unwrap();
         assert_eq!(count(&s, "outbox"), 0);
         assert_eq!(count(&s, "external_refs"), 0);
@@ -969,10 +1026,14 @@ mod tests {
         // A leftover of an interrupted run, then the whole step twice.
         conn.execute_batch("CREATE TABLE outbox_v8 (junk INTEGER);")
             .unwrap();
-        conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
-        run_pending(&conn, 7).unwrap();
+        migrate(&conn).unwrap();
+        assert_eq!(outbox_dump(&conn), before);
         conn.pragma_update(None, "user_version", 7).unwrap();
-        run_pending(&conn, 7).unwrap();
+        migrate(&conn).unwrap();
+        let fk: i64 = conn
+            .pragma_query_value(None, "foreign_keys", |r| r.get(0))
+            .unwrap();
+        assert_eq!(fk, 1, "foreign_keys restored");
         assert_eq!(outbox_dump(&conn), before);
         let leftovers: i64 = conn
             .query_row(

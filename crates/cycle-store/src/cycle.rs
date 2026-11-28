@@ -332,11 +332,13 @@ impl NotionProperties {
 /// 20th digit (the same shapes the schema accepts; surrounding whitespace is ignored).
 pub fn normalize_notion_id(s: &str) -> Option<String> {
     let mut out = String::with_capacity(32);
+    let mut last_dash_at = 0;
     for c in s.trim().chars() {
         if c == '-' {
-            if !matches!(out.len(), 8 | 12 | 16 | 20) {
+            if !matches!(out.len(), 8 | 12 | 16 | 20) || last_dash_at == out.len() {
                 return None;
             }
+            last_dash_at = out.len();
         } else if c.is_ascii_hexdigit() {
             out.push(c.to_ascii_lowercase());
         } else {
@@ -907,6 +909,10 @@ targets:
             "0123456789abcdef0123456789abcdef0",
             "0123456789abcdef0123456789abcdeg",
             "01234-56789abcdef0123456789abcdef",
+            "01234567--89abcdef0123456789abcdef",
+            "01234567-89ab--cdef0123456789abcdef",
+            "-0123456789abcdef0123456789abcdef",
+            "0123456789abcdef0123456789abcdef-",
             "https://www.notion.so/0123456789abcdef0123456789abcdef",
             "cred:notion/nomad-db",
         ] {
