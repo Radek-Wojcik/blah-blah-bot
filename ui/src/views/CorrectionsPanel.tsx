@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useBackend } from "../backend-context";
 import { errorMessage, useCycleFacts, useOutbox } from "../hooks";
 import { isIpcError } from "../ipc/tauri";
-import type { Correction, Corrections, DraftItem, PublishPlan } from "../ipc/types";
+import type { Correction, CorrectionStep, Corrections, DraftItem, PublishPlan } from "../ipc/types";
 import {
   CORRECTION_STATE_LABELS,
   correctionAbout,
@@ -12,6 +12,7 @@ import {
   correctionStatusLine,
   discordChannelUrl,
   safeHttpUrl,
+  safeHttpsUrl,
   today,
   unqueued,
 } from "../publish";
@@ -347,16 +348,18 @@ function CorrectionRow(props: {
   const { c } = props;
   const about = correctionAbout(c);
   const line = correctionStatusLine(c, props.rule);
+  const stepWaiting = (op: CorrectionStep | null | undefined) =>
+    op != null && (op.state === "failed" || (op.state === "queued" && op.lastError !== null));
   const waitingStep =
-    c.state === "failed" || (c.state === "queued" && c.file?.lastError)
+    c.file && (c.state === "failed" || (c.state === "queued" && c.file.lastError))
       ? c.file
-      : c.comment?.state === "failed"
+      : stepWaiting(c.comment)
         ? c.comment
-        : c.discordEdit?.state === "failed"
+        : stepWaiting(c.discordEdit)
           ? c.discordEdit
           : null;
   const threadId = c.discordEdit?.state === "done" ? c.discordEdit.result?.thread_id : null;
-  const threadHref = safeHttpUrl(
+  const threadHref = safeHttpsUrl(
     threadId && props.guildId ? discordChannelUrl(props.guildId, threadId) : null,
   );
   return (

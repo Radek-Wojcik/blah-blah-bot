@@ -38,7 +38,7 @@ import {
   planTopicsSummary,
   publicRepoBlock,
   repoWarning,
-  safeHttpUrl,
+  safeHttpsUrl,
   targetsSent,
   topicDifference,
   topicLine,
@@ -150,7 +150,7 @@ export function PublishPanel(props: {
     setBusy(true);
     backend
       .reexportNotion(meetingId)
-      .then((r) => setPlan(r.plan))
+      .then(() => loadPlan())
       .catch((e) => setError(errorMessage(e)))
       .finally(() => setBusy(false));
   };
@@ -259,7 +259,7 @@ export function PublishPanel(props: {
                 <h4 className="sub-head tight">Planned Notion tasks</h4>
                 <ul className="plan-lines" aria-label="Planned Notion tasks">
                   {plan.summary.notion.map((n) => {
-                    const existingHref = safeHttpUrl(n.existingUrl);
+                    const existingHref = safeHttpsUrl(n.existingUrl);
                     return (
                       <li key={n.itemId}>
                         {n.title}{" "}
@@ -270,6 +270,10 @@ export function PublishPanel(props: {
                               existing page
                             </a>{" "}
                             — updated, status kept)
+                          </span>
+                        ) : n.existingUrl ? (
+                          <span className="person-meta">
+                            (existing page — updated, status kept)
                           </span>
                         ) : (
                           <span className="person-meta">(new page)</span>

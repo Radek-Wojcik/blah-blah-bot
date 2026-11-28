@@ -241,15 +241,25 @@ fn payload<T: DeserializeOwned>(op: &OutboxOp) -> Result<T, OpError> {
         .map_err(|e| OpError::permanent(format!("the operation cannot be read: {e}")))
 }
 
+/// A fingerprint of a token for the client caches: the caches keep one client per API
+/// address and replace it when the token changes, so no raw token is a map key and a rotated
+/// token does not leave the old client behind.
+fn token_fingerprint(token: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    token.hash(&mut hasher);
+    hasher.finish()
+}
+
 /// Runs the operations of the outbox.
 pub struct Dispatcher {
     store: Arc<Mutex<Store>>,
     env: Arc<dyn Env>,
     /// Targets that could not be reached, with the time of the failure.
     offline: Mutex<HashMap<OutboxTarget, i64>>,
-    github: Mutex<HashMap<(String, String), Arc<Github>>>,
-    notion: Mutex<HashMap<(String, String), Arc<Notion>>>,
-    discord_bot: Mutex<HashMap<(String, String), Arc<DiscordBot>>>,
+    github: Mutex<HashMap<String, (u64, Arc<Github>)>>,
+    notion: Mutex<HashMap<String, (u64, Arc<Notion>)>>,
+    discord_bot: Mutex<HashMap<String, (u64, Arc<DiscordBot>)>>,
     visibility: Mutex<HashMap<String, (i64, RepoVisibility)>>,
 }
 
@@ -374,37 +384,43 @@ impl Dispatcher {
 
     fn github(&self, api: &str) -> Result<(Arc<Github>, String), OpError> {
         let token = self.env.github_token(api).unwrap_or_default();
-        let key = (api.to_string(), token.clone());
-        if let Some(found) = lock(&self.github).get(&key) {
-            return Ok((found.clone(), token));
+        let fingerprint = token_fingerprint(&token);
+        if let Some((fp, found)) = lock(&self.github).get(api) {
+            if *fp == fingerprint {
+                return Ok((found.clone(), token));
+            }
         }
         let client = self.env.client();
         let github = Arc::new(Github::with_client(client, api, &token)?);
-        lock(&self.github).insert(key, github.clone());
+        lock(&self.github).insert(api.to_string(), (fingerprint, github.clone()));
         Ok((github, token))
     }
 
     fn notion(&self, token: &str) -> Result<Arc<Notion>, OpError> {
         let api = self.env.notion_api();
-        let key = (api.clone(), token.to_string());
-        if let Some(found) = lock(&self.notion).get(&key) {
-            return Ok(found.clone());
+        let fingerprint = token_fingerprint(token);
+        if let Some((fp, found)) = lock(&self.notion).get(&api) {
+            if *fp == fingerprint {
+                return Ok(found.clone());
+            }
         }
         let client = self.env.client();
         let notion = Arc::new(Notion::with_client(client, &api, token)?);
-        lock(&self.notion).insert(key, notion.clone());
+        lock(&self.notion).insert(api, (fingerprint, notion.clone()));
         Ok(notion)
     }
 
     fn discord_bot(&self, token: &str) -> Result<Arc<DiscordBot>, OpError> {
         let api = self.env.discord_api();
-        let key = (api.clone(), token.to_string());
-        if let Some(found) = lock(&self.discord_bot).get(&key) {
-            return Ok(found.clone());
+        let fingerprint = token_fingerprint(token);
+        if let Some((fp, found)) = lock(&self.discord_bot).get(&api) {
+            if *fp == fingerprint {
+                return Ok(found.clone());
+            }
         }
         let client = self.env.client();
         let bot = Arc::new(DiscordBot::with_client(client, &api, token)?);
-        lock(&self.discord_bot).insert(key, bot.clone());
+        lock(&self.discord_bot).insert(api, (fingerprint, bot.clone()));
         Ok(bot)
     }
 

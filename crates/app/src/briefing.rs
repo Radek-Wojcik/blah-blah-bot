@@ -435,7 +435,7 @@ pub async fn get_briefing(
         build_briefing(source.as_ref(), &repos, &id, refresh, now_unix_ms())
     })
     .await
-    .map_err(|e| IpcError::new("internal", format!("the background task failed: {e}")))??;
+    .map_err(|e| crate::ipc::background_task_error(&e))??;
     if let Ok(completions) = state.with_store(|s| s.list_task_completions(&cycle_id)) {
         apply_task_completions(&mut result, &completions);
     }

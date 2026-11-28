@@ -7,17 +7,16 @@ import { discordMemberLabel } from "../publish";
 /**
  * Inline Discord server member search (and role list) for a participant row when the cycle has a
  * Discord bot target configured. Selecting a result populates the participant's `discord.userId`
- * or `discord.roleId`; manual numeric ID entry remains available alongside it.
+ * or `discord.roleId` in the form (saved with the project settings); manual numeric ID entry remains available alongside it.
  */
 export function DiscordParticipantPicker(props: {
   cycleId: string;
-  participantId: string;
   participantIndex: number;
   participantName: string;
   kind: "" | "user" | "role";
   onPick: (discord: DiscordRef) => void;
 }) {
-  const { cycleId, participantId, participantIndex, participantName, kind, onPick } = props;
+  const { cycleId, participantIndex, participantName, kind, onPick } = props;
   const backend = useBackend();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -29,11 +28,9 @@ export function DiscordParticipantPicker(props: {
   const labelPrefix = `Participant ${participantIndex + 1}`;
 
   const pick = (discord: DiscordRef) => {
+    // Only edits the form: the choice is stored with "Save project settings", like every field.
     onPick(discord);
     setOpen(false);
-    if (participantId.trim() !== "") {
-      void backend.setParticipantDiscord(cycleId, participantId, discord).catch(() => undefined);
-    }
   };
 
   const searchMembers = () => {

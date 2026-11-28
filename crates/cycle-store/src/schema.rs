@@ -60,11 +60,32 @@ pub fn validate(schema: Schema, value: &Value) -> Vec<ValidationIssue> {
     let mut issues: Vec<ValidationIssue> = schema
         .validator()
         .iter_errors(value)
-        .map(|e| ValidationIssue::new(pointer_to_path(&e.instance_path.to_string()), e.to_string()))
+        .map(|e| {
+            ValidationIssue::new(
+                pointer_to_path(&e.instance_path.to_string()),
+                match &e.kind {
+                    // The name comes from the schema, not from the data.
+                    jsonschema::error::ValidationErrorKind::Required { property } => {
+                        format!("{property} is a required property")
+                    }
+                    kind => redacted_message(&format!("{kind:?}")),
+                },
+            )
+        })
         .collect();
     issues.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.message.cmp(&b.message)));
     issues.dedup();
     issues
+}
+
+/// A message that names the violated keyword and nothing of the offending value: the library
+/// text quotes the value, which may be a pasted token or webhook address.
+fn redacted_message(kind_debug: &str) -> String {
+    let keyword: String = kind_debug
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric())
+        .collect();
+    format!("does not satisfy the schema rule `{keyword}`")
 }
 
 /// `/participants/0/id` becomes `participants[0].id`.
@@ -149,6 +170,38 @@ mod tests {
             "participants[1].discord.user_id"
         );
         assert_eq!(pointer_to_path("/0/status"), "[0].status");
+    }
+
+    #[test]
+    fn validation_messages_do_not_echo_the_value() {
+        let secret = "https://discord.com/api/webhooks/123456789012345678/FAKE-token_ABCdef";
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {"id": {"type": "integer"}, "n": {"enum": ["a"]},
+                           "p": {"type": "string", "pattern": "^x$"}},
+            "additionalProperties": false
+        });
+        let validator = jsonschema::validator_for(&schema).unwrap();
+        let value = serde_json::json!({"id": secret, "n": secret, "p": secret, "extra": secret});
+        let mut seen = 0;
+        for e in validator.iter_errors(&value) {
+            let m = redacted_message(&format!("{:?}", e.kind));
+            assert!(!m.contains("FAKE") && !m.contains("discord"), "{m}");
+            assert!(m.contains('`') && m.len() > 30, "{m}");
+            seen += 1;
+        }
+        assert!(seen >= 4);
+        let issues = validate(
+            Schema::Cycle,
+            &serde_json::json!({"id": secret, "x": secret}),
+        );
+        assert!(!issues.is_empty());
+        for i in &issues {
+            assert!(
+                !i.message.contains("FAKE") && !i.message.contains("webhooks"),
+                "{i:?}"
+            );
+        }
     }
 
     #[test]

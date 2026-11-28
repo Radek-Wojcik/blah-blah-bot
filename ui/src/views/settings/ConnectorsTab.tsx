@@ -168,7 +168,8 @@ function SecretCard(props: {
 /**
  * Connectors settings tab: external account tokens and API keys stored in Windows Credential
  * Manager (GitHub Token, Hugging Face Token, External / Cloud LLM API keys).
- * Discord webhooks and Notion targets are intentionally per-project inside Project Settings.
+ * Discord webhooks and the per-project Notion/Discord targets are configured in Project Settings;
+ * the Discord bot and Notion integration tokens are stored here.
  */
 export function ConnectorsTab({ onDirtyChange, registerHandle }: Partial<EditableTabProps> = {}) {
   const backend = useBackend();
@@ -555,7 +556,7 @@ export function ConnectorsTab({ onDirtyChange, registerHandle }: Partial<Editabl
             className="field-label-row"
             style={{ marginBottom: 8, justifyContent: "space-between" }}
           >
-            <span className="field-label-row">
+            <div className="field-label-row">
               <h3 className="sub-head" style={{ margin: 0 }}>
                 Discord Bot Token
               </h3>
@@ -570,11 +571,12 @@ export function ConnectorsTab({ onDirtyChange, registerHandle }: Partial<Editabl
                 </p>
                 <p>Zero privileged intents are required.</p>
               </HelpPopover>
-            </span>
+            </div>
             {DISCORD_TOKEN_PAGE && (
               <a
                 className="btn btn-small btn-ghost"
                 href={DISCORD_TOKEN_PAGE}
+                aria-label="Open Discord token page"
                 target="_blank"
                 rel="noreferrer noopener"
               >
@@ -632,7 +634,7 @@ export function ConnectorsTab({ onDirtyChange, registerHandle }: Partial<Editabl
             className="field-label-row"
             style={{ marginBottom: 8, justifyContent: "space-between" }}
           >
-            <span className="field-label-row">
+            <div className="field-label-row">
               <h3 className="sub-head" style={{ margin: 0 }}>
                 Notion Integration Token
               </h3>
@@ -650,11 +652,12 @@ export function ConnectorsTab({ onDirtyChange, registerHandle }: Partial<Editabl
                   before inspecting or exporting tasks.
                 </p>
               </HelpPopover>
-            </span>
+            </div>
             {NOTION_TOKEN_PAGE && (
               <a
                 className="btn btn-small btn-ghost"
                 href={NOTION_TOKEN_PAGE}
+                aria-label="Open Notion token page"
                 target="_blank"
                 rel="noreferrer noopener"
               >
