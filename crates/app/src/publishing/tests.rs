@@ -1342,6 +1342,24 @@ fn a_local_only_commit_does_not_block_queueing_it_again_after_a_remote_is_linked
     let url = bare.to_string_lossy().to_string();
     git(lab.repo().root(), &["remote", "add", "origin", &url]);
     rig.repos.lock().unwrap()[0].remote = Some(url);
+    // A publication that is refused (the repository is not confirmed) or has no commit
+    // (Discord only, nothing configured) leaves the historical commit exactly as it was.
+    assert!(rig.publishing.publish(MEETING, &github_only()).is_err());
+    assert!(rig
+        .publishing
+        .publish(MEETING, &["discord".to_string()])
+        .is_err());
+    let ops = rig.ops();
+    assert_eq!(ops.len(), 1);
+    assert_eq!((ops[0].id, ops[0].state), (op.id, OpState::Done));
+    assert!(rig
+        .store
+        .lock()
+        .unwrap()
+        .get_publication(MEETING)
+        .unwrap()
+        .is_none());
+
     let key = rig
         .publishing
         .env
@@ -1359,7 +1377,44 @@ fn a_local_only_commit_does_not_block_queueing_it_again_after_a_remote_is_linked
     assert_eq!(result.queued, 1, "the commit is queued again");
     let ops = rig.ops();
     assert_eq!(ops.len(), 1);
-    assert_eq!(ops[0].state, OpState::Queued);
+    assert_eq!((ops[0].id, ops[0].state), (op.id, OpState::Queued));
+    // It runs and now pushes: the draft is locked, because something was sent.
+    assert_eq!(rig.tick().done, 1);
+    let done = rig.ops().remove(0);
+    assert_eq!(done.state, OpState::Done);
+    assert!(done.result.as_deref().unwrap().contains("\"pushed\":true"));
+    assert_eq!(
+        ensure_draft_unlocked(&rig.store.lock().unwrap(), MEETING)
+            .unwrap_err()
+            .code,
+        "published"
+    );
+}
+
+#[test]
+fn auto_publish_with_a_notion_database_but_no_token_freezes_nothing() {
+    let mut cycle = fixture_cycle(Some(PublishMode::Off), None);
+    cycle.targets.notion = Some(cycle_store::NotionTarget {
+        token: "cred:notion/nomad".into(),
+        database: "0123456789abcdef0123456789abcdef".into(),
+        data_source: None,
+        publish: PublishMode::Auto,
+        properties: cycle_store::NotionProperties::default(),
+    });
+    let (rig, _lab) = Rig::local(Some(cycle));
+    rig.save_draft(&draft());
+
+    // The target is configured and automatic, yet the plan has no operation to queue.
+    assert_eq!(rig.publishing.auto_publish(MEETING).unwrap(), 0);
+    assert!(rig.ops().is_empty());
+    assert!(!rig.meeting_dir().join("work/publish").exists());
+    assert!(rig
+        .store
+        .lock()
+        .unwrap()
+        .get_publication(MEETING)
+        .unwrap()
+        .is_none());
 }
 
 #[test]

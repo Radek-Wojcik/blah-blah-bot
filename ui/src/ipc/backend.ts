@@ -391,8 +391,7 @@ export interface Backend {
   publishPlan(meetingId: string, targets?: string[]): Promise<PublishPlan>;
   /**
    * Queue the publication. Rejects with `public_repo_unconfirmed` until `confirmPublicRepo`, with
-   * `new_draft_pending` while a newer draft waits, with `discord_webhook_missing` and
-   * `nothing_to_publish`. From then on the draft is read-only.
+   * `new_draft_pending` while a newer draft waits, with `nothing_to_publish`. From then on the draft is read-only.
    */
   publishMeeting(meetingId: string, targets: string[]): Promise<PublishResult>;
   /** The user accepts publishing to the repository of the cycle although it is (or may be) public. */

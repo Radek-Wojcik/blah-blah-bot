@@ -452,6 +452,15 @@ export function opsOf(state: OutboxState | null, meetingId: string): OutboxOp[] 
   return (state?.ops ?? []).filter((o) => o.meetingId === meetingId).sort((a, b) => a.id - b.id);
 }
 
+/** A finished commit that only stayed on this computer (`pushed: false`): nothing was sent. */
+export function isLocalOnlyCommit(op: OutboxOp): boolean {
+  return (
+    op.state === "done" &&
+    (op.kind === "commit_meeting" || op.kind === "commit_correction") &&
+    op.result?.pushed === false
+  );
+}
+
 /**
  * Whether a single operation holds the draft lock.
  * Only operations that have actually been sent (`done`) or are currently running (`running`)
@@ -459,14 +468,7 @@ export function opsOf(state: OutboxState | null, meetingId: string): OutboxOp[] 
  */
 export function opLocksDraft(op: OutboxOp): boolean {
   if (op.state === "running") return true;
-  if (op.state !== "done") return false;
-  if (
-    (op.kind === "commit_meeting" || op.kind === "commit_correction") &&
-    op.result?.pushed === false
-  ) {
-    return false;
-  }
-  return true;
+  return op.state === "done" && !isLocalOnlyCommit(op);
 }
 
 /** The draft is read-only only once an external publishing operation is running or done. */
@@ -871,7 +873,7 @@ export function topicsSummary(result: OpResult | null | undefined): string | nul
  */
 export function targetsSent(ops: OutboxOp[]): Set<PublishTargetName> {
   const out = new Set<PublishTargetName>();
-  const live = (o: OutboxOp) => o.state !== "cancelled";
+  const live = (o: OutboxOp) => o.state !== "cancelled" && !isLocalOnlyCommit(o);
   const named: [PublishTargetName, (o: OutboxOp) => boolean][] = [
     ["github", (o) => o.target === "github" || o.target === "issues"],
     ["discord", (o) => o.target === "discord" && o.kind !== "edit_discord"],
@@ -886,7 +888,10 @@ export function targetsSent(ops: OutboxOp[]): Set<PublishTargetName> {
 
 /** The commit operation of a meeting that is done, if any. */
 export function committedOp(ops: OutboxOp[]): OutboxOp | null {
-  return ops.find((o) => o.kind === "commit_meeting" && o.state === "done") ?? null;
+  return (
+    ops.find((o) => o.kind === "commit_meeting" && o.state === "done" && !isLocalOnlyCommit(o)) ??
+    null
+  );
 }
 
 // ----- tasks --------------------------------------------------------------------------------

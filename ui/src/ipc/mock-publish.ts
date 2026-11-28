@@ -1048,14 +1048,6 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
         summary.discordMode = "bot";
         summary.discordThread = discord.bot.thread;
       } else {
-        const reference = discord?.webhook ?? "";
-        if (!targetSecrets.has(reference))
-          blocks.push({
-            code: "discord_webhook_missing",
-            message:
-              "No Discord webhook is stored for this cycle: add it in the publishing settings.",
-            visibility: null,
-          });
         summary.discord = true;
         summary.discordMode = "webhook";
         summary.discordThread = false;

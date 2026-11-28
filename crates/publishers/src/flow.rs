@@ -12,9 +12,10 @@
 //!
 //! # The lock
 //!
-//! From the moment the first operation of a meeting is queued, and until all of them are
-//! cancelled, the draft is read-only: an edit, a change of mode or a decision on a status
-//! change is refused with the code `published`.
+//! From the moment an operation of a meeting is running or done (something was sent), the
+//! draft is read-only: an edit, a change of mode or a decision on a status change is refused
+//! with the code `published`. Queued, failed and cancelled operations, and a commit that only
+//! stayed on this computer (`pushed: false`), leave the draft editable.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -220,6 +221,15 @@ pub fn start(
     if plan.is_blocked() {
         return Err(StartError::Blocked(plan.blocks.clone()));
     }
+    // A commit that stayed on this computer is replaced by the commit of this plan when it
+    // goes to a remote now. Only then, and never for a refused or commit-less plan.
+    if plan.summary.pushes && plan.ops.iter().any(|o| o.op_key == COMMIT_KEY) {
+        for op in store.list_ops(Some(start.meeting_id))? {
+            if op.op_key == COMMIT_KEY && plan::is_unpushed_local_commit(&op) {
+                store.supersede_done_op(op.id, now_ms)?;
+            }
+        }
+    }
     let live = store
         .list_ops(Some(start.meeting_id))?
         .iter()
@@ -408,30 +418,28 @@ pub struct Outcome {
 /// snapshot made for it is removed.
 pub fn publish(store: &Store, p: &Prepared<'_>) -> Result<Outcome, StartError> {
     let root = p.env.snapshot_root();
-    // A commit that only stayed on this computer (no remote then) does not stop the commit
-    // from being queued again once the repository has a remote.
-    if p.ctx.has_remote {
-        for op in store.list_ops(Some(p.meeting_id))? {
-            if op.op_key == plan::COMMIT_KEY && plan::is_unpushed_local_commit(&op) {
-                store.supersede_done_op(op.id, p.env.now_ms())?;
-            }
-        }
-    }
     let existing = store.list_ops(Some(p.meeting_id))?;
-    let live = existing.iter().any(|o| o.state != OpState::Cancelled);
     let publication = store.get_publication(p.meeting_id)?;
-    let (snapshot, fresh) = match (live, publication) {
-        (true, Some(row)) => {
-            let files = list_files(&root.join(&row.snapshot_dir))
-                .map_err(|e| StartError::Files(e.to_string()))?;
-            (
-                SnapshotRef {
-                    dir: row.snapshot_dir,
-                    files,
-                },
-                None,
-            )
-        }
+    // A commit that only stayed on this computer does not count as a live publication once the
+    // repository has a remote: it is queued again, but only when this plan has a commit
+    // (`start` supersedes it then, never before).
+    let supersedable = |o: &OutboxOp| {
+        p.ctx.has_remote && o.op_key == COMMIT_KEY && plan::is_unpushed_local_commit(o)
+    };
+    let has_supersedable = existing.iter().any(supersedable);
+    let live = existing
+        .iter()
+        .any(|o| o.state != OpState::Cancelled && !supersedable(o));
+    let reuse = |row: &Publication| -> Result<SnapshotRef, StartError> {
+        let files = list_files(&root.join(&row.snapshot_dir))
+            .map_err(|e| StartError::Files(e.to_string()))?;
+        Ok(SnapshotRef {
+            dir: row.snapshot_dir.clone(),
+            files,
+        })
+    };
+    let (mut snapshot, mut fresh) = match (live, &publication) {
+        (true, Some(row)) => (reuse(row)?, None),
         _ => {
             let frozen = freeze(
                 &root.join(p.meeting_rel),
@@ -459,14 +467,29 @@ pub fn publish(store: &Store, p: &Prepared<'_>) -> Result<Outcome, StartError> {
     let facts = repo_facts(p.env, store, p.ctx)?;
     let existing_refs = store.list_external_refs(p.meeting_id)?;
     let topics = p.ctx.repo.load_topics(&p.ctx.cycle.id).unwrap_or_default();
-    let mut plan = plan::build(&plan_input(
-        p,
-        &facts,
-        &snapshot,
-        &existing,
-        &existing_refs,
-        &topics,
-    ));
+    let build = |snapshot: &SnapshotRef| {
+        plan::build(&plan_input(
+            p,
+            &facts,
+            snapshot,
+            &existing,
+            &existing_refs,
+            &topics,
+        ))
+    };
+    let mut plan = build(&snapshot);
+    // The old local commit stays as it is when this publication has no commit (blocked, or
+    // only Discord or Notion): then it keeps its own snapshot and the new one is dropped.
+    let commits = plan.ops.iter().any(|o| o.op_key == COMMIT_KEY);
+    if has_supersedable && !live && !commits {
+        if let Some(row) = &publication {
+            if let Some(dir) = fresh.take() {
+                let _ = fs::remove_dir_all(dir);
+            }
+            snapshot = reuse(row)?;
+            plan = build(&snapshot);
+        }
+    }
     attach_topics(p, &topics, &mut plan);
     let started = start(
         store,

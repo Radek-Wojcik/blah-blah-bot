@@ -160,10 +160,12 @@ export function useCycles(): {
   const [reposLoaded, setReposLoaded] = useState(false);
   const reload = useCallback(() => {
     void backend.listCycles().then(setCycles);
-    void backend.listCycleRepos().then((r) => {
-      setRepos(r);
-      setReposLoaded(true);
-    });
+    void backend
+      .listCycleRepos()
+      .then(setRepos)
+      .catch(() => undefined)
+      // A failed load is final for now: the switches must not stay disabled forever.
+      .finally(() => setReposLoaded(true));
   }, [backend]);
   useEffect(() => {
     reload();
