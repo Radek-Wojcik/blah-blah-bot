@@ -205,13 +205,34 @@ fn starting_queues_the_plan_and_records_the_publication() {
     let row = s.get_publication(MEETING).unwrap().unwrap();
     assert_eq!(row.snapshot_dir, "m/work/publish/1");
     assert_eq!(row.repo_key.as_deref(), Some("github.com/owner/rover"));
+    // Queued (unsent) operations do not lock the draft.
+    assert_eq!(lock_reason(&s, MEETING).unwrap(), None);
+    assert!(!is_locked(&s, MEETING).unwrap());
+
+    // Claiming (Running) or finishing (Done) an external operation locks the draft.
+    let claimed = s.claim_next_op(15, &[]).unwrap().unwrap();
     assert!(lock_reason(&s, MEETING).unwrap().is_some());
+    assert!(is_locked(&s, MEETING).unwrap());
+    s.complete_op(claimed.id, r#"{"pushed":true}"#, 16).unwrap();
     assert!(is_locked(&s, MEETING).unwrap());
 
     // Starting again changes nothing.
     let again = start(&s, &begin("m/work/publish/1"), &plan, 20).unwrap();
     assert!(again.iter().all(|(_, created)| !created));
     assert_eq!(s.list_ops(Some(MEETING)).unwrap().len(), 2);
+}
+
+#[test]
+fn done_local_only_commit_without_push_does_not_lock_draft() {
+    let s = store();
+    let plan = plan_for(RepoVisibility::NotPublic, false, "m/work/publish/1");
+    start(&s, &begin("m/work/publish/1"), &plan, 10).unwrap();
+    let commit = s.claim_next_op(11, &[]).unwrap().unwrap();
+    s.complete_op(commit.id, r#"{"pushed":false}"#, 12).unwrap();
+    assert!(
+        !is_locked(&s, MEETING).unwrap(),
+        "an unsent local-only commit (pushed: false) must not lock the draft"
+    );
 }
 
 #[test]
@@ -248,6 +269,9 @@ fn cancelling_every_operation_unlocks_the_draft_and_a_new_snapshot_replaces_the_
         s.get_publication(MEETING).unwrap().unwrap().snapshot_dir,
         "m/work/publish/2"
     );
+    // Still unlocked while queued; locks once claimed/running.
+    assert!(!is_locked(&s, MEETING).unwrap());
+    let _ = s.claim_next_op(21, &[]).unwrap().unwrap();
     assert!(is_locked(&s, MEETING).unwrap());
 }
 

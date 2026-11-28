@@ -12,16 +12,17 @@
 //!
 //! # The lock
 //!
-//! From the moment the first operation of a meeting is queued, and until all of them are
-//! cancelled, the draft is read-only: an edit, a change of mode or a decision on a status
-//! change is refused with the code `published`.
+//! From the moment an operation of a meeting is running or done (something was sent), the
+//! draft is read-only: an edit, a change of mode or a decision on a status change is refused
+//! with the code `published`. Queued, failed and cancelled operations, and a commit that only
+//! stayed on this computer (`pushed: false`), leave the draft editable.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use cycle_store::{Correction, DiscordMode, Draft, Topic};
+use cycle_store::{Correction, Cycle, DiscordMode, Draft, Topic};
 use store::{
     ExternalRef, OpState, OutboxKind, OutboxOp, Publication, RefTarget, Store, StoreError,
 };
@@ -34,7 +35,7 @@ use crate::plan::{
     self, Block, PlanInput, PublishPlan, RepoFacts, SnapshotRef, TopicsPlan, COMMIT_KEY,
     DISCORD_KEY, DISCORD_POST_REF_KEY,
 };
-use crate::rules::{PublishTarget, Trigger};
+use crate::rules::{PublishTarget, TargetRules, Trigger};
 
 /// Folder of the snapshots below the meeting folder.
 pub const SNAPSHOT_DIR: &str = "work/publish";
@@ -140,12 +141,45 @@ pub fn list_files(dir: &Path) -> io::Result<Vec<String>> {
 
 // ----- the lock -------------------------------------------------------------------------------
 
+/// Whether a single outbox operation locks the draft from editing.
+/// Only operations that have actually been sent or are currently in flight (`Done` or `Running`)
+/// lock the draft. Queued, failed, cancelled, and local-only unsent commits (`pushed: false`)
+/// leave the draft editable.
+pub fn op_locks_draft(op: &OutboxOp) -> bool {
+    match op.state {
+        OpState::Running => true,
+        OpState::Done => !plan::is_unpushed_local_commit(op),
+        OpState::Queued | OpState::Failed | OpState::Cancelled => false,
+    }
+}
+
+/// Whether any of the given operations lock the draft from editing.
+pub fn ops_lock_draft(ops: &[OutboxOp]) -> bool {
+    ops.iter().any(op_locks_draft)
+}
+
+/// Whether the secret of the Discord webhook reference of `cycle` is stored.
+pub fn discord_webhook_secret_set(env: &dyn Env, cycle: &Cycle) -> bool {
+    matches!(
+        cycle.targets.discord.as_ref().and_then(|d| d.mode()),
+        Some(DiscordMode::Webhook(r)) if env.webhook(r).is_some()
+    )
+}
+
+/// The target rules of a repository context, with the configuration state of every target.
+pub fn target_rules(env: &dyn Env, ctx: &RepoContext) -> TargetRules {
+    TargetRules::for_repo(
+        &ctx.cycle,
+        ctx.has_remote || ctx.github.is_some(),
+        discord_webhook_secret_set(env, &ctx.cycle),
+    )
+}
+
 /// Why the draft of a meeting is read-only, when it is: the operations that hold it.
 pub fn lock_reason(store: &Store, meeting_id: &str) -> Result<Option<String>, StoreError> {
     let ops = store.list_ops(Some(meeting_id))?;
-    let live = ops.iter().filter(|o| o.state != OpState::Cancelled).count();
-    Ok((live > 0).then(|| {
-        "this meeting is published (or queued for publishing), so its draft is read-only; cancel its operations in the outbox to change it".to_string()
+    Ok(ops_lock_draft(&ops).then(|| {
+        "this meeting has been published (or is currently being published), so its draft is read-only".to_string()
     }))
 }
 
@@ -186,6 +220,15 @@ pub fn start(
 ) -> Result<Vec<(OutboxOp, bool)>, StartError> {
     if plan.is_blocked() {
         return Err(StartError::Blocked(plan.blocks.clone()));
+    }
+    // A commit that stayed on this computer is replaced by the commit of this plan when it
+    // goes to a remote now. Only then, and never for a refused or commit-less plan.
+    if plan.summary.pushes && plan.ops.iter().any(|o| o.op_key == COMMIT_KEY) {
+        for op in store.list_ops(Some(start.meeting_id))? {
+            if op.op_key == COMMIT_KEY && plan::is_unpushed_local_commit(&op) {
+                store.supersede_done_op(op.id, now_ms)?;
+            }
+        }
     }
     let live = store
         .list_ops(Some(start.meeting_id))?
@@ -376,20 +419,27 @@ pub struct Outcome {
 pub fn publish(store: &Store, p: &Prepared<'_>) -> Result<Outcome, StartError> {
     let root = p.env.snapshot_root();
     let existing = store.list_ops(Some(p.meeting_id))?;
-    let live = existing.iter().any(|o| o.state != OpState::Cancelled);
     let publication = store.get_publication(p.meeting_id)?;
-    let (snapshot, fresh) = match (live, publication) {
-        (true, Some(row)) => {
-            let files = list_files(&root.join(&row.snapshot_dir))
-                .map_err(|e| StartError::Files(e.to_string()))?;
-            (
-                SnapshotRef {
-                    dir: row.snapshot_dir,
-                    files,
-                },
-                None,
-            )
-        }
+    // A commit that only stayed on this computer does not count as a live publication once the
+    // repository has a remote: it is queued again, but only when this plan has a commit
+    // (`start` supersedes it then, never before).
+    let supersedable = |o: &OutboxOp| {
+        p.ctx.has_remote && o.op_key == COMMIT_KEY && plan::is_unpushed_local_commit(o)
+    };
+    let has_supersedable = existing.iter().any(supersedable);
+    let live = existing
+        .iter()
+        .any(|o| o.state != OpState::Cancelled && !supersedable(o));
+    let reuse = |row: &Publication| -> Result<SnapshotRef, StartError> {
+        let files = list_files(&root.join(&row.snapshot_dir))
+            .map_err(|e| StartError::Files(e.to_string()))?;
+        Ok(SnapshotRef {
+            dir: row.snapshot_dir.clone(),
+            files,
+        })
+    };
+    let (mut snapshot, mut fresh) = match (live, &publication) {
+        (true, Some(row)) => (reuse(row)?, None),
         _ => {
             let frozen = freeze(
                 &root.join(p.meeting_rel),
@@ -417,14 +467,29 @@ pub fn publish(store: &Store, p: &Prepared<'_>) -> Result<Outcome, StartError> {
     let facts = repo_facts(p.env, store, p.ctx)?;
     let existing_refs = store.list_external_refs(p.meeting_id)?;
     let topics = p.ctx.repo.load_topics(&p.ctx.cycle.id).unwrap_or_default();
-    let mut plan = plan::build(&plan_input(
-        p,
-        &facts,
-        &snapshot,
-        &existing,
-        &existing_refs,
-        &topics,
-    ));
+    let build = |snapshot: &SnapshotRef| {
+        plan::build(&plan_input(
+            p,
+            &facts,
+            snapshot,
+            &existing,
+            &existing_refs,
+            &topics,
+        ))
+    };
+    let mut plan = build(&snapshot);
+    // The old local commit stays as it is when this publication has no commit (blocked, or
+    // only Discord or Notion): then it keeps its own snapshot and the new one is dropped.
+    let commits = plan.ops.iter().any(|o| o.op_key == COMMIT_KEY);
+    if has_supersedable && !live && !commits {
+        if let Some(row) = &publication {
+            if let Some(dir) = fresh.take() {
+                let _ = fs::remove_dir_all(dir);
+            }
+            snapshot = reuse(row)?;
+            plan = build(&snapshot);
+        }
+    }
     attach_topics(p, &topics, &mut plan);
     let started = start(
         store,

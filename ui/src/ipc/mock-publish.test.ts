@@ -198,9 +198,9 @@ describe("plan and the public repository gate", () => {
     await approveAll(b);
     const plan = await b.publishPlan("m5");
     expect(plan.targets).toEqual([
-      { target: "github", mode: "on-approval", available: true },
-      { target: "discord", mode: "on-approval", available: true },
-      { target: "notion", mode: null, available: false },
+      { target: "github", mode: "on-approval", available: true, configured: true },
+      { target: "discord", mode: "on-approval", available: true, configured: true },
+      { target: "notion", mode: null, available: false, configured: false },
     ]);
     expect(plan.summary.commit && plan.summary.pushes).toBe(true);
     expect(plan.summary.files).toContain("transcript.md");
@@ -254,14 +254,14 @@ describe("plan and the public repository gate", () => {
     });
   });
 
-  it("blocks Discord without a webhook and a target the rules turn off", async () => {
+  it("leaves Discord out without a stored webhook and blocks a target the rules turn off", async () => {
     const b = fresh();
     await b.confirmPublicRepo("NOMAD");
     await b.clearTargetSecret("cred:discord/nomad");
     expect((await b.publishPlan("m5", ["discord"])).blocks.map((x) => x.code)).toEqual([
-      "discord_webhook_missing",
+      "nothing_to_publish",
     ]);
-    expect(await codeOf(b.publishMeeting("m5", ["discord"]))).toBe("discord_webhook_missing");
+    expect(await codeOf(b.publishMeeting("m5", ["discord"]))).toBe("nothing_to_publish");
     const cycle = (await b.getCycle("NOMAD")).cycle;
     cycle.targets.github = { path: "meetings", publish: "off" };
     cycle.targets.discord = { webhook: "cred:discord/nomad", publish: "off" };
@@ -334,10 +334,11 @@ describe("the full loop", () => {
     expect(posts[0].content).toContain("Issues: #13, #14, #15, #16");
   });
 
-  it("locks the draft once operations exist", async () => {
+  it("locks the draft once external operations are sent", async () => {
     const b = fresh();
     await approveAll(b);
     await publishAll(b);
+    await settled(b);
     const view = await b.getDraft("m5");
     expect(view.locked).toBe(true);
     for (const attempt of [
@@ -507,7 +508,7 @@ describe("offline, retry, cancel", () => {
     expect(done.ops.every((o) => o.state === "done")).toBe(true);
   });
 
-  it("cancels waiting operations and unlocks the draft with the last one", async () => {
+  it("cancels waiting operations without locking the draft while queued", async () => {
     const b = fresh();
     await b.confirmPublicRepo("NOMAD");
     hooks().setOffline(true);
@@ -516,15 +517,10 @@ describe("offline, retry, cancel", () => {
       () => b.outboxState(),
       (s) => s.offline.length > 0,
     );
-    expect((await b.getDraft("m5")).locked).toBe(true);
-    const unlocks: string[] = [];
-    await b.onDraftChanged((id) => unlocks.push(id));
-    const ids = (await b.outboxState()).ops.map((o) => o.id);
-    for (const id of ids.slice(0, -1)) await b.cancelOutboxOp(id);
-    expect((await b.getDraft("m5")).locked).toBe(true);
-    await b.cancelOutboxOp(ids[ids.length - 1]);
     expect((await b.getDraft("m5")).locked).toBe(false);
-    expect(unlocks).toContain("m5");
+    const ids = (await b.outboxState()).ops.map((o) => o.id);
+    for (const id of ids) await b.cancelOutboxOp(id);
+    expect((await b.getDraft("m5")).locked).toBe(false);
     await b.updateDraftItem("m5", "i01", { text: "An edit after cancelling" });
     expect(await codeOf(b.cancelOutboxOp(ids[0]))).toBe("invalid");
     expect(await codeOf(b.cancelOutboxOp(12345))).toBe("not_found");
@@ -727,6 +723,7 @@ describe("corrections to a published meeting", () => {
     const b = fresh();
     expect(await codeOf(b.addCorrection("m5", "Moved."))).toBe("not_published");
     await publishAll(b);
+    await settled(b);
     expect(await codeOf(b.addCorrection("m5", "   "))).toBe("invalid");
     expect(await codeOf(b.addCorrection("m5", "x", "i99"))).toBe("not_found");
     expect(await codeOf(b.addCorrection("m5", "x", undefined, "twelve"))).toBe("invalid");
@@ -848,6 +845,7 @@ describe("corrections to a published meeting", () => {
     const b = fresh();
     await b.confirmPublicRepo("NOMAD");
     await b.publishMeeting("m5", ["discord"]);
+    await settled(b);
     const view = await b.addCorrection("m5", "Moved.");
     expect(view.inRepository).toBe(false);
     expect(await codeOf(b.publishCorrections("m5"))).toBe("not_in_repository");
@@ -856,6 +854,10 @@ describe("corrections to a published meeting", () => {
   it("waits for the issue of its item and survives the network going away", async () => {
     const b = fresh();
     await publishAll(b);
+    await until(
+      () => b.outboxState(),
+      (s) => s.ops.some((o) => o.state === "done" || o.state === "running"),
+    );
     const task = (await b.getDraft("m5")).draft.items.find((i) => i.type === "task")!;
     await b.addCorrection("m5", "Moved.", task.id);
     // Queued before the meeting finished: the comment still finds the issue that gets made.

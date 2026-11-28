@@ -202,7 +202,7 @@ impl Publishing {
         Ok(CorrectionsDto {
             meeting_id,
             cycle_id: loaded.ctx.cycle.id.clone(),
-            locked: ops.iter().any(|o| o.state != OpState::Cancelled),
+            locked: flow::ops_lock_draft(&ops),
             in_repository,
             rule: mode_name(TargetRules::of(&loaded.ctx.cycle).github),
             corrections,
@@ -273,7 +273,7 @@ impl Publishing {
         self.write_corrections(&loaded, &file)?;
         drop(guard);
 
-        let rules = TargetRules::of(&loaded.ctx.cycle);
+        let rules = flow::target_rules(self.env.as_ref(), &loaded.ctx);
         let discord_auto = loaded
             .ctx
             .cycle

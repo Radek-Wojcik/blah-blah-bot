@@ -86,9 +86,9 @@ fn publishing_without_a_network_waits_in_the_outbox_and_recovers() {
         );
     }
 
-    // Nothing runs before the retry time, and the draft stays locked all the while.
+    // Nothing runs before the retry time, and the draft is not locked while ops are only queued.
     assert_eq!(lab.tick().ran(), 0);
-    assert!(publishers::flow::is_locked(&lab.store.lock().unwrap(), MEETING).unwrap());
+    assert!(!publishers::flow::is_locked(&lab.store.lock().unwrap(), MEETING).unwrap());
 
     // A second failed attempt backs off further.
     lab.env.advance(31_000);
@@ -124,6 +124,8 @@ fn publishing_without_a_network_waits_in_the_outbox_and_recovers() {
     assert_eq!(lab.github.issues(REPO).len(), 2);
     assert_eq!(lab.discord.messages().len(), 2);
     assert!(lab.dispatcher.offline_targets().is_empty());
+    // Everything that was sent is done, so the draft is read-only now.
+    assert!(publishers::flow::is_locked(&lab.store.lock().unwrap(), MEETING).unwrap());
 }
 
 #[test]

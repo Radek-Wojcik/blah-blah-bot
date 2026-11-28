@@ -387,16 +387,16 @@ fn the_check_covers_what_goes_to_the_repository_and_nothing_else() {
 }
 
 #[test]
-fn a_missing_webhook_blocks_an_explicit_post_and_only_notes_an_automatic_one() {
+fn a_webhook_without_a_stored_secret_is_an_unconfigured_target_that_is_left_out() {
     let mut case = Case::new(with_discord(PublishMode::Auto));
     case.webhook = false;
-    assert_eq!(
-        case.explicit(&DISCORD).blocks,
-        [Block::DiscordWebhookMissing]
-    );
+    let explicit = case.explicit(&DISCORD);
+    assert_eq!(explicit.blocks, [Block::NothingToPublish]);
+    assert!(explicit.ops.is_empty());
+    assert!(explicit.notes.iter().any(|n| n.contains("Discord webhook")));
+    assert!(!explicit.rules.is_configured(PublishTarget::Discord));
     let auto = case.plan(Trigger::Auto, &[]);
     assert!(auto.blocks.is_empty() && auto.ops.is_empty());
-    assert!(auto.notes.iter().any(|n| n.contains("webhook")));
 }
 
 #[test]
@@ -584,4 +584,51 @@ fn missing_notion_and_bot_tokens_block_explicit_and_note_auto() {
     assert_eq!(bot.guild, "400000000000000001");
     assert_eq!(bot.channel, "300000000000000001");
     assert!(bot.thread && bot.edit_on_correction);
+}
+
+#[test]
+fn local_only_project_with_auto_rules_plans_no_ops() {
+    let mut c = cycle(Some(PublishMode::Auto), None);
+    c.targets.discord = Some(cycle_store::DiscordTarget {
+        webhook: Some("".into()),
+        bot: None,
+        publish: PublishMode::Auto,
+        template: None,
+    });
+    c.targets.notion = Some(cycle_store::NotionTarget {
+        token: "cred:notion/nomad".into(),
+        database: "".into(),
+        data_source: None,
+        publish: PublishMode::Auto,
+        properties: cycle_store::NotionProperties::default(),
+    });
+    let mut case = Case::new(c);
+    case.repo = RepoFacts {
+        github: None,
+        has_remote: false,
+        visibility: RepoVisibility::NotPublic,
+        confirmed: false,
+    };
+
+    let auto = case.plan(Trigger::Auto, &[]);
+    assert!(
+        auto.ops.is_empty(),
+        "no ops planned for unconfigured targets"
+    );
+    assert!(!auto.summary.commit);
+    assert!(!auto.summary.discord);
+    assert!(auto.summary.notion.is_empty());
+    assert!(auto.blocks.is_empty());
+
+    let explicit = case.explicit(&[
+        PublishTarget::Github,
+        PublishTarget::Discord,
+        PublishTarget::Notion,
+    ]);
+    assert!(explicit.ops.is_empty());
+    assert_eq!(explicit.blocks, [Block::NothingToPublish]);
+    assert!(explicit
+        .notes
+        .iter()
+        .any(|n| n.contains("GitHub repository")));
 }

@@ -28,7 +28,12 @@ import type {
   PublishingSecrets,
   ReportMode,
 } from "../ipc/types";
-import { DEFAULT_PUBLISH_RULE, parseWebhook } from "../publish";
+import {
+  DEFAULT_PUBLISH_RULE,
+  UNCONFIGURED_TARGET_HINT,
+  isDiscordConfigured,
+  parseWebhook,
+} from "../publish";
 import { MODE_HELP, MODE_NAMES, REPORT_MODES } from "../report-gate";
 import { DeleteProjectSection } from "./DeleteProjectSection";
 import { DiscordInviteBox } from "./DiscordInviteBox";
@@ -93,6 +98,9 @@ export function ProjectSettingsModal({
 
   const [repos, setRepos] = useState<CycleRepoView[]>([]);
   const [secrets, setSecrets] = useState<PublishingSecrets | null>(null);
+  /** The repositories and secrets are loaded: until then the configured state is unknown. */
+  const [integrationsLoaded, setIntegrationsLoaded] = useState(false);
+  const integrationsSeq = useRef(0);
   const [githubRepoInput, setGithubRepoInput] = useState("");
   const [githubApiInput, setGithubApiInput] = useState("");
   const [repoBusy, setRepoBusy] = useState(false);
@@ -127,10 +135,13 @@ export function ProjectSettingsModal({
 
   const loadIntegrations = useCallback(
     (repoId?: string) => {
+      const seq = ++integrationsSeq.current;
       void Promise.all([backend.listCycleRepos(), backend.publishingSecrets()])
         .then(([repoList, sec]) => {
+          if (seq !== integrationsSeq.current) return;
           setRepos(repoList);
           setSecrets(sec);
+          setIntegrationsLoaded(true);
           if (repoId) {
             const match = repoList.find((r) => r.id === repoId);
             if (match) {
@@ -139,10 +150,20 @@ export function ProjectSettingsModal({
             }
           }
         })
-        .catch(() => undefined);
+        .catch(() => {
+          if (seq === integrationsSeq.current) setIntegrationsLoaded(true);
+        });
     },
     [backend],
   );
+
+  useEffect(() => {
+    const seq = integrationsSeq;
+    return () => {
+      // A load that finishes after the dialog closed is ignored.
+      seq.current += 1;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1228,6 +1249,12 @@ export function ProjectSettingsModal({
                             name="GitHub"
                             target="github"
                             value={github.publish ?? DEFAULT_PUBLISH_RULE.github}
+                            disabled={!integrationsLoaded}
+                            disabledReason={
+                              !integrationsLoaded || currentRepo?.remote || currentRepo?.githubRepo
+                                ? undefined
+                                : UNCONFIGURED_TARGET_HINT.github
+                            }
                             onChange={(publish) => setTargets({ github: { ...github, publish } })}
                           />
                         </div>
@@ -1518,6 +1545,12 @@ export function ProjectSettingsModal({
                         name="Discord"
                         target="discord"
                         value={discordRef.publish ?? DEFAULT_PUBLISH_RULE.discord}
+                        disabled={!integrationsLoaded}
+                        disabledReason={
+                          !integrationsLoaded || isDiscordConfigured(discordRef, isWebhookSet)
+                            ? undefined
+                            : UNCONFIGURED_TARGET_HINT.discord
+                        }
                         onChange={(publish) => setTargets({ discord: { ...discordRef, publish } })}
                       />
                     </div>

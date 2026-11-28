@@ -34,6 +34,26 @@ export const TARGET_LABELS: Record<PublishTargetName, string> = {
   notion: "Notion (tasks database)",
 };
 
+/** Shown next to a disabled rule switch when the target is not configured yet. */
+export const UNCONFIGURED_TARGET_HINT: Record<PublishTargetName, string> = {
+  github: "Connect a GitHub repository first",
+  discord: "Configure a Discord webhook or bot channel first",
+  notion: "Configure a Notion database first",
+};
+
+/**
+ * Whether the Discord target can publish: a bot needs its channel, a webhook needs its secret
+ * to be stored (the same rule the backend applies).
+ */
+export function isDiscordConfigured(
+  discord: { webhook?: string | null; bot?: { channel: string } | null } | null | undefined,
+  webhookSet: boolean,
+): boolean {
+  if (!discord) return false;
+  if (discord.bot) return discord.bot.channel.trim() !== "";
+  return Boolean(discord.webhook?.trim()) && webhookSet;
+}
+
 /** The positions of the rule switch, from the safest. */
 export const RULE_ORDER: PublishMode[] = ["off", "on-approval", "auto"];
 
@@ -432,9 +452,28 @@ export function opsOf(state: OutboxState | null, meetingId: string): OutboxOp[] 
   return (state?.ops ?? []).filter((o) => o.meetingId === meetingId).sort((a, b) => a.id - b.id);
 }
 
-/** The draft is read-only while an operation of the meeting exists that is not cancelled. */
+/** A finished commit that only stayed on this computer (`pushed: false`): nothing was sent. */
+export function isLocalOnlyCommit(op: OutboxOp): boolean {
+  return (
+    op.state === "done" &&
+    (op.kind === "commit_meeting" || op.kind === "commit_correction") &&
+    op.result?.pushed === false
+  );
+}
+
+/**
+ * Whether a single operation holds the draft lock.
+ * Only operations that have actually been sent (`done`) or are currently running (`running`)
+ * lock the draft; queued, failed, cancelled, or local-only unsent commits (`pushed: false`) do not.
+ */
+export function opLocksDraft(op: OutboxOp): boolean {
+  if (op.state === "running") return true;
+  return op.state === "done" && !isLocalOnlyCommit(op);
+}
+
+/** The draft is read-only only once an external publishing operation is running or done. */
 export function lockedByOps(ops: OutboxOp[]): boolean {
-  return ops.some((o) => o.state !== "cancelled");
+  return ops.some(opLocksDraft);
 }
 
 export interface OpCounts {
@@ -834,7 +873,7 @@ export function topicsSummary(result: OpResult | null | undefined): string | nul
  */
 export function targetsSent(ops: OutboxOp[]): Set<PublishTargetName> {
   const out = new Set<PublishTargetName>();
-  const live = (o: OutboxOp) => o.state !== "cancelled";
+  const live = (o: OutboxOp) => o.state !== "cancelled" && !isLocalOnlyCommit(o);
   const named: [PublishTargetName, (o: OutboxOp) => boolean][] = [
     ["github", (o) => o.target === "github" || o.target === "issues"],
     ["discord", (o) => o.target === "discord" && o.kind !== "edit_discord"],
@@ -849,7 +888,10 @@ export function targetsSent(ops: OutboxOp[]): Set<PublishTargetName> {
 
 /** The commit operation of a meeting that is done, if any. */
 export function committedOp(ops: OutboxOp[]): OutboxOp | null {
-  return ops.find((o) => o.kind === "commit_meeting" && o.state === "done") ?? null;
+  return (
+    ops.find((o) => o.kind === "commit_meeting" && o.state === "done" && !isLocalOnlyCommit(o)) ??
+    null
+  );
 }
 
 // ----- tasks --------------------------------------------------------------------------------

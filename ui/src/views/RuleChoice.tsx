@@ -13,13 +13,21 @@ export function RuleChoice(props: {
   target: PublishTargetName;
   value: PublishMode;
   disabled?: boolean;
+  /** When set, disables the switch and displays this message below it. */
+  disabledReason?: string | null;
   onChange: (mode: PublishMode) => void;
 }) {
-  const { name, target, value } = props;
-  const warning = autoWarning(target, value);
+  const { name, target, value, disabledReason } = props;
+  const isDisabled = Boolean(props.disabled || disabledReason);
+  const warning = disabledReason ? null : autoWarning(target, value);
   return (
     <div className="rule-choice">
-      <RuleSwitch name={name} value={value} disabled={props.disabled} onChange={props.onChange} />
+      <RuleSwitch name={name} value={value} disabled={isDisabled} onChange={props.onChange} />
+      {disabledReason && (
+        <p className="target-rule-help" role="note">
+          {disabledReason}
+        </p>
+      )}
       <ul className="rule-options" aria-label={`What each ${name} rule does`}>
         {RULE_ORDER.map((rule) => (
           <li key={rule} className={rule === value ? "rule-option rule-option-on" : "rule-option"}>

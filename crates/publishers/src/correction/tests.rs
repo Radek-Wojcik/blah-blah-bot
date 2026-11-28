@@ -216,7 +216,7 @@ fn the_public_repository_check_applies_also_under_automatic() {
         case.repo = facts(RepoVisibility::Public, true);
         assert!(!case.plan(Trigger::Explicit).is_blocked());
     }
-    // Nothing leaves a repository without a remote.
+    // A local-only repository with no remote and no linked GitHub repo plans no ops.
     let mut local = Case::new(Some(PublishMode::OnApproval));
     local.repo = RepoFacts {
         github: None,
@@ -224,6 +224,17 @@ fn the_public_repository_check_applies_also_under_automatic() {
         visibility: RepoVisibility::NotPublic,
         confirmed: false,
     };
+    let plan = local.plan(Trigger::Explicit);
+    assert!(plan.ops.is_empty());
+    assert_eq!(plan.blocks, [Block::NothingToPublish]);
+    assert!(plan
+        .notes
+        .iter()
+        .any(|n| n.contains("connect a GitHub repository")));
+    assert!(!plan.notes.iter().any(|n| n.contains("cycle.yaml")));
+
+    // A repository linked to GitHub without a local remote does not push and is not blocked by visibility.
+    local.repo.github = facts(RepoVisibility::NotPublic, false).github;
     let plan = local.plan(Trigger::Explicit);
     assert!(!plan.is_blocked() && !plan.summary.pushes);
 }

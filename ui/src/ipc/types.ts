@@ -276,7 +276,6 @@ export type IpcErrorCode =
   | "published"
   /** The repository is public (or its visibility is unknown) and the user has not confirmed it. */
   | "public_repo_unconfirmed"
-  | "discord_webhook_missing"
   | "nothing_to_publish"
   /** A newer draft waits for a decision. */
   | "new_draft_pending"
@@ -1172,6 +1171,8 @@ export interface PublishTargetView {
   mode: PublishMode | null;
   /** An explicit publication may use it. */
   available: boolean;
+  /** Whether the target has the required configuration (remote/repo, webhook/channel, database). */
+  configured?: boolean;
 }
 
 export interface PlannedIssue {
@@ -1259,7 +1260,6 @@ export interface PlanSummary {
 
 export type PlanBlockCode =
   | "public_repo_unconfirmed"
-  | "discord_webhook_missing"
   | "discord_bot_token_missing"
   | "notion_token_missing"
   | "nothing_to_publish"
