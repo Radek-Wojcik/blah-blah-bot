@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useBackend } from "../backend-context";
 import { AudioRetentionHelp } from "../components/AudioRetentionHelp";
 import { BrowseButton } from "../components/BrowseButton";
@@ -283,6 +283,52 @@ export function ProjectSettingsModal({
     thread: true,
     editOnCorrection: true,
   });
+
+  /** Editing a bot field makes an earlier channel check stale. */
+  const patchBot = (p: Partial<DiscordBotTarget>) => {
+    if (!discordRef?.bot) return;
+    setBotCheck(null);
+    setBotCheckError(null);
+    setTargets({ discord: { ...discordRef, bot: { ...discordRef.bot, ...p } } });
+  };
+
+  const setDiscordMode = (mode: "webhook" | "bot") => {
+    if (!discordRef) return;
+    setBotCheck(null);
+    setBotCheckError(null);
+    if (mode === "bot") {
+      // A pasted webhook URL is never kept once the bot is the delivery mode.
+      setWebhookInput("");
+      setWebhookMsg(null);
+    }
+    setTargets({
+      discord:
+        mode === "bot"
+          ? {
+              bot: discordRef.bot ?? defaultBotTarget(),
+              publish: discordRef.publish,
+              ...(discordRef.template ? { template: discordRef.template } : {}),
+            }
+          : {
+              webhook: discordRef.webhook ?? `cred:discord/${slug}`,
+              publish: discordRef.publish,
+              ...(discordRef.template ? { template: discordRef.template } : {}),
+            },
+    });
+  };
+  const modeRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const onModeKey = (e: React.KeyboardEvent, i: number) => {
+    const last = 1;
+    let to: number;
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") to = i === last ? 0 : i + 1;
+    else if (e.key === "ArrowLeft" || e.key === "ArrowUp") to = i === 0 ? last : i - 1;
+    else if (e.key === "Home") to = 0;
+    else if (e.key === "End") to = last;
+    else return;
+    e.preventDefault();
+    modeRefs.current[to]?.focus();
+    setDiscordMode(to === 0 ? "webhook" : "bot");
+  };
 
   const checkDiscordBot = () => {
     if (botDirty) {
@@ -757,7 +803,6 @@ export function ProjectSettingsModal({
                         <div className="row-span">
                           <DiscordParticipantPicker
                             cycleId={cycleId}
-                            participantId={p.id}
                             participantIndex={i}
                             participantName={p.name}
                             kind={kind}
@@ -1207,7 +1252,13 @@ export function ProjectSettingsModal({
                     <input
                       type="checkbox"
                       checked={discordRef != null}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        if (!e.target.checked) {
+                          setWebhookInput("");
+                          setWebhookMsg(null);
+                          setBotCheck(null);
+                          setBotCheckError(null);
+                        }
                         setTargets({
                           discord: e.target.checked
                             ? {
@@ -1215,8 +1266,8 @@ export function ProjectSettingsModal({
                                 publish: DEFAULT_PUBLISH_RULE.discord,
                               }
                             : null,
-                        })
-                      }
+                        });
+                      }}
                     />
                     Post a summary to a Discord channel
                   </label>
@@ -1239,52 +1290,26 @@ export function ProjectSettingsModal({
                         role="radiogroup"
                         aria-label="Discord delivery mode"
                       >
-                        <button
-                          type="button"
-                          role="radio"
-                          aria-checked={discordRef.bot === undefined}
-                          className={
-                            discordRef.bot === undefined
-                              ? "btn btn-small"
-                              : "btn btn-small btn-ghost"
-                          }
-                          onClick={() => {
-                            setBotCheck(null);
-                            setBotCheckError(null);
-                            setTargets({
-                              discord: {
-                                webhook: discordRef.webhook ?? `cred:discord/${slug}`,
-                                publish: discordRef.publish,
-                                ...(discordRef.template ? { template: discordRef.template } : {}),
-                              },
-                            });
-                          }}
-                        >
-                          Webhook
-                        </button>
-                        <button
-                          type="button"
-                          role="radio"
-                          aria-checked={discordRef.bot !== undefined}
-                          className={
-                            discordRef.bot !== undefined
-                              ? "btn btn-small"
-                              : "btn btn-small btn-ghost"
-                          }
-                          onClick={() => {
-                            setBotCheck(null);
-                            setBotCheckError(null);
-                            setTargets({
-                              discord: {
-                                bot: discordRef.bot ?? defaultBotTarget(),
-                                publish: discordRef.publish,
-                                ...(discordRef.template ? { template: discordRef.template } : {}),
-                              },
-                            });
-                          }}
-                        >
-                          Bot
-                        </button>
+                        {(["webhook", "bot"] as const).map((mode, i) => {
+                          const on = (discordRef.bot !== undefined) === (mode === "bot");
+                          return (
+                            <button
+                              key={mode}
+                              ref={(el) => {
+                                modeRefs.current[i] = el;
+                              }}
+                              type="button"
+                              role="radio"
+                              aria-checked={on}
+                              tabIndex={on ? 0 : -1}
+                              className={on ? "btn btn-small" : "btn btn-small btn-ghost"}
+                              onClick={() => !on && setDiscordMode(mode)}
+                              onKeyDown={(e) => onModeKey(e, i)}
+                            >
+                              {mode === "bot" ? "Bot" : "Webhook"}
+                            </button>
+                          );
+                        })}
                       </div>
                       <FieldProblems issues={issues} path="targets.discord" />
                     </div>
@@ -1296,14 +1321,7 @@ export function ProjectSettingsModal({
                           <input
                             value={discordRef.bot.token}
                             placeholder={`cred:discord-bot/${slug}`}
-                            onChange={(e) =>
-                              setTargets({
-                                discord: {
-                                  ...discordRef,
-                                  bot: { ...discordRef.bot!, token: e.target.value },
-                                },
-                              })
-                            }
+                            onChange={(e) => patchBot({ token: e.target.value })}
                           />
                           <small>
                             The name of a secret in the Windows Credential Manager, written
@@ -1318,14 +1336,7 @@ export function ProjectSettingsModal({
                               value={discordRef.bot.guild}
                               inputMode="numeric"
                               placeholder="111111111111111111"
-                              onChange={(e) =>
-                                setTargets({
-                                  discord: {
-                                    ...discordRef,
-                                    bot: { ...discordRef.bot!, guild: e.target.value },
-                                  },
-                                })
-                              }
+                              onChange={(e) => patchBot({ guild: e.target.value })}
                             />
                             <FieldProblems issues={issues} path="targets.discord.bot.guild" />
                           </label>
@@ -1335,14 +1346,7 @@ export function ProjectSettingsModal({
                               value={discordRef.bot.channel}
                               inputMode="numeric"
                               placeholder="222222222222222222"
-                              onChange={(e) =>
-                                setTargets({
-                                  discord: {
-                                    ...discordRef,
-                                    bot: { ...discordRef.bot!, channel: e.target.value },
-                                  },
-                                })
-                              }
+                              onChange={(e) => patchBot({ channel: e.target.value })}
                             />
                             <FieldProblems issues={issues} path="targets.discord.bot.channel" />
                           </label>
@@ -1351,14 +1355,7 @@ export function ProjectSettingsModal({
                           <input
                             type="checkbox"
                             checked={discordRef.bot.thread}
-                            onChange={(e) =>
-                              setTargets({
-                                discord: {
-                                  ...discordRef,
-                                  bot: { ...discordRef.bot!, thread: e.target.checked },
-                                },
-                              })
-                            }
+                            onChange={(e) => patchBot({ thread: e.target.checked })}
                           />
                           Open one thread per meeting under the summary
                         </label>
@@ -1366,14 +1363,7 @@ export function ProjectSettingsModal({
                           <input
                             type="checkbox"
                             checked={discordRef.bot.editOnCorrection}
-                            onChange={(e) =>
-                              setTargets({
-                                discord: {
-                                  ...discordRef,
-                                  bot: { ...discordRef.bot!, editOnCorrection: e.target.checked },
-                                },
-                              })
-                            }
+                            onChange={(e) => patchBot({ editOnCorrection: e.target.checked })}
                           />
                           Edit the summary when a correction is published
                         </label>
