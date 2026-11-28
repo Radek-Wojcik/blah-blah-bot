@@ -86,6 +86,8 @@ impl Default for Report {
 pub const DEFAULT_GITHUB_PUBLISH: PublishMode = PublishMode::OnApproval;
 /// What `targets.discord.publish` is when the cycle does not set it.
 pub const DEFAULT_DISCORD_PUBLISH: PublishMode = PublishMode::OnApproval;
+/// What `targets.notion.publish` is when the cycle does not set it.
+pub const DEFAULT_NOTION_PUBLISH: PublishMode = PublishMode::OnApproval;
 
 fn default_github_publish() -> PublishMode {
     DEFAULT_GITHUB_PUBLISH
@@ -93,6 +95,10 @@ fn default_github_publish() -> PublishMode {
 
 fn default_discord_publish() -> PublishMode {
     DEFAULT_DISCORD_PUBLISH
+}
+
+fn default_notion_publish() -> PublishMode {
+    DEFAULT_NOTION_PUBLISH
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -188,23 +194,158 @@ impl Default for GithubTarget {
     }
 }
 
+/// `targets.discord`: exactly one of `webhook` and `bot` (the schema checks it).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DiscordTarget {
     /// A `cred:` reference to the webhook URL in the Credential Manager, never the URL.
-    pub webhook: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook: Option<String>,
+    /// Post through a bot instead of a webhook.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot: Option<DiscordBot>,
     #[serde(default = "default_discord_publish")]
     pub publish: PublishMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template: Option<String>,
 }
 
+/// `targets.discord.bot`: where a bot posts and which secret it uses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiscordBot {
+    /// A `cred:` reference to the bot token, never the token.
+    pub token: String,
+    /// The server (guild) id, a snowflake.
+    pub guild: String,
+    /// The text or announcement channel id, a snowflake.
+    pub channel: String,
+    /// One thread per meeting under the summary. Left out of the file while true.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub thread: bool,
+    /// Edit the summary when a correction is published. Left out of the file while true.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub edit_on_correction: bool,
+}
+
+/// How a Discord target posts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiscordMode<'a> {
+    /// The `cred:` reference of the webhook.
+    Webhook(&'a str),
+    Bot(&'a DiscordBot),
+}
+
+impl DiscordTarget {
+    /// The way this target posts: the bot when both are set, `None` when neither is
+    /// (the schema refuses such a file, a value built by hand can still have it).
+    pub fn mode(&self) -> Option<DiscordMode<'_>> {
+        match (&self.bot, &self.webhook) {
+            (Some(bot), _) => Some(DiscordMode::Bot(bot)),
+            (None, Some(webhook)) => Some(DiscordMode::Webhook(webhook)),
+            (None, None) => None,
+        }
+    }
+}
+
+/// `targets.notion`: a Notion database that task items are exported to.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NotionTarget {
+    /// A `cred:` reference to the integration token, never the token.
+    pub token: String,
+    /// The database id (32 hex digits, with or without dashes). Not a secret.
     pub database: String,
-    #[serde(default)]
+    /// The data source id; needed when the database has more than one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_source: Option<String>,
+    #[serde(default = "default_notion_publish")]
     pub publish: PublishMode,
+    /// Names of the Notion properties the fields go to; left out while all are default.
+    #[serde(default, skip_serializing_if = "NotionProperties::is_default")]
+    pub properties: NotionProperties,
+}
+
+/// The title property name when `targets.notion.properties.title` is not set.
+pub const DEFAULT_NOTION_TITLE: &str = "Name";
+/// The key property name when `targets.notion.properties.key` is not set.
+pub const DEFAULT_NOTION_KEY: &str = "BBB key";
+
+fn default_notion_title() -> String {
+    DEFAULT_NOTION_TITLE.to_string()
+}
+
+fn default_notion_key() -> String {
+    DEFAULT_NOTION_KEY.to_string()
+}
+
+/// The Notion property names of `targets.notion.properties`. `title` and `key` always have a
+/// name; the other fields are exported only when a property is named.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotionProperties {
+    /// The title property (type `title`).
+    #[serde(default = "default_notion_title")]
+    pub title: String,
+    /// The property that holds the idempotency key (type `rich_text`).
+    #[serde(default = "default_notion_key")]
+    pub key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// The status a new page gets; required when `status` is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meeting: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cycle: Option<String>,
+}
+
+impl Default for NotionProperties {
+    fn default() -> Self {
+        Self {
+            title: default_notion_title(),
+            key: default_notion_key(),
+            assignee: None,
+            due: None,
+            status: None,
+            status_value: None,
+            meeting: None,
+            cycle: None,
+        }
+    }
+}
+
+impl NotionProperties {
+    /// Nothing is changed from the defaults (the block is then left out of the file).
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// The canonical form of a Notion id: 32 lowercase hex digits, dashes removed. `None` when
+/// `s` is not a Notion id: 32 hex digits, with an optional dash after the 8th, 12th, 16th and
+/// 20th digit (the same shapes the schema accepts; surrounding whitespace is ignored).
+pub fn normalize_notion_id(s: &str) -> Option<String> {
+    let mut out = String::with_capacity(32);
+    let mut last_dash_at = 0;
+    for c in s.trim().chars() {
+        if c == '-' {
+            if !matches!(out.len(), 8 | 12 | 16 | 20) || last_dash_at == out.len() {
+                return None;
+            }
+            last_dash_at = out.len();
+        } else if c.is_ascii_hexdigit() {
+            out.push(c.to_ascii_lowercase());
+        } else {
+            return None;
+        }
+    }
+    (out.len() == 32).then_some(out)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -317,6 +458,14 @@ impl Cycle {
         if let Some(github) = &self.targets.github {
             if let Some(problem) = repo_path_problem(&github.path) {
                 issues.push(ValidationIssue::new("targets.github.path", problem));
+            }
+        }
+        if let Some(notion) = &self.targets.notion {
+            if notion.properties.status.is_some() && notion.properties.status_value.is_none() {
+                issues.push(ValidationIssue::new(
+                    "targets.notion.properties.status_value",
+                    "the status a new page gets is required when a status property is set",
+                ));
             }
         }
         issues
@@ -432,7 +581,7 @@ report:
 targets:
   github: { path: meetings, publish: auto }
   discord: { webhook: "cred:discord/nomad", publish: on-approval, template: short }
-  notion: { database: "cred:notion/nomad-db", publish: off }
+  notion: { token: "cred:notion/nomad", database: "0123456789abcdef0123456789abcdef", publish: off }
 "#;
 
     fn issues_of(text: &str) -> Vec<ValidationIssue> {
@@ -623,6 +772,289 @@ targets:
         assert!(yaml.find("budget:").unwrap() < yaml.find("technical:").unwrap());
         // The discord id stays a string.
         assert!(!yaml.contains("user_id: 000000000000000000\n"), "{yaml}");
+    }
+
+    fn with_targets(block: &str) -> String {
+        format!("id: A\nname: x\ntargets:\n{block}")
+    }
+
+    const BOT: &str = "    bot: { token: \"cred:discord-bot/team\", guild: \"111111111111111111\", channel: \"222222222222222222\" }\n";
+
+    #[test]
+    fn discord_takes_exactly_one_of_webhook_and_bot() {
+        let webhook = with_targets("  discord: { webhook: \"cred:discord/nomad\" }\n");
+        let c = Cycle::from_yaml_str(&webhook).unwrap();
+        let d = c.targets.discord.unwrap();
+        assert!(d.bot.is_none());
+        assert_eq!(d.mode(), Some(DiscordMode::Webhook("cred:discord/nomad")));
+
+        let bot = with_targets(&format!("  discord:\n{BOT}"));
+        let c = Cycle::from_yaml_str(&bot).unwrap();
+        let d = c.targets.discord.unwrap();
+        assert!(d.webhook.is_none());
+        assert!(matches!(d.mode(), Some(DiscordMode::Bot(b)) if b.channel == "222222222222222222"));
+
+        let both = with_targets(&format!(
+            "  discord:\n    webhook: \"cred:discord/nomad\"\n{BOT}"
+        ));
+        let issues = issues_of(&both);
+        assert!(has_path(&issues, "targets.discord"), "{issues:?}");
+
+        let neither = with_targets("  discord: { publish: auto }\n");
+        let issues = issues_of(&neither);
+        assert!(has_path(&issues, "targets.discord"), "{issues:?}");
+    }
+
+    #[test]
+    fn the_bot_block_is_checked_field_by_field() {
+        // The token is a reference, never a token or a URL.
+        let url = with_targets(
+            "  discord:\n    bot: { token: \"https://discord.com/api/webhooks/1/abc\", guild: \"1\", channel: \"2\" }\n",
+        );
+        assert!(has_path(&issues_of(&url), "targets.discord.bot.token"));
+        let raw = with_targets(
+            "  discord:\n    bot: { token: \"MTIz.abc.def\", guild: \"1\", channel: \"2\" }\n",
+        );
+        assert!(has_path(&issues_of(&raw), "targets.discord.bot.token"));
+        // The ids are quoted digits.
+        let guild = with_targets(
+            "  discord:\n    bot: { token: \"cred:discord-bot/t\", guild: \"my-server\", channel: \"2\" }\n",
+        );
+        assert!(has_path(&issues_of(&guild), "targets.discord.bot.guild"));
+        let channel = with_targets(
+            "  discord:\n    bot: { token: \"cred:discord-bot/t\", guild: \"1\", channel: 222 }\n",
+        );
+        assert!(has_path(
+            &issues_of(&channel),
+            "targets.discord.bot.channel"
+        ));
+        // A required field missing, an unknown field, a flag that is not a boolean.
+        let missing =
+            with_targets("  discord:\n    bot: { token: \"cred:discord-bot/t\", guild: \"1\" }\n");
+        assert!(!issues_of(&missing).is_empty());
+        let unknown = with_targets(
+            "  discord:\n    bot: { token: \"cred:discord-bot/t\", guild: \"1\", channel: \"2\", intents: 3 }\n",
+        );
+        assert!(!issues_of(&unknown).is_empty());
+        let flag = with_targets(
+            "  discord:\n    bot: { token: \"cred:discord-bot/t\", guild: \"1\", channel: \"2\", thread: maybe }\n",
+        );
+        assert!(has_path(&issues_of(&flag), "targets.discord.bot.thread"));
+    }
+
+    #[test]
+    fn the_bot_flags_default_to_true_and_are_written_only_when_off() {
+        let c = Cycle::from_yaml_str(&with_targets(&format!("  discord:\n{BOT}"))).unwrap();
+        let bot = c.targets.discord.as_ref().unwrap().bot.clone().unwrap();
+        assert!(bot.thread && bot.edit_on_correction);
+        let yaml = c.to_yaml().unwrap();
+        assert!(!yaml.contains("thread"), "{yaml}");
+        assert!(!yaml.contains("edit_on_correction"), "{yaml}");
+        assert!(!yaml.contains("webhook"), "{yaml}");
+
+        let off = with_targets(
+            "  discord:\n    bot: { token: \"cred:discord-bot/t\", guild: \"1\", channel: \"2\", thread: false, edit_on_correction: false }\n",
+        );
+        let c = Cycle::from_yaml_str(&off).unwrap();
+        let bot = c.targets.discord.as_ref().unwrap().bot.as_ref().unwrap();
+        assert!(!bot.thread && !bot.edit_on_correction);
+        let yaml = c.to_yaml().unwrap();
+        assert!(yaml.contains("thread: false"), "{yaml}");
+        assert!(yaml.contains("edit_on_correction: false"), "{yaml}");
+        assert_eq!(Cycle::from_yaml_str(&yaml).unwrap(), c);
+    }
+
+    #[test]
+    fn mode_prefers_the_bot_and_is_none_without_either() {
+        let bot = DiscordBot {
+            token: "cred:discord-bot/t".into(),
+            guild: "1".into(),
+            channel: "2".into(),
+            thread: true,
+            edit_on_correction: true,
+        };
+        let mut target = DiscordTarget {
+            webhook: Some("cred:discord/nomad".into()),
+            bot: Some(bot.clone()),
+            publish: PublishMode::Off,
+            template: None,
+        };
+        assert_eq!(target.mode(), Some(DiscordMode::Bot(&bot)));
+        target.bot = None;
+        assert_eq!(
+            target.mode(),
+            Some(DiscordMode::Webhook("cred:discord/nomad"))
+        );
+        target.webhook = None;
+        assert_eq!(target.mode(), None);
+        // A value built by hand without either is refused when written.
+        let mut cycle = Cycle::new("A", "x");
+        cycle.targets.discord = Some(target);
+        assert!(cycle.to_yaml().is_err());
+    }
+
+    #[test]
+    fn notion_ids_are_normalised_and_bad_ones_refused() {
+        assert_eq!(
+            normalize_notion_id("0123456789ABCDEF0123456789abcdef").as_deref(),
+            Some("0123456789abcdef0123456789abcdef")
+        );
+        assert_eq!(
+            normalize_notion_id(" fedcba98-7654-3210-FEDC-ba9876543210 ").as_deref(),
+            Some("fedcba9876543210fedcba9876543210")
+        );
+        for bad in [
+            "",
+            "0123456789abcdef0123456789abcde",
+            "0123456789abcdef0123456789abcdef0",
+            "0123456789abcdef0123456789abcdeg",
+            "01234-56789abcdef0123456789abcdef",
+            "01234567--89abcdef0123456789abcdef",
+            "01234567-89ab--cdef0123456789abcdef",
+            "-0123456789abcdef0123456789abcdef",
+            "0123456789abcdef0123456789abcdef-",
+            "https://www.notion.so/0123456789abcdef0123456789abcdef",
+            "cred:notion/nomad-db",
+        ] {
+            assert_eq!(normalize_notion_id(bad), None, "{bad}");
+        }
+        for (field, bad) in [
+            ("database", "cred:notion/nomad-db"),
+            ("database", "0123456789abcdef0123456789abcde"),
+            ("data_source", "not-an-id"),
+        ] {
+            let mut pairs = vec![
+                ("token", "\"cred:notion/nomad\"".to_string()),
+                (
+                    "database",
+                    "\"0123456789abcdef0123456789abcdef\"".to_string(),
+                ),
+            ];
+            match pairs.iter_mut().find(|(k, _)| *k == field) {
+                Some(pair) => pair.1 = format!("\"{bad}\""),
+                None => pairs.push((field, format!("\"{bad}\""))),
+            }
+            let body: Vec<String> = pairs.iter().map(|(k, v)| format!("{k}: {v}")).collect();
+            let text = with_targets(&format!("  notion: {{ {} }}\n", body.join(", ")));
+            assert!(
+                has_path(&issues_of(&text), &format!("targets.notion.{field}")),
+                "{field} = {bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_notion_token_is_a_reference_and_both_fields_are_required() {
+        let raw = with_targets(
+            "  notion: { token: \"ntn_0123456789abcdefghijklmnop\", database: \"0123456789abcdef0123456789abcdef\" }\n",
+        );
+        assert!(has_path(&issues_of(&raw), "targets.notion.token"));
+        let no_token =
+            with_targets("  notion: { database: \"0123456789abcdef0123456789abcdef\" }\n");
+        assert!(!issues_of(&no_token).is_empty());
+        let no_database = with_targets("  notion: { token: \"cred:notion/nomad\" }\n");
+        assert!(!issues_of(&no_database).is_empty());
+        // The old shape, a database reference without a token, is not valid any more.
+        let old = with_targets("  notion: { database: \"cred:notion/nomad-db\", publish: off }\n");
+        assert!(!issues_of(&old).is_empty());
+    }
+
+    #[test]
+    fn notion_defaults_are_not_written_and_a_full_mapping_round_trips() {
+        let minimal = with_targets(
+            "  notion: { token: \"cred:notion/nomad\", database: \"0123456789abcdef0123456789abcdef\" }\n",
+        );
+        let c = Cycle::from_yaml_str(&minimal).unwrap();
+        let n = c.targets.notion.as_ref().unwrap();
+        assert_eq!(n.publish, DEFAULT_NOTION_PUBLISH);
+        assert_eq!(n.data_source, None);
+        assert_eq!(n.properties, NotionProperties::default());
+        assert_eq!(n.properties.title, DEFAULT_NOTION_TITLE);
+        assert_eq!(n.properties.key, DEFAULT_NOTION_KEY);
+        let yaml = c.to_yaml().unwrap();
+        assert!(!yaml.contains("properties"), "{yaml}");
+        assert!(!yaml.contains("data_source"), "{yaml}");
+
+        let full = with_targets(
+            "  notion:
+    token: \"cred:notion/nomad\"
+    database: \"0123456789abcdef0123456789abcdef\"
+    data_source: \"fedcba98-7654-3210-fedc-ba9876543210\"
+    publish: auto
+    properties:
+      title: Task
+      key: BBB key
+      assignee: Assignee
+      due: Due
+      status: Status
+      status_value: Not started
+      meeting: Meeting
+      cycle: Cycle
+",
+        );
+        let c = Cycle::from_yaml_str(&full).unwrap();
+        let n = c.targets.notion.as_ref().unwrap();
+        assert_eq!(n.properties.title, "Task");
+        assert_eq!(n.properties.status_value.as_deref(), Some("Not started"));
+        assert_eq!(
+            n.data_source.as_deref(),
+            Some("fedcba98-7654-3210-fedc-ba9876543210")
+        );
+        let yaml = c.to_yaml().unwrap();
+        assert_eq!(Cycle::from_yaml_str(&yaml).unwrap(), c);
+        assert_eq!(
+            Cycle::from_yaml_str(&yaml).unwrap().to_yaml().unwrap(),
+            yaml
+        );
+        // A property block that only repeats the defaults is dropped again.
+        let defaults = with_targets(
+            "  notion: { token: \"cred:notion/nomad\", database: \"0123456789abcdef0123456789abcdef\", properties: { title: Name } }\n",
+        );
+        let yaml = Cycle::from_yaml_str(&defaults).unwrap().to_yaml().unwrap();
+        assert!(!yaml.contains("properties"), "{yaml}");
+    }
+
+    #[test]
+    fn a_status_property_needs_the_value_a_new_page_gets() {
+        let text = with_targets(
+            "  notion: { token: \"cred:notion/nomad\", database: \"0123456789abcdef0123456789abcdef\", properties: { status: Status } }\n",
+        );
+        let (cycle, issues) = Cycle::parse(&text);
+        assert!(
+            cycle.is_some(),
+            "the shape is right, the cycle is still shown"
+        );
+        assert!(
+            has_path(&issues, "targets.notion.properties.status_value"),
+            "{issues:?}"
+        );
+        assert!(cycle.unwrap().to_yaml().is_err());
+        let ok = text.replace("status: Status", "status: Status, status_value: Open");
+        assert!(Cycle::from_yaml_str(&ok).is_ok());
+    }
+
+    #[test]
+    fn a_file_without_the_new_keys_is_written_as_before() {
+        let text = "id: NOMAD
+name: Nomad rover
+targets:
+  github:
+    path: meetings
+    publish: auto
+  discord:
+    webhook: cred:discord/nomad
+    publish: on-approval
+    template: short
+";
+        let cycle = Cycle::from_yaml_str(text).unwrap();
+        let yaml = cycle.to_yaml().unwrap();
+        for key in ["bot", "thread", "edit_on_correction", "notion", "token"] {
+            assert!(!yaml.contains(key), "{key}: {yaml}");
+        }
+        assert!(
+            yaml.contains("discord:\n    webhook: cred:discord/nomad\n    publish: on-approval\n    template: short\n"),
+            "{yaml}"
+        );
     }
 
     #[test]

@@ -113,7 +113,8 @@ pub fn cycle(github: Option<PublishMode>, discord: Option<(&str, PublishMode)>) 
         ..GithubTarget::default()
     });
     c.targets.discord = discord.map(|(webhook, publish)| DiscordTarget {
-        webhook: webhook.into(),
+        webhook: Some(webhook.into()),
+        bot: None,
         publish,
         template: None,
     });

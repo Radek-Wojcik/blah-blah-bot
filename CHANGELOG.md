@@ -81,6 +81,21 @@ Summary of fixes merged on `stage/8-release` toward 1.0.0:
 - The first setup downloads several GB (a processing environment of about 7.4 GB plus models).
 - Quality was measured on synthetic meetings only. The full list is in [docs/LIMITATIONS.md](docs/LIMITATIONS.md).
 
+### Stage 7
+
+Notion task export and REST-only Discord bot publishing. Everything in Stage 7 is tested against fake servers (`FakeNotion`, `FakeDiscordBot`, fake GitHub, local bare Git repositories) and the UI mock backend only; real-service checks are provided as `#[ignore]`d release checks (`crates/app/src/release_check/integrations.rs`) and have not been run against live Notion or Discord servers yet.
+
+#### Added
+
+- Generic task export contract (`crates/publishers/src/export.rs`: `TaskKey` `bbb:v1:<cycle>:<meeting>:<item>`, `TaskRecord`, `Assignee`, `TaskExporter`, `UpsertOutcome`) so Notion and future task trackers share one idempotent export model.
+- Notion task exporter (`crates/publishers/src/notion.rs`): REST client (`Notion-Version: 2026-03-11`), database and data-source inspection, automatic property mapping suggestion and validation across `title`, `key` (`rich_text`), `assignee` (`rich_text`, `select`, `multi_select`), `due` (`date`), `status` (`status`, `select`) with `status_value`, `meeting` (`url`, `rich_text`) and `cycle` (`select`, `rich_text`), and idempotent page upsert that checks `external_refs` first, falls back to querying by the `key` property, assigns `status` only when creating a new page so manual status updates in Notion are preserved, and leaves trashed pages (`in_trash: true`) untouched.
+- Discord bot publisher (`crates/publishers/src/discord_bot.rs`): REST-only bot client (no Gateway WebSocket connection and zero privileged intents required), OAuth2 invite URL builder with minimal permissions bitmask `309237746688` (`VIEW_CHANNEL`, `SEND_MESSAGES`, `ATTACH_FILES`, `READ_MESSAGE_HISTORY`, `CREATE_PUBLIC_THREADS`, `SEND_MESSAGES_IN_THREADS`), channel and permission inspection, server member prefix search (`GET /guilds/{id}/members/search`) and role listing (`GET /guilds/{id}/roles`), deterministic message nonces (`enforce_nonce: true`) so retries do not duplicate posts, optional public thread per meeting under the summary message for issue links and screenshots, and in-place summary editing plus a thread reply when a correction is published (`edit_on_correction`).
+- Cycle configuration (`cycle.yaml`, `schemas/cycle.schema.json`): `targets.discord.bot` (`token`, `guild`, `channel`, `thread`, `edit_on_correction`, mutually exclusive with `targets.discord.webhook`) and `targets.notion` (`token`, `database`, `data_source`, `publish`, `properties`).
+- Database schema version 8 (`crates/store`): outbox rebuild migration from schema version 7 to 8 adding target `notion` and operation kinds `export_notion` and `edit_discord`, plus the `external_refs` table recording external identifiers per meeting (`notion` task page ids and `discord` bot post channel, thread and message ids).
+- Secret management and IPC commands (`crates/app`): discovery, shape validation and safe masking of `discord-bot` (`bot <first4>...`) and `notion` (`ntn_...<last4>`) secrets in the `target:` namespace of the Windows Credential Manager; commands `test_notion_access`, `notion_schema`, `set_notion_mapping`, `test_discord_bot`, `search_discord_members`, `list_discord_roles`, `set_participant_discord` and `reexport_notion`; `set_target_rule` extended to `notion`.
+- UI bindings and mock backend (`ui/`): IPC types, Tauri bindings, and mock backend support (`ui/src/ipc/mock-integrations.ts`, `ui/src/ipc/mock-publish.ts`) are in the build; the Notion and Discord bot UI screens are being re-ported onto the new Project settings and Settings > Connectors screens.
+- ADR 0023 (`docs/decisions/0023-discord-bot-and-notion-export.md`), Stage 7 documentation in `docs/ARCHITECTURE.md`, `docs/CYCLES.md` and `docs/TESTING.md`, in-process `FakeNotion` and `FakeDiscordBot` test servers, and `#[ignore]`d release checks in `crates/app/src/release_check/integrations.rs`.
+
 ## [0.7.0] - 2026-11-23
 
 ### Stage 6 (convenience)

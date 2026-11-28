@@ -11,14 +11,25 @@
 import type { Backend, Unsubscribe } from "./backend";
 import { MOCK_TODAY, type CycleStore } from "./mock-cycles";
 import type { MockDrafts } from "./mock-drafts";
+import {
+  createMockIntegrations,
+  type IntegrationHooks,
+  type NotionTask,
+} from "./mock-integrations";
 import { fail } from "./mock-util";
 import {
+  type SecretKind,
   apiHost,
+  botTokenProblem,
   correctionProblem,
   hasControlChars,
   issueUrl,
+  maskBotToken,
+  maskNotionToken,
   maskWebhook,
+  notionTokenProblem,
   parseWebhook,
+  referenceKindByName,
   tokenProblem,
   webBase,
 } from "../publish";
@@ -29,6 +40,7 @@ import type {
   Corrections,
   CycleTask,
   CycleTasks,
+  DiscordBotTarget,
   Draft,
   DraftView,
   OpKind,
@@ -64,6 +76,14 @@ type PublishMethods = Pick<
   | "setTargetSecret"
   | "clearTargetSecret"
   | "testDiscordWebhook"
+  | "testNotionAccess"
+  | "notionSchema"
+  | "setNotionMapping"
+  | "testDiscordBot"
+  | "searchDiscordMembers"
+  | "listDiscordRoles"
+  | "setParticipantDiscord"
+  | "reexportNotion"
   | "publishPlan"
   | "publishMeeting"
   | "confirmPublicRepo"
@@ -98,7 +118,7 @@ export interface FakeDiscordPost {
 }
 
 /** What a test or a screenshot may do to the fake world. */
-export interface MockHooks {
+export interface MockHooks extends IntegrationHooks {
   /** No target answers while it is on. Turning it off lets waiting operations run again. */
   setOffline(offline: boolean): void;
   /** A colleague closes (or reopens) an issue on GitHub. It shows in the tasks after a pull. */
@@ -145,15 +165,23 @@ export interface PublishDeps {
   screenshotCount: (meetingId: string) => number;
   /** The draft of a meeting changed for a reason other than an edit (it was unlocked). */
   onUnlocked: (meetingId: string) => void;
+  /** A cycle was modified through an integration helper (`setNotionMapping`, `setParticipantDiscord`). */
+  onCyclesChanged?: () => void;
 }
 
 const DEFAULT_API = "https://api.github.com";
-const DISCORD_REFERENCE = /^cred:[A-Za-z0-9][A-Za-z0-9_./-]*$/;
+const CREDENTIAL_REFERENCE = /^cred:[A-Za-z0-9][A-Za-z0-9_./-]*$/;
 const BACKOFF_MS = 30_000;
 const BACKOFF_MAX_MS = 30 * 60_000;
 
+type OfflineGroup = "github" | "discord" | "notion";
+
 /** Where an operation talks to: GitHub and its issues are one server. */
-const group = (t: OpTarget): "github" | "discord" => (t === "discord" ? "discord" : "github");
+const group = (t: OpTarget): OfflineGroup =>
+  t === "discord" ? "discord" : t === "notion" ? "notion" : "github";
+
+const offlineHost = (g: OfflineGroup): string =>
+  g === "discord" ? "discord.com" : g === "notion" ? "api.notion.com" : "api.github.com";
 
 /** Eight hex digits made from a text: a stand-in for a commit hash. */
 function fakeSha(seed: string): string {
@@ -219,7 +247,8 @@ type Payload =
       due: string | null;
     }
   | { kind: "status"; proposalId: string; number: number; open: boolean; comment: string | null }
-  | { kind: "discord"; reference: string };
+  | { kind: "discord"; reference: string; bot: DiscordBotTarget | null }
+  | { kind: "notion"; itemId: string; task: NotionTask };
 
 interface Snapshot {
   draft: Draft;
@@ -255,10 +284,22 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
   world.remoteTopics = demoRemoteTopics(cycles.topics("NOMAD"));
   /** Only whether a token is stored, never the token. */
   const tokens = new Set<string>([apiHost(DEFAULT_API)!]);
-  /** Only the masked form of a stored webhook, never the address. */
-  const webhooks = new Map<string, string>([
+  /** Only the masked form of a stored target secret (webhook, bot token, Notion token). */
+  const targetSecrets = new Map<string, string>([
     ["cred:discord/nomad", maskWebhook({ host: "discord.com", id: "000000000000000007" })],
   ]);
+  const integrations = createMockIntegrations({
+    cycles,
+    hasSecret: (ref) => targetSecrets.has(ref),
+    isOffline: () => world.offline,
+  });
+  /** Stored Notion page ids by `${meetingId}:${itemId}` (mirrors `external_refs`). */
+  const notionRefs = new Map<string, string>();
+  /** Stored Discord bot post metadata by `meetingId` (mirrors `external_refs`). */
+  const discordPosts = new Map<
+    string,
+    { channelId: string; threadId: string | null; messageIds: string[]; baseSummary: string }
+  >();
   const confirmed = new Set<string>();
   /** The corrections of each meeting, as `work/corrections.json` has them. */
   const corrections = new Map<string, { cycleId: string; list: StoredCorrection[] }>();
@@ -270,7 +311,7 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
   const ops: OutboxOp[] = [];
   const payloads = new Map<number, Payload>();
   const snapshots = new Map<string, Snapshot>();
-  const offlineGroups = new Set<"github" | "discord">();
+  const offlineGroups = new Set<OfflineGroup>();
   let nextId = 1;
   let timer: ReturnType<typeof setInterval> | null = null;
 
@@ -307,6 +348,17 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
         if (made && (made.state === "queued" || made.state === "running")) return false;
       }
     }
+    // A Discord edit after a correction waits for the original Discord post to finish.
+    if (
+      op.kind === "edit_discord" &&
+      ops.some(
+        (o) =>
+          o.meetingId === op.meetingId &&
+          o.kind === "post_discord" &&
+          (o.state === "queued" || o.state === "running"),
+      )
+    )
+      return false;
     // The message links the issues, so it waits for the issue operations of its meeting.
     if (
       op.kind === "post_discord" &&
@@ -360,7 +412,7 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
         settle(op, {
           state: "queued",
           attempts,
-          lastError: `Could not reach ${group(op.target) === "discord" ? "discord.com" : "api.github.com"}: the network is offline.`,
+          lastError: `Could not reach ${offlineHost(group(op.target))}: the network is offline.`,
           nextAttemptUnixMs: deps.now() + wait,
         });
       } else {
@@ -393,12 +445,16 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
         return createIssue(op, snap, payload);
       case "status":
         return setIssueState(snap, payload);
+      case "notion":
+        return exportNotion(op, snap, payload);
       case "discord":
-        return post(op, snap, payload.reference);
+        return payload.bot !== null
+          ? postBot(op, snap, payload.bot)
+          : post(op, snap, payload.reference);
       case "correction":
-        return op.kind === "commit_correction"
-          ? correctionFile(op, snap, payload)
-          : correctionComment(op, snap, payload);
+        if (op.kind === "commit_correction") return correctionFile(op, snap, payload);
+        if (op.kind === "edit_discord") return correctionDiscordEdit(op, snap, payload);
+        return correctionComment(op, snap, payload);
     }
   }
 
@@ -578,8 +634,38 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
     return { number: issue.number, url: issueUrl(snap.github!, issue.number, snap.api) };
   }
 
+  function exportNotion(
+    op: OutboxOp,
+    snap: Snapshot,
+    p: Extract<Payload, { kind: "notion" }>,
+  ): OpResult {
+    const notion = cycles.cycle(snap.cycleId)?.targets.notion;
+    if (!notion)
+      return refuse("This cycle has no Notion target: add one in the cycle settings, then retry.");
+    const commitOp = ops.find(
+      (o) => o.meetingId === op.meetingId && o.kind === "commit_meeting" && o.state === "done",
+    );
+    const task: NotionTask = {
+      ...p.task,
+      meetingUrl: commitOp?.result?.report_url ?? p.task.meetingUrl,
+    };
+    const refKey = `${op.meetingId}:${p.itemId}`;
+    const known = notionRefs.get(refKey) ?? null;
+    const res = integrations.notion.export(notion, task, known);
+    if ("error" in res) return refuse(res.error);
+    notionRefs.set(refKey, res.pageId);
+    return {
+      page_id: res.pageId,
+      url: res.outcome === "removed" ? undefined : res.url,
+      created: res.outcome === "created",
+      updated: res.outcome === "updated",
+      removed: res.outcome === "removed",
+      duplicates: res.duplicates,
+    };
+  }
+
   function post(op: OutboxOp, snap: Snapshot, reference: string): OpResult {
-    if (!webhooks.has(reference))
+    if (!targetSecrets.has(reference))
       return refuse(
         "No Discord webhook is stored for this cycle: add it in the publishing settings.",
       );
@@ -596,6 +682,91 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
     if (links.length > 0) lines.push(`Issues: ${links.join(", ")}`);
     world.discord.push({ reference, content: lines.join("\n") });
     return { sent_chunks: 1 };
+  }
+
+  function postBot(op: OutboxOp, snap: Snapshot, bot: DiscordBotTarget): OpResult {
+    const refused = integrations.bot.refusal(bot);
+    if (refused) return refuse(refused);
+    const links = ops
+      .filter(
+        (o) => o.meetingId === op.meetingId && o.kind === "create_issue" && o.state === "done",
+      )
+      .map((o) => `#${o.result?.number}`);
+    const commitOp = ops.find(
+      (o) => o.meetingId === op.meetingId && o.kind === "commit_meeting" && o.state === "done",
+    );
+    const summaryLines = [snap.chat.trimEnd()];
+    if (commitOp?.result?.report_url)
+      summaryLines.push("", `Full report: ${commitOp.result.report_url}`);
+    if (!bot.thread && links.length > 0) summaryLines.push(`Issues: ${links.join(", ")}`);
+    const baseSummary = summaryLines.join("\n");
+    const first = integrations.bot.post(bot.channel, baseSummary, null);
+    const messageIds = [first.id];
+    let threadId: string | null = null;
+    if (bot.thread) {
+      const title = `Meeting ${snap.draft.cycle} ${snap.draft.date}`;
+      const thread = integrations.bot.openThread(bot.channel, first.id, title);
+      threadId = thread.id;
+      const details: string[] = [];
+      if (links.length > 0) details.push(`Issues: ${links.join(", ")}`);
+      if (snap.screenshots > 0)
+        details.push(
+          snap.screenshots === 1
+            ? "1 screenshot attached."
+            : `${snap.screenshots} screenshots attached.`,
+        );
+      if (details.length > 0) {
+        const follow = integrations.bot.post(bot.channel, details.join("\n"), threadId);
+        messageIds.push(follow.id);
+      }
+    }
+    discordPosts.set(op.meetingId, {
+      channelId: bot.channel,
+      threadId,
+      messageIds,
+      baseSummary,
+    });
+    return {
+      sent_chunks: messageIds.length,
+      channel_id: bot.channel,
+      thread_id: threadId,
+      message_ids: messageIds,
+    };
+  }
+
+  function correctionDiscordEdit(
+    op: OutboxOp,
+    snap: Snapshot,
+    p: Extract<Payload, { kind: "correction" }>,
+  ): OpResult {
+    const bot = cycles.cycle(snap.cycleId)?.targets.discord?.bot;
+    if (!bot)
+      return { edited: false, replied: false, skipped: "Discord is not configured in bot mode" };
+    const stored = discordPosts.get(op.meetingId);
+    if (!stored || stored.messageIds.length === 0)
+      return {
+        edited: false,
+        replied: false,
+        skipped: "no Discord post is recorded for this meeting",
+      };
+    const refused = integrations.bot.refusal(bot);
+    if (refused) return refuse(refused);
+    const all = corrections.get(op.meetingId)?.list ?? [p.correction];
+    const notes = all.map((c) => `- (${c.date}) ${c.text}`).join("\n");
+    const updated = `${stored.baseSummary}\n\nCorrections:\n${notes}`;
+    const ok = integrations.bot.edit(stored.messageIds[0], updated);
+    if (!ok)
+      return {
+        edited: false,
+        replied: false,
+        skipped: "the Discord message was deleted",
+      };
+    if (stored.threadId) {
+      const reply = `Correction (${p.correction.date}): ${p.correction.text}`;
+      integrations.bot.post(stored.channelId, reply, stored.threadId);
+      return { edited: true, replied: true, thread_id: stored.threadId };
+    }
+    return { edited: true, replied: false };
   }
 
   function correctionFile(
@@ -683,17 +854,19 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
     const cycle = cycles.cycle(cycleId);
     const github = cycle?.targets.github?.publish ?? "on-approval";
     const discord = cycle?.targets.discord?.publish ?? null;
+    const notion = cycle?.targets.notion?.publish ?? null;
     return [
       { target: "github", mode: github, available: github !== "off" },
       { target: "discord", mode: discord, available: discord !== null && discord !== "off" },
+      { target: "notion", mode: notion, available: notion !== null && notion !== "off" },
     ];
   };
 
   const parseTargets = (names: string[]): PublishTargetName[] => {
     const out: PublishTargetName[] = [];
     for (const n of names) {
-      if (n !== "github" && n !== "discord")
-        fail("invalid", `${n} is not a target (github or discord)`);
+      if (n !== "github" && n !== "discord" && n !== "notion")
+        fail("invalid", `${n} is not a target (github, discord or notion)`);
       if (!out.includes(n)) out.push(n);
     }
     return out;
@@ -724,7 +897,9 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
     const cycle = cycles.cycle(cycleId);
     const targets = targetViews(cycleId);
     const wanted =
-      names.length === 0 ? (["github", "discord"] as PublishTargetName[]) : parseTargets(names);
+      names.length === 0
+        ? (["github", "discord", "notion"] as PublishTargetName[])
+        : parseTargets(names);
     const allowed = (t: PublishTargetName) =>
       wanted.includes(t) && targets.find((x) => x.target === t)!.available;
     const issuesOn = cycle?.targets.github?.issues !== false;
@@ -739,6 +914,9 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
       topicsAdded: [],
       topicsSet: [],
       discord: false,
+      discordMode: null,
+      discordThread: false,
+      notion: [],
       proposalsPending: 0,
     };
     if (allowed("github")) {
@@ -811,18 +989,54 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
         });
       }
     }
-    if (allowed("discord")) {
-      const reference = cycle?.targets.discord?.webhook ?? "";
-      if (!webhooks.has(reference))
-        blocks.push({
-          code: "discord_webhook_missing",
-          message:
-            "No Discord webhook is stored for this cycle: add it in the publishing settings.",
-          visibility: null,
-        });
-      summary.discord = true;
+    if (allowed("notion")) {
+      const notion = cycle?.targets.notion;
+      if (notion) {
+        if (!targetSecrets.has(notion.token))
+          blocks.push({
+            code: "notion_token_missing",
+            message:
+              "No Notion integration token is stored for this cycle: add it in the publishing settings.",
+            visibility: null,
+          });
+        for (const item of draft.items.filter((i) => i.type === "task")) {
+          const existingId = notionRefs.get(`${meetingId}:${item.id}`) ?? null;
+          summary.notion.push({
+            itemId: item.id,
+            title: item.text,
+            existingUrl: existingId ? integrations.notion.pageUrl(existingId) : null,
+          });
+        }
+      }
     }
-    if (!summary.commit && !summary.discord)
+    if (allowed("discord")) {
+      const discord = cycle?.targets.discord;
+      if (discord?.bot) {
+        if (!targetSecrets.has(discord.bot.token))
+          blocks.push({
+            code: "discord_bot_token_missing",
+            message:
+              "No Discord bot token is stored for this cycle: add it in the publishing settings.",
+            visibility: null,
+          });
+        summary.discord = true;
+        summary.discordMode = "bot";
+        summary.discordThread = discord.bot.thread;
+      } else {
+        const reference = discord?.webhook ?? "";
+        if (!targetSecrets.has(reference))
+          blocks.push({
+            code: "discord_webhook_missing",
+            message:
+              "No Discord webhook is stored for this cycle: add it in the publishing settings.",
+            visibility: null,
+          });
+        summary.discord = true;
+        summary.discordMode = "webhook";
+        summary.discordThread = false;
+      }
+    }
+    if (!summary.commit && !summary.discord && summary.notion.length === 0)
       blocks.push({
         code: "nothing_to_publish",
         message: "There is nothing to publish with the rules of this cycle.",
@@ -871,13 +1085,15 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
     const list = (entry?.list ?? []).map((c): Correction => {
       const file = find(`correction:${c.id}`);
       const comment = find(`correction-issue:${c.id}`);
-      const state: CorrectionState = !file
+      const discordEdit = find(`discord-edit:${c.id}`);
+      const primary = file ?? discordEdit;
+      const state: CorrectionState = !primary
         ? "local"
-        : file.state === "done"
+        : primary.state === "done"
           ? "published"
-          : file.state === "failed"
+          : primary.state === "failed"
             ? "failed"
-            : file.state === "running"
+            : primary.state === "running"
               ? "running"
               : "queued";
       return {
@@ -885,9 +1101,10 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
         state,
         file: step(file),
         comment: step(comment),
+        discordEdit: step(discordEdit),
         fileName: state === "published" ? (file?.result?.file ?? null) : null,
         url: state === "published" ? (file?.result?.url ?? null) : null,
-        canDelete: !file && !comment,
+        canDelete: !file && !comment && !discordEdit,
       };
     });
     return {
@@ -958,6 +1175,21 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
           file.op.id,
         ),
       );
+    const bot = cycles.cycle(cycleId)?.targets.discord?.bot;
+    const posted = mine.find((o) => o.kind === "post_discord" && o.state !== "cancelled");
+    if (bot && bot.editOnCorrection && (posted || discordPosts.has(meetingId))) {
+      count(
+        queue(
+          meetingId,
+          "edit_discord",
+          "discord",
+          `discord-edit:${c.id}`,
+          "Update the Discord summary with the correction",
+          payload,
+          file.op.id,
+        ),
+      );
+    }
     if (queued > 0) {
       pump();
       emit();
@@ -1059,12 +1291,14 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
     label: string,
     payload: Payload,
     afterId: number | null,
+    forceRequeue = false,
   ): { op: OutboxOp; created: boolean } {
     const now = deps.now();
     const existing = ops.find((o) => o.meetingId === meetingId && o.opKey === opKey);
     if (existing) {
-      if (existing.state !== "cancelled") return { op: existing, created: false };
-      // A cancelled operation is revived: same row, fresh state.
+      if (existing.state !== "cancelled" && !forceRequeue) return { op: existing, created: false };
+      if (existing.state === "running") return { op: existing, created: false };
+      // A cancelled operation (or a Notion re-export) is revived: same row, fresh state.
       Object.assign(existing, {
         state: "queued" as OpState,
         attempts: 0,
@@ -1099,6 +1333,24 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
     return { op, created: true };
   }
 
+  function buildNotionTask(snap: Snapshot, itemId: string): NotionTask | null {
+    const item = snap.draft.items.find((i) => i.id === itemId && i.type === "task");
+    if (!item) return null;
+    const cycle = cycles.cycle(snap.cycleId);
+    const assignee =
+      item.assignee !== null
+        ? (cycle?.participants.find((p) => p.id === item.assignee)?.name ?? item.assignee)
+        : null;
+    return {
+      key: `bbb:v1:${snap.cycleId}:${snap.draft.meetingId}:${item.id}`,
+      title: item.text,
+      assignee,
+      due: item.due,
+      meetingUrl: null,
+      cycleName: cycle?.name ?? snap.cycleId,
+    };
+  }
+
   async function publish(meetingId: string, names: string[]): Promise<PublishResult> {
     const view = await drafts.methods.getDraft(meetingId);
     if (view.hasNewDraft)
@@ -1124,9 +1376,13 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
         screenshots: deps.screenshotCount(meetingId),
       });
     }
+    const snap = snapshots.get(meetingId)!;
     let queued = 0;
     const count = (r: { created: boolean }) => void (r.created && (queued += 1));
-    let commitId: number | null = null;
+    let commitId: number | null =
+      ops.find(
+        (o) => o.meetingId === meetingId && o.kind === "commit_meeting" && o.state !== "cancelled",
+      )?.id ?? null;
     if (preview.summary.commit) {
       const r = queue(
         meetingId,
@@ -1153,7 +1409,7 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
         ),
       );
     }
-    const proposals = snapshots.get(meetingId)!.draft.statusProposals ?? [];
+    const proposals = snap.draft.statusProposals ?? [];
     for (const s of preview.summary.statuses) {
       const p = proposals.find((x) => x.id === s.proposalId)!;
       const number = Number(s.target.slice(1));
@@ -1169,16 +1425,33 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
         ),
       );
     }
+    for (const n of preview.summary.notion) {
+      const task = buildNotionTask(snap, n.itemId);
+      if (!task) continue;
+      count(
+        queue(
+          meetingId,
+          "export_notion",
+          "notion",
+          `notion:${n.itemId}`,
+          `Export to Notion: ${n.title}`,
+          { kind: "notion", itemId: n.itemId, task },
+          commitId,
+        ),
+      );
+    }
     if (preview.summary.discord) {
-      const reference = cycles.cycle(view.draft.cycle)?.targets.discord?.webhook ?? "";
+      const discord = cycles.cycle(view.draft.cycle)?.targets.discord;
+      const reference = discord?.webhook ?? "";
+      const bot = discord?.bot ? structuredClone(discord.bot) : null;
       count(
         queue(
           meetingId,
           "post_discord",
           "discord",
           "discord",
-          "Post the summary to Discord",
-          { kind: "discord", reference },
+          bot ? "Post the summary to Discord (bot)" : "Post the summary to Discord",
+          { kind: "discord", reference, bot },
           commitId,
         ),
       );
@@ -1186,6 +1459,54 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
     pump();
     emit();
     return { plan: await plan(meetingId, wanted), queued };
+  }
+
+  async function reexportNotion(meetingId: string): Promise<PublishResult> {
+    if (!isLocked(meetingId))
+      fail("not_published", "Publish the meeting before re-exporting tasks to Notion.");
+    const view = await drafts.methods.getDraft(meetingId);
+    const cycle = cycles.cycle(view.draft.cycle);
+    if (!cycle?.targets.notion)
+      fail("no_target", "This cycle has no Notion target: add one in the cycle settings first.");
+    const preview = await plan(meetingId, ["notion"]);
+    const block = preview.blocks[0];
+    if (block) fail(block.code, block.message);
+    if (!snapshots.has(meetingId)) {
+      const info = repoInfo(view.draft.cycle);
+      snapshots.set(meetingId, {
+        draft: structuredClone(view.draft),
+        cycleId: view.draft.cycle,
+        github: info.github,
+        api: info.api,
+        markdown: view.reportMarkdown,
+        chat: await drafts.methods.renderReport(meetingId, "chat"),
+        screenshots: deps.screenshotCount(meetingId),
+      });
+    }
+    const snap = snapshots.get(meetingId)!;
+    const commitId =
+      ops.find(
+        (o) => o.meetingId === meetingId && o.kind === "commit_meeting" && o.state !== "cancelled",
+      )?.id ?? null;
+    let queued = 0;
+    for (const n of preview.summary.notion) {
+      const task = buildNotionTask(snap, n.itemId);
+      if (!task) continue;
+      const r = queue(
+        meetingId,
+        "export_notion",
+        "notion",
+        `notion:${n.itemId}`,
+        `Export to Notion: ${n.title}`,
+        { kind: "notion", itemId: n.itemId, task },
+        commitId,
+        true,
+      );
+      if (r.created) queued += 1;
+    }
+    pump();
+    emit();
+    return { plan: await plan(meetingId, ["notion"]), queued };
   }
 
   // ----- secrets -----
@@ -1196,6 +1517,16 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
   const hostOf = (api?: string): string =>
     apiHost(apiOrDefault(api)) ?? fail("invalid", "the API address must start with https://");
 
+  function secretKindOf(ref: string): SecretKind | null {
+    for (const c of cycles.listCycles()) {
+      const t = cycles.cycle(c.id)?.targets;
+      if (t?.discord?.webhook?.trim() === ref) return "discord";
+      if (t?.discord?.bot?.token.trim() === ref) return "discord-bot";
+      if (t?.notion?.token.trim() === ref) return "notion";
+    }
+    return referenceKindByName(ref);
+  }
+
   const methods: PublishMethods = {
     publishingSecrets: async (): Promise<PublishingSecrets> => {
       const hosts = new Map<string, string>([[apiHost(DEFAULT_API)!, DEFAULT_API]]);
@@ -1205,17 +1536,23 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
       }
       const seen = new Set<string>();
       const targets: PublishingSecrets["targets"] = [];
-      for (const c of cycles.listCycles()) {
-        const reference = cycles.cycle(c.id)?.targets.discord?.webhook?.trim();
-        if (!reference || !DISCORD_REFERENCE.test(reference) || seen.has(reference)) continue;
-        seen.add(reference);
+      const addTarget = (reference: string | undefined, cycleId: string, kind: SecretKind) => {
+        const ref = reference?.trim();
+        if (!ref || !CREDENTIAL_REFERENCE.test(ref) || seen.has(ref)) return;
+        seen.add(ref);
         targets.push({
-          reference,
-          cycleId: c.id,
-          kind: "discord",
-          set: webhooks.has(reference),
-          masked: webhooks.get(reference) ?? null,
+          reference: ref,
+          cycleId,
+          kind,
+          set: targetSecrets.has(ref),
+          masked: targetSecrets.get(ref) ?? null,
         });
+      };
+      for (const c of cycles.listCycles()) {
+        const t = cycles.cycle(c.id)?.targets;
+        addTarget(t?.discord?.webhook, c.id, "discord");
+        addTarget(t?.discord?.bot?.token, c.id, "discord-bot");
+        addTarget(t?.notion?.token, c.id, "notion");
       }
       return {
         github: [...hosts].map(([host, api]) => ({ host, api, tokenSet: tokens.has(host) })),
@@ -1270,28 +1607,41 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
       cycles.setGithubRepo(repoId, githubRepo, githubApi),
     setTargetSecret: async (reference, value) => {
       const ref = reference.trim();
-      if (!DISCORD_REFERENCE.test(ref))
+      if (!CREDENTIAL_REFERENCE.test(ref))
         fail("invalid", "A reference is written cred:name (letters, digits, . _ / -).");
-      const isWebhook =
-        ref.startsWith("cred:discord/") ||
-        cycles.listCycles().some((c) => cycles.cycle(c.id)?.targets.discord?.webhook === ref);
-      if (isWebhook) {
+      const kind = secretKindOf(ref);
+      if (kind === "discord") {
         const parts = parseWebhook(value);
         if (typeof parts === "string") fail("invalid_webhook", `Not a Discord webhook: ${parts}`);
-        webhooks.set(ref, maskWebhook(parts));
+        targetSecrets.set(ref, maskWebhook(parts));
+        emit();
+        return;
+      }
+      if (kind === "discord-bot") {
+        const problem = botTokenProblem(value);
+        if (problem) fail("invalid_bot_token", problem);
+        targetSecrets.set(ref, maskBotToken(value));
+        emit();
+        return;
+      }
+      if (kind === "notion") {
+        const problem = notionTokenProblem(value);
+        if (problem) fail("invalid_notion_token", problem);
+        targetSecrets.set(ref, maskNotionToken(value));
         emit();
         return;
       }
       if (value.trim() === "" || hasControlChars(value))
         fail("invalid", "This value is not acceptable.");
-      webhooks.set(ref, "value stored");
+      targetSecrets.set(ref, "value stored");
+      emit();
     },
     clearTargetSecret: async (reference) => {
-      webhooks.delete(reference.trim());
+      targetSecrets.delete(reference.trim());
       emit();
     },
     testDiscordWebhook: async (reference) => {
-      if (!webhooks.has(reference.trim()))
+      if (!targetSecrets.has(reference.trim()))
         return { ok: false, message: "No webhook is stored for this reference.", name: null };
       if (world.offline)
         return {
@@ -1301,6 +1651,22 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
         };
       return { ok: true, message: "The webhook exists.", name: "Nomad updates" };
     },
+    ...integrations.methods,
+    setNotionMapping: async (cycleId, dataSource, properties) => {
+      const saved = await integrations.methods.setNotionMapping(cycleId, dataSource, properties);
+      deps.onCyclesChanged?.();
+      return saved;
+    },
+    setParticipantDiscord: async (cycleId, participantId, discord) => {
+      const saved = await integrations.methods.setParticipantDiscord(
+        cycleId,
+        participantId,
+        discord,
+      );
+      deps.onCyclesChanged?.();
+      return saved;
+    },
+    reexportNotion,
 
     publishPlan: (meetingId, targets) => plan(meetingId, targets ?? []),
     publishMeeting: (meetingId, targets) => publish(meetingId, targets),
@@ -1376,6 +1742,7 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
   };
 
   const hooks: MockHooks = {
+    ...integrations.hooks,
     setOffline: (offline) => {
       world.offline = offline;
       if (!offline) {

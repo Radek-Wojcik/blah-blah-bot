@@ -3666,3 +3666,76 @@ textarea {
   white-space: nowrap;
   border: 0;
 }
+
+/* ---------- Stage 7: Discord bot, Notion property mapping, member picker ---------- */
+.discord-invite-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.perm-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8em;
+  color: var(--muted);
+}
+.perm-list code {
+  color: var(--cyan);
+  font-family: var(--font-mono);
+}
+.notion-mapping {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}
+.mapping-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px 14px;
+}
+.row-span {
+  grid-column: 1 / -1;
+}
+.discord-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--cyan);
+  background: var(--panel-2);
+}
+.picker-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.picker-controls input {
+  flex: 1 1 200px;
+}
+.picker-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.picker-item {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+}
+.notion-plan {
+  margin: 8px 0;
+}

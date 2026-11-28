@@ -49,6 +49,9 @@ struct Case {
     topics: Vec<Topic>,
     repo: RepoFacts,
     webhook: bool,
+    bot_token: bool,
+    notion_token: bool,
+    existing_refs: Vec<ExternalRef>,
     existing: Vec<OutboxOp>,
     anchors: BTreeMap<String, String>,
 }
@@ -67,6 +70,9 @@ impl Case {
             topics: vec![topic("t-1", "Wheel size")],
             repo: private(),
             webhook: true,
+            bot_token: true,
+            notion_token: true,
+            existing_refs: vec![],
             existing: vec![],
             anchors: BTreeMap::from([("i1".to_string(), "t-00-12-25".to_string())]),
         }
@@ -80,6 +86,9 @@ impl Case {
             local_topics: &self.topics,
             repo: &self.repo,
             discord_webhook_set: self.webhook,
+            discord_bot_token_set: self.bot_token,
+            notion_token_set: self.notion_token,
+            existing_refs: &self.existing_refs,
             anchors: &self.anchors,
             snapshot: &snapshot(),
             existing: &self.existing,
@@ -477,4 +486,102 @@ fn topics_are_applied_on_top_of_the_local_list() {
     );
     assert_eq!(reopened[1].status, TopicStatus::Open);
     assert_eq!(reopened[1].closed_in, None);
+}
+
+#[test]
+fn notion_export_plans_one_op_per_task_and_chains_after_commit() {
+    let mut c = cycle(Some(PublishMode::OnApproval), None);
+    c.targets.notion = Some(cycle_store::NotionTarget {
+        token: "cred:notion/nomad".into(),
+        database: "0123456789abcdef0123456789abcdef".into(),
+        data_source: None,
+        publish: PublishMode::OnApproval,
+        properties: cycle_store::NotionProperties::default(),
+    });
+    let mut case = Case::new(c);
+    case.existing_refs.push(ExternalRef {
+        meeting_id: MEETING.into(),
+        target: RefTarget::Notion,
+        ref_key: notion_ref_key("i1"),
+        external_id: "page-1".into(),
+        url: Some("https://www.notion.so/page-1".into()),
+        extra: "{}".into(),
+        updated_unix_ms: 1,
+    });
+    let plan = case.explicit(&[PublishTarget::Github, PublishTarget::Notion]);
+    assert!(plan.blocks.is_empty(), "{:?}", plan.blocks);
+    assert_eq!(
+        keys(&plan),
+        ["commit", "issue:i1", "issue:i2", "notion:i1", "notion:i2"]
+    );
+    assert_eq!(plan.ops[3].kind, OutboxKind::ExportNotion);
+    assert_eq!(plan.ops[3].target, OutboxTarget::Notion);
+    assert_eq!(plan.ops[3].after_op_key.as_deref(), Some("commit"));
+    let p: NotionPayload = serde_json::from_str(&plan.ops[3].payload).unwrap();
+    assert_eq!(p.item_id, "i1");
+    assert_eq!(p.assignee_name.as_deref(), Some("Alex Example"));
+    assert_eq!(p.due.as_deref(), Some("2026-11-20"));
+    assert_eq!(p.token_ref, "cred:notion/nomad");
+    assert_eq!(plan.summary.notion.len(), 2);
+    assert_eq!(
+        plan.summary.notion[0].existing_url.as_deref(),
+        Some("https://www.notion.so/page-1")
+    );
+    assert_eq!(plan.summary.notion[1].existing_url, None);
+
+    // Without GitHub, Notion ops have no commit dependency.
+    let notion_only = case.explicit(&[PublishTarget::Notion]);
+    assert_eq!(keys(&notion_only), ["notion:i1", "notion:i2"]);
+    assert_eq!(notion_only.ops[0].after_op_key, None);
+}
+
+#[test]
+fn missing_notion_and_bot_tokens_block_explicit_and_note_auto() {
+    let mut c = cycle(Some(PublishMode::Off), None);
+    c.targets.notion = Some(cycle_store::NotionTarget {
+        token: "cred:notion/nomad".into(),
+        database: "0123456789abcdef0123456789abcdef".into(),
+        data_source: None,
+        publish: PublishMode::Auto,
+        properties: cycle_store::NotionProperties::default(),
+    });
+    c.targets.discord = Some(cycle_store::DiscordTarget {
+        webhook: None,
+        bot: Some(cycle_store::DiscordBot {
+            token: "cred:discord-bot/nomad".into(),
+            guild: "400000000000000001".into(),
+            channel: "300000000000000001".into(),
+            thread: true,
+            edit_on_correction: true,
+        }),
+        publish: PublishMode::Auto,
+        template: None,
+    });
+    let mut case = Case::new(c);
+    case.notion_token = false;
+    case.bot_token = false;
+
+    let explicit = case.explicit(&[PublishTarget::Notion, PublishTarget::Discord]);
+    assert_eq!(
+        explicit.blocks,
+        [Block::NotionTokenMissing, Block::DiscordBotTokenMissing]
+    );
+    let auto = case.plan(Trigger::Auto, &[]);
+    assert!(auto.blocks.is_empty());
+    assert!(auto.ops.is_empty());
+    assert_eq!(auto.notes.len(), 2);
+
+    // With the bot token present, Discord plans in bot mode with thread metadata.
+    case.bot_token = true;
+    let bot_plan = case.explicit(&[PublishTarget::Discord]);
+    assert!(bot_plan.blocks.is_empty());
+    assert!(bot_plan.summary.discord);
+    assert_eq!(bot_plan.summary.discord_mode, Some("bot"));
+    assert!(bot_plan.summary.discord_thread);
+    let dp: DiscordPayload = serde_json::from_str(&bot_plan.ops[0].payload).unwrap();
+    let bot = dp.bot.expect("bot payload");
+    assert_eq!(bot.token, "cred:discord-bot/nomad");
+    assert_eq!(bot.guild, "400000000000000001");
+    assert_eq!(bot.channel, "300000000000000001");
+    assert!(bot.thread && bot.edit_on_correction);
 }

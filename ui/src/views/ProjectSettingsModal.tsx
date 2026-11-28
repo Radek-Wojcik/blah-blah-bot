@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useBackend } from "../backend-context";
 import { AudioRetentionHelp } from "../components/AudioRetentionHelp";
 import { BrowseButton } from "../components/BrowseButton";
@@ -21,16 +21,20 @@ import type {
   CycleParticipant,
   CycleRepoView,
   DetectedModels,
+  DiscordBotCheck,
+  DiscordBotTarget,
   LanguageSetting,
   ProjectPrefs,
-  PublishMode,
   PublishingSecrets,
   ReportMode,
 } from "../ipc/types";
 import { DEFAULT_PUBLISH_RULE, parseWebhook } from "../publish";
 import { MODE_HELP, MODE_NAMES, REPORT_MODES } from "../report-gate";
-import { Modal } from "./Modal";
 import { DeleteProjectSection } from "./DeleteProjectSection";
+import { DiscordInviteBox } from "./DiscordInviteBox";
+import { DiscordParticipantPicker } from "./DiscordParticipantPicker";
+import { Modal } from "./Modal";
+import { NotionTargetFields } from "./NotionTargetFields";
 import { RuleChoice } from "./RuleChoice";
 import { TemplateEditor } from "./TemplateEditor";
 
@@ -40,12 +44,6 @@ const LANGUAGES: { value: LanguageSetting; label: string }[] = [
   { value: "auto", label: "Auto" },
   { value: "en", label: "English" },
   { value: "pl", label: "Polish" },
-];
-
-const PUBLISH_OPTIONS: { value: PublishMode; label: string }[] = [
-  { value: "on-approval", label: "After approval in the draft" },
-  { value: "auto", label: "Automatically" },
-  { value: "off", label: "Never" },
 ];
 
 function FieldProblems({ issues, path }: { issues: CycleIssue[]; path: string }) {
@@ -111,12 +109,14 @@ export function ProjectSettingsModal({
     discord: boolean;
     notion: boolean;
   }>({ github: false, discord: false, notion: false });
+  const [botChecking, setBotChecking] = useState(false);
+  const [botCheck, setBotCheck] = useState<DiscordBotCheck | null>(null);
+  const [botCheckError, setBotCheckError] = useState<string | null>(null);
 
   const projectIdInputId = useId();
   const reportFolderInputId = useId();
   const webhookRefInputId = useId();
   const webhookSecretInputId = useId();
-  const notionDbInputId = useId();
 
   const adoptCycle = useCallback((d: CycleDetails) => {
     setDetails(d);
@@ -222,6 +222,11 @@ export function ProjectSettingsModal({
         onSaved?.();
       } else {
         setIssues(res.issues);
+        setOpenTargets((cur) => ({
+          github: cur.github || res.issues.some((i) => i.path.startsWith("targets.github")),
+          discord: cur.discord || res.issues.some((i) => i.path.startsWith("targets.discord")),
+          notion: cur.notion || res.issues.some((i) => i.path.startsWith("targets.notion")),
+        }));
         setError("Fix the highlighted project settings before saving.");
       }
     } catch (e) {
@@ -250,12 +255,98 @@ export function ProjectSettingsModal({
     (githubRepoInput.trim() !== (currentRepo.githubRepo ?? "") ||
       githubApiInput.trim() !== (currentRepo.githubApi ?? ""));
 
-  const trimmedWebhookRef = discordRef?.webhook.trim() ?? "";
+  const trimmedWebhookRef = discordRef?.webhook?.trim() ?? "";
   const validWebhookRef = /^cred:[A-Za-z0-9][A-Za-z0-9_./-]*$/.test(trimmedWebhookRef);
   const matchedSecret = validWebhookRef
     ? secrets?.targets.find((t) => t.reference === trimmedWebhookRef)
     : undefined;
   const isWebhookSet = Boolean(matchedSecret?.set || storedWebhookRefs.has(trimmedWebhookRef));
+
+  const savedBot = details?.cycle.targets.discord?.bot ?? null;
+  const currentBot = discordRef?.bot ?? null;
+  const hasSavedDiscordBot = savedBot !== null;
+  const botDirty = JSON.stringify(savedBot) !== JSON.stringify(currentBot);
+  const savedNotion = details?.cycle.targets.notion ?? null;
+  const currentNotion = notion ?? null;
+  const notionConnectionDirty =
+    savedNotion === null ||
+    currentNotion === null ||
+    savedNotion.token !== currentNotion.token ||
+    savedNotion.database !== currentNotion.database ||
+    (savedNotion.dataSource ?? "") !== (currentNotion.dataSource ?? "");
+  const slug = (cycle?.id ?? cycleId).toLowerCase();
+
+  const defaultBotTarget = (): DiscordBotTarget => ({
+    token: `cred:discord-bot/${slug}`,
+    guild: "",
+    channel: "",
+    thread: true,
+    editOnCorrection: true,
+  });
+
+  /** Editing a bot field makes an earlier channel check stale. */
+  const patchBot = (p: Partial<DiscordBotTarget>) => {
+    if (!discordRef?.bot) return;
+    setBotCheck(null);
+    setBotCheckError(null);
+    setTargets({ discord: { ...discordRef, bot: { ...discordRef.bot, ...p } } });
+  };
+
+  const setDiscordMode = (mode: "webhook" | "bot") => {
+    if (!discordRef) return;
+    setBotCheck(null);
+    setBotCheckError(null);
+    if (mode === "bot") {
+      // A pasted webhook URL is never kept once the bot is the delivery mode.
+      setWebhookInput("");
+      setWebhookMsg(null);
+    }
+    setTargets({
+      discord:
+        mode === "bot"
+          ? {
+              bot: discordRef.bot ?? defaultBotTarget(),
+              publish: discordRef.publish,
+              ...(discordRef.template ? { template: discordRef.template } : {}),
+            }
+          : {
+              webhook: discordRef.webhook ?? `cred:discord/${slug}`,
+              publish: discordRef.publish,
+              ...(discordRef.template ? { template: discordRef.template } : {}),
+            },
+    });
+  };
+  const modeRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const onModeKey = (e: React.KeyboardEvent, i: number) => {
+    const last = 1;
+    let to: number;
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") to = i === last ? 0 : i + 1;
+    else if (e.key === "ArrowLeft" || e.key === "ArrowUp") to = i === 0 ? last : i - 1;
+    else if (e.key === "Home") to = 0;
+    else if (e.key === "End") to = last;
+    else return;
+    e.preventDefault();
+    modeRefs.current[to]?.focus();
+    setDiscordMode(to === 0 ? "webhook" : "bot");
+  };
+
+  const checkDiscordBot = () => {
+    if (botDirty) {
+      setBotCheck(null);
+      setBotCheckError(
+        "Save the project settings first so the bot settings are stored, then check.",
+      );
+      return;
+    }
+    setBotChecking(true);
+    setBotCheck(null);
+    setBotCheckError(null);
+    backend
+      .testDiscordBot(cycleId)
+      .then(setBotCheck)
+      .catch((e) => setBotCheckError(errorMessage(e)))
+      .finally(() => setBotChecking(false));
+  };
 
   const saveGithubLink = async () => {
     if (!details) return;
@@ -708,6 +799,17 @@ export function ProjectSettingsModal({
                       >
                         Remove
                       </button>
+                      {hasSavedDiscordBot && (
+                        <div className="row-span">
+                          <DiscordParticipantPicker
+                            cycleId={cycleId}
+                            participantIndex={i}
+                            participantName={p.name}
+                            kind={kind}
+                            onPick={(discord) => setParticipant(i, { discord })}
+                          />
+                        </div>
+                      )}
                     </li>
                   );
                 })}
@@ -1150,7 +1252,13 @@ export function ProjectSettingsModal({
                     <input
                       type="checkbox"
                       checked={discordRef != null}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        if (!e.target.checked) {
+                          setWebhookInput("");
+                          setWebhookMsg(null);
+                          setBotCheck(null);
+                          setBotCheckError(null);
+                        }
                         setTargets({
                           discord: e.target.checked
                             ? {
@@ -1158,8 +1266,8 @@ export function ProjectSettingsModal({
                                 publish: DEFAULT_PUBLISH_RULE.discord,
                               }
                             : null,
-                        })
-                      }
+                        });
+                      }}
                     />
                     Post a summary to a Discord channel
                   </label>
@@ -1175,98 +1283,214 @@ export function ProjectSettingsModal({
                 </div>
                 {openTargets.discord && discordRef && (
                   <div className="form" style={{ marginTop: "0.75rem" }}>
-                    <div className="field-block">
-                      <div className="field-label-row">
-                        <label htmlFor={webhookRefInputId}>Webhook credential reference</label>
-                        <HelpPopover
-                          title="Credential reference"
-                          text="Use cred:name to reference a Discord webhook stored safely in Windows Credential Manager. Never paste raw webhook URLs here."
-                          recommended="cred:discord/project"
-                        />
+                    <div className="field-group">
+                      <span className="field-label">Delivery mode</span>
+                      <div
+                        className="rule-switch"
+                        role="radiogroup"
+                        aria-label="Discord delivery mode"
+                      >
+                        {(["webhook", "bot"] as const).map((mode, i) => {
+                          const on = (discordRef.bot !== undefined) === (mode === "bot");
+                          return (
+                            <button
+                              key={mode}
+                              ref={(el) => {
+                                modeRefs.current[i] = el;
+                              }}
+                              type="button"
+                              role="radio"
+                              aria-checked={on}
+                              tabIndex={on ? 0 : -1}
+                              className={on ? "btn btn-small" : "btn btn-small btn-ghost"}
+                              onClick={() => !on && setDiscordMode(mode)}
+                              onKeyDown={(e) => onModeKey(e, i)}
+                            >
+                              {mode === "bot" ? "Bot" : "Webhook"}
+                            </button>
+                          );
+                        })}
                       </div>
-                      <input
-                        id={webhookRefInputId}
-                        value={discordRef.webhook}
-                        placeholder="cred:discord/nomad"
-                        onChange={(e) =>
-                          setTargets({ discord: { ...discordRef, webhook: e.target.value } })
-                        }
-                      />
-                      <FieldProblems issues={issues} path="targets.discord.webhook" />
+                      <FieldProblems issues={issues} path="targets.discord" />
                     </div>
 
-                    {validWebhookRef && (
-                      <div
-                        className="secret-form"
-                        role="form"
-                        aria-label={`Webhook for ${trimmedWebhookRef}`}
-                      >
-                        <p className="token-state">
-                          {isWebhookSet
-                            ? matchedSecret?.masked
-                              ? `Webhook stored: ${matchedSecret.masked}`
-                              : "Webhook stored"
-                            : "No webhook stored"}
-                        </p>
-                        <label htmlFor={webhookSecretInputId}>
-                          Discord webhook URL
+                    {discordRef.bot ? (
+                      <>
+                        <label>
+                          Bot token reference
                           <input
-                            id={webhookSecretInputId}
-                            aria-label={`Webhook for ${trimmedWebhookRef}`}
-                            type="password"
-                            autoComplete="off"
-                            spellCheck={false}
-                            value={webhookInput}
-                            placeholder={
-                              isWebhookSet
-                                ? "Enter a new value to replace it"
-                                : "https://discord.com/api/webhooks/…"
-                            }
-                            onChange={(e) => {
-                              setWebhookInput(e.target.value);
-                              setWebhookMsg(null);
-                            }}
+                            value={discordRef.bot.token}
+                            placeholder={`cred:discord-bot/${slug}`}
+                            onChange={(e) => patchBot({ token: e.target.value })}
                           />
                           <small>
-                            Stored in Windows Credential Manager under {trimmedWebhookRef}; the URL
-                            is never written to Git or shown again.
+                            The name of a secret in the Windows Credential Manager, written
+                            cred:name. Store the bot token in Settings &gt; Connectors.
                           </small>
+                          <FieldProblems issues={issues} path="targets.discord.bot.token" />
                         </label>
-                        {webhookMsg && (
-                          <p
-                            className={webhookMsg.kind === "error" ? "error" : "secret-result"}
-                            role={webhookMsg.kind === "error" ? "alert" : "status"}
-                          >
-                            {webhookMsg.text}
-                          </p>
-                        )}
+                        <div className="form-row">
+                          <label>
+                            Server (guild) id
+                            <input
+                              value={discordRef.bot.guild}
+                              inputMode="numeric"
+                              placeholder="111111111111111111"
+                              onChange={(e) => patchBot({ guild: e.target.value })}
+                            />
+                            <FieldProblems issues={issues} path="targets.discord.bot.guild" />
+                          </label>
+                          <label>
+                            Channel id
+                            <input
+                              value={discordRef.bot.channel}
+                              inputMode="numeric"
+                              placeholder="222222222222222222"
+                              onChange={(e) => patchBot({ channel: e.target.value })}
+                            />
+                            <FieldProblems issues={issues} path="targets.discord.bot.channel" />
+                          </label>
+                        </div>
+                        <label className="check">
+                          <input
+                            type="checkbox"
+                            checked={discordRef.bot.thread}
+                            onChange={(e) => patchBot({ thread: e.target.checked })}
+                          />
+                          Open one thread per meeting under the summary
+                        </label>
+                        <label className="check">
+                          <input
+                            type="checkbox"
+                            checked={discordRef.bot.editOnCorrection}
+                            onChange={(e) => patchBot({ editOnCorrection: e.target.checked })}
+                          />
+                          Edit the summary when a correction is published
+                        </label>
                         <div className="actions">
                           <button
-                            type="button"
                             className="btn btn-small btn-ghost"
-                            disabled={!isWebhookSet || webhookBusy}
-                            onClick={() => void testDiscordSecret()}
-                          >
-                            Test webhook
-                          </button>
-                          <button
                             type="button"
-                            className="btn btn-small btn-ghost"
-                            disabled={!isWebhookSet || webhookBusy}
-                            onClick={() => void clearDiscordWebhook()}
+                            disabled={botChecking}
+                            onClick={checkDiscordBot}
                           >
-                            Clear
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-small"
-                            disabled={webhookInput.trim() === "" || webhookBusy}
-                            onClick={() => void storeDiscordWebhook()}
-                          >
-                            Store
+                            {botChecking ? "Checking…" : "Check channel & permissions"}
                           </button>
                         </div>
-                      </div>
+                        {botCheckError && (
+                          <p className="error" role="alert">
+                            {botCheckError}
+                          </p>
+                        )}
+                        {botCheck && (
+                          <div
+                            className={botCheck.ok ? "secret-result" : "error"}
+                            role={botCheck.ok ? "status" : "alert"}
+                          >
+                            <p>{botCheck.message}</p>
+                            {botCheck.missing.length > 0 && (
+                              <p>Missing permissions: {botCheck.missing.join(", ")}.</p>
+                            )}
+                          </div>
+                        )}
+                        <DiscordInviteBox compact />
+                      </>
+                    ) : (
+                      <>
+                        <div className="field-block">
+                          <div className="field-label-row">
+                            <label htmlFor={webhookRefInputId}>Webhook credential reference</label>
+                            <HelpPopover
+                              title="Credential reference"
+                              text="Use cred:name to reference a Discord webhook stored safely in Windows Credential Manager. Never paste raw webhook URLs here."
+                              recommended="cred:discord/project"
+                            />
+                          </div>
+                          <input
+                            id={webhookRefInputId}
+                            value={discordRef.webhook ?? ""}
+                            placeholder={`cred:discord/${slug}`}
+                            onChange={(e) =>
+                              setTargets({ discord: { ...discordRef, webhook: e.target.value } })
+                            }
+                          />
+                          <FieldProblems issues={issues} path="targets.discord.webhook" />
+                        </div>
+
+                        {validWebhookRef && (
+                          <div
+                            className="secret-form"
+                            role="form"
+                            aria-label={`Webhook for ${trimmedWebhookRef}`}
+                          >
+                            <p className="token-state">
+                              {isWebhookSet
+                                ? matchedSecret?.masked
+                                  ? `Webhook stored: ${matchedSecret.masked}`
+                                  : "Webhook stored"
+                                : "No webhook stored"}
+                            </p>
+                            <label htmlFor={webhookSecretInputId}>
+                              Discord webhook URL
+                              <input
+                                id={webhookSecretInputId}
+                                aria-label={`Webhook for ${trimmedWebhookRef}`}
+                                type="password"
+                                autoComplete="off"
+                                spellCheck={false}
+                                value={webhookInput}
+                                placeholder={
+                                  isWebhookSet
+                                    ? "Enter a new value to replace it"
+                                    : "https://discord.com/api/webhooks/…"
+                                }
+                                onChange={(e) => {
+                                  setWebhookInput(e.target.value);
+                                  setWebhookMsg(null);
+                                }}
+                              />
+                              <small>
+                                Stored in Windows Credential Manager under {trimmedWebhookRef}; the
+                                URL is never written to Git or shown again.
+                              </small>
+                            </label>
+                            {webhookMsg && (
+                              <p
+                                className={webhookMsg.kind === "error" ? "error" : "secret-result"}
+                                role={webhookMsg.kind === "error" ? "alert" : "status"}
+                              >
+                                {webhookMsg.text}
+                              </p>
+                            )}
+                            <div className="actions">
+                              <button
+                                type="button"
+                                className="btn btn-small btn-ghost"
+                                disabled={!isWebhookSet || webhookBusy}
+                                onClick={() => void testDiscordSecret()}
+                              >
+                                Test webhook
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-small btn-ghost"
+                                disabled={!isWebhookSet || webhookBusy}
+                                onClick={() => void clearDiscordWebhook()}
+                              >
+                                Clear
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-small"
+                                disabled={webhookInput.trim() === "" || webhookBusy}
+                                onClick={() => void storeDiscordWebhook()}
+                              >
+                                Store
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </>
                     )}
 
                     <label>
@@ -1319,12 +1543,17 @@ export function ProjectSettingsModal({
                       onChange={(e) =>
                         setTargets({
                           notion: e.target.checked
-                            ? { database: "", publish: "on-approval" }
+                            ? {
+                                token: `cred:notion/${slug}`,
+                                database: "",
+                                publish: DEFAULT_PUBLISH_RULE.notion,
+                                properties: { title: "Name", key: "BBB key" },
+                              }
                             : null,
                         })
                       }
                     />
-                    Add the report to a Notion database
+                    Export tasks to a Notion database
                   </label>
                   <button
                     type="button"
@@ -1338,42 +1567,13 @@ export function ProjectSettingsModal({
                 </div>
                 {openTargets.notion && notion && (
                   <div className="form" style={{ marginTop: "0.75rem" }}>
-                    <div className="field-block">
-                      <div className="field-label-row">
-                        <label htmlFor={notionDbInputId}>Database ID or cred: reference</label>
-                        <HelpPopover
-                          title="Notion database"
-                          text="Provide a Notion database ID or a cred: reference stored in Windows Credential Manager."
-                        />
-                      </div>
-                      <input
-                        id={notionDbInputId}
-                        value={notion.database}
-                        placeholder="cred:notion/project-db"
-                        onChange={(e) =>
-                          setTargets({ notion: { ...notion, database: e.target.value } })
-                        }
-                      />
-                      <FieldProblems issues={issues} path="targets.notion.database" />
-                    </div>
-                    <label>
-                      When to publish
-                      <select
-                        aria-label="Notion publish"
-                        value={notion.publish}
-                        onChange={(e) =>
-                          setTargets({
-                            notion: { ...notion, publish: e.target.value as PublishMode },
-                          })
-                        }
-                      >
-                        {PUBLISH_OPTIONS.map((p) => (
-                          <option key={p.value} value={p.value}>
-                            {p.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                    <NotionTargetFields
+                      cycleId={cycleId}
+                      notion={notion}
+                      connectionDirty={notionConnectionDirty}
+                      issues={issues}
+                      onChange={(next) => setTargets({ notion: next })}
+                    />
                   </div>
                 )}
               </fieldset>

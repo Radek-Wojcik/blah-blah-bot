@@ -6,6 +6,7 @@
 //! on open.
 
 mod cycles;
+mod external_refs;
 mod jobs;
 mod migrations;
 mod outbox;
@@ -13,6 +14,7 @@ mod publications;
 mod voices;
 
 pub use cycles::{LlmChoice, LlmKind, ProjectPrefs, ReportSettings, SyncOutcome, TaskCompletion};
+pub use external_refs::{ExternalRef, RefTarget};
 pub use jobs::{JobRow, StageRow, StageStatus};
 pub use outbox::{
     retry_delay_ms, Failure, NewOp, OpState, OutboxKind, OutboxOp, OutboxTarget, BACKOFF_BASE_MS,

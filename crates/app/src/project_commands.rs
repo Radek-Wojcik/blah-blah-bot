@@ -212,7 +212,8 @@ fn apply_wizard_cycle_overrides(cycle: &mut Cycle, req: &WizardCreateProjectDto)
         .filter(|s| !s.is_empty())
     {
         cycle.targets.discord = Some(DiscordTarget {
-            webhook: normalize_webhook_ref(wh),
+            webhook: Some(normalize_webhook_ref(wh)),
+            bot: None,
             publish: PublishMode::OnApproval,
             template: None,
         });
@@ -1240,7 +1241,10 @@ mod tests {
         assert_eq!(dto.languages.output, LanguageSetting::En);
         assert_eq!(dto.report.default_mode, ReportMode::Auto);
         assert_eq!(
-            dto.targets.discord.as_ref().map(|d| d.webhook.as_str()),
+            dto.targets
+                .discord
+                .as_ref()
+                .and_then(|d| d.webhook.as_deref()),
             Some("cred:alpha-hook")
         );
         assert_eq!(settings.cycle_repos.len(), 1);

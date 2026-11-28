@@ -112,6 +112,19 @@ pub fn is_loopback_host(host: &str) -> bool {
         .is_ok_and(|ip| ip.is_loopback())
 }
 
+/// Whether plain `http` to `host` is accepted. Only tests and the `test-support` feature (fake
+/// servers) allow it, on this machine; a production build requires `https` everywhere.
+#[cfg(any(test, feature = "test-support"))]
+pub fn plain_http_allowed(host: &str) -> bool {
+    is_loopback_host(host)
+}
+
+/// Production build: plain `http` is never accepted.
+#[cfg(not(any(test, feature = "test-support")))]
+pub fn plain_http_allowed(_host: &str) -> bool {
+    false
+}
+
 /// Splits a URL and applies the safety rules: `https`, or `http` for this machine only, and
 /// no user name or password.
 pub fn parse_endpoint(url: &str) -> Result<Endpoint, HttpError> {
@@ -134,10 +147,8 @@ pub fn parse_endpoint(url: &str) -> Result<Endpoint, HttpError> {
     if host.is_empty() {
         return Err(invalid("the address has no host"));
     }
-    if scheme == "http" && !is_loopback_host(&host) {
-        return Err(invalid(
-            "plain http is only allowed for this machine, use https",
-        ));
+    if scheme == "http" && !plain_http_allowed(&host) {
+        return Err(invalid("the address must use https"));
     }
     Ok(Endpoint {
         scheme,
@@ -193,12 +204,39 @@ struct Body {
 }
 
 /// A request to build and send with [`HttpClient`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` is written by hand: the `Authorization` header and the secret parts of the URL
+/// (a webhook token, a token query value) never reach a log through `{:?}`.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Request {
     method: Method,
     url: String,
     headers: Vec<(String, String)>,
     body: Option<Body>,
+}
+
+impl std::fmt::Debug for Request {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let headers: Vec<(&str, &str)> = self
+            .headers
+            .iter()
+            .map(|(name, _)| (name.as_str(), MASK))
+            .collect();
+        let url = redact(&self.url, &[]);
+        let url = url.split(['?', '#']).next().unwrap_or("");
+        f.debug_struct("Request")
+            .field("method", &self.method)
+            .field("url", &url)
+            .field("headers", &headers)
+            .field(
+                "body",
+                &self
+                    .body
+                    .as_ref()
+                    .map(|b| format!("{}, {} bytes", b.content_type, b.bytes.len())),
+            )
+            .finish()
+    }
 }
 
 impl Request {
@@ -417,10 +455,22 @@ impl HttpClient {
     /// Like [`send_raw`](Self::send_raw), but a status outside 2xx is an error, classified
     /// by [`classify_status`].
     pub fn send(&self, request: &Request) -> Result<Response, HttpError> {
+        self.send_refined(request, &|err, _| err)
+    }
+
+    /// Like [`send`](Self::send), but `refine` may rewrite the classified error of a failing
+    /// answer (a service whose error bodies carry a code that changes what a status means).
+    /// The message of what it returns is redacted.
+    pub fn send_refined(
+        &self,
+        request: &Request,
+        refine: &dyn Fn(HttpError, &Response) -> HttpError,
+    ) -> Result<Response, HttpError> {
         let response = self.send_raw(request)?;
         match classify_status(&response, (self.now_ms)()) {
             None => Ok(response),
-            Some(mut err) => {
+            Some(err) => {
+                let mut err = refine(err, &response);
                 err.message = self.redacted(&err.message);
                 Err(err)
             }
@@ -639,6 +689,11 @@ pub fn api_message(body: &[u8]) -> Option<String> {
     if message.is_empty() {
         return None;
     }
+    // A server message that carries something shaped like a token is not kept at all: the
+    // error text is logged and stored.
+    if redact(message, &[]) != message {
+        return Some("(message withheld, it contains a secret-like value)".to_string());
+    }
     Some(truncate(message, DETAIL_CHARS))
 }
 
@@ -646,13 +701,18 @@ pub fn api_message(body: &[u8]) -> Option<String> {
 
 const MASK: &str = "***";
 const TOKEN_PREFIXES: [&str; 6] = ["github_pat_", "ghp_", "gho_", "ghu_", "ghs_", "ghr_"];
+/// Notion token prefixes. Ordinary words can start with `secret_`, so only a run of at least
+/// [`LONG_TOKEN_MIN`] token characters after the prefix is masked.
+const LONG_TOKEN_PREFIXES: [&str; 2] = ["ntn_", "secret_"];
+const LONG_TOKEN_MIN: usize = 20;
 
 /// Removes secrets from a text that may be stored or shown.
 ///
 /// Every occurrence of a value in `secrets` is masked, and so are the shapes secrets take
 /// when the value itself is not known: the token part of a Discord webhook path
 /// (`/webhooks/<id>/<token>`), the value after `Bearer ` and `Basic `, `access_token=`
-/// and `token=` query values, and GitHub token prefixes (`ghp_`, `github_pat_`, ...).
+/// and `token=` query values, the value after `Bot ` (a Discord bot token), GitHub token
+/// prefixes (`ghp_`, `github_pat_`, ...) and Notion token prefixes (`ntn_`, `secret_`).
 pub fn redact(text: &str, secrets: &[&str]) -> String {
     let mut out = text.to_string();
     for secret in secrets.iter().filter(|s| !s.is_empty()) {
@@ -664,8 +724,13 @@ pub fn redact(text: &str, secrets: &[&str]) -> String {
     out = mask_after(&out, "basic ", 8);
     out = mask_after(&out, "access_token=", 1);
     out = mask_after(&out, "token=", 1);
+    // A bot token is far longer than any word that follows "bot ".
+    out = mask_after(&out, "bot ", LONG_TOKEN_MIN);
     for prefix in TOKEN_PREFIXES {
         out = mask_prefixed(&out, prefix);
+    }
+    for prefix in LONG_TOKEN_PREFIXES {
+        out = mask_prefixed_min(&out, prefix, LONG_TOKEN_MIN);
     }
     out
 }
@@ -705,9 +770,11 @@ fn mask_after(text: &str, marker: &str, min_len: usize) -> String {
 /// Masks `<token>` in `/webhooks/<id>/<token>`.
 fn mask_webhook_tokens(text: &str) -> String {
     const MARKER: &str = "/webhooks/";
+    // ASCII lowercasing keeps byte offsets, so the marker is found in any letter case.
+    let lower = text.to_ascii_lowercase();
     let mut out = String::with_capacity(text.len());
     let mut at = 0;
-    while let Some(found) = text[at..].find(MARKER) {
+    while let Some(found) = lower[at..].find(MARKER) {
         let id_start = at + found + MARKER.len();
         out.push_str(&text[at..id_start]);
         let id_len = text[id_start..]
@@ -734,16 +801,26 @@ fn mask_webhook_tokens(text: &str) -> String {
 
 /// Masks `prefix` and the characters that follow it.
 fn mask_prefixed(text: &str, prefix: &str) -> String {
+    mask_prefixed_min(text, prefix, 0)
+}
+
+/// Masks `prefix` and the characters that follow it, when at least `min_run` follow.
+fn mask_prefixed_min(text: &str, prefix: &str, min_run: usize) -> String {
     let mut out = String::with_capacity(text.len());
     let mut at = 0;
     while let Some(found) = text[at..].find(prefix) {
         let start = at + found;
-        out.push_str(&text[at..start]);
-        let run = text[start + prefix.len()..]
-            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-            .unwrap_or(text.len() - start - prefix.len());
-        out.push_str(MASK);
-        at = start + prefix.len() + run;
+        let after = start + prefix.len();
+        let run = text[after..]
+            .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '-')))
+            .unwrap_or(text.len() - after);
+        if run >= min_run {
+            out.push_str(&text[at..start]);
+            out.push_str(MASK);
+        } else {
+            out.push_str(&text[at..after + run]);
+        }
+        at = after + run;
     }
     out.push_str(&text[at..]);
     out
@@ -1004,6 +1081,30 @@ mod tests {
         assert!(api_message(long.as_bytes()).unwrap().chars().count() < 210);
     }
 
+    #[test]
+    fn secrets_do_not_reach_debug_or_stored_messages() {
+        let hook = "https://discord.com/api/webhooks/123456789012345678/FAKE-tok_en9?token=ZZZ";
+        let req = Request::post_json(hook, &serde_json::json!({"a": "FAKEBODY"}))
+            .bearer("FAKE-bearer-secret");
+        let dump = format!("{req:?}");
+        for needle in ["FAKE", "ZZZ", "Bearer"] {
+            assert!(!dump.contains(needle), "{dump}");
+        }
+        let err = classify_status(
+            &response(
+                400,
+                &[],
+                r#"{"message":"bad ntn_FAKE-abc-def-ghi-jkl-mno-pqr-stu"}"#,
+            ),
+            0,
+        )
+        .unwrap();
+        assert!(!err.message.contains("FAKE"), "{}", err.message);
+        assert!(!redact("x ntn_FAKE-abc-def-ghi-jkl-mno-pqr", &[]).contains("pqr"));
+        let upper = redact("/API/WEBHOOKS/123456789012345678/FAKEtoken1", &[]);
+        assert!(!upper.contains("FAKE"), "{upper}");
+    }
+
     // ----- Retry-After -----
 
     #[test]
@@ -1110,6 +1211,46 @@ mod tests {
             redact("the token expired, bearer of bad news", &[]),
             "the token expired, bearer of bad news"
         );
+    }
+
+    #[test]
+    fn notion_and_bot_tokens_are_masked_by_their_shape() {
+        let ntn = concat!("ntn_", "1234567890abcdefABCDEF1234567890abcdef");
+        let legacy = concat!("secret_", "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789ABCDEFG");
+        assert_eq!(
+            redact(&format!("the token {ntn} was refused"), &[]),
+            "the token *** was refused"
+        );
+        assert_eq!(
+            redact(&format!("old {legacy}, then ntn_{}.", "x".repeat(20)), &[]),
+            "old ***, then ***."
+        );
+        let bot = concat!(
+            "MTExMTExMTExMTExMTExMTEx",
+            ".GaBcDe.",
+            "Abcdefghijklmnopqrstuvwxyz0123456789"
+        );
+        assert_eq!(
+            redact(&format!("Authorization: Bot {bot} rejected"), &[]),
+            "Authorization: Bot *** rejected"
+        );
+        assert_eq!(
+            redact(&format!("authorization: bot {bot}"), &[]),
+            "authorization: bot ***"
+        );
+        // Words and short values stay readable.
+        for text in [
+            "the secret_x of the plan",
+            "a secret_ is not a token",
+            "ntn_short",
+            "this secret_key_is_a_name",
+            "the bot is missing a permission",
+            "Bot rejected",
+            "a robot arm",
+            "the bot Abcdefghij failed",
+        ] {
+            assert_eq!(redact(text, &[]), text);
+        }
     }
 
     #[test]

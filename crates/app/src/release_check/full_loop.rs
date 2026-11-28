@@ -396,7 +396,8 @@ impl Rig {
             issues: true,
         });
         dto.targets.discord = Some(DiscordTargetDto {
-            webhook: webhook_ref.to_string(),
+            webhook: Some(webhook_ref.to_string()),
+            bot: None,
             publish: PublishMode::OnApproval,
             template: None,
         });

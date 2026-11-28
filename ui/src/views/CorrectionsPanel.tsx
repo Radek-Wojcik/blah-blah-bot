@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { useBackend } from "../backend-context";
-import { errorMessage, useOutbox } from "../hooks";
+import { errorMessage, useCycleFacts, useOutbox } from "../hooks";
 import { isIpcError } from "../ipc/tauri";
-import type { Correction, Corrections, DraftItem, PublishPlan } from "../ipc/types";
+import type { Correction, CorrectionStep, Corrections, DraftItem, PublishPlan } from "../ipc/types";
 import {
   CORRECTION_STATE_LABELS,
   correctionAbout,
@@ -10,7 +10,9 @@ import {
   correctionProblem,
   correctionRuleHelp,
   correctionStatusLine,
+  discordChannelUrl,
   safeHttpUrl,
+  safeHttpsUrl,
   today,
   unqueued,
 } from "../publish";
@@ -36,6 +38,7 @@ export function CorrectionsPanel(props: {
   const { meetingId, cycleId, items } = props;
   const backend = useBackend();
   const outbox = useOutbox();
+  const { discordGuildId } = useCycleFacts(cycleId);
   const [view, setView] = useState<Corrections | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notes, setNotes] = useState<string[]>([]);
@@ -193,6 +196,7 @@ export function CorrectionsPanel(props: {
               <CorrectionRow
                 key={c.id}
                 c={c}
+                guildId={discordGuildId}
                 rule={view.rule}
                 canPublish={canPublish}
                 busy={busy}
@@ -331,24 +335,33 @@ function CorrectionForm(props: {
 
 function CorrectionRow(props: {
   c: Correction;
+  guildId: string | null;
   rule: Corrections["rule"];
   canPublish: boolean;
   busy: boolean;
   onPublish: () => void;
   onDelete: () => void;
   onRetry: (opId: number) => void;
-  /** The operations to drop, the comment first (it follows the file). */
+  /** The operations to drop, the comment/edit first (they follow the file). */
   onCancel: (opIds: number[]) => void;
 }) {
   const { c } = props;
   const about = correctionAbout(c);
   const line = correctionStatusLine(c, props.rule);
+  const stepWaiting = (op: CorrectionStep | null | undefined) =>
+    op != null && (op.state === "failed" || (op.state === "queued" && op.lastError !== null));
   const waitingStep =
-    c.state === "failed" || (c.state === "queued" && c.file?.lastError)
+    c.file && (c.state === "failed" || (c.state === "queued" && c.file.lastError))
       ? c.file
-      : c.comment?.state === "failed"
+      : stepWaiting(c.comment)
         ? c.comment
-        : null;
+        : stepWaiting(c.discordEdit)
+          ? c.discordEdit
+          : null;
+  const threadId = c.discordEdit?.state === "done" ? c.discordEdit.result?.thread_id : null;
+  const threadHref = safeHttpsUrl(
+    threadId && props.guildId ? discordChannelUrl(props.guildId, threadId) : null,
+  );
   return (
     <li className={`correction correction-${c.state}`} aria-label={`Correction ${c.id}`}>
       <div className="op-main">
@@ -357,6 +370,9 @@ function CorrectionRow(props: {
           {about && <span className="person-meta"> · {about}</span>}
         </span>
         <span className={correctionBadgeClass(c.state)}>{CORRECTION_STATE_LABELS[c.state]}</span>
+        {c.discordEdit?.state === "done" && c.discordEdit.result?.edited && (
+          <span className="chip">Discord edited</span>
+        )}
         {(() => {
           const href = safeHttpUrl(c.url);
           return (
@@ -367,6 +383,11 @@ function CorrectionRow(props: {
             )
           );
         })()}
+        {threadHref && (
+          <a href={threadHref} target="_blank" rel="noreferrer noopener">
+            Discord thread
+          </a>
+        )}
       </div>
       <p className="correction-text">{c.text}</p>
       {line && (
@@ -400,9 +421,11 @@ function CorrectionRow(props: {
             aria-label={`Cancel correction ${c.id}`}
             onClick={() =>
               props.onCancel(
-                [c.comment?.state === "done" ? null : c.comment?.opId, c.file!.opId].filter(
-                  (id): id is number => id !== null && id !== undefined,
-                ),
+                [
+                  c.discordEdit?.state === "done" ? null : c.discordEdit?.opId,
+                  c.comment?.state === "done" ? null : c.comment?.opId,
+                  c.file!.opId,
+                ].filter((id): id is number => id !== null && id !== undefined),
               )
             }
           >

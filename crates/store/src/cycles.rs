@@ -509,6 +509,16 @@ impl Store {
             return Err(StoreError::Invalid("cycle_id cannot be empty".into()));
         }
         let tx = self.conn.unchecked_transaction()?;
+        // The Notion pages and Discord posts of the project's meetings were tied to the
+        // project's own integration settings, which go with it; this must run before the
+        // meetings are detached or deleted. Ids only, nothing in a service is touched.
+        tx.execute(
+            "DELETE FROM external_refs WHERE meeting_id IN (
+                 SELECT id FROM meetings WHERE cycle_id = ?1
+                 UNION SELECT meeting_id FROM publications WHERE cycle_id = ?1
+             )",
+            params![cycle_id],
+        )?;
         if delete_meetings {
             tx.execute(
                 "DELETE FROM meetings WHERE cycle_id = ?1",
@@ -1168,6 +1178,58 @@ mod tests {
         // Delete meetings when requested.
         s.delete_cycle_data("OTHER", true).unwrap();
         assert!(s.get_meeting("m2").unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_cycle_data_removes_external_refs_of_the_project_only() {
+        let s = store();
+        s.set_report_settings("m1", &settings("NOMAD")).unwrap();
+        s.set_report_settings("m2", &settings("OTHER")).unwrap();
+        let publication = |meeting: &str, cycle: &str| crate::Publication {
+            meeting_id: meeting.into(),
+            cycle_id: cycle.into(),
+            folder: None,
+            repo_key: None,
+            commit_sha: None,
+            report_url: None,
+            snapshot_dir: "snap".into(),
+            published_unix_ms: None,
+        };
+        // m3 has no project of its own; only its publication names NOMAD (an orphan).
+        s.put_publication(&publication("m1", "NOMAD")).unwrap();
+        s.put_publication(&publication("m2", "OTHER")).unwrap();
+        s.put_publication(&publication("m3", "NOMAD")).unwrap();
+        for meeting in ["m1", "m2", "m3"] {
+            for (target, key) in [
+                (crate::RefTarget::Notion, "task:i1"),
+                (crate::RefTarget::Discord, "post"),
+            ] {
+                s.put_external_ref(&crate::ExternalRef {
+                    meeting_id: meeting.into(),
+                    target,
+                    ref_key: key.into(),
+                    external_id: "page".into(),
+                    url: None,
+                    extra: "{}".into(),
+                    updated_unix_ms: 1,
+                })
+                .unwrap();
+            }
+        }
+        // Meetings kept as standalone: their references to the project's services are gone.
+        s.delete_cycle_data("NOMAD", false).unwrap();
+        assert!(s.get_meeting("m1").unwrap().is_some());
+        assert!(s.list_external_refs("m1").unwrap().is_empty());
+        assert!(s.list_external_refs("m3").unwrap().is_empty());
+        assert_eq!(s.list_external_refs("m2").unwrap().len(), 2);
+        assert_eq!(s.get_publication("m1").unwrap().unwrap().cycle_id, "");
+        assert_eq!(s.get_publication("m3").unwrap().unwrap().cycle_id, "");
+        assert_eq!(s.get_publication("m2").unwrap().unwrap().cycle_id, "OTHER");
+        assert!(s.list_publications("NOMAD").unwrap().is_empty());
+        assert_eq!(s.list_publications("OTHER").unwrap().len(), 1);
+        s.delete_cycle_data("OTHER", true).unwrap();
+        assert!(s.list_external_refs("m2").unwrap().is_empty());
+        assert!(s.get_publication("m2").unwrap().is_none());
     }
 
     #[test]
