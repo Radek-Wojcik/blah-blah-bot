@@ -30,13 +30,13 @@ On the first start the application opens a setup wizard. It prepares what proces
 5. **Language model.** Pick a local `.gguf` file for `llama-server`, configure an external OpenAI-compatible server, or skip reports for transcript-only mode.
 6. **Screenshot analysis.** Download the vision model (~5 GB) or choose **Skip screenshot analysis** to keep captured screenshots without describing them.
 7. **Summary.** Shows every item's readiness state (`Ready`, `Missing`, `Needs fixing`, `Skipped`) with **Fix** buttons.
-8. **First cycle / project.** Create your first project or skip and create one later from the **Projects** workspace.
+8. **First project.** Create your first project or skip and create one later from the **Projects** workspace.
 
 **Leave setup** closes the wizard at any point. While required processing pieces are missing, a readiness banner appears on the **Projects** page with **Open setup**. You can re-open the wizard anytime from **Settings > Processing > Run setup again**.
 
 ## Projects & briefings
 
-The **Projects** view is the home screen of the application. Each project represents a recurring series of meetings backed by a cycle Git repository (`cycle.yaml`, `topics.yaml`, and Markdown templates).
+The **Projects** view is the home screen of the application. Each project represents a recurring series of meetings backed by a Git repository (`cycle.yaml`, `topics.yaml`, and Markdown templates).
 
 - **Project cards:** Each card shows participant count, repository sync state, and a live briefing summary (open tasks, overdue items, open discussion topics). Any unassigned/standalone recordings appear in **Unassigned / standalone meetings** below the project grid.
 - **New Project (`ProjectWizard`):** A 2-step wizard creates a new project:
@@ -59,7 +59,7 @@ You can record from either the **Record** tab in the Main UI or the compact **Tr
 - **Live metering & controls:** Both views show a 12-bar live audio waveform equalizer (`WaveformEq`), elapsed time, active sources, and a **Screenshot** button.
 - **Source picker:** Sources are grouped into **Microphone**, **Applications** (desktop apps with active audio sessions, filtering out `AudioSrv`), and **Browser** (tabs captured via the Chrome extension, or `Chrome (whole browser)` fallback).
 - **Dynamic sources:** Add or remove sources mid-recording; tracks stay aligned on the session clock.
-- **Report gate:** Choose the target project (cycle), report mode, template/meeting type, and output language before recording starts.
+- **Report gate:** Choose the target project, report mode, template/meeting type, and output language before recording starts.
 - **Region screenshots:** Press the global hotkey (`Ctrl+Alt+Shift+F10` by default) to freeze the desktop, drag a rectangle, and save a timestamped PNG.
 - **Crash recovery & wake lock:** Audio writes in 60-second segments alongside an append-only journal. Crashed recordings appear as **Needs recovery** and can be recovered with at most the in-progress segment lost. A `SystemWakeLock` keeps the computer awake while recording or while jobs are scheduled/processing.
 

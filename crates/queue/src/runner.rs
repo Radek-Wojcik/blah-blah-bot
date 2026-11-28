@@ -108,7 +108,7 @@ impl PipelineRunner {
             return Ok(None);
         };
         let source = self.cycles.as_deref().ok_or_else(|| {
-            RunError::new("no cycle source is configured, so the context cannot be built")
+            RunError::new("no project source is configured, so the context cannot be built")
         })?;
         context::load_cycle(source, &cycle_id).map(Some)
     }

@@ -229,7 +229,7 @@ fn label_of(cycle_id: &str) -> Result<String, HttpError> {
     if ok {
         Ok(format!("cycle:{cycle_id}"))
     } else {
-        Err(invalid("the cycle id is not usable as a label"))
+        Err(invalid("the project id is not usable as a label"))
     }
 }
 

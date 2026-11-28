@@ -553,7 +553,7 @@ impl Repo {
                         .map(ToString::to_string)
                         .unwrap_or_else(|| "it cannot be read".to_string());
                     report.warnings.push(format!(
-                        "the cycle {} no longer parses after the update: {first}",
+                        "the project {} no longer parses after the update: {first}",
                         entry.dir_name
                     ));
                 }
@@ -640,7 +640,7 @@ impl Repo {
         if !is_identifier(dir_name) {
             issues.push(ValidationIssue::new(
                 "",
-                format!("directory name \"{dir_name}\" is not a valid cycle id"),
+                format!("directory name \"{dir_name}\" is not a valid project id"),
             ));
         }
         if let Some(c) = &cycle {
@@ -668,7 +668,7 @@ impl Repo {
         }
         match self.inspect_cycle(id, &dir) {
             (Some(cycle), issues) if issues.is_empty() => Ok(cycle),
-            (_, issues) => Err(CycleError::invalid(format!("cycle {id}"), issues)),
+            (_, issues) => Err(CycleError::invalid(format!("project {id}"), issues)),
         }
     }
 
@@ -683,7 +683,7 @@ impl Repo {
         let templates = template::list_templates(&dir.join("templates"))?;
         let issues = cycle.validate(&templates);
         if !issues.is_empty() {
-            return Err(CycleError::invalid(format!("cycle {}", cycle.id), issues));
+            return Err(CycleError::invalid(format!("project {}", cycle.id), issues));
         }
         write_atomic(&dir.join("cycle.yaml"), cycle.to_yaml()?.as_bytes())
     }
@@ -706,7 +706,7 @@ impl Repo {
         }
         let issues = cycle.validate(&templates);
         if !issues.is_empty() {
-            return Err(CycleError::invalid(format!("cycle {}", cycle.id), issues));
+            return Err(CycleError::invalid(format!("project {}", cycle.id), issues));
         }
         let yaml = cycle.to_yaml()?;
         template::create_default_template(&templates_dir)?;

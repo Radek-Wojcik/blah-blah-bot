@@ -192,7 +192,7 @@ export function createMockBriefing(cycles: CycleStore) {
     getBriefing: async (cycleId: string, refresh: boolean): Promise<Briefing> => {
       const details = cycles.getCycle(cycleId);
       const repo = cycles.listRepos().find((r) => r.id === details.repoId);
-      if (!repo) fail("not_found", "this cycle repository is not registered");
+      if (!repo) fail("not_found", "this project repository is not registered");
       let pull: Briefing["pull"] = null;
       let error = repo.lastError;
       let current = repo;
@@ -230,7 +230,7 @@ export function createMockBriefing(cycles: CycleStore) {
         .slice(0, 1)
         .map(
           (i) =>
-            `the cycle has problems, so people may be missing from the groups: ${i.path}: ${i.message}`,
+            `the project has problems, so people may be missing from the groups: ${i.path}: ${i.message}`,
         );
       return {
         cycleId,

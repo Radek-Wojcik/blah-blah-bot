@@ -414,7 +414,10 @@ impl Cycle {
             }
             Err(e) => (
                 None,
-                vec![ValidationIssue::new("", format!("cannot read cycle: {e}"))],
+                vec![ValidationIssue::new(
+                    "",
+                    format!("cannot read project: {e}"),
+                )],
             ),
         }
     }
@@ -434,7 +437,7 @@ impl Cycle {
         if !is_identifier(&self.id) {
             issues.push(ValidationIssue::new(
                 "id",
-                format!("cycle id \"{}\" is not a valid identifier", self.id),
+                format!("project id \"{}\" is not a valid identifier", self.id),
             ));
         }
         let mut seen: BTreeMap<&str, usize> = BTreeMap::new();
@@ -533,7 +536,7 @@ impl Cycle {
         };
         issues.extend(self.semantic_issues());
         if !issues.is_empty() {
-            return Err(CycleError::invalid("cycle", issues));
+            return Err(CycleError::invalid("project", issues));
         }
         serde_norway::to_string(self)
             .map_err(|e| CycleError::Other(format!("cannot write YAML: {e}")))

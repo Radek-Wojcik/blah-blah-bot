@@ -1,6 +1,6 @@
-# Cycle repository format
+# Project repository format
 
-A *cycle* is a recurring series of meetings that share participants, vocabulary and report format. Everything the team shares about a cycle lives in a Git repository, so reports and tasks can be read and changed without the application. This page is the reference for that repository. The design background is in [ADR 0009](decisions/0009-git-as-source-of-truth.md) and [ADR 0017](decisions/0017-cycles-extraction-and-drafts.md); the code is the `cycle-store` crate.
+A *project* is a recurring series of meetings that share participants, vocabulary and report format. Everything the team shares about a project lives in a Git repository, so reports and tasks can be read and changed without the application. This page is the reference for that repository. The design background is in [ADR 0009](decisions/0009-git-as-source-of-truth.md) and [ADR 0017](decisions/0017-projects-extraction-and-drafts.md); the code is the `cycle-store` crate.
 
 Machine-readable definitions: `schemas/cycle.schema.json`, `schemas/topics.schema.json`, `schemas/meeting.schema.json`.
 
@@ -12,9 +12,9 @@ cycles/
     cycle.yaml            # participants, glossary, defaults, targets
     topics.yaml           # open and closed topics
     templates/
-      default.md          # created with the cycle
+      default.md          # created with the project
       budget-review.md
-meetings/                 # `targets.github.path`; `meetings` unless the cycle says otherwise
+meetings/                 # `targets.github.path`; `meetings` unless the project says otherwise
   NOMAD/
     2026-11-13/
       report.md           # generated report, never parsed back
@@ -23,7 +23,7 @@ meetings/                 # `targets.github.path`; `meetings` unless the cycle s
       img/
 ```
 
-* The directory name under `cycles/` is the cycle id and must equal `id` in `cycle.yaml`.
+* The directory name under `cycles/` is the project id and must equal `id` in `cycle.yaml`.
 * A directory under `cycles/` without a `cycle.yaml` is ignored.
 * A second meeting on the same day is stored in a folder with a suffix: `2026-11-13-2`.
 * The application creates a repository itself (a local repository without a remote; with a saved GitHub token and the person's confirmation in the project wizard, also an empty private repository on GitHub that becomes its `origin`, falling back to the local-only repository with a message when GitHub cannot be used) or clones an existing one. Text encodings are UTF-8; a byte order mark and Windows line endings are accepted when reading.
@@ -89,12 +89,12 @@ Only `id` and `name` are required. Unknown keys are rejected, so a misspelled ke
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `id` | identifier | required | Cycle id. Also the issue label `cycle:<id>` and the folder name. |
+| `id` | identifier | required | Project id. Also the issue label `cycle:<id>` and the folder name. |
 | `name` | text | required | Display name. |
 | `languages.asr` | `auto`, `pl`, `en` | `auto` | Transcription language. |
 | `languages.output` | `auto`, `pl`, `en` | `auto` | Report language; `auto` follows the dominant language of the meeting. Can be overridden per meeting. |
-| `participants` | list | empty | The cycle's people. Voice profiles are keyed by participant id within the cycle. |
-| `participants[].id` | identifier | required | Unique within the cycle. |
+| `participants` | list | empty | The project's people. Voice profiles are keyed by participant id within the project. |
+| `participants[].id` | identifier | required | Unique within the project. |
 | `participants[].name` | text | required | Name shown in transcripts and reports. |
 | `participants[].github` | GitHub login | none | Assignee of the participant's task issues. |
 | `participants[].discord` | map | none | Exactly one of `user_id` or `role_id`, a Discord snowflake. Quote the number: unquoted, YAML reads it as a number and the file is rejected. |
@@ -106,7 +106,7 @@ Only `id` and `name` are required. Unknown keys are rejected, so a misspelled ke
 | `report.instruction` | text | empty | Natural-language instruction given to the extraction, for example "Group tasks by person". |
 | `report.by_type` | map | empty | Meeting type (for example `technical`, `budget`, `casual`) to template name. |
 | `targets.github.path` | relative path | `meetings` | Folder for meeting reports: a meeting is committed to `<path>/<ID>/<date>/`. Relative to the repository, names separated by `/` and made of letters, digits, `.`, `_` and `-`; no `.` or `..` name, no leading `/`, no drive letter or backslash, no `.git`, no name ending in a dot. Meetings already published under another path stay where they are, and both folders are read for the context of the next meeting. |
-| `targets.github.publish` | `auto`, `on-approval`, `off` | `on-approval` | Whether the report, the issues and the topics (and the corrections to a published meeting) are published automatically when the draft is complete, when you press Publish, or not at all. You choose it; until you do, `on-approval` is used. Status changes are never written back automatically. A cycle without `targets.github` still has this target with the default. See [Publishing rules](#publishing-rules). |
+| `targets.github.publish` | `auto`, `on-approval`, `off` | `on-approval` | Whether the report, the issues and the topics (and the corrections to a published meeting) are published automatically when the draft is complete, when you press Publish, or not at all. You choose it; until you do, `on-approval` is used. Status changes are never written back automatically. A project without `targets.github` still has this target with the default. See [Publishing rules](#publishing-rules). |
 | `targets.github.issues` | `true`, `false` | `true` | Whether task items become GitHub issues and approved status changes are written back to them. With `false` only the report is committed. |
 | `targets.discord.webhook` | `cred:` reference | none | Exactly one of `webhook` and `bot` is required. Name of a secret, for example `cred:discord/nomad`. A URL is rejected: the webhook URL never appears in the repository. The webhook is entered in the publishing settings and stored in the Windows Credential Manager under `target:<name>` (`target:discord/nomad`), a namespace of its own, so a reference in a repository cannot reach any other secret of the application. |
 | `targets.discord.bot.token` | `cred:` reference | required with `bot` | Name of the bot token, for example `cred:discord-bot/team`. A token itself is rejected. Stored in the Windows Credential Manager under `target:<name>` like the webhook. |
@@ -114,12 +114,12 @@ Only `id` and `name` are required. Unknown keys are rejected, so a misspelled ke
 | `targets.discord.bot.channel` | Discord snowflake | required with `bot` | The text or announcement channel the summary is posted to. Quote the number. |
 | `targets.discord.bot.thread` | `true`, `false` | `true` | One thread per meeting under the summary. Left out of the file while true. |
 | `targets.discord.bot.edit_on_correction` | `true`, `false` | `true` | Edit the summary when a correction is published. Left out of the file while true. |
-| `targets.discord.publish` | as above | `on-approval` | A cycle without `targets.discord` has no Discord target: nothing is posted. |
+| `targets.discord.publish` | as above | `on-approval` | A project without `targets.discord` has no Discord target: nothing is posted. |
 | `targets.discord.template` | template name | none | Separate template for the Discord message; without it the built-in short message is used (one message, see below). A template of your own should stay short as well: a long one is split into several messages. |
 | `targets.notion.token` | `cred:` reference | required | Name of the integration token, for example `cred:notion/nomad`. A token itself is rejected. Stored in the Windows Credential Manager under `target:<name>`. |
 | `targets.notion.database` | Notion id | required | The database id: 32 hexadecimal digits, with or without dashes. It is not a secret. |
 | `targets.notion.data_source` | Notion id | none | The data source id; needed only when the database has more than one. |
-| `targets.notion.publish` | as above | `on-approval` | A cycle without `targets.notion` has no Notion target. Status changes are never exported. |
+| `targets.notion.publish` | as above | `on-approval` | A project without `targets.notion` has no Notion target. Status changes are never exported. |
 | `targets.notion.properties.title` | property name | `Name` | The page title property (type `title`). Left out of the file while default. |
 | `targets.notion.properties.key` | property name | `BBB key` | The `rich_text` property that holds the key which makes an export idempotent. |
 | `targets.notion.properties.assignee`, `due`, `status`, `meeting`, `cycle` | property name | none | Optional fields: a field without a property name is not exported. |
@@ -134,11 +134,11 @@ Only `id` and `name` are required. Unknown keys are rejected, so a misspelled ke
 * `targets.discord` has exactly one of `webhook` and `bot`.
 * `targets.notion.properties.status_value` is set when `properties.status` is.
 
-A cycle that fails a check is still listed, with its issues (each with the path of the offending value, for example `participants[2].id`), so a broken cycle never hides the others. It cannot be used for a recording until it is fixed.
+A project that fails a check is still listed, with its issues (each with the path of the offending value, for example `participants[2].id`), so a broken project never hides the others. It cannot be used for a recording until it is fixed.
 
 ### Writing
 
-The application writes `cycle.yaml` only after validation. Keys are written in the order shown above and map entries are sorted, so saving an unchanged cycle produces an unchanged file and Git diffs show only real changes. Comments in a hand-edited file are not preserved when the application saves it.
+The application writes `cycle.yaml` only after validation. Keys are written in the order shown above and map entries are sorted, so saving an unchanged project produces an unchanged file and Git diffs show only real changes. Comments in a hand-edited file are not preserved when the application saves it.
 
 ## Publishing rules
 
@@ -156,7 +156,7 @@ The defaults are `on-approval` for all three targets (`github`, `discord`, `noti
 * A repository that is public, or whose visibility cannot be read, needs your confirmation once before anything is published to it, also under `auto`.
 * After a meeting is published (or while any of its operations is queued) its draft is read-only.
 
-In the application the rule is a switch of three positions, **Off**, **On approval** and **Automatic**, in the **Targets** section of the cycle editor (where a GitHub, Discord or Notion target is switched on it shows **On approval** and is saved so unless you pick another), in the publishing panel of a draft and in **Settings**, **Publishing**, **When to publish**. Under the switch each rule is explained by what it does to you (Off: nothing is ever published, not even when you press Publish; On approval: nothing leaves the computer until you press Publish; Automatic: published as soon as the draft is complete, cannot be taken back, the people named are notified). A change goes through the `set_target_rule` command, which writes `targets.<name>.publish` and nothing else of `cycle.yaml` (a cycle without `targets.github` gets one with the default folder; Discord and Notion need a target configured in the cycle editor first). The panel says next to the switch that status changes are never written back automatically.
+In the application the rule is a switch of three positions, **Off**, **On approval** and **Automatic**, in the **Targets** section of the project editor (where a GitHub, Discord or Notion target is switched on it shows **On approval** and is saved so unless you pick another), in the publishing panel of a draft and in **Settings**, **Publishing**, **When to publish**. Under the switch each rule is explained by what it does to you (Off: nothing is ever published, not even when you press Publish; On approval: nothing leaves the computer until you press Publish; Automatic: published as soon as the draft is complete, cannot be taken back, the people named are notified). A change goes through the `set_target_rule` command, which writes `targets.<name>.publish` and nothing else of `cycle.yaml` (a project without `targets.github` gets one with the default folder; Discord and Notion need a target configured in the project editor first). The panel says next to the switch that status changes are never written back automatically.
 
 `github` covers the commit with the report, the transcript, the screenshots and `topics.yaml`, the issues, and the write-back of approved status changes. With `targets.github.issues: false` only the commit is made. Without a remote the commit stays in the local repository and no issues are created. `notion` exports one database page per task item (`export_notion`), keyed by `bbb:v1:<cycle>:<meeting>:<item>` in the mapped `key` property so re-exporting (`reexport_notion`) updates the mapped fields on existing pages, keeps the status a person set in Notion, and skips pages that were moved to the trash. `discord` posts the summary either through a webhook (`targets.discord.webhook`) or through a bot (`targets.discord.bot`); in bot mode with `thread: true` the summary goes to the channel and the issue links and screenshots are posted inside a public thread opened under it.
 
@@ -164,7 +164,7 @@ Before anything is published the panel shows `topics.yaml` before and after, top
 
 ### What is written to the repository
 
-Only new files go into the meeting folder `meetings/<ID>/<folder>`: `report.md`, `transcript.md`, `meeting.json` (the draft with its decisions on status changes) and `img/` with the screenshots that are not inside an excluded passage. When the draft lists `key_screenshots`, only those go out (a screenshot in an excluded passage stays out even if it is a key one); without key screenshots all of them go out. Discord attaches the same set. The folder is the date of the meeting, with a suffix `-2`, `-3` if another meeting of the cycle took the date (chosen against the remote at publishing time). `transcript.md` has one line per segment with an anchor `t-hh-mm-ss` and the speaker's name, and leaves out passages you excluded. `topics.yaml` is the only existing file that changes (below). Other edits to the cycle (`cycle.yaml`, templates) are not committed by the application; commit them yourself.
+Only new files go into the meeting folder `meetings/<ID>/<folder>`: `report.md`, `transcript.md`, `meeting.json` (the draft with its decisions on status changes) and `img/` with the screenshots that are not inside an excluded passage. When the draft lists `key_screenshots`, only those go out (a screenshot in an excluded passage stays out even if it is a key one); without key screenshots all of them go out. Discord attaches the same set. The folder is the date of the meeting, with a suffix `-2`, `-3` if another meeting of the project took the date (chosen against the remote at publishing time). `transcript.md` has one line per segment with an anchor `t-hh-mm-ss` and the speaker's name, and leaves out passages you excluded. `topics.yaml` is the only existing file that changes (below). Other edits to the project (`cycle.yaml`, templates) are not committed by the application; commit them yourself.
 
 ### Issues
 
@@ -204,13 +204,13 @@ Written on 2026-11-16. Refers to item i3 and issue #12.
 > The mount is redesigned, the new drawing is attached to the issue.
 ```
 
-When the note is about an item that became an issue, or names an issue, the same text is also posted as a comment on that issue (once, by its own marker; the issue stays open or closed as it was). When the cycle uses a Discord bot target with `edit_on_correction: true` and the meeting was posted to Discord, publishing a correction also edits the bot's summary message in place (appending a `Corrections` section) and posts a reply in the meeting's thread (`edit_discord`). A correction that was queued cannot be edited or deleted; one that was never queued can be deleted.
+When the note is about an item that became an issue, or names an issue, the same text is also posted as a comment on that issue (once, by its own marker; the issue stays open or closed as it was). When the project uses a Discord bot target with `edit_on_correction: true` and the meeting was posted to Discord, publishing a correction also edits the bot's summary message in place (appending a `Corrections` section) and posts a reply in the meeting's thread (`edit_discord`). A correction that was queued cannot be edited or deleted; one that was never queued can be deleted.
 
-For the next meeting the context gets an optional `corrections` list (`schemas/cycle-context.schema.json`): `meeting` (its date), `date`, `text`, the text of the `item` and the `issue`, newest first, at most 30, taken from the `corrections*.md` files of the earlier meetings in the repository and from the local notes (not yet published ones too). The extraction prompt shows them as information that replaces what the items of those meetings say; a cycle without corrections gets the context and the prompt it always had.
+For the next meeting the context gets an optional `corrections` list (`schemas/cycle-context.schema.json`): `meeting` (its date), `date`, `text`, the text of the `item` and the `issue`, newest first, at most 30, taken from the `corrections*.md` files of the earlier meetings in the repository and from the local notes (not yet published ones too). The extraction prompt shows them as information that replaces what the items of those meetings say; a project without corrections gets the context and the prompt it always had.
 
 ## `cycles/<ID>/topics.yaml`
 
-A list of topics that outlive a single meeting. A new cycle gets an empty list (`[]`).
+A list of topics that outlive a single meeting. A new project gets an empty list (`[]`).
 
 ```yaml
 - id: t-1
@@ -236,7 +236,7 @@ Open topics go into the extraction context. Concurrent edits are resolved last w
 
 ## `cycles/<ID>/templates/<name>.md`
 
-A template is Markdown with `{placeholders}` and an optional YAML front matter that declares sections. The file name without `.md` is the template name. Every new cycle gets `default.md`:
+A template is Markdown with `{placeholders}` and an optional YAML front matter that declares sections. The file name without `.md` is the template name. Every new project gets `default.md`:
 
 ```markdown
 # {title}
@@ -284,7 +284,7 @@ sections:
 |---|---|
 | `{title}` | Meeting title. |
 | `{date}` | Meeting date, `YYYY-MM-DD`. |
-| `{participants}` | Names of the cycle's participants, comma separated. |
+| `{participants}` | Names of the project's participants, comma separated. |
 | `{summary}` | The meeting summary as bare text. |
 | `{summary_section}` | The summary under a localised heading, `## Summary` or `## Podsumowanie` (by the language of the draft); nothing at all, heading included, when the summary is empty. |
 | `{sections}` | Every non-empty section as a `## Title` heading followed by its list of items. |
@@ -296,7 +296,7 @@ sections:
 * Writing `{{` or `}}` gives a literal brace.
 * An unknown or malformed placeholder is an error when the template is saved or rendered; it is never dropped silently. When the front matter declares sections, `{section:<id>}` must name one of them.
 * After substitution, headings of level 2 and deeper with nothing under them are removed, so empty sections never appear. A heading that is followed only by placeholders that came out empty is removed too, even when other text follows after a blank line (`## Tasks`, `{tasks}`, then `[Full report]({report_link})`: a meeting without tasks has no `## Tasks` heading in the Discord message). Put two placeholders under one heading on lines of one block (no blank line between them) so that either of them keeps the heading. The report then has exactly one blank line between blocks (every heading has one before and after it), no trailing spaces and a single final newline.
-* Cycles created before `{summary_section}` existed keep their own `default.md` (with `## Summary` and `{summary}`); it is not migrated. A report from such a template has an English summary heading in Polish too; replace those two lines with `{summary_section}` to localise it.
+* Projects created before `{summary_section}` existed keep their own `default.md` (with `## Summary` and `{summary}`); it is not migrated. A report from such a template has an English summary heading in Polish too; replace those two lines with `{summary_section}` to localise it.
 
 ### Item lines
 
@@ -334,8 +334,8 @@ Items are grouped by type, in this order, with headings in the report language; 
 
 | Mode | Sections | Chosen by |
 |---|---|---|
-| `fixed` | The built-in sections. | The cycle default. |
-| `template` | The `sections` of the template named by `report.default_template`; the model assigns each item to one. | The cycle default or the recording dialog. |
+| `fixed` | The built-in sections. | The project default. |
+| `template` | The `sections` of the template named by `report.default_template`; the model assigns each item to one. | The project default or the recording dialog. |
 | `auto` | Proposed by the model from the extracted items; the user can rename, add, remove and reorder them in the draft. | The recording dialog. |
 | `by-type` | The sections of the template that `report.by_type` maps the meeting type to. A type without a mapping falls back to `report.default_template`. | The meeting type at the report mode gate. |
 
@@ -350,13 +350,13 @@ The structured result of one meeting, described by `schemas/meeting.schema.json`
 ## Offline behaviour
 
 * The working tree is the cache. Everything can be read and edited without network access.
-* Before a briefing the application runs `git pull --rebase`. It never stashes: with uncommitted changes to tracked files (cycle edits made in the application) nothing is pulled and the briefing says so. A failure (no network, no upstream, a conflict) never discards anything: the clone stays as it was, an interrupted rebase is aborted, and the reason is recorded.
+* Before a briefing the application runs `git pull --rebase`. It never stashes: with uncommitted changes to tracked files (project edits made in the application) nothing is pulled and the briefing says so. A failure (no network, no upstream, a conflict) never discards anything: the clone stays as it was, an interrupted rebase is aborted, and the reason is recorded.
 * The date of the last successful pull (or clone) and the last error are kept in `.git/bbb-cache.json`, and the application shows it as "state as of <date>".
 * The briefing screen opens at once with the last known state, then updates a clone in the background. Without network it stays on the old state and reads "State as of <date>. Could not update: <reason>". It lists the open tasks by person (the open issues of the cache and the task items of the `meeting.json` files, a task that points to an issue only once) and the open topics of `topics.yaml`; closed topics are left out.
 * Open issues come from the GitHub REST API (`GET /repos/{owner}/{name}/issues?state=open&labels=cycle:<id>`, pull requests excluded, up to 500 issues). A failed request returns the last cached list with its date. The cache is `.git/bbb-issues-<ID>.json`. Issues are read only.
 * Issue state comes from the GitHub REST API (`GET /repos/{owner}/{name}/issues?state=all&labels=cycle:<id>`, pull requests excluded, most recently updated first, at most five pages) before a briefing and on a manual pull, for repositories linked to GitHub. A failed request keeps the last cached state with its date. The cache is `.git/bbb-issues-<ID>.json`: open issues, the numbers of closed ones and the links between issues and items. Reading issues does not depend on `targets.github.issues`.
 * Publishing without a network is not lost: the operations wait in the outbox and are retried, see [ADR 0018](decisions/0018-publishing.md).
-* A cycle created without a remote lives in a local repository; there is nothing to pull and no error is recorded.
+* A project created without a remote lives in a local repository; there is nothing to pull and no error is recorded.
 
 ## What is committed and what is not
 
@@ -367,4 +367,4 @@ The structured result of one meeting, described by `schemas/meeting.schema.json`
 | | Secrets: Discord webhook URLs, API tokens, keys (only `cred:` references appear) |
 | | The pull state and the issue cache (inside `.git`, never in the working tree) |
 
-Edits made in the application (cycle settings, topics, templates) are written to the working tree and are not committed by the application. The publishers commit and push only the new meeting folder and the merged `topics.yaml`, and they build that commit without touching the working tree, so your uncommitted edits stay as they are.
+Edits made in the application (project settings, topics, templates) are written to the working tree and are not committed by the application. The publishers commit and push only the new meeting folder and the merged `topics.yaml`, and they build that commit without touching the working tree, so your uncommitted edits stay as they are.

@@ -681,7 +681,7 @@ describe("cloud confirmation", () => {
     // The only draft of the cycle is the meeting's own: nothing from earlier meetings.
     expect(p.previousItemCount).toBe(0);
     expect(p.summaryText).toContain("no items");
-    expect(p.summaryText).toContain("earlier meetings of the cycle");
+    expect(p.summaryText).toContain("earlier meetings of the project");
     expect(p.summaryText).toContain("processed only locally");
     // A second meeting of the same cycle whose draft exists: m5's items now count for it.
     await b.startRecording({
@@ -836,8 +836,8 @@ describe("processing with a cycle", () => {
     const job = (await b.queueState()).jobs.find((j) => j.meetingId === "m1")!;
     expect(job.state).toBe("done");
     const extract = job.stages.find((s) => s.stage === "extract")!;
-    expect(extract).toMatchObject({ status: "done", note: "the meeting has no cycle" });
-    expect(job.stages.find((s) => s.stage === "reduce")?.note).toBe("the meeting has no cycle");
+    expect(extract).toMatchObject({ status: "done", note: "the meeting has no project" });
+    expect(job.stages.find((s) => s.stage === "reduce")?.note).toBe("the meeting has no project");
     expect(await codeOf(b.getDraft("m1"))).toBe("no_draft");
   });
 

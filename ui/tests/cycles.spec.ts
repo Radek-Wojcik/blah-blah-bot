@@ -634,7 +634,7 @@ test.describe("cloud confirmation on the mock backend", () => {
     await page.getByRole("button", { name: "Queue", exact: true }).click();
     const job = page.getByRole("article", { name: "Kickoff" });
     await expect(job.getByText("Processed", { exact: true })).toBeVisible();
-    await expect(job.getByText("Skipped: the meeting has no cycle")).toHaveCount(2);
+    await expect(job.getByText("Skipped: the meeting has no project")).toHaveCount(2);
   });
 });
 

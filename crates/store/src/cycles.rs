@@ -325,7 +325,7 @@ impl Store {
     /// Save local preferences for a project/cycle.
     pub fn set_project_prefs(&self, prefs: &ProjectPrefs) -> Result<()> {
         if prefs.cycle_id.trim().is_empty() {
-            return Err(StoreError::Invalid("cycle_id cannot be empty".into()));
+            return Err(StoreError::Invalid("project id cannot be empty".into()));
         }
         if let Some(kind) = &prefs.llm_kind_override {
             LlmKind::parse(kind)?;
@@ -506,7 +506,7 @@ impl Store {
     /// publications); otherwise they are kept as standalone meetings (`cycle_id = NULL`).
     pub fn delete_cycle_data(&self, cycle_id: &str, delete_meetings: bool) -> Result<()> {
         if cycle_id.trim().is_empty() {
-            return Err(StoreError::Invalid("cycle_id cannot be empty".into()));
+            return Err(StoreError::Invalid("project id cannot be empty".into()));
         }
         let tx = self.conn.unchecked_transaction()?;
         // The Notion pages and Discord posts of the project's meetings were tied to the
@@ -585,7 +585,7 @@ impl Store {
     ) -> Result<()> {
         if cycle_id.trim().is_empty() || task_key.trim().is_empty() {
             return Err(StoreError::Invalid(
-                "cycle_id and task_key cannot be empty".into(),
+                "project id and task key cannot be empty".into(),
             ));
         }
         if done {

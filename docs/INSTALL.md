@@ -49,7 +49,7 @@ On first start (or later from Settings), the wizard walks through:
 5. **Language model** (downloads pinned Gemma 4 12B Q4_K_M, or picks an existing GGUF file)
 6. **Screenshot analysis** (optional)
 7. **Summary**
-8. **First cycle**
+8. **First project**
 
 Creating the Python environment and downloading the default models takes **10-30 minutes** and needs about **8 GB** of free disk space. Keep the PC on while it runs.
 

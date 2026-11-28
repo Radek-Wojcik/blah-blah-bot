@@ -21,14 +21,14 @@ What this build does not do, and what has not been measured. Numbers come from t
 
 These targets are missed in the Stage 8 regression run ([stage8-regression.md](../benchmarks/results/stage8-regression.md)). The project owner accepted them for 1.0; the plan to improve them is in the "Post-1.0 improvements" section of the [roadmap](ROADMAP.md).
 
-- **Term recall is ~35% (35.1%, target 85%)** on the mixed set with the default settings: English technical terms spoken inside Polish sentences are often written phonetically or in Polish spelling. Correct terms in a cycle glossary help the report, but they do not reach transcription (G1, G9).
+- **Term recall is ~35% (35.1%, target 85%)** on the mixed set with the default settings: English technical terms spoken inside Polish sentences are often written phonetically or in Polish spelling. Correct terms in a project glossary help the report, but they do not reach transcription (G1, G9).
 - **Speaker diarization error (DER) is ~29% (29.4% in the worst 2 to 4 speaker meeting, target 15%)**, accepted for 1.0. Short turns and overlapping speech are the main source. Treat speaker labels as suggestions and use the voice samples to confirm them (G1).
 
 ## Languages
 
 - Polish and English, including mixed speech. Other languages are not supported.
 - Whisper turbo on synthetic meetings: word error rate 8.9% Polish, 14.3% English, 16.4% mixed. The best recall of English terms inside Polish speech was 51% against a target of 85%, and the translation rate was 1.3% against a target of 1% (G1).
-- The language of transcription is always detected automatically. The cycle's transcription language and glossary are stored but not applied to transcription; the glossary reaches only the extraction prompt (G9).
+- The language of transcription is always detected automatically. The project's transcription language and glossary are stored but not applied to transcription; the glossary reaches only the extraction prompt (G9).
 - In mixed-language meetings the model writes task text in the report language, so English tasks are translated.
 
 ## Speakers
@@ -36,7 +36,7 @@ These targets are missed in the Stage 8 regression run ([stage8-regression.md](.
 - Speaker separation error rate on synthetic meetings was 20.5% to 23.3% for 2 to 4 speakers (target 15%, not met) and 23.4% for 8 speakers. These are measured on synthetic voices; real conference audio is not measured (G1).
 - **Many speakers.** Meetings were measured up to 16 speakers, with error rates of 21.3% and 27.4%. Automatic separation of more than about 8 voices from one mixed track is not promised. The requirement of up to 30 participants is an open gap (G4): separate source tracks, the participant list and voice profiles are the mitigations, not a solution.
 - Voice recognition was measured with synthetic voices: 100% of enrolled speech named correctly and no false accept among 16 new voices. On band-limited, noisy audio some different voices come close to the range of the same voice, so a suggestion should be checked (G1).
-- The speaker count cannot be bound from the cycle's participant list; it is not applied (G9).
+- The speaker count cannot be bound from the project's participant list; it is not applied (G9).
 - A meeting processed after its audio was deleted has no sample clips, so voices are named from the transcript.
 - The audio of a meeting is deleted after processing by default (turn on **Keep audio after processing** globally or per project to keep it). Once it is deleted, only the transcript can be corrected afterwards: the meeting cannot be transcribed, separated or matched against voices again from the audio, and no new sample clips can be cut. Audio is never deleted while a job is unfinished or failed.
 
@@ -45,7 +45,7 @@ These targets are missed in the Stage 8 regression run ([stage8-regression.md](.
 - Extraction was measured on ten synthetic meetings (4 Polish, 3 English, 3 mixed). With the default model, Gemma 4 12B, task recall is 86.0% and precision 89.3%; decision recall is 49.9% and budget recall 54.3%, so part of the decisions and budget lines are not extracted. Per-meeting task recall is 43.5% to 100% on Polish and mixed meetings. Qwen3 14B misses the task recall, assignee and due-date targets (G1).
 - Quotes are matched against the transcript, but quality on real recordings with recognition errors is not measured.
 - Other model servers (Ollama, LM Studio) and the cloud path are tested against mock servers only (G12).
-- Open issues of a cycle are read from a cache; the application cannot yet configure the GitHub token that fetching them needs.
+- Open issues of a project are read from a cache; the application cannot yet configure the GitHub token that fetching them needs.
 - Screenshots are described and placed in the transcript by time. The report text does not embed images (G8).
 
 ## Scale

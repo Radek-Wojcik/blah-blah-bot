@@ -244,18 +244,18 @@ describe("first-run wizard", () => {
     await click("Next");
     expect(heading()).toBe("Summary");
     await click("Continue anyway");
-    expect(heading()).toBe("First cycle");
+    expect(heading()).toBe("First project");
   });
 
   it("creates the first cycle and finishes by marking the setup as done", async () => {
     const backend = backendFor("ready");
     const onClose = vi.fn();
     await show(backend, { initialStep: "cycle", onClose });
-    expect(button("Create first cycle")?.disabled).toBe(true);
-    await type(labelled("Cycle id"), "WEEKLY");
-    await type(labelled("Cycle name"), "Weekly sync");
-    await click("Create first cycle");
-    await until(() => text().includes("Cycle WEEKLY was created."), "cycle created");
+    expect(button("Create first project")?.disabled).toBe(true);
+    await type(labelled("Project id"), "WEEKLY");
+    await type(labelled("Project name"), "Weekly sync");
+    await click("Create first project");
+    await until(() => text().includes("Project WEEKLY was created."), "project created");
     expect((await backend.listCycles()).some((c) => c.id === "WEEKLY")).toBe(true);
     expect((await backend.getProcessingSettings()).firstRunDone).toBe(false);
     await click("Finish");

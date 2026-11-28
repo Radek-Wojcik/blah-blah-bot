@@ -153,7 +153,7 @@ impl Field {
             Self::Due => "the due date",
             Self::Status => "the status",
             Self::Meeting => "the meeting link",
-            Self::Cycle => "the cycle",
+            Self::Cycle => "the project",
         }
     }
 

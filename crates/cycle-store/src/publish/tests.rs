@@ -799,7 +799,7 @@ fn bad_requests_are_refused_before_git_is_touched() {
     assert!(refused(&r).contains("YYYY-MM-DD"));
     let mut r = request(&snap.files, None);
     r.cycle_id = "../x";
-    assert!(refused(&r).contains("cycle id"));
+    assert!(refused(&r).contains("project id"));
     assert!(refused(&request(&[], None)).contains("nothing to publish"));
 
     for rel in [

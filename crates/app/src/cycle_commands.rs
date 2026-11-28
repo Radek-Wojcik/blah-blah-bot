@@ -18,7 +18,7 @@ pub const EVENT_CYCLES: &str = "cycles-changed";
 
 fn changed(app: &AppHandle) {
     if let Err(e) = app.emit(EVENT_CYCLES, ()) {
-        tracing::warn!(error = %e, "could not emit the cycles change");
+        tracing::warn!(error = %e, "could not emit the projects change");
     }
 }
 
@@ -246,7 +246,7 @@ pub async fn pull_cycle_repo(
         .cycle_repos()
         .into_iter()
         .find(|r| r.id == repo_id)
-        .ok_or_else(|| IpcError::new("not_found", "this cycle repository is not registered"))?;
+        .ok_or_else(|| IpcError::new("not_found", "this project repository is not registered"))?;
     let task = setting.clone();
     let mut result = tauri::async_runtime::spawn_blocking(move || {
         let mut result = cycles::pull_repo(&task)?;

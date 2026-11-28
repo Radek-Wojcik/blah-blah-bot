@@ -361,11 +361,11 @@ export const NOTION_FIELD_SPECS: NotionFieldSpec[] = [
   },
   {
     field: "cycle",
-    label: "Cycle",
+    label: "Project",
     required: false,
     allowedTypes: ["select", "rich_text"],
-    placeholder: "Cycle",
-    help: "Optional select or text property holding the cycle name.",
+    placeholder: "Project",
+    help: "Optional select or text property holding the project name.",
   },
 ];
 
@@ -1035,7 +1035,7 @@ const FIELD_LABELS: Record<MappedNotionField, string> = {
   due: "Due date",
   status: "Status",
   meeting: "Meeting link",
-  cycle: "Cycle",
+  cycle: "Project",
 };
 
 const TYPE_LABELS: Record<NotionPropertyType, string> = {

@@ -333,15 +333,15 @@ export function createMockIntegrations(deps: IntegrationDeps): MockIntegrations 
 
   // ----- access to the targets of a cycle -----
   const cycleOf = (cycleId: string): CycleDto =>
-    cycles.cycle(cycleId) ?? fail("not_found", `The cycle ${cycleId} does not exist.`);
+    cycles.cycle(cycleId) ?? fail("not_found", `The project ${cycleId} does not exist.`);
   const notionOf = (cycleId: string): NotionTarget =>
     cycleOf(cycleId).targets.notion ??
-    fail("no_target", "This cycle has no Notion target: add one in the cycle settings first.");
+    fail("no_target", "This project has no Notion target: add one in the project settings first.");
   const botOf = (cycleId: string): DiscordBotTarget =>
     cycleOf(cycleId).targets.discord?.bot ??
     fail(
       "no_target",
-      "This cycle has no Discord bot: choose Bot for the Discord target in the cycle settings first.",
+      "This project has no Discord bot: choose Bot for the Discord target in the project settings first.",
     );
 
   const NOT_SHARED =
@@ -404,12 +404,16 @@ export function createMockIntegrations(deps: IntegrationDeps): MockIntegrations 
     const cycle = cycleOf(cycleId);
     const notion =
       cycle.targets.notion ??
-      fail("no_target", "This cycle has no Notion target: add one in the cycle settings first.");
+      fail(
+        "no_target",
+        "This project has no Notion target: add one in the project settings first.",
+      );
     if (dataSource === null) delete notion.dataSource;
     else notion.dataSource = dataSource;
     notion.properties = structuredClone(properties);
     const saved = cycles.saveCycle(cycle);
-    if (!saved.saved) fail("cycle_invalid", saved.issues[0]?.message ?? "The cycle is not valid.");
+    if (!saved.saved)
+      fail("cycle_invalid", saved.issues[0]?.message ?? "The project is not valid.");
     return structuredClone(cycleOf(cycleId).targets);
   };
 
@@ -626,7 +630,8 @@ export function createMockIntegrations(deps: IntegrationDeps): MockIntegrations 
       person.discord = userId !== undefined ? { userId } : { roleId };
     }
     const saved = cycles.saveCycle(cycle);
-    if (!saved.saved) fail("cycle_invalid", saved.issues[0]?.message ?? "The cycle is not valid.");
+    if (!saved.saved)
+      fail("cycle_invalid", saved.issues[0]?.message ?? "The project is not valid.");
     return cycleOf(cycleId);
   };
 

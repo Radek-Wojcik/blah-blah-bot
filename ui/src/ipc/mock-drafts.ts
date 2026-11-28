@@ -127,7 +127,7 @@ export function createMockDrafts(
     if (!assignee) return;
     const cycle = cycles.cycle(held(id).draft.cycle);
     if (cycle && !cycle.participants.some((p) => p.id === assignee))
-      fail("invalid", `${assignee} is not a participant of the cycle`);
+      fail("invalid", `${assignee} is not a participant of the project`);
   }
 
   /** The layout a new draft starts with, following the report settings of the recording. */

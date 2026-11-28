@@ -132,7 +132,7 @@ pub fn start_recording(
     }
     if let Some(cycle) = &report.cycle_id {
         if let Err(e) = cycles::sync_cycle(&repos, state.inner(), cycle) {
-            tracing::warn!(error = %e, "could not sync the cycle participants");
+            tracing::warn!(error = %e, "could not sync the project participants");
         }
     }
     emit_meetings_changed(&app);

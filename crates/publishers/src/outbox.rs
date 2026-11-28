@@ -844,10 +844,10 @@ impl Dispatcher {
             .targets
             .notion
             .as_ref()
-            .ok_or_else(|| OpError::permanent("this cycle has no Notion target"))?;
+            .ok_or_else(|| OpError::permanent("this project has no Notion target"))?;
         let token = self.env.notion_token(&target.token).ok_or_else(|| {
             OpError::permanent(
-                "no Notion token is stored for this cycle: add it in the publishing settings, then retry",
+                "no Notion token is stored for this project: add it in the publishing settings, then retry",
             )
         })?;
         let notion = self.notion(&token)?;
@@ -1020,7 +1020,7 @@ impl Dispatcher {
         }
         let ctx = self.context(&p.cycle)?;
         let value = self.env.webhook(&p.reference).ok_or_else(|| {
-            OpError::permanent("no Discord webhook is stored for this cycle: add it in the publishing settings, then retry")
+            OpError::permanent("no Discord webhook is stored for this project: add it in the publishing settings, then retry")
         })?;
         let hook = Webhook::parse(&value).map_err(|why| {
             OpError::permanent(format!("the stored webhook is not usable: {why}"))
@@ -1106,7 +1106,7 @@ impl Dispatcher {
         let ctx = self.context(&p.cycle)?;
         let token = self.env.discord_bot_token(&bot_cfg.token).ok_or_else(|| {
             OpError::permanent(
-                "no Discord bot token is stored for this cycle: add it in the publishing settings, then retry",
+                "no Discord bot token is stored for this project: add it in the publishing settings, then retry",
             )
         })?;
         let bot = self.discord_bot(&token)?;
@@ -1285,7 +1285,7 @@ impl Dispatcher {
             return Ok(json!({
                 "edited": false,
                 "replied": false,
-                "skipped": "this cycle has no Discord target",
+                "skipped": "this project has no Discord target",
             }));
         };
         let Some(DiscordMode::Bot(bot_cfg)) = target.mode() else {
@@ -1318,7 +1318,7 @@ impl Dispatcher {
         };
         let token = self.env.discord_bot_token(&bot_cfg.token).ok_or_else(|| {
             OpError::permanent(
-                "no Discord bot token is stored for this cycle: add it in the publishing settings, then retry",
+                "no Discord bot token is stored for this project: add it in the publishing settings, then retry",
             )
         })?;
         let bot = self.discord_bot(&token)?;

@@ -80,7 +80,7 @@ The installer does not download or bundle the Microsoft Edge WebView2 runtime (`
 
 ## Offline use
 
-Processing needs no network once the environment and the models are in place. Cycle repositories work offline too; the application shows the state of the last pull. Creating the environment, downloading models, cloning or pulling a cycle, and using an external or cloud language model need a connection (an external server may be on your own machine or network).
+Processing needs no network once the environment and the models are in place. Project repositories work offline too; the application shows the state of the last pull. Creating the environment, downloading models, cloning or pulling a project, and using an external or cloud language model need a connection (an external server may be on your own machine or network).
 
 ## Logs and bug reports
 

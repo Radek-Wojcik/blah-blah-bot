@@ -114,7 +114,7 @@ impl Env for AppEnv {
     fn context(&self, cycle_id: &str) -> Result<RepoContext, String> {
         let located = cycles::locate(&self.repos(), cycle_id)
             .map_err(|e| e.message)?
-            .ok_or_else(|| format!("the cycle {cycle_id} is not in any registered repository"))?;
+            .ok_or_else(|| format!("the project {cycle_id} is not in any registered repository"))?;
         context_of(located)
     }
 
@@ -181,7 +181,7 @@ fn context_of(located: Located) -> Result<RepoContext, String> {
         .entry
         .cycle
         .clone()
-        .ok_or_else(|| format!("the cycle {} cannot be read", located.entry.dir_name))?;
+        .ok_or_else(|| format!("the project {} cannot be read", located.entry.dir_name))?;
     let github = github_identity(&located.setting)
         .ok()
         .map(|(repo, api)| GithubIdentity { repo, api });
@@ -642,7 +642,7 @@ impl Publishing {
             IpcError::new(
                 "not_found",
                 format!(
-                    "the cycle {} is not in any registered repository",
+                    "the project {} is not in any registered repository",
                     draft.cycle
                 ),
             )
@@ -1032,7 +1032,7 @@ impl Publishing {
         let located = cycles::locate(&self.env.repos(), cycle_id)?.ok_or_else(|| {
             IpcError::new(
                 "not_found",
-                format!("the cycle {cycle_id} is not in any registered repository"),
+                format!("the project {cycle_id} is not in any registered repository"),
             )
         })?;
         let mut dto = tasks_of(&located, cycle_id)?;

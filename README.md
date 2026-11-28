@@ -12,7 +12,7 @@ Local meeting recorder and notes assistant for Windows that turns calls and reco
 
 ## What it does
 
-- **Projects workspace:** Organize recurring meeting series under `Projects` with a 2-step `ProjectWizard`, live briefings of open tasks and discussion topics, Git-backed cycle repositories, and optional local Markdown auto-save.
+- **Projects workspace:** Organize recurring meeting series under `Projects` with a 2-step `ProjectWizard`, live briefings of open tasks and discussion topics, Git-backed project repositories, and optional local Markdown auto-save.
 - **Record or import media:** Record from the Main UI `Record` tab (with live 12-bar `WaveformEq`) or the tray widget using Windows process loopback (`AudioSrv`-filtered app sessions, microphone, Chrome tab extension), take global region screenshots (`Ctrl+Alt+Shift+F10`), or import audio/video files with automatic slide detection (`+ Add meeting`).
 - **Crash-safe capture:** Audio writes in 60-second WAV segments beside an append-only journal; interrupted recordings recover at the next launch with at most the in-progress segment lost. A `SystemWakeLock` keeps the PC awake during recording and scheduled/active processing.
 - **Smart processing queue:** Staged local pipeline (Whisper `large-v3-turbo`, pyannote speaker diarization, Qwen3-VL vision, Gemma 4 extraction) that waits when the GPU is busy, supports temporary queue GPU overrides, scheduled start times, `Force process`, and crash resume.
@@ -101,7 +101,7 @@ Screenshots captured from demo mode (`BBB_DEMO`) with fictional data and mock Gi
 | ![Transcript with speakers, an edited passage and described screenshots](docs/img/transcript.png) | ![A screenshot with its description between two passages of the transcript](docs/img/screenshot-description.png) |
 | ![Labeling screen with a recognized, a suggested and two unknown voices, each with sample clips](docs/img/speakers-label.png) | ![Animated naming of voices: play a clip, create a participant, accept a suggestion, pick a name](docs/img/naming-voices.gif) |
 | ![Draft editor with the source of an item opened: quote, time and a jump to the transcript](docs/img/draft-source-popover.png) | ![Animated draft editing: open the source of an item, change the report mode and move an item to another section](docs/img/draft-editing.gif) |
-| ![Briefing of a cycle: open tasks by person, overdue marks and open topics](docs/img/briefing.png) | ![Animated flow: approve a status change, press Publish, confirm the public repository and watch the outbox finish](docs/img/approve-and-publish.gif) |
+| ![Briefing of a project: open tasks by person, overdue marks and open topics](docs/img/briefing.png) | ![Animated flow: approve a status change, press Publish, confirm the public repository and watch the outbox finish](docs/img/approve-and-publish.gif) |
 
 ## Measured benchmarks
 
@@ -121,7 +121,7 @@ Measurements were collected on the reference machine (RTX 3080 12 GB, Windows 10
 - [User guide](docs/USER-GUIDE.md) — projects, recording, media import, queue controls, 5-tab settings, voice enrollment, GitHub/Discord publishing
 - [Installing on Windows](docs/INSTALL.md) — NSIS installer payload, SHA-256 verification, SmartScreen, clean-machine checklist
 - [Browser extension guide](docs/guides/extension.md) — unpacked Chrome installation, pairing, and tab capture
-- [Cycles & templates](docs/CYCLES.md) — `cycle.yaml`, glossary, report modes, and Markdown template placeholders
+- [Projects & templates](docs/CYCLES.md) — `cycle.yaml`, glossary, report modes, and Markdown template placeholders
 - [Architecture](docs/ARCHITECTURE.md) — crate structure, IPC boundary, worker lifecycle, and security model
 - [Testing](docs/TESTING.md) & [Requirements traceability](docs/TRACEABILITY.md) — test suites, 52 requirements, and known gaps (G1–G13)
 - [Limitations](docs/LIMITATIONS.md) & [Troubleshooting](docs/TROUBLESHOOTING.md) — honest scope boundaries and error recovery

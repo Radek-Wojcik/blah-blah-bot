@@ -324,7 +324,7 @@ impl Supervisor {
         let store = self.store()?;
         let settings = store.get_report_settings(meeting_id)?.unwrap_or_default();
         if settings.cycle_id.is_none() {
-            return Ok(Plan::Skip("the meeting has no cycle".into()));
+            return Ok(Plan::Skip("the meeting has no project".into()));
         }
         if llm.kind == LlmKind::Cloud
             && !confirmed_for_run(llm, store.get_llm_choice(meeting_id)?.as_ref())
@@ -758,7 +758,7 @@ mod tests {
         assert_eq!(*runner.calls.lock().unwrap(), without_llm_stages());
         assert_eq!(
             stage_row(&sup, Stage::Reduce).note.as_deref(),
-            Some("the meeting has no cycle")
+            Some("the meeting has no project")
         );
         // A skipped stage never waits for the GPU.
         assert!(!gate.0.lock().unwrap().contains(&Stage::Extract));
