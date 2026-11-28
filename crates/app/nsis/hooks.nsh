@@ -23,7 +23,7 @@ Function VerifyWritableInstDir
     ${If} $0 = 0
       RMDir "$INSTDIR"
     ${EndIf}
-    MessageBox MB_OK|MB_ICONEXCLAMATION /SD IDOK "The selected folder cannot be written to:$\r$\n$INSTDIR$\r$\n$\r$\nPlease choose a folder you have permission to write to, such as $LOCALAPPDATA\${PRODUCTNAME}, rather than Program Files."
+    MessageBox MB_OK|MB_ICONEXCLAMATION "The selected folder cannot be written to:$\r$\n$INSTDIR$\r$\n$\r$\nPlease choose a folder you have permission to write to, such as $LOCALAPPDATA\Blah Blah Bot, rather than Program Files." /SD IDOK
     Abort
 
   writable_done:
