@@ -15,6 +15,7 @@ use crate::http::{parse_endpoint, ErrorKind, HttpClient, HttpError, Request};
 pub const DEFAULT_API: &str = "https://api.github.com";
 const API_VERSION: &str = "2022-11-28";
 
+pub mod device;
 mod exporter;
 mod issues;
 mod repos;
