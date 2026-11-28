@@ -284,9 +284,6 @@ pub struct Settings {
     /// rule of its own. Changed through `set_global_publish_rule`: a settings save from the
     /// settings screen keeps the stored value.
     pub publish_rules: publishers::rules::GlobalPublishRules,
-    /// The move of untouched projects to the global rules (`publish_rules::migrate_untouched`)
-    /// ran; it runs once.
-    pub publish_rules_migrated: bool,
 }
 
 impl Default for Settings {
@@ -305,7 +302,6 @@ impl Default for Settings {
             bridge: BridgeSettings::default(),
             detection: DetectionSettings::default(),
             publish_rules: publishers::rules::GlobalPublishRules::default(),
-            publish_rules_migrated: false,
         }
     }
 }
@@ -365,7 +361,6 @@ impl Settings {
         self.bridge.clients = current.bridge.clients.clone();
         self.detection = current.detection.clone();
         self.publish_rules = current.publish_rules;
-        self.publish_rules_migrated = current.publish_rules_migrated;
         self.hotkeys_migrated = true;
         if self.last_source_keys.is_empty() {
             self.last_source_keys = current.last_source_keys.clone();
@@ -474,7 +469,6 @@ mod tests {
                 github: cycle_store::PublishMode::Auto,
                 ..publishers::rules::GlobalPublishRules::default()
             },
-            publish_rules_migrated: true,
         };
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), s);
@@ -675,10 +669,8 @@ mod tests {
     fn a_settings_save_keeps_the_publish_rules() {
         let mut current = Settings::default();
         current.publish_rules.discord = cycle_store::PublishMode::Off;
-        current.publish_rules_migrated = true;
         let merged = Settings::default().keeping_managed_from(&current);
         assert_eq!(merged.publish_rules, current.publish_rules);
-        assert!(merged.publish_rules_migrated);
     }
 
     #[test]

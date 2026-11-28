@@ -672,104 +672,6 @@ impl Repo {
         }
     }
 
-    /// Whether nobody ever chose a publish rule for `cycle_id`: `cycle.yaml` is tracked by Git
-    /// without uncommitted changes and no revision of it ever held a `publish` value other than
-    /// the old default `on-approval`. This is the only trace a rule choice leaves (the file
-    /// reads the same whether the default was kept or picked), so whenever the history cannot be
-    /// read (no Git, not tracked, edited since the last commit) the answer is `false`: an
-    /// explicit value is then kept as it is. The same holds for a shallow clone, for a history
-    /// longer than [`MAX_RULE_HISTORY`] commits, and for a file whose first revision has fewer
-    /// `publish:` keys than `stored_defaults` (a target or key added later may be a choice).
-    pub fn publish_rule_untouched(&self, cycle_id: &str, stored_defaults: usize) -> bool {
-        let Ok(dir) = self.cycle_dir(cycle_id) else {
-            return false;
-        };
-        let Ok(rel) = dir
-            .join("cycle.yaml")
-            .strip_prefix(&self.root)
-            .map(|p| p.to_string_lossy().replace('\\', "/"))
-        else {
-            return false;
-        };
-        if !self.is_git_repo() {
-            return false;
-        }
-        let shallow = git::run(Some(&self.root), ["rev-parse", "--is-shallow-repository"])
-            .map_or(true, |o| !o.ok || o.stdout.trim() != "false");
-        if shallow {
-            return false;
-        }
-        let tracked = git::run(
-            Some(&self.root),
-            ["ls-files", "--error-unmatch", "--", &rel],
-        )
-        .is_ok_and(|o| o.ok);
-        if !tracked {
-            return false;
-        }
-        let clean = git::run(
-            Some(&self.root),
-            [
-                "status",
-                "--porcelain=v1",
-                "--untracked-files=no",
-                "--",
-                &rel,
-            ],
-        )
-        .is_ok_and(|o| o.ok && o.stdout.trim().is_empty());
-        if !clean {
-            return false;
-        }
-        let max = (MAX_RULE_HISTORY + 1).to_string();
-        let Ok(log) = git::run(
-            Some(&self.root),
-            [
-                "log",
-                "--format=%H",
-                "--max-count",
-                &max,
-                "--no-color",
-                "--no-ext-diff",
-                "--",
-                &rel,
-            ],
-        ) else {
-            return false;
-        };
-        let hashes: Vec<&str> = log.stdout.lines().collect();
-        if !log.ok || hashes.is_empty() || hashes.len() > MAX_RULE_HISTORY {
-            return false;
-        }
-        // The first revision must already have the keys: files written by the application
-        // always had `publish`, so a key that appears later was added by hand.
-        let first = format!("{}:{rel}", hashes[hashes.len() - 1]);
-        let Ok(first_text) = git::run(Some(&self.root), ["show", &first]) else {
-            return false;
-        };
-        if !first_text.ok || first_text.stdout.matches("publish:").count() < stored_defaults {
-            return false;
-        }
-        let Ok(patch) = git::run(
-            Some(&self.root),
-            [
-                "log",
-                "--format=",
-                "-p",
-                "-U0",
-                "--max-count",
-                &max,
-                "--no-color",
-                "--no-ext-diff",
-                "--",
-                &rel,
-            ],
-        ) else {
-            return false;
-        };
-        patch.ok && !patch.stdout.trim().is_empty() && !log_has_other_publish_value(&patch.stdout)
-    }
-
     /// Writes `cycle.yaml` of an existing cycle after validating it against the schema, the
     /// participant rules and the templates that exist.
     pub fn save_cycle(&self, cycle: &Cycle) -> Result<()> {
@@ -861,30 +763,6 @@ impl Repo {
     }
 }
 
-/// How many commits of `cycle.yaml` are read to tell that a rule was never chosen.
-const MAX_RULE_HISTORY: usize = 200;
-
-/// Whether a `git log -p` of `cycle.yaml` has an added or removed line with a `publish:` value
-/// that is not `on-approval` (block style `publish: auto` or flow style `{ ..., publish: auto }`).
-fn log_has_other_publish_value(patch: &str) -> bool {
-    patch
-        .lines()
-        .filter(|l| {
-            (l.starts_with('+') && !l.starts_with("+++"))
-                || (l.starts_with('-') && !l.starts_with("---"))
-        })
-        .any(|l| {
-            l[1..].match_indices("publish:").any(|(at, key)| {
-                let value: String = l[1 + at + key.len()..]
-                    .trim_start()
-                    .chars()
-                    .take_while(|c| !matches!(c, ',' | '}' | '#') && !c.is_whitespace())
-                    .collect();
-                value.trim_matches(|c| c == '"' || c == '\'') != "on-approval"
-            })
-        })
-}
-
 /// `main...origin/main [ahead 1, behind 2]`, `No commits yet on main`, `HEAD (no branch)`.
 fn parse_branch_line(line: &str, status: &mut RepoStatus) {
     if let Some(rest) = line.strip_prefix("No commits yet on ") {
@@ -973,68 +851,6 @@ mod tests {
         origin.create_cycle(&cycle("NOMAD")).unwrap();
         commit_all(origin.root(), "add NOMAD");
         origin
-    }
-
-    #[test]
-    fn the_publish_rule_is_untouched_only_when_the_history_shows_just_the_old_default() {
-        use crate::cycle::{GithubTarget, PublishMode};
-        let tmp = test_tmp::TestDir::new("repo");
-        let origin = Repo::init_local(tmp.path().join("origin")).unwrap();
-        set_identity(origin.root());
-        let mut c = cycle("NOMAD");
-        c.targets.github = Some(GithubTarget {
-            publish: Some(PublishMode::OnApproval),
-            ..GithubTarget::default()
-        });
-        origin.create_cycle(&c).unwrap();
-        // Not committed yet: the history does not describe the file, so it cannot be told.
-        assert!(!origin.publish_rule_untouched("NOMAD", 1));
-        commit_all(origin.root(), "add NOMAD");
-        assert!(origin.publish_rule_untouched("NOMAD", 1));
-        // More stored defaults than keys in the first revision: a key added later may be a choice.
-        assert!(!origin.publish_rule_untouched("NOMAD", 2));
-        // An uncommitted edit makes the history stale.
-        origin.save_cycle(&c).unwrap();
-        c.name = "Renamed".into();
-        origin.save_cycle(&c).unwrap();
-        assert!(!origin.publish_rule_untouched("NOMAD", 1));
-        commit_all(origin.root(), "rename");
-        assert!(origin.publish_rule_untouched("NOMAD", 1));
-        // Somebody chose another rule once, even if it was set back: touched.
-        c.targets.github.as_mut().unwrap().publish = Some(PublishMode::Auto);
-        origin.save_cycle(&c).unwrap();
-        commit_all(origin.root(), "auto");
-        c.targets.github.as_mut().unwrap().publish = Some(PublishMode::OnApproval);
-        origin.save_cycle(&c).unwrap();
-        commit_all(origin.root(), "back");
-        assert!(!origin.publish_rule_untouched("NOMAD", 1));
-        assert!(!origin.publish_rule_untouched("GHOST", 1));
-    }
-
-    #[test]
-    fn without_git_history_the_publish_rule_counts_as_touched() {
-        let tmp = test_tmp::TestDir::new("repo");
-        // Not committed at all.
-        let repo = Repo::init_local(tmp.path().join("r")).unwrap();
-        repo.create_cycle(&cycle("NOMAD")).unwrap();
-        assert!(!repo.publish_rule_untouched("NOMAD", 1));
-    }
-
-    #[test]
-    fn publish_values_are_read_from_block_and_flow_style_log_lines() {
-        assert!(!log_has_other_publish_value(
-            "+  publish: on-approval\n-    publish: \"on-approval\"\n"
-        ));
-        assert!(log_has_other_publish_value("+  publish: auto\n"));
-        assert!(log_has_other_publish_value(
-            "-  github: { path: m, publish: off }\n"
-        ));
-        assert!(!log_has_other_publish_value(
-            "+  github: { path: m, publish: on-approval }\n"
-        ));
-        assert!(!log_has_other_publish_value(
-            " context publish: auto\n+++ b/x\n"
-        ));
     }
 
     #[test]
