@@ -95,20 +95,7 @@ impl AppState {
         } else {
             Arc::new(WasapiBackend)
         };
-        let mut loaded = Settings::load(&settings_path);
-        // Projects that predate the global publish rules and were never touched follow them.
-        let (migrated_repos, migrated) = crate::publish_rules::migrate_untouched(&mut loaded);
-        if migrated_repos {
-            if migrated > 0 {
-                tracing::info!(
-                    projects = migrated,
-                    "untouched projects now use the global publish rule"
-                );
-            }
-            if let Err(e) = loaded.save(&settings_path) {
-                tracing::warn!(error = %e, "could not save the publish rule migration");
-            }
-        }
+        let loaded = Settings::load(&settings_path);
         // Browser tabs come from the bridge, in demo mode as well.
         let browser_host = Arc::new(AppHost::default());
         let browser = Browser::new(&loaded.bridge, browser_host.clone());
@@ -116,6 +103,33 @@ impl AppState {
             Arc::new(RoutingBackend::new(devices, browser.tab_source()));
         let detection = Detection::new(&loaded.detection);
         let settings = Arc::new(Mutex::new(loaded));
+        // Projects that predate the global publish rules and were never touched follow them. It
+        // reads Git history, so it runs in the background and never holds up the start.
+        {
+            let settings = settings.clone();
+            let path = settings_path.clone();
+            std::thread::spawn(move || {
+                let Some(mut snapshot) = settings.lock().ok().map(|s| s.clone()) else {
+                    return;
+                };
+                let (done, migrated) = crate::publish_rules::migrate_untouched(&mut snapshot);
+                if !done {
+                    return;
+                }
+                if migrated > 0 {
+                    tracing::info!(
+                        projects = migrated,
+                        "untouched projects now use the global publish rule"
+                    );
+                }
+                if let Ok(mut current) = settings.lock() {
+                    current.publish_rules_migrated = true;
+                    if let Err(e) = current.save(&path) {
+                        tracing::warn!(error = %e, "could not save the publish rule migration");
+                    }
+                }
+            });
+        }
         let root_app = app.clone();
         let repos_settings = settings.clone();
         let briefing_settings = settings.clone();

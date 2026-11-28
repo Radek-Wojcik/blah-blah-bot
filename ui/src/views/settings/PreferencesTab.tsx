@@ -88,6 +88,8 @@ function ProjectPublishRules({
   const [secrets, setSecrets] = useState<PublishingSecrets | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** Bumped after a change: the one effect below reads again, and drops answers that are late. */
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -110,7 +112,7 @@ function ProjectPublishRules({
     return () => {
       cancelled = true;
     };
-  }, [backend, cycle.id, version, globalVersion]);
+  }, [backend, cycle.id, version, globalVersion, reloadKey]);
 
   /** `null` removes the project's own rule: it uses the global setting again. */
   const change = (target: PublishTargetName, mode: PublishMode | null) => {
@@ -118,9 +120,7 @@ function ProjectPublishRules({
     setBusy(true);
     backend
       .setTargetRule(cycle.id, target, mode)
-      .then(setTargets)
-      .then(() => backend.effectivePublishRules(cycle.id))
-      .then(setEffective)
+      .then(() => setReloadKey((k) => k + 1))
       .catch((e) => setError(errorMessage(e)))
       .finally(() => setBusy(false));
   };

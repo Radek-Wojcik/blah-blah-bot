@@ -1,4 +1,4 @@
-//! The global "When to publish" rules and how a project relates to them (ADR 0019, WP-08e).
+//! The global "When to publish" rules and how a project relates to them (ADR 0019).
 //!
 //! The rule of a target is global by default: `Settings::publish_rules` holds one rule per
 //! target and a project follows it until its `cycle.yaml` has its own `targets.<x>.publish`.
@@ -13,7 +13,7 @@ use serde::Serialize;
 use crate::cycles::{self};
 use crate::ipc::{IpcError, IpcResult};
 use crate::publishing::mode_name;
-use crate::settings::{CycleRepoSetting, Settings};
+use crate::settings::{CycleRepoSetting, RepoKind, Settings};
 
 /// The rule in force for one target of a project, with where it comes from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -70,12 +70,17 @@ pub fn effective_rules_of(settings: &Settings, cycle_id: &str) -> IpcResult<Vec<
             format!("the cycle {cycle_id} is not in any registered repository"),
         )
     })?;
-    let cycle = located.entry.cycle.ok_or_else(|| {
-        IpcError::new(
-            "cycle_invalid",
-            "the cycle cannot be used until it is fixed",
-        )
-    })?;
+    let cycle = located
+        .entry
+        .cycle
+        .clone()
+        .filter(|_| located.entry.is_valid())
+        .ok_or_else(|| {
+            IpcError::new(
+                "cycle_invalid",
+                "the cycle cannot be used until it is fixed",
+            )
+        })?;
     Ok(effective_rules(&cycle, &settings.publish_rules))
 }
 
@@ -99,31 +104,43 @@ pub fn set_global_rule(
 /// untouched ones: a target whose stored rule is the old default `on-approval` and whose
 /// `cycle.yaml` never held another rule in the Git history of its repository
 /// ([`cycle_store::Repo::publish_rule_untouched`]). When that cannot be told the explicit value
-/// stays. A repository is looked at once (its id is remembered in
-/// `Settings::publish_rules_migrated`), so a rule a user picks later is never rewritten.
+/// stays.
+///
+/// It runs once, over the repositories registered when the application first starts with the
+/// global rules (`Settings::publish_rules_migrated` is then set), so a repository added later and
+/// a rule picked later are never rewritten. Only local repositories without a remote are
+/// touched: the file is changed and not committed, which would make `pull` skip a repository
+/// that has an upstream. The flag is set only when every repository was looked at and every write
+/// went through; otherwise the next start tries again (what was moved already is not touched
+/// twice, its key is gone).
 ///
 /// Returns whether `settings` changed (the caller saves them) and how many projects were
 /// migrated.
 pub fn migrate_untouched(settings: &mut Settings) -> (bool, usize) {
-    let mut changed = false;
+    if settings.publish_rules_migrated {
+        return (false, 0);
+    }
+    let mut complete = true;
     let mut migrated = 0;
     let repos: Vec<CycleRepoSetting> = settings.cycle_repos.clone();
     for setting in repos {
-        if settings.publish_rules_migrated.contains(&setting.id) {
+        if setting.kind != RepoKind::Local || setting.remote.is_some() {
             continue;
         }
         let Ok(repo) = cycle_store::Repo::open(&setting.path) else {
-            // Not available now: look again at the next start.
+            complete = false;
             continue;
         };
         let Ok(entries) = repo.list_cycles() else {
+            complete = false;
             continue;
         };
         for entry in entries.into_iter().filter(|e| e.is_valid()) {
             let Some(mut cycle) = entry.cycle else {
                 continue;
             };
-            if !has_default_rule(&cycle) || !repo.publish_rule_untouched(&entry.dir_name) {
+            let stored = stored_defaults(&cycle);
+            if stored == 0 || !repo.publish_rule_untouched(&entry.dir_name, stored) {
                 continue;
             }
             if let Some(t) = cycle.targets.github.as_mut() {
@@ -137,37 +154,34 @@ pub fn migrate_untouched(settings: &mut Settings) -> (bool, usize) {
             }
             match repo.save_cycle(&cycle) {
                 Ok(()) => migrated += 1,
-                Err(e) => tracing::warn!(
-                    cycle = %entry.dir_name,
-                    error = %e,
-                    "could not move the cycle to the global publish rule"
-                ),
+                Err(e) => {
+                    complete = false;
+                    tracing::warn!(
+                        cycle = %entry.dir_name,
+                        error = %e,
+                        "could not move the cycle to the global publish rule"
+                    );
+                }
             }
         }
-        settings.publish_rules_migrated.push(setting.id);
-        changed = true;
     }
-    (changed, migrated)
+    if complete {
+        settings.publish_rules_migrated = true;
+    }
+    (complete, migrated)
 }
 
-/// Whether any target of `cycle` still stores the old default `on-approval`.
-fn has_default_rule(cycle: &Cycle) -> bool {
+/// How many targets of `cycle` still store the old default `on-approval`.
+fn stored_defaults(cycle: &Cycle) -> usize {
     let default = Some(PublishMode::OnApproval);
-    cycle
-        .targets
-        .github
-        .as_ref()
-        .is_some_and(|t| t.publish == default)
-        || cycle
-            .targets
-            .discord
-            .as_ref()
-            .is_some_and(|t| t.publish == default)
-        || cycle
-            .targets
-            .notion
-            .as_ref()
-            .is_some_and(|t| t.publish == default)
+    [
+        cycle.targets.github.as_ref().map(|t| t.publish),
+        cycle.targets.discord.as_ref().map(|t| t.publish),
+        cycle.targets.notion.as_ref().map(|t| t.publish),
+    ]
+    .into_iter()
+    .filter(|p| *p == Some(default))
+    .count()
 }
 
 #[cfg(test)]
@@ -318,7 +332,7 @@ mod tests {
         let (changed, migrated) = migrate_untouched(&mut settings);
         assert!(changed);
         assert_eq!(migrated, 1, "only NOMAD is committed and never changed");
-        assert_eq!(settings.publish_rules_migrated, ["local"]);
+        assert!(settings.publish_rules_migrated);
         // NOMAD: both targets inherit now.
         let nomad = repo.load_cycle("NOMAD").unwrap();
         assert_eq!(nomad.targets.github.unwrap().publish, None);
@@ -390,6 +404,55 @@ mod tests {
             github_api: None,
         });
         assert_eq!(migrate_untouched(&mut settings), (false, 0));
-        assert!(settings.publish_rules_migrated.is_empty());
+        assert!(!settings.publish_rules_migrated);
+    }
+
+    #[test]
+    fn repositories_with_a_remote_and_repositories_added_later_are_left_alone() {
+        let tmp = test_tmp::TestDir::new("publish-rules");
+        let (mut settings, repo) = repo_fixture(tmp.path());
+        // A repository with an upstream would stop pulling with an uncommitted file.
+        settings.cycle_repos[0].remote = Some("https://example.org/r.git".into());
+        let (done, migrated) = migrate_untouched(&mut settings);
+        assert!(done && migrated == 0);
+        assert_eq!(
+            repo.load_cycle("NOMAD")
+                .unwrap()
+                .targets
+                .github
+                .unwrap()
+                .publish,
+            Some(PublishMode::OnApproval)
+        );
+        // The migration ran: a repository registered afterwards is never looked at.
+        settings.cycle_repos[0].remote = None;
+        assert_eq!(migrate_untouched(&mut settings), (false, 0));
+        assert_eq!(
+            repo.load_cycle("NOMAD")
+                .unwrap()
+                .targets
+                .github
+                .unwrap()
+                .publish,
+            Some(PublishMode::OnApproval)
+        );
+    }
+
+    #[test]
+    fn an_invalid_cycle_has_no_effective_rules() {
+        let tmp = test_tmp::TestDir::new("publish-rules");
+        let (settings, repo) = repo_fixture(tmp.path());
+        std::fs::write(
+            repo.cycle_dir("NOMAD").unwrap().join("cycle.yaml"),
+            "id: NOMAD
+name: Nomad
+targets:
+  github: { path: \"../x\" }
+",
+        )
+        .unwrap();
+        let e = effective_rules_of(&settings, "NOMAD").unwrap_err();
+        assert_eq!(e.code, "cycle_invalid");
+        assert!(effective_rules_of(&settings, "ROVER").is_ok());
     }
 }

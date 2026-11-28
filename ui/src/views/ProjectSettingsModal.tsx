@@ -1616,6 +1616,7 @@ export function ProjectSettingsModal({
                       cycleId={cycleId}
                       notion={notion}
                       globalRule={globalRules.notion}
+                      rulesLoading={!integrationsLoaded}
                       connectionDirty={notionConnectionDirty}
                       issues={issues}
                       onChange={(next) => setTargets({ notion: next })}

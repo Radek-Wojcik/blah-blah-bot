@@ -632,6 +632,7 @@ fn a_project_without_its_own_rule_publishes_by_the_global_rule() {
     let plan = rig.publishing.plan(MEETING, &github_only()).unwrap();
     assert_eq!(plan.targets[0].mode, Some("on-approval"));
     assert_eq!(plan.targets[0].source, "global");
+    assert_eq!(plan.targets[0].global, "on-approval");
     assert_eq!(rig.publishing.auto_publish(MEETING).unwrap(), 0);
 
     // The global rule becomes automatic: the same project now publishes by itself.
@@ -639,6 +640,16 @@ fn a_project_without_its_own_rule_publishes_by_the_global_rule() {
     let plan = rig.publishing.plan(MEETING, &github_only()).unwrap();
     assert_eq!(plan.targets[0].mode, Some("auto"));
     assert_eq!(plan.targets[0].source, "global");
+    assert_eq!(plan.targets[0].global, "auto");
+    // The contract the UI reads: every target row carries source and global.
+    let json = serde_json::to_value(&plan).unwrap();
+    for row in json["targets"].as_array().unwrap() {
+        assert!(
+            row["source"].is_string() && row["global"].is_string(),
+            "{row}"
+        );
+    }
+    assert_eq!(json["targets"][0]["global"], "auto");
     assert_eq!(rig.publishing.auto_publish(MEETING).unwrap(), 2);
 }
 
@@ -659,6 +670,7 @@ fn the_global_off_blocks_inheriting_projects_and_an_explicit_project_rule_still_
     let plan = rig.publishing.plan(MEETING, &github_only()).unwrap();
     assert_eq!(plan.targets[0].mode, Some("on-approval"));
     assert_eq!(plan.targets[0].source, "project");
+    assert_eq!(plan.targets[0].global, "off");
     rig.publishing.publish(MEETING, &github_only()).unwrap();
     assert_eq!(rig.tick().done, 2);
 }

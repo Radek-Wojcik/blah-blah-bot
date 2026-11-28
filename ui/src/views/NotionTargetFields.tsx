@@ -43,6 +43,8 @@ export function NotionTargetFields(props: {
   notion: NotionTarget;
   /** The global rule for Notion, which the project follows until it sets its own. */
   globalRule?: PublishMode;
+  /** The global rules are not loaded yet: the rule cannot be changed. */
+  rulesLoading?: boolean;
   /** True when token or database differs from the last saved cycle. */
   connectionDirty: boolean;
   issues: CycleIssue[];
@@ -303,6 +305,7 @@ export function NotionTargetFields(props: {
           name="Notion"
           target="notion"
           value={resolvePublishRule(notion.publish, globalRule).mode}
+          disabled={props.rulesLoading}
           inherit={inheritOf(notion.publish, globalRule, () => patch({ publish: undefined }))}
           disabledReason={notion.database.trim() ? undefined : UNCONFIGURED_TARGET_HINT.notion}
           onChange={(publish) => patch({ publish })}

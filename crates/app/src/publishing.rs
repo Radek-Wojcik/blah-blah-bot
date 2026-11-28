@@ -222,6 +222,8 @@ pub struct TargetDto {
     pub mode: Option<&'static str>,
     /// Where the rule comes from: `project` (its own `publish`) or `global` (the preferences).
     pub source: &'static str,
+    /// The global rule for this target (what `mode` is while the project follows it).
+    pub global: &'static str,
     /// An explicit publication may use it.
     pub available: bool,
     /// Whether the target has the required configuration (GitHub remote/repo, Discord webhook/bot channel, Notion database).
@@ -766,7 +768,10 @@ impl Publishing {
 
     // ----- plan and publish -------------------------------------------------------------------
 
-    fn targets_dto(plan: &PublishPlan) -> Vec<TargetDto> {
+    fn targets_dto(
+        plan: &PublishPlan,
+        global: &publishers::rules::GlobalPublishRules,
+    ) -> Vec<TargetDto> {
         [
             PublishTarget::Github,
             PublishTarget::Discord,
@@ -782,6 +787,7 @@ impl Publishing {
                     publishers::rules::RuleSource::Project => "project",
                     publishers::rules::RuleSource::Global => "global",
                 },
+                global: mode_name(global.get(t)),
                 available: plan.rules.allows(t, Trigger::Explicit),
                 configured: plan.rules.is_configured(t),
             }
@@ -797,7 +803,7 @@ impl Publishing {
         Ok(PlanDto {
             meeting_id,
             cycle_id: loaded.ctx.cycle.id.clone(),
-            targets: Self::targets_dto(plan),
+            targets: Self::targets_dto(plan, &self.env.global_publish_rules()),
             summary: plan.summary.clone(),
             blocks: plan.blocks.iter().map(block_dto).collect(),
             notes: plan.notes.clone(),

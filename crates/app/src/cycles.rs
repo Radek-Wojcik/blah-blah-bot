@@ -971,19 +971,20 @@ pub fn set_target_rule(
     let mut cycle = load_valid(&located)?;
     let changed = match target {
         "github" => {
-            let existed = cycle.targets.github.is_some();
-            let github = cycle
-                .targets
-                .github
-                .get_or_insert_with(GithubTarget::default);
-            // Inheriting on a cycle that has no GitHub target needs no target: nothing to write.
-            let changed = if existed {
-                github.publish != mode
+            // Inheriting on a cycle that has no GitHub target needs no target: nothing to
+            // write, and the returned targets stay as they are.
+            if cycle.targets.github.is_none() && mode.is_none() {
+                false
             } else {
-                mode.is_some()
-            };
-            github.publish = mode;
-            changed
+                let existed = cycle.targets.github.is_some();
+                let github = cycle
+                    .targets
+                    .github
+                    .get_or_insert_with(GithubTarget::default);
+                let changed = !existed || github.publish != mode;
+                github.publish = mode;
+                changed
+            }
         }
         "discord" => {
             let discord = cycle.targets.discord.as_mut().ok_or_else(|| {
@@ -2642,7 +2643,7 @@ targets:
         // Inheriting on a cycle without a GitHub target writes nothing.
         let before = yaml(&repo);
         let t = set_target_rule(lab.repos(), "NOMAD", "github", None).unwrap();
-        assert_eq!(t.github.unwrap().publish, None);
+        assert!(t.github.is_none(), "no target is invented");
         assert_eq!(yaml(&repo), before);
         // An explicit rule is written, inheriting removes the key again.
         set_target_rule(lab.repos(), "NOMAD", "github", Some(PublishMode::Auto)).unwrap();
