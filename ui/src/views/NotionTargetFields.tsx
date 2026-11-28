@@ -67,7 +67,7 @@ export function NotionTargetFields(props: {
   const inspect = () => {
     if (connectionDirty) {
       setInspectStatus({
-        text: "Save the cycle first so the token reference and database id are stored, then inspect.",
+        text: "Save the project settings first so the token reference and database id are stored, then inspect.",
         kind: "error",
       });
       return;
@@ -122,7 +122,7 @@ export function NotionTargetFields(props: {
         />
         <small>
           The name of a secret in the Windows Credential Manager, written cred:name. Store the token
-          in Settings &gt; Publishing.
+          in Settings &gt; Connectors.
         </small>
         <FieldProblems issues={issues} path="targets.notion.token" />
       </label>
