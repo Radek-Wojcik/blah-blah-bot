@@ -21,7 +21,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use cycle_store::{Correction, DiscordMode, Draft, Topic};
+use cycle_store::{Correction, Cycle, DiscordMode, Draft, Topic};
 use store::{
     ExternalRef, OpState, OutboxKind, OutboxOp, Publication, RefTarget, Store, StoreError,
 };
@@ -34,7 +34,7 @@ use crate::plan::{
     self, Block, PlanInput, PublishPlan, RepoFacts, SnapshotRef, TopicsPlan, COMMIT_KEY,
     DISCORD_KEY, DISCORD_POST_REF_KEY,
 };
-use crate::rules::{PublishTarget, Trigger};
+use crate::rules::{PublishTarget, TargetRules, Trigger};
 
 /// Folder of the snapshots below the meeting folder.
 pub const SNAPSHOT_DIR: &str = "work/publish";
@@ -140,12 +140,45 @@ pub fn list_files(dir: &Path) -> io::Result<Vec<String>> {
 
 // ----- the lock -------------------------------------------------------------------------------
 
+/// Whether a single outbox operation locks the draft from editing.
+/// Only operations that have actually been sent or are currently in flight (`Done` or `Running`)
+/// lock the draft. Queued, failed, cancelled, and local-only unsent commits (`pushed: false`)
+/// leave the draft editable.
+pub fn op_locks_draft(op: &OutboxOp) -> bool {
+    match op.state {
+        OpState::Running => true,
+        OpState::Done => !plan::is_unpushed_local_commit(op),
+        OpState::Queued | OpState::Failed | OpState::Cancelled => false,
+    }
+}
+
+/// Whether any of the given operations lock the draft from editing.
+pub fn ops_lock_draft(ops: &[OutboxOp]) -> bool {
+    ops.iter().any(op_locks_draft)
+}
+
+/// Whether the secret of the Discord webhook reference of `cycle` is stored.
+pub fn discord_webhook_secret_set(env: &dyn Env, cycle: &Cycle) -> bool {
+    matches!(
+        cycle.targets.discord.as_ref().and_then(|d| d.mode()),
+        Some(DiscordMode::Webhook(r)) if env.webhook(r).is_some()
+    )
+}
+
+/// The target rules of a repository context, with the configuration state of every target.
+pub fn target_rules(env: &dyn Env, ctx: &RepoContext) -> TargetRules {
+    TargetRules::for_repo(
+        &ctx.cycle,
+        ctx.has_remote || ctx.github.is_some(),
+        discord_webhook_secret_set(env, &ctx.cycle),
+    )
+}
+
 /// Why the draft of a meeting is read-only, when it is: the operations that hold it.
 pub fn lock_reason(store: &Store, meeting_id: &str) -> Result<Option<String>, StoreError> {
     let ops = store.list_ops(Some(meeting_id))?;
-    let live = ops.iter().filter(|o| o.state != OpState::Cancelled).count();
-    Ok((live > 0).then(|| {
-        "this meeting is published (or queued for publishing), so its draft is read-only; cancel its operations in the outbox to change it".to_string()
+    Ok(ops_lock_draft(&ops).then(|| {
+        "this meeting has been published (or is currently being published), so its draft is read-only".to_string()
     }))
 }
 
@@ -375,6 +408,15 @@ pub struct Outcome {
 /// snapshot made for it is removed.
 pub fn publish(store: &Store, p: &Prepared<'_>) -> Result<Outcome, StartError> {
     let root = p.env.snapshot_root();
+    // A commit that only stayed on this computer (no remote then) does not stop the commit
+    // from being queued again once the repository has a remote.
+    if p.ctx.has_remote {
+        for op in store.list_ops(Some(p.meeting_id))? {
+            if op.op_key == plan::COMMIT_KEY && plan::is_unpushed_local_commit(&op) {
+                store.supersede_done_op(op.id, p.env.now_ms())?;
+            }
+        }
+    }
     let existing = store.list_ops(Some(p.meeting_id))?;
     let live = existing.iter().any(|o| o.state != OpState::Cancelled);
     let publication = store.get_publication(p.meeting_id)?;

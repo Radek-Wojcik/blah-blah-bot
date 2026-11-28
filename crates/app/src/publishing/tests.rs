@@ -84,6 +84,52 @@ impl Rig {
         (rig, lab)
     }
 
+    /// A local repository with a bare `origin` remote (not linked to GitHub), so `has_remote` is
+    /// true and commits are configured and pushed to the local bare remote.
+    fn with_local_remote(cycle: Option<Cycle>) -> (Rig, Lab) {
+        let lab = Lab::new();
+        lab.make_cycle("NOMAD");
+        if let Some(c) = cycle {
+            lab.repo().save_cycle(&c).unwrap();
+        }
+        let bare = lab.dir.path().join("origin.git");
+        std::fs::create_dir_all(&bare).unwrap();
+        git(&bare, &["init", "--bare"]);
+        let bare_url = bare.to_string_lossy().to_string();
+        git(lab.repo().root(), &["add", "-A"]);
+        git(
+            lab.repo().root(),
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "init",
+            ],
+        );
+        git(lab.repo().root(), &["remote", "add", "origin", &bare_url]);
+        git(lab.repo().root(), &["push", "-u", "origin", "HEAD"]);
+        let mut repos = lab.repos().to_vec();
+        repos[0].remote = Some(bare_url);
+        let rig = Rig::new(lab.dir.path().join("recordings"), repos, None);
+        // Confirm the non-GitHub remote so tests focus on publishing mechanics.
+        let key = rig
+            .publishing
+            .env
+            .context("NOMAD")
+            .unwrap()
+            .repo_key()
+            .unwrap();
+        rig.store
+            .lock()
+            .unwrap()
+            .confirm_repo(&key, "unknown", 1)
+            .unwrap();
+        (rig, lab)
+    }
+
     fn meeting_dir(&self) -> PathBuf {
         self.root.join(MEETING)
     }
@@ -118,7 +164,7 @@ fn github_only() -> Vec<String> {
 
 #[test]
 fn the_plan_shows_the_rules_and_what_would_happen_without_changing_anything() {
-    let (rig, _lab) = Rig::local(Some(fixture_cycle(
+    let (rig, _lab) = Rig::with_local_remote(Some(fixture_cycle(
         Some(PublishMode::OnApproval),
         Some(("cred:discord/nomad", PublishMode::Off)),
     )));
@@ -138,7 +184,7 @@ fn the_plan_shows_the_rules_and_what_would_happen_without_changing_anything() {
             ("notion", None, false),
         ]
     );
-    assert!(plan.summary.commit && !plan.summary.pushes);
+    assert!(plan.summary.commit && plan.summary.pushes);
     assert!(
         plan.summary.issues.is_empty(),
         "the repository is not linked to GitHub"
@@ -160,14 +206,15 @@ fn the_plan_shows_the_rules_and_what_would_happen_without_changing_anything() {
 
 #[test]
 fn publishing_freezes_the_draft_locks_it_and_the_dispatcher_commits_it() {
-    let (rig, lab) = Rig::local(None);
+    let (rig, lab) = Rig::with_local_remote(None);
     let d = draft();
     rig.save_draft(&d);
     let before = std::fs::read(rig.meeting_dir().join("work/draft.json")).unwrap();
 
     let result = rig.publishing.publish(MEETING, &github_only()).unwrap();
     assert_eq!(result.queued, 1);
-    assert!(result.plan.locked);
+    // Queued (unsent) operations do not lock the draft yet.
+    assert!(!result.plan.locked);
     assert_eq!(result.plan.ops.len(), 1);
     assert_eq!(
         result.plan.ops[0].label,
@@ -189,11 +236,10 @@ fn publishing_freezes_the_draft_locks_it_and_the_dispatcher_commits_it() {
         d
     );
 
-    // From now on the draft is read-only.
+    assert_eq!(rig.tick().done, 1);
+    // Once the external commit is done (pushed), the draft is read-only.
     let err = ensure_draft_unlocked(&rig.store.lock().unwrap(), MEETING).unwrap_err();
     assert_eq!(err.code, "published");
-
-    assert_eq!(rig.tick().done, 1);
     let published = lab
         .repo()
         .root()
@@ -210,18 +256,24 @@ fn publishing_freezes_the_draft_locks_it_and_the_dispatcher_commits_it() {
 
 #[test]
 fn cancelling_the_operations_unlocks_the_draft_and_a_running_one_cannot_be_cancelled() {
-    let (rig, _lab) = Rig::local(None);
+    let (rig, _lab) = Rig::with_local_remote(None);
     rig.save_draft(&draft());
     rig.publishing.publish(MEETING, &github_only()).unwrap();
     let id = rig.ops()[0].id;
 
-    // Claimed, as a running dispatcher holds it.
+    // Claimed, as a running dispatcher holds it -> locked and cannot be cancelled.
     rig.store
         .lock()
         .unwrap()
         .claim_next_op(rig.publishing.env.now_ms(), &[])
         .unwrap()
         .unwrap();
+    assert_eq!(
+        ensure_draft_unlocked(&rig.store.lock().unwrap(), MEETING)
+            .unwrap_err()
+            .code,
+        "published"
+    );
     assert_eq!(rig.publishing.cancel(id).unwrap_err().code, "busy");
     rig.store
         .lock()
@@ -329,7 +381,7 @@ fn status_changes_are_decided_in_the_draft_and_only_approved_ones_are_queued() {
 
 #[test]
 fn an_auto_cycle_publishes_a_finished_draft_by_itself_but_never_a_status_change() {
-    let (rig, _lab) = Rig::local(Some(fixture_cycle(Some(PublishMode::Auto), None)));
+    let (rig, _lab) = Rig::with_local_remote(Some(fixture_cycle(Some(PublishMode::Auto), None)));
     let mut d = draft();
     d.status_proposals = vec![proposal(
         "s1",
@@ -610,6 +662,7 @@ fn a_correction_needs_a_published_meeting_and_a_sensible_note() {
     assert!(!rig.meeting_dir().join("work/corrections.json").exists());
 
     rig.publishing.publish(MEETING, &github_only()).unwrap();
+    rig.tick();
     let add = |text: &str, item: Option<&str>, issue: Option<&str>, date: Option<&str>| {
         rig.publishing
             .add_correction(MEETING, text, item, issue, date)
@@ -812,7 +865,7 @@ fn a_correction_for_a_repository_that_became_public_waits_for_the_confirmation()
 
 #[test]
 fn a_discord_only_publication_has_no_repository_for_corrections() {
-    let (rig, _lab) = Rig::local(Some(fixture_cycle(
+    let (rig, _lab) = Rig::with_local_remote(Some(fixture_cycle(
         Some(PublishMode::OnApproval),
         Some(("cred:discord/nomad", PublishMode::OnApproval)),
     )));
@@ -825,6 +878,19 @@ fn a_discord_only_publication_has_no_repository_for_corrections() {
         .unwrap();
     rig.publishing
         .publish(MEETING, &["discord".to_string()])
+        .unwrap();
+    // Mark the Discord post as done so the meeting is published (locked).
+    let op = rig
+        .store
+        .lock()
+        .unwrap()
+        .claim_next_op(rig.publishing.env.now_ms(), &[])
+        .unwrap()
+        .unwrap();
+    rig.store
+        .lock()
+        .unwrap()
+        .complete_op(op.id, r#"{"posted":true}"#, rig.publishing.env.now_ms())
         .unwrap();
     let view = rig
         .publishing
@@ -861,6 +927,27 @@ fn rig_with_apis(
     let lab = Lab::new();
     lab.make_cycle("NOMAD");
     lab.repo().save_cycle(&cycle).unwrap();
+    let bare = lab.dir.path().join("origin.git");
+    std::fs::create_dir_all(&bare).unwrap();
+    git(&bare, &["init", "--bare"]);
+    let bare_url = bare.to_string_lossy().to_string();
+    git(lab.repo().root(), &["add", "-A"]);
+    git(
+        lab.repo().root(),
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "init",
+        ],
+    );
+    git(lab.repo().root(), &["remote", "add", "origin", &bare_url]);
+    git(lab.repo().root(), &["push", "-u", "origin", "HEAD"]);
+    let mut repo_list = lab.repos().to_vec();
+    repo_list[0].remote = Some(bare_url);
     let root = lab.dir.path().join("recordings");
     std::fs::create_dir_all(root.join(MEETING).join("work")).unwrap();
     let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
@@ -876,7 +963,7 @@ fn rig_with_apis(
             dir: MEETING.into(),
         })
         .unwrap();
-    let repos = Arc::new(Mutex::new(lab.repos().to_vec()));
+    let repos = Arc::new(Mutex::new(repo_list));
     let secrets = Arc::new(MemorySecrets::default());
     let (r, root2) = (repos.clone(), root.clone());
     let mut env = AppEnv::new(
@@ -890,7 +977,14 @@ fn rig_with_apis(
     if let Some(api) = discord_api {
         env = env.with_discord_api(api);
     }
-    let publishing = Publishing::new(store.clone(), Arc::new(env));
+    let env = Arc::new(env);
+    let key = env.context("NOMAD").unwrap().repo_key().unwrap();
+    store
+        .lock()
+        .unwrap()
+        .confirm_repo(&key, "unknown", 1)
+        .unwrap();
+    let publishing = Publishing::new(store.clone(), env);
     let rig = Rig {
         _keep: None,
         root,
@@ -1090,4 +1184,210 @@ fn discord_bot_publishes_with_thread_and_edits_on_correction() {
     let corr_json = serde_json::to_string(&view).unwrap();
     assert!(!outbox_json.contains(&token));
     assert!(!corr_json.contains(&token));
+}
+
+#[test]
+fn local_only_project_with_auto_github_plans_no_ops_and_keeps_draft_editable() {
+    let (rig, _lab) = Rig::local(Some(fixture_cycle(Some(PublishMode::Auto), None)));
+    rig.save_draft(&draft());
+
+    assert_eq!(rig.publishing.auto_publish(MEETING).unwrap(), 0);
+    assert!(rig.ops().is_empty());
+
+    let plan = rig.publishing.plan(MEETING, &[]).unwrap();
+    assert!(!plan.locked);
+    assert!(!plan.summary.commit);
+    let gh = plan.targets.iter().find(|t| t.target == "github").unwrap();
+    assert!(!gh.configured);
+    assert!(!gh.available);
+    assert!(ensure_draft_unlocked(&rig.store.lock().unwrap(), MEETING).is_ok());
+}
+
+fn stale_op(kind: OutboxKind, key: &str, after: Option<&str>) -> store::NewOp {
+    store::NewOp {
+        meeting_id: MEETING.to_string(),
+        target: if kind == OutboxKind::PostDiscord {
+            OutboxTarget::Discord
+        } else {
+            OutboxTarget::Github
+        },
+        kind,
+        op_key: key.to_string(),
+        payload:
+            r#"{"cycle":"NOMAD","date":"2026-11-13","snapshot":"m/work/publish/1","files":[]}"#
+                .to_string(),
+        after_op_key: after.map(String::from),
+    }
+}
+
+#[test]
+fn startup_cleanup_cancels_unsent_local_commits_and_releases_their_dependents() {
+    let (rig, lab) = Rig::local(Some(fixture_cycle(Some(PublishMode::Auto), None)));
+    rig.save_draft(&draft());
+    let store = rig.store.clone();
+    let enqueue = |op: &store::NewOp| store.lock().unwrap().enqueue_op(op, 100).unwrap().0;
+    let claim = || {
+        store
+            .lock()
+            .unwrap()
+            .claim_next_op(200, &[])
+            .unwrap()
+            .unwrap()
+    };
+
+    // Done and running operations are never touched.
+    let done = enqueue(&stale_op(OutboxKind::CommitMeeting, "done", None));
+    claim();
+    store
+        .lock()
+        .unwrap()
+        .complete_op(done.id, r#"{"pushed":false}"#, 201)
+        .unwrap();
+    let running = enqueue(&stale_op(OutboxKind::CommitMeeting, "running", None));
+    claim();
+    // A failed correction commit and a queued meeting commit with a waiting Discord post.
+    let failed = enqueue(&stale_op(OutboxKind::CommitCorrection, "failed", None));
+    claim();
+    store
+        .lock()
+        .unwrap()
+        .fail_op(failed.id, store::Failure::Permanent, "x", 202)
+        .unwrap();
+    let queued = enqueue(&stale_op(OutboxKind::CommitMeeting, "commit", None));
+    let post = enqueue(&stale_op(
+        OutboxKind::PostDiscord,
+        "discord",
+        Some("commit"),
+    ));
+    assert_eq!(post.after_id, Some(queued.id));
+
+    // Queued and failed ones do not lock the draft; the running one does.
+    assert_eq!(
+        ensure_draft_unlocked(&store.lock().unwrap(), MEETING)
+            .unwrap_err()
+            .code,
+        "published"
+    );
+
+    assert_eq!(rig.publishing.cleanup_unsent_local_ops().unwrap(), 2);
+    let state = |id: i64| store.lock().unwrap().get_op(id).unwrap().unwrap();
+    assert_eq!(state(queued.id).state, OpState::Cancelled);
+    assert_eq!(state(failed.id).state, OpState::Cancelled);
+    assert_eq!(state(done.id).state, OpState::Done);
+    assert_eq!(state(running.id).state, OpState::Running);
+    let post = state(post.id);
+    assert_eq!((post.state, post.after_id), (OpState::Queued, None));
+    // Idempotent.
+    assert_eq!(rig.publishing.cleanup_unsent_local_ops().unwrap(), 0);
+
+    // Once the project is linked to GitHub it is no longer local-only: its queued commit stays.
+    let repo_id = lab.repos()[0].id.clone();
+    set_github_repo(
+        &mut rig.repos.lock().unwrap(),
+        &repo_id,
+        Some("owner/rover"),
+        Some("https://api.github.com"),
+    )
+    .unwrap();
+    let late = enqueue(&stale_op(OutboxKind::CommitMeeting, "late", None));
+    assert_eq!(rig.publishing.cleanup_unsent_local_ops().unwrap(), 0);
+    assert_eq!(state(late.id).state, OpState::Queued);
+}
+
+#[test]
+fn auto_publish_without_a_stored_webhook_secret_freezes_nothing() {
+    let (rig, _lab) = Rig::local(Some(fixture_cycle(
+        Some(PublishMode::Off),
+        Some(("cred:discord/nomad", PublishMode::Auto)),
+    )));
+    rig.save_draft(&draft());
+
+    assert_eq!(rig.publishing.auto_publish(MEETING).unwrap(), 0);
+    assert!(rig.ops().is_empty());
+    assert!(!rig.meeting_dir().join("work/publish").exists());
+    assert!(rig
+        .store
+        .lock()
+        .unwrap()
+        .get_publication(MEETING)
+        .unwrap()
+        .is_none());
+    let plan = rig.publishing.plan(MEETING, &[]).unwrap();
+    let discord = plan.targets.iter().find(|t| t.target == "discord").unwrap();
+    assert!(!discord.configured && !discord.available);
+}
+
+#[test]
+fn a_local_only_commit_does_not_block_queueing_it_again_after_a_remote_is_linked() {
+    let (rig, lab) = Rig::local(None);
+    rig.save_draft(&draft());
+    // A historical commit that only stayed on this computer.
+    let (op, _) = rig
+        .store
+        .lock()
+        .unwrap()
+        .enqueue_op(&stale_op(OutboxKind::CommitMeeting, "commit", None), 1)
+        .unwrap();
+    rig.store.lock().unwrap().claim_next_op(2, &[]).unwrap();
+    rig.store
+        .lock()
+        .unwrap()
+        .complete_op(op.id, r#"{"pushed":false}"#, 3)
+        .unwrap();
+    assert!(ensure_draft_unlocked(&rig.store.lock().unwrap(), MEETING).is_ok());
+
+    let bare = lab.dir.path().join("origin.git");
+    std::fs::create_dir_all(&bare).unwrap();
+    git(&bare, &["init", "--bare"]);
+    let url = bare.to_string_lossy().to_string();
+    git(lab.repo().root(), &["remote", "add", "origin", &url]);
+    rig.repos.lock().unwrap()[0].remote = Some(url);
+    let key = rig
+        .publishing
+        .env
+        .context("NOMAD")
+        .unwrap()
+        .repo_key()
+        .unwrap();
+    rig.store
+        .lock()
+        .unwrap()
+        .confirm_repo(&key, "unknown", 1)
+        .unwrap();
+
+    let result = rig.publishing.publish(MEETING, &github_only()).unwrap();
+    assert_eq!(result.queued, 1, "the commit is queued again");
+    let ops = rig.ops();
+    assert_eq!(ops.len(), 1);
+    assert_eq!(ops[0].state, OpState::Queued);
+}
+
+#[test]
+fn local_folder_auto_export_stays_independent_of_unconfigured_github() {
+    let (rig, lab) = Rig::local(Some(fixture_cycle(Some(PublishMode::Auto), None)));
+    rig.save_draft(&draft());
+
+    // Auto-publishing does nothing for a local-only project.
+    assert_eq!(rig.publishing.auto_publish(MEETING).unwrap(), 0);
+    assert!(rig.ops().is_empty());
+
+    // Local-folder auto-export runs independently and writes the markdown file.
+    let export_dir = lab.dir.path().join("local-notes");
+    let settings = crate::settings::Settings {
+        local_save_enabled: true,
+        local_save_dir: export_dir.to_string_lossy().to_string(),
+        ..Default::default()
+    };
+    let exported = crate::local_export::auto_export_if_enabled_with(
+        lab.repos(),
+        &rig.store.lock().unwrap(),
+        &settings,
+        lab.dir.path(),
+        MEETING,
+        &rig.meeting_dir(),
+    )
+    .unwrap();
+    let exported_path = exported.expect("local folder auto-export should write a file");
+    assert!(exported_path.is_file());
+    assert!(ensure_draft_unlocked(&rig.store.lock().unwrap(), MEETING).is_ok());
 }

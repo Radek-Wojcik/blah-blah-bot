@@ -281,9 +281,8 @@ export function DraftEditor(props: {
       {locked && (
         <div className="banner banner-locked" role="status">
           <span>
-            <strong>This draft is locked.</strong> The meeting was published or queued for
-            publishing, so the draft stays as it was sent. Cancel the queued operations in the
-            publishing panel below to edit it again.
+            <strong>This draft is locked.</strong> The meeting has been published (or is currently
+            being published), so the draft stays as it was sent.
           </span>
         </div>
       )}

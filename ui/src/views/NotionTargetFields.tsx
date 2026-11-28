@@ -11,7 +11,7 @@ import type {
   NotionProperties,
   NotionSchema,
 } from "../ipc/types";
-import { NOTION_FIELD_SPECS } from "../publish";
+import { NOTION_FIELD_SPECS, UNCONFIGURED_TARGET_HINT } from "../publish";
 import { RuleChoice } from "./RuleChoice";
 
 type NotionTarget = NonNullable<CycleTargets["notion"]>;
@@ -298,6 +298,7 @@ export function NotionTargetFields(props: {
           name="Notion"
           target="notion"
           value={notion.publish}
+          disabledReason={notion.database.trim() ? undefined : UNCONFIGURED_TARGET_HINT.notion}
           onChange={(publish) => patch({ publish })}
         />
       </div>

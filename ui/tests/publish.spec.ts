@@ -197,21 +197,24 @@ test.describe("publishing on the mock backend", () => {
     // A retry while still offline fails again and counts the attempt.
     await panel(page).getByRole("button", { name: "Retry all now" }).click();
     await expect(outbox.getByRole("listitem").first()).toContainText("2 attempts");
-    await expect(page.getByText("This draft is locked.")).toBeVisible();
+    // Nothing was sent yet, so the draft is still editable.
+    await expect(page.getByText("This draft is locked.")).toHaveCount(0);
 
     await hooks(page, (h) => h.setOffline(false));
     await expect(panel(page).getByText("Published: everything was sent.")).toBeVisible({
       timeout: 15_000,
     });
+    await expect(page.getByText("This draft is locked.")).toBeVisible();
     await expect(banner).toHaveCount(0);
   });
 
-  test("cancelling the waiting operations gives the draft back", async ({ page }) => {
+  test("cancelling the waiting operations leaves the draft editable", async ({ page }) => {
     await page.goto(`${DRAFT}&net=offline`);
     await publishConfirmed(page);
     const outbox = panel(page).getByRole("list", { name: "Outbox" });
     await expect(outbox.getByRole("listitem").first()).toContainText("Waiting");
-    await expect(page.getByText("This draft is locked.")).toBeVisible();
+    // Waiting operations have sent nothing, so they do not lock the draft.
+    await expect(page.getByText("This draft is locked.")).toHaveCount(0);
     // The commit comes first and the rest follows it: cancel from the last one back.
     const count = await outbox.getByRole("listitem").count();
     for (let i = 0; i < count; i += 1) {
@@ -413,7 +416,7 @@ test.describe("publishing on the mock backend", () => {
     await expect(rule(page, "GitHub").getByRole("radio", { name: "Automatic" })).toBeChecked();
   });
 
-  test("a missing webhook blocks the Discord post and the settings fix it", async ({ page }) => {
+  test("a cleared webhook leaves Discord out of the publication", async ({ page }) => {
     await page.goto(`${MAIN}&page=project&cycle=NOMAD`);
     await page.getByRole("button", { name: "Project settings" }).click();
     await page.getByRole("tab", { name: "Integrations" }).click();
@@ -428,12 +431,9 @@ test.describe("publishing on the mock backend", () => {
       .filter({ hasText: "ORBIT weekly sync" })
       .getByRole("button", { name: "Open" })
       .click();
-    await expect(panel(page).getByRole("alert")).toContainText("No Discord webhook is stored");
-    await expect(panel(page).getByRole("button", { name: "Publish", exact: true })).toBeDisabled();
-    await panel(page)
-      .getByRole("checkbox", { name: /Publish to Discord/ })
-      .uncheck();
-    await expect(panel(page).getByRole("button", { name: "Publish", exact: true })).toBeDisabled();
+    await expect(panel(page)).toContainText("Configure a Discord webhook or bot channel first");
+    await expect(panel(page).getByRole("checkbox", { name: /Publish to Discord/ })).toBeDisabled();
+    await expect(rule(page, "Discord").getByRole("radio", { name: "Automatic" })).toBeDisabled();
   });
 });
 
@@ -610,6 +610,9 @@ test.describe("the rule of a target is chosen explicitly", () => {
     await expect(group(page, "Discord").getByRole("radio", { name: "On approval" })).toBeChecked();
     await expect(group(page, "GitHub").getByRole("radio", { name: "On approval" })).toBeChecked();
 
+    // A webhook whose secret is not stored leaves the switch disabled; one that is stored enables it.
+    await expect(group(page, "Discord").getByRole("radio", { name: "Automatic" })).toBeDisabled();
+    await page.getByLabel("Webhook credential reference").fill("cred:discord/nomad");
     // A choice is a choice: Automatic shows its warning and is what gets saved.
     await group(page, "Discord").getByRole("radio", { name: "Automatic" }).click();
     await expect(page.locator(".target-rule-warn")).toContainText("cannot be taken back");
@@ -1052,5 +1055,42 @@ test.describe("Stage 7: Notion and Discord bot integrations", () => {
     expect(messages[0].content).toContain("Corrections:");
     expect(messages[0].content).toContain("The test window moved to Monday morning.");
     expect(messages.at(-1)?.content).toContain("The test window moved to Monday morning.");
+  });
+
+  test("local-only project processed keeps draft editable and disables unconfigured GitHub rule switch", async ({
+    page,
+  }) => {
+    await page.goto(`${MAIN}&page=project&cycle=SANDBOX`);
+    await expect(page.getByRole("heading", { name: "Sandbox", level: 2 })).toBeVisible();
+
+    // In Project Settings -> Integrations, GitHub rule switch is disabled with the connect hint.
+    await page.getByRole("button", { name: "Project settings" }).click();
+    await page.getByRole("tab", { name: "Integrations" }).click();
+    const ghCheck = page.getByRole("checkbox", {
+      name: "Commit meeting reports to the repository",
+    });
+    if (!(await ghCheck.isChecked())) await ghCheck.check();
+    await page.getByRole("button", { name: "GitHub details" }).click();
+    const settingsRule = page.getByRole("radiogroup", { name: "GitHub publishing rule" });
+    await expect(settingsRule.getByRole("radio", { name: "Automatic" })).toBeDisabled();
+    await expect(page.getByText("Connect a GitHub repository first")).toBeVisible();
+    await closeModal(page);
+
+    // Import and process a meeting in the local-only project.
+    await page.getByRole("button", { name: "+ Add meeting" }).click();
+    await page.getByLabel("Audio or video file path").fill("C:\\demo\\standup.wav");
+    await page.getByRole("button", { name: "Import meeting" }).click();
+
+    const row = page.getByRole("listitem").filter({ hasText: "standup" });
+    await expect(row.getByRole("button", { name: "Open" })).toBeVisible({ timeout: 20_000 });
+    await row.getByRole("button", { name: "Open" }).click();
+
+    // Draft is editable (not locked), and the Publishing panel disables GitHub with the hint and queues nothing.
+    await expect(page.getByText("This draft is locked.")).toHaveCount(0);
+    await expect(page.getByLabel("Report mode")).toBeEnabled();
+    await expect(panel(page)).toContainText("Connect a GitHub repository first");
+    await expect(rule(page, "GitHub").getByRole("radio", { name: "Automatic" })).toBeDisabled();
+    await expect(panel(page).getByRole("checkbox", { name: /Publish to GitHub/ })).toBeDisabled();
+    await expect(panel(page).getByRole("list", { name: "Outbox" })).toHaveCount(0);
   });
 });

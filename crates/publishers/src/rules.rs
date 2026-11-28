@@ -66,11 +66,44 @@ pub struct TargetRules {
     pub discord: Option<PublishMode>,
     /// `None`: the cycle has no Notion target. Status changes never go to Notion.
     pub notion: Option<PublishMode>,
+    /// Whether the GitHub target has a configured remote or linked repository.
+    pub github_configured: bool,
+    /// Whether the Discord target has a configured webhook reference or bot channel.
+    pub discord_configured: bool,
+    /// Whether the Notion target has a configured database/page id.
+    pub notion_configured: bool,
+}
+
+/// A bot channel is configured by its channel; a webhook only when its secret is stored
+/// (`webhook_secret_set`), the same rule the settings screen applies.
+fn discord_is_configured(cycle: &Cycle, webhook_secret_set: bool) -> bool {
+    cycle.targets.discord.as_ref().is_some_and(|t| {
+        t.bot.as_ref().map_or_else(
+            || webhook_secret_set && t.webhook.as_deref().is_some_and(|w| !w.trim().is_empty()),
+            |b| !b.channel.trim().is_empty(),
+        )
+    })
+}
+
+fn notion_is_configured(cycle: &Cycle) -> bool {
+    cycle
+        .targets
+        .notion
+        .as_ref()
+        .is_some_and(|t| !t.database.trim().is_empty())
 }
 
 impl TargetRules {
-    /// The rules of `cycle`, with the defaults where it says nothing.
+    /// The rules of `cycle`, with the defaults where it says nothing. Assumes GitHub is
+    /// configured; use [`Self::for_repo`] when the repository's remote/link state is known.
     pub fn of(cycle: &Cycle) -> Self {
+        Self::for_repo(cycle, true, true)
+    }
+
+    /// The rules of `cycle` together with whether its repository is connected to a remote or
+    /// GitHub repository, and whether the secret of the Discord webhook reference is stored.
+    /// An unconfigured target is never allowed by [`Self::allows`].
+    pub fn for_repo(cycle: &Cycle, github_configured: bool, discord_webhook_set: bool) -> Self {
         Self {
             // A cycle without `targets.github` still has the report target, with the default.
             github: cycle
@@ -83,6 +116,19 @@ impl TargetRules {
             discord: cycle.targets.discord.as_ref().map(|t| t.publish),
             // A cycle without `targets.notion` has no Notion target at all.
             notion: cycle.targets.notion.as_ref().map(|t| t.publish),
+            github_configured,
+            discord_configured: discord_is_configured(cycle, discord_webhook_set),
+            notion_configured: notion_is_configured(cycle),
+        }
+    }
+
+    /// Whether `target` has the configuration required to publish (GitHub: a remote or linked
+    /// repo; Discord: a webhook or bot channel; Notion: a database/page id).
+    pub fn is_configured(&self, target: PublishTarget) -> bool {
+        match target {
+            PublishTarget::Github => self.github_configured,
+            PublishTarget::Discord => self.discord_configured,
+            PublishTarget::Notion => self.notion_configured,
         }
     }
 
@@ -96,8 +142,11 @@ impl TargetRules {
     }
 
     /// Whether `trigger` may publish to `target`: `auto` only for targets set to auto,
-    /// an explicit request for everything but `off`.
+    /// an explicit request for everything but `off`. Always `false` for unconfigured targets.
     pub fn allows(&self, target: PublishTarget, trigger: Trigger) -> bool {
+        if !self.is_configured(target) {
+            return false;
+        }
         matches!(
             (self.mode(target), trigger),
             (Some(PublishMode::Auto), _) | (Some(PublishMode::OnApproval), Trigger::Explicit)
@@ -225,5 +274,72 @@ targets:
                 explicit
             );
         }
+    }
+
+    #[test]
+    fn a_webhook_counts_as_configured_only_when_its_secret_is_stored() {
+        let cycle = with(Some(PublishMode::Auto), Some(PublishMode::Auto));
+        assert!(TargetRules::for_repo(&cycle, true, true).is_configured(PublishTarget::Discord));
+        let rules = TargetRules::for_repo(&cycle, true, false);
+        assert!(!rules.is_configured(PublishTarget::Discord));
+        assert!(!rules.allows(PublishTarget::Discord, Trigger::Auto));
+        assert!(!rules.allows(PublishTarget::Discord, Trigger::Explicit));
+    }
+
+    #[test]
+    fn unconfigured_targets_are_never_allowed() {
+        let mut cycle = with(Some(PublishMode::Auto), Some(PublishMode::Auto));
+        cycle.targets.discord = Some(DiscordTarget {
+            webhook: Some("  ".into()),
+            bot: None,
+            publish: PublishMode::Auto,
+            template: None,
+        });
+        cycle.targets.notion = Some(cycle_store::NotionTarget {
+            token: "cred:notion/nomad".into(),
+            database: "".into(),
+            data_source: None,
+            publish: PublishMode::Auto,
+            properties: cycle_store::NotionProperties::default(),
+        });
+
+        let rules = TargetRules::for_repo(&cycle, false, true);
+        for target in [
+            PublishTarget::Github,
+            PublishTarget::Discord,
+            PublishTarget::Notion,
+        ] {
+            assert!(!rules.is_configured(target), "{target:?}");
+            assert!(!rules.allows(target, Trigger::Auto), "{target:?}");
+            assert!(!rules.allows(target, Trigger::Explicit), "{target:?}");
+        }
+
+        // Bot mode with empty channel is also unconfigured; non-empty channel is configured.
+        cycle.targets.discord = Some(DiscordTarget {
+            webhook: None,
+            bot: Some(cycle_store::DiscordBot {
+                token: "cred:discord-bot/nomad".into(),
+                guild: "123".into(),
+                channel: "".into(),
+                thread: true,
+                edit_on_correction: true,
+            }),
+            publish: PublishMode::Auto,
+            template: None,
+        });
+        assert!(!TargetRules::for_repo(&cycle, false, true)
+            .allows(PublishTarget::Discord, Trigger::Auto));
+
+        cycle
+            .targets
+            .discord
+            .as_mut()
+            .unwrap()
+            .bot
+            .as_mut()
+            .unwrap()
+            .channel = "456".into();
+        assert!(TargetRules::for_repo(&cycle, false, true)
+            .allows(PublishTarget::Discord, Trigger::Auto));
     }
 }

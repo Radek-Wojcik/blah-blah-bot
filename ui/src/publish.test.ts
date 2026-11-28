@@ -38,6 +38,7 @@ import {
   countProposals,
   decisionLabel,
   discordChannelUrl,
+  isDiscordConfigured,
   discordInviteUrl,
   discordMemberLabel,
   issueNumber,
@@ -221,10 +222,28 @@ describe("outbox", () => {
     expect(opsOf(null, "m5")).toEqual([]);
   });
 
-  it("locks the draft unless every operation is cancelled", () => {
+  it("locks the draft only once an external operation is running or done", () => {
     expect(lockedByOps([])).toBe(false);
     expect(lockedByOps([op(1, { state: "cancelled" })])).toBe(false);
-    expect(lockedByOps([op(1, { state: "cancelled" }), op(2, { state: "failed" })])).toBe(true);
+    expect(lockedByOps([op(1, { state: "queued" }), op(2, { state: "failed" })])).toBe(false);
+    expect(
+      lockedByOps([op(1, { kind: "commit_meeting", state: "done", result: { pushed: false } })]),
+    ).toBe(false);
+    expect(lockedByOps([op(1, { state: "running" })])).toBe(true);
+    expect(
+      lockedByOps([op(1, { kind: "commit_meeting", state: "done", result: { pushed: true } })]),
+    ).toBe(true);
+  });
+
+  it("treats a Discord webhook as configured only when its secret is stored", () => {
+    expect(isDiscordConfigured(undefined, true)).toBe(false);
+    expect(isDiscordConfigured({ webhook: "cred:discord/x" }, false)).toBe(false);
+    expect(isDiscordConfigured({ webhook: "cred:discord/x" }, true)).toBe(true);
+    expect(isDiscordConfigured({ webhook: " ", bot: null }, true)).toBe(false);
+    expect(isDiscordConfigured({ bot: { channel: " " } }, true)).toBe(false);
+    expect(isDiscordConfigured({ webhook: "cred:discord/x", bot: { channel: "1" } }, false)).toBe(
+      true,
+    );
   });
 
   it("counts and summarises", () => {

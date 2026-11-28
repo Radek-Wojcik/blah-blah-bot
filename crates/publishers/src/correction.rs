@@ -106,7 +106,9 @@ fn live(op: &OutboxOp) -> bool {
 }
 
 pub fn build(input: &CorrectionPlanInput<'_>) -> CorrectionPlan {
-    let rules = TargetRules::of(input.cycle);
+    let github_configured = input.repo.has_remote || input.repo.github.is_some();
+    // Corrections reach Discord only through a bot, so the webhook secret is irrelevant here.
+    let rules = TargetRules::for_repo(input.cycle, github_configured, false);
     let mut plan = CorrectionPlan {
         rules,
         ops: Vec::new(),
@@ -214,7 +216,12 @@ pub fn build(input: &CorrectionPlanInput<'_>) -> CorrectionPlan {
     if plan.ops.is_empty() && plan.blocks.is_empty() && explicit {
         if !github_allowed {
             plan.notes
-                .push("github is off in cycle.yaml: the correction stays on this computer".into());
+                .push(if rules.is_configured(PublishTarget::Github) {
+                    "github is off in cycle.yaml: the correction stays on this computer".into()
+                } else {
+                    "connect a GitHub repository first: the correction stays on this computer"
+                        .into()
+                });
             plan.blocks.push(Block::NothingToPublish);
         } else if !input.in_repository {
             plan.blocks.push(Block::MeetingNotInRepository);

@@ -1145,6 +1145,8 @@ export interface PublishTargetView {
   mode: PublishMode | null;
   /** An explicit publication may use it. */
   available: boolean;
+  /** Whether the target has the required configuration (remote/repo, webhook/channel, database). */
+  configured?: boolean;
 }
 
 export interface PlannedIssue {

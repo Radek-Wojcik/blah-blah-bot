@@ -23,11 +23,13 @@ import {
   botTokenProblem,
   correctionProblem,
   hasControlChars,
+  isDiscordConfigured,
   issueUrl,
   maskBotToken,
   maskNotionToken,
   maskWebhook,
   notionTokenProblem,
+  opLocksDraft,
   parseWebhook,
   referenceKindByName,
   tokenProblem,
@@ -163,8 +165,6 @@ export interface PublishDeps {
   /** The simulated time, in Unix milliseconds. */
   now: () => number;
   screenshotCount: (meetingId: string) => number;
-  /** The draft of a meeting changed for a reason other than an edit (it was unlocked). */
-  onUnlocked: (meetingId: string) => void;
   /** A cycle was modified through an integration helper (`setNotionMapping`, `setParticipantDiscord`). */
   onCyclesChanged?: () => void;
 }
@@ -325,8 +325,7 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
   });
   const emit = () => listeners.forEach((l) => l.cb(state()));
   const opsOfMeeting = (meetingId: string) => ops.filter((o) => o.meetingId === meetingId);
-  const isLocked = (meetingId: string) =>
-    opsOfMeeting(meetingId).some((o) => o.state !== "cancelled");
+  const isLocked = (meetingId: string) => opsOfMeeting(meetingId).some(opLocksDraft);
 
   function pump() {
     if (timer !== null) return;
@@ -850,15 +849,41 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
   });
 
   // ----- planning -----
+  /** A remote or a linked GitHub repository: without one nothing can go to GitHub. */
+  const isGithubConfigured = (cycleId: string) => {
+    const info = repoInfo(cycleId);
+    return Boolean(info.repo.remote || info.github);
+  };
   const targetViews = (cycleId: string): PublishTargetView[] => {
     const cycle = cycles.cycle(cycleId);
+    const githubConfigured = isGithubConfigured(cycleId);
+    const discordConfigured = isDiscordConfigured(
+      cycle?.targets.discord,
+      targetSecrets.has(cycle?.targets.discord?.webhook?.trim() ?? ""),
+    );
+    const notionConfigured = Boolean(cycle?.targets.notion?.database?.trim());
     const github = cycle?.targets.github?.publish ?? "on-approval";
     const discord = cycle?.targets.discord?.publish ?? null;
     const notion = cycle?.targets.notion?.publish ?? null;
     return [
-      { target: "github", mode: github, available: github !== "off" },
-      { target: "discord", mode: discord, available: discord !== null && discord !== "off" },
-      { target: "notion", mode: notion, available: notion !== null && notion !== "off" },
+      {
+        target: "github",
+        mode: github,
+        available: githubConfigured && github !== "off",
+        configured: githubConfigured,
+      },
+      {
+        target: "discord",
+        mode: discord,
+        available: discordConfigured && discord !== null && discord !== "off",
+        configured: discordConfigured,
+      },
+      {
+        target: "notion",
+        mode: notion,
+        available: notionConfigured && notion !== null && notion !== "off",
+        configured: notionConfigured,
+      },
     ];
   };
 
@@ -1129,7 +1154,7 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
     const entry = corrections.get(meetingId)!;
     const cycleId = entry.cycleId;
     const rule = githubRule(cycleId);
-    if (rule === "off") {
+    if (rule === "off" || !isGithubConfigured(cycleId)) {
       if (explicit)
         fail("nothing_to_publish", "There is nothing to publish with the rules of this cycle.");
       return 0;
@@ -1707,9 +1732,8 @@ export function createMockPublishing(deps: PublishDeps): MockPublishing {
       if (op.state === "running") fail("busy", "The operation is running; wait for it to finish.");
       if (op.state === "done" || op.state === "cancelled")
         fail("invalid", "Only a waiting or failed operation can be cancelled.");
-      const wasLocked = isLocked(op.meetingId);
+      // Only a waiting or failed operation gets here, and those never lock the draft.
       settle(op, { state: "cancelled" });
-      if (wasLocked && !isLocked(op.meetingId)) deps.onUnlocked(op.meetingId);
       return state();
     },
     cycleTasks: async (cycleId): Promise<CycleTasks> => {

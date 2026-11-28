@@ -490,8 +490,24 @@ fn is_live(op: &OutboxOp) -> bool {
     op.state != OpState::Cancelled
 }
 
+/// A finished commit that stayed on this computer (`pushed: false`): it sent nothing anywhere.
+pub fn is_unpushed_local_commit(op: &OutboxOp) -> bool {
+    op.state == OpState::Done
+        && matches!(
+            op.kind,
+            OutboxKind::CommitMeeting | OutboxKind::CommitCorrection
+        )
+        && op
+            .result
+            .as_deref()
+            .and_then(|r| serde_json::from_str::<serde_json::Value>(r).ok())
+            .and_then(|v| v.get("pushed").and_then(serde_json::Value::as_bool))
+            == Some(false)
+}
+
 pub fn build(input: &PlanInput<'_>) -> PublishPlan {
-    let rules = TargetRules::of(input.cycle);
+    let github_configured = input.repo.has_remote || input.repo.github.is_some();
+    let rules = TargetRules::for_repo(input.cycle, github_configured, input.discord_webhook_set);
     let mut plan = PublishPlan {
         rules,
         ops: Vec::new(),
@@ -509,6 +525,13 @@ pub fn build(input: &PlanInput<'_>) -> PublishPlan {
             if !rules.allows(*t, Trigger::Explicit) {
                 plan.notes.push(match rules.mode(*t) {
                     None => format!("this cycle has no {} target", t.as_str()),
+                    Some(_) if !rules.is_configured(*t) => match t {
+                        PublishTarget::Github => "connect a GitHub repository first".into(),
+                        PublishTarget::Discord => {
+                            "configure a Discord webhook or bot channel first".into()
+                        }
+                        PublishTarget::Notion => "configure a Notion database first".into(),
+                    },
                     Some(_) => format!("{} is off in cycle.yaml and was left out", t.as_str()),
                 });
             }
@@ -517,10 +540,12 @@ pub fn build(input: &PlanInput<'_>) -> PublishPlan {
     let draft = input.draft;
     let date = draft.date.clone();
     let cycle_id = input.cycle.id.clone();
-    let live_commit = input
-        .existing
-        .iter()
-        .any(|o| o.op_key == COMMIT_KEY && is_live(o));
+    let live_commit = input.existing.iter().any(|o| {
+        o.op_key == COMMIT_KEY
+                && is_live(o)
+                // A commit that only stayed local is queued again once a remote exists.
+                && !(input.repo.has_remote && is_unpushed_local_commit(o))
+    });
     let anchor = |id: &str| input.anchors.get(id).cloned();
 
     plan.summary.proposals_pending = draft

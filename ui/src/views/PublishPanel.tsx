@@ -17,6 +17,7 @@ import {
   OP_TARGET_LABELS,
   STATUS_WRITE_BACK_NOTE,
   TARGET_LABELS,
+  UNCONFIGURED_TARGET_HINT,
   canCancel,
   canRetry,
   chosenTargets,
@@ -385,9 +386,12 @@ function TargetRow(props: {
             target={view.target}
             value={view.mode}
             disabled={props.ruleBusy}
+            disabledReason={
+              view.configured === false ? UNCONFIGURED_TARGET_HINT[view.target] : undefined
+            }
             onChange={props.onRule}
           />
-          {view.target === "github" && (
+          {view.target === "github" && view.configured !== false && (
             <span className="target-rule-help">{STATUS_WRITE_BACK_NOTE}</span>
           )}
         </>

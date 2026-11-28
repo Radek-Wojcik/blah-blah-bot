@@ -33,6 +33,26 @@ export const TARGET_LABELS: Record<PublishTargetName, string> = {
   notion: "Notion (tasks database)",
 };
 
+/** Shown next to a disabled rule switch when the target is not configured yet. */
+export const UNCONFIGURED_TARGET_HINT: Record<PublishTargetName, string> = {
+  github: "Connect a GitHub repository first",
+  discord: "Configure a Discord webhook or bot channel first",
+  notion: "Configure a Notion database first",
+};
+
+/**
+ * Whether the Discord target can publish: a bot needs its channel, a webhook needs its secret
+ * to be stored (the same rule the backend applies).
+ */
+export function isDiscordConfigured(
+  discord: { webhook?: string | null; bot?: { channel: string } | null } | null | undefined,
+  webhookSet: boolean,
+): boolean {
+  if (!discord) return false;
+  if (discord.bot) return discord.bot.channel.trim() !== "";
+  return Boolean(discord.webhook?.trim()) && webhookSet;
+}
+
 /** The positions of the rule switch, from the safest. */
 export const RULE_ORDER: PublishMode[] = ["off", "on-approval", "auto"];
 
@@ -431,9 +451,26 @@ export function opsOf(state: OutboxState | null, meetingId: string): OutboxOp[] 
   return (state?.ops ?? []).filter((o) => o.meetingId === meetingId).sort((a, b) => a.id - b.id);
 }
 
-/** The draft is read-only while an operation of the meeting exists that is not cancelled. */
+/**
+ * Whether a single operation holds the draft lock.
+ * Only operations that have actually been sent (`done`) or are currently running (`running`)
+ * lock the draft; queued, failed, cancelled, or local-only unsent commits (`pushed: false`) do not.
+ */
+export function opLocksDraft(op: OutboxOp): boolean {
+  if (op.state === "running") return true;
+  if (op.state !== "done") return false;
+  if (
+    (op.kind === "commit_meeting" || op.kind === "commit_correction") &&
+    op.result?.pushed === false
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/** The draft is read-only only once an external publishing operation is running or done. */
 export function lockedByOps(ops: OutboxOp[]): boolean {
-  return ops.some((o) => o.state !== "cancelled");
+  return ops.some(opLocksDraft);
 }
 
 export interface OpCounts {

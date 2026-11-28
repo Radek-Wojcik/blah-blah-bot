@@ -548,6 +548,42 @@ impl Store {
         Ok(())
     }
 
+    /// Like [`Self::cancel_op`], and the queued or failed operations that waited for `id`
+    /// (`after_id`) no longer wait for it, so cancelling it does not strand them.
+    pub fn cancel_op_releasing_dependents(&self, id: i64, now_ms: i64) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        checked(&tx, id, OpState::Cancelled)?;
+        tx.execute(
+            "UPDATE outbox SET state = 'cancelled', next_attempt_unix_ms = NULL,
+                updated_unix_ms = ?2 WHERE id = ?1",
+            params![id, now_ms],
+        )?;
+        tx.execute(
+            "UPDATE outbox SET after_id = NULL, updated_unix_ms = ?2
+             WHERE after_id = ?1 AND state IN ('queued', 'failed')",
+            params![id, now_ms],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// done -> cancelled, for an operation whose outcome turned out to be a no-op that must
+    /// be possible to queue again (a commit that stayed on this computer). Anything but a
+    /// done operation is an error.
+    pub fn supersede_done_op(&self, id: i64, now_ms: i64) -> Result<()> {
+        let changed = self.conn.execute(
+            "UPDATE outbox SET state = 'cancelled', updated_unix_ms = ?2
+             WHERE id = ?1 AND state = 'done'",
+            params![id, now_ms],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::Invalid(format!(
+                "outbox operation {id} is not done"
+            )));
+        }
+        Ok(())
+    }
+
     /// Called at start: no operation can be running in a fresh process, so these are crash
     /// leftovers and go back to queued (the attempt is not counted). Returns their ids.
     pub fn reset_running_ops(&self, now_ms: i64) -> Result<Vec<i64>> {
@@ -972,6 +1008,37 @@ mod tests {
         assert_eq!((row.state, row.updated_unix_ms), (OpState::Done, 4));
         // An unknown id is an error too.
         assert!(s.cancel_op(999, 1).is_err());
+    }
+
+    #[test]
+    fn cancelling_with_release_unlinks_the_dependents_and_supersede_needs_done() {
+        let s = store();
+        let (git, _) = s.enqueue_op(&commit("m1"), 0).unwrap();
+        let mut post = new_op(
+            "m1",
+            OutboxTarget::Discord,
+            OutboxKind::PostDiscord,
+            "discord",
+        );
+        post.after_op_key = Some(git.op_key.clone());
+        let (post, _) = s.enqueue_op(&post, 0).unwrap();
+        assert_eq!(post.after_id, Some(git.id));
+        s.cancel_op_releasing_dependents(git.id, 1).unwrap();
+        let post = s.get_op(post.id).unwrap().unwrap();
+        assert_eq!((post.state, post.after_id), (OpState::Queued, None));
+        assert!(s.claim_next_op(2, &[]).unwrap().is_some());
+
+        // supersede: only a done operation.
+        assert!(s.supersede_done_op(git.id, 3).is_err());
+        let (c2, _) = s.enqueue_op(&commit("m2"), 0).unwrap();
+        assert!(s.supersede_done_op(c2.id, 3).is_err());
+        let running = s.claim_next_op(4, &[]).unwrap().unwrap();
+        assert_eq!(running.id, c2.id);
+        s.complete_op(c2.id, "{}", 5).unwrap();
+        s.supersede_done_op(c2.id, 6).unwrap();
+        assert_eq!(s.get_op(c2.id).unwrap().unwrap().state, OpState::Cancelled);
+        let (again, created) = s.enqueue_op(&commit("m2"), 7).unwrap();
+        assert!(created && again.state == OpState::Queued);
     }
 
     #[test]

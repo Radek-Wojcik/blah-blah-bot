@@ -22,7 +22,7 @@ use publishers::flow::{self, Prepared, StartError};
 use publishers::http::HttpClient;
 use publishers::outbox::{Dispatcher, Env, RepoContext, TICK_MS};
 use publishers::plan::{GithubIdentity, PlanSummary, PublishPlan};
-use publishers::rules::{PublishTarget, TargetRules, Trigger};
+use publishers::rules::{PublishTarget, Trigger};
 use queue::draft::DraftFiles;
 use queue::transcript::{self, TranscriptFiles, TranscriptView};
 use serde::Serialize;
@@ -200,12 +200,14 @@ fn context_of(located: Located) -> Result<RepoContext, String> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TargetDto {
-    /// `github` or `discord`.
+    /// `github`, `discord` or `notion`.
     pub target: &'static str,
     /// `auto`, `on-approval` or `off`; `None` when the cycle has no such target.
     pub mode: Option<&'static str>,
     /// An explicit publication may use it.
     pub available: bool,
+    /// Whether the target has the required configuration (GitHub remote/repo, Discord webhook/bot channel, Notion database).
+    pub configured: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -520,6 +522,17 @@ impl Publishing {
                 if let Err(e) = this.dispatcher.recover() {
                     tracing::error!(error = %e, "could not resume the publishing operations");
                 }
+                match this.cleanup_unsent_local_ops() {
+                    Ok(0) => {}
+                    Ok(n) => tracing::info!(
+                        cancelled = n,
+                        "cancelled stale unsent local-only publishing operations on startup"
+                    ),
+                    Err(e) => tracing::warn!(
+                        error = %e.message,
+                        "could not clean up unsent local-only publishing operations"
+                    ),
+                }
                 loop {
                     let now = this.env.now_ms();
                     let wait = this
@@ -564,6 +577,50 @@ impl Publishing {
     /// A draft was completed: the `auto` rules of its cycle apply (on the publishing thread).
     pub fn draft_completed(&self, meeting_id: &str) {
         self.send(Command::Auto(meeting_id.to_string()));
+    }
+
+    /// Idempotent startup cleanup: cancels queued or failed local-only commit operations
+    /// whose project has neither a Git remote nor a linked GitHub repository, so stale unsent
+    /// local operations from before target gating do not run or linger in the outbox. Done and
+    /// running operations and other projects are never touched; operations that waited for a
+    /// cancelled commit stop waiting for it. A failing cancellation is skipped, not fatal.
+    pub fn cleanup_unsent_local_ops(&self) -> IpcResult<usize> {
+        let ops = self.with_store(|s| s.list_ops(None))?;
+        let mut cancelled = 0;
+        for op in ops {
+            if !matches!(op.state, OpState::Queued | OpState::Failed)
+                || !matches!(
+                    op.kind,
+                    OutboxKind::CommitMeeting | OutboxKind::CommitCorrection
+                )
+            {
+                continue;
+            }
+            let Some(cycle_id) = serde_json::from_str::<Value>(&op.payload)
+                .ok()
+                .and_then(|v| v.get("cycle").and_then(Value::as_str).map(String::from))
+            else {
+                continue;
+            };
+            let Ok(ctx) = self.env.context(&cycle_id) else {
+                continue;
+            };
+            if ctx.has_remote || ctx.github.is_some() {
+                continue;
+            }
+            let now = self.env.now_ms();
+            match self.with_store(|s| s.cancel_op_releasing_dependents(op.id, now)) {
+                Ok(()) => cancelled += 1,
+                Err(e) => tracing::warn!(
+                    op = op.id,
+                    error = %e.message,
+                    "could not cancel an unsent local-only operation"
+                ),
+            }
+        }
+        // Always tell the screen: even a partial clean-up changed the outbox.
+        self.env.outbox_changed();
+        Ok(cancelled)
     }
 
     // ----- loading ---------------------------------------------------------------------------
@@ -703,6 +760,7 @@ impl Publishing {
                 target: t.as_str(),
                 mode: mode.map(mode_name),
                 available: plan.rules.allows(t, Trigger::Explicit),
+                configured: plan.rules.is_configured(t),
             }
         })
         .collect()
@@ -712,7 +770,7 @@ impl Publishing {
         let facts = self.with_store(|s| flow::repo_facts(self.env.as_ref(), s, &loaded.ctx))?;
         let meeting_id = loaded.draft.meeting_id.clone();
         let ops = self.with_store(|s| s.list_ops(Some(&meeting_id)))?;
-        let locked = ops.iter().any(|o| o.state != OpState::Cancelled);
+        let locked = flow::ops_lock_draft(&ops);
         Ok(PlanDto {
             meeting_id,
             cycle_id: loaded.ctx.cycle.id.clone(),
@@ -839,7 +897,7 @@ impl Publishing {
     /// draft, a repository that was not confirmed).
     pub fn auto_publish(&self, meeting_id: &str) -> IpcResult<usize> {
         let loaded = self.load(meeting_id)?;
-        let rules = TargetRules::of(&loaded.ctx.cycle);
+        let rules = flow::target_rules(self.env.as_ref(), &loaded.ctx);
         let any_auto = [
             PublishTarget::Github,
             PublishTarget::Discord,
@@ -870,6 +928,14 @@ impl Publishing {
                 meeting = meeting_id,
                 code = block.code(),
                 "automatic publishing is waiting for the user"
+            );
+            return Ok(0);
+        }
+        if preview.ops.is_empty() {
+            // Nothing is configured to go anywhere: no snapshot, no publication row.
+            tracing::info!(
+                meeting = meeting_id,
+                "automatic publishing has nothing to send"
             );
             return Ok(0);
         }

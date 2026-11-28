@@ -557,23 +557,23 @@ fn the_configured_folder_holds_the_meeting_and_the_links_point_to_it() {
 }
 
 #[test]
-fn a_local_only_repository_commits_without_pushing_or_issues() {
+fn a_local_only_repository_plans_no_ops_and_stays_unlocked() {
     let lab = Lab::new(LabOptions {
         remote: false,
         linked: false,
         discord: None,
         ..LabOptions::default()
     });
-    publish(&lab, &GITHUB);
-    let report = lab.tick();
-    assert_eq!(report.done, 1, "{:?}", lab.states());
-    let result: Value =
-        serde_json::from_str(lab.op(COMMIT_KEY).result.as_deref().unwrap()).unwrap();
-    assert_eq!(result["pushed"], false);
-    assert!(lab
-        .clone_dir
-        .join("meetings/NOMAD/2026-11-13/report.md")
-        .is_file());
+    let err = lab
+        .publish(&draft(), Trigger::Explicit, &GITHUB, &anchors())
+        .err()
+        .expect("local-only project without remote or GitHub link cannot publish to GitHub");
+    assert!(
+        matches!(err, crate::flow::StartError::Blocked(ref b) if b == &[crate::plan::Block::NothingToPublish]),
+        "{err:?}"
+    );
+    assert!(lab.ops().is_empty());
+    assert!(!crate::flow::is_locked(&lab.store.lock().unwrap(), MEETING).unwrap());
     assert_eq!(
         lab.github.request_count(),
         0,

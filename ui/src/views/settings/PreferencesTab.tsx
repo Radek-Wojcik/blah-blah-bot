@@ -13,11 +13,17 @@ import type {
   MouseButtonsMode,
   PublishMode,
   PublishTargetName,
+  PublishingSecrets,
   PullResult,
   RepoKind,
   Settings,
 } from "../../ipc/types";
-import { DEFAULT_PUBLISH_RULE, STATUS_WRITE_BACK_NOTE } from "../../publish";
+import {
+  DEFAULT_PUBLISH_RULE,
+  STATUS_WRITE_BACK_NOTE,
+  UNCONFIGURED_TARGET_HINT,
+  isDiscordConfigured,
+} from "../../publish";
 import { BrowserExtension } from "../BrowserExtension";
 import { DetectionSettingsView } from "../DetectionSettings";
 import { RuleChoice } from "../RuleChoice";
@@ -59,18 +65,32 @@ function isPrefsDirty(saved: Settings | null, draft: Settings | null): boolean {
   return a.enabled !== b.enabled || a.port !== b.port || a.autoAddTabs !== b.autoAddTabs;
 }
 
-function ProjectPublishRules({ cycle, version }: { cycle: CycleListItem; version: unknown }) {
+function ProjectPublishRules({
+  cycle,
+  repo,
+  reposLoaded,
+  version,
+}: {
+  cycle: CycleListItem;
+  repo?: CycleRepoView;
+  reposLoaded: boolean;
+  version: unknown;
+}) {
   const backend = useBackend();
   const [targets, setTargets] = useState<CycleTargets | null>(null);
+  const [secrets, setSecrets] = useState<PublishingSecrets | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    backend
-      .getCycle(cycle.id)
-      .then((d) => {
-        if (!cancelled) setTargets(d.cycle.targets);
+    // The targets and the stored secrets arrive together, so a switch never shows a
+    // configured target as unconfigured for a moment.
+    Promise.all([backend.getCycle(cycle.id), backend.publishingSecrets().catch(() => null)])
+      .then(([d, sec]) => {
+        if (cancelled) return;
+        setSecrets(sec);
+        setTargets(d.cycle.targets);
       })
       .catch((e) => {
         if (!cancelled) setError(errorMessage(e));
@@ -94,6 +114,11 @@ function ProjectPublishRules({ cycle, version }: { cycle: CycleListItem; version
   const github = targets.github?.publish ?? DEFAULT_PUBLISH_RULE.github;
   const discord = targets.discord?.publish ?? null;
   const notion = targets.notion?.publish ?? null;
+  const githubConfigured = Boolean(repo?.remote || repo?.githubRepo);
+  const webhookRef = targets.discord?.webhook?.trim() ?? "";
+  const webhookSet = Boolean(secrets?.targets.find((t) => t.reference === webhookRef)?.set);
+  const discordConfigured = isDiscordConfigured(targets.discord, webhookSet);
+  const notionConfigured = Boolean(targets.notion?.database?.trim());
 
   return (
     <div className="panel quiet">
@@ -107,7 +132,10 @@ function ProjectPublishRules({ cycle, version }: { cycle: CycleListItem; version
             name={`GitHub, project ${cycle.name}`}
             target="github"
             value={github}
-            disabled={busy}
+            disabled={busy || !reposLoaded}
+            disabledReason={
+              !reposLoaded || githubConfigured ? undefined : UNCONFIGURED_TARGET_HINT.github
+            }
             onChange={(m) => change("github", m)}
           />
         </div>
@@ -119,6 +147,7 @@ function ProjectPublishRules({ cycle, version }: { cycle: CycleListItem; version
               target="discord"
               value={discord}
               disabled={busy}
+              disabledReason={discordConfigured ? undefined : UNCONFIGURED_TARGET_HINT.discord}
               onChange={(m) => change("discord", m)}
             />
           </div>
@@ -135,6 +164,7 @@ function ProjectPublishRules({ cycle, version }: { cycle: CycleListItem; version
               target="notion"
               value={notion}
               disabled={busy}
+              disabledReason={notionConfigured ? undefined : UNCONFIGURED_TARGET_HINT.notion}
               onChange={(m) => change("notion", m)}
             />
           </div>
@@ -159,7 +189,7 @@ function ProjectPublishRules({ cycle, version }: { cycle: CycleListItem; version
  */
 export function PreferencesTab({ onDirtyChange, registerHandle }: EditableTabProps) {
   const backend = useBackend();
-  const { cycles, repos, reload: reloadCycles } = useCycles();
+  const { cycles, repos, reposLoaded, reload: reloadCycles } = useCycles();
   const [saved, setSaved] = useState<Settings | null>(null);
   const [draft, setDraft] = useState<Settings | null>(null);
   const [message, setMessage] = useState<{ text: string; kind: "status" | "error" } | null>(null);
@@ -457,7 +487,13 @@ export function PreferencesTab({ onDirtyChange, registerHandle }: EditableTabPro
         ) : (
           <div className="secret-list">
             {validCycles.map((c) => (
-              <ProjectPublishRules key={c.id} cycle={c} version={cycles} />
+              <ProjectPublishRules
+                key={c.id}
+                cycle={c}
+                repo={repos.find((r) => r.id === c.repoId)}
+                reposLoaded={reposLoaded}
+                version={cycles}
+              />
             ))}
           </div>
         )}

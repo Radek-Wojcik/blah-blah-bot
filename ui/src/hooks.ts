@@ -150,14 +150,20 @@ export function useSources(refreshKey: unknown): SourceInfo[] {
 export function useCycles(): {
   cycles: CycleListItem[] | null;
   repos: CycleRepoView[];
+  /** The list of repositories has arrived; until then `repos` is empty because it is unknown. */
+  reposLoaded: boolean;
   reload: () => void;
 } {
   const backend = useBackend();
   const [cycles, setCycles] = useState<CycleListItem[] | null>(null);
   const [repos, setRepos] = useState<CycleRepoView[]>([]);
+  const [reposLoaded, setReposLoaded] = useState(false);
   const reload = useCallback(() => {
     void backend.listCycles().then(setCycles);
-    void backend.listCycleRepos().then(setRepos);
+    void backend.listCycleRepos().then((r) => {
+      setRepos(r);
+      setReposLoaded(true);
+    });
   }, [backend]);
   useEffect(() => {
     reload();
@@ -172,7 +178,7 @@ export function useCycles(): {
       off?.();
     };
   }, [backend, reload]);
-  return { cycles, repos, reload };
+  return { cycles, repos, reposLoaded, reload };
 }
 
 /** The outbox of publishing: loaded once, then replaced by every `outbox-changed` event. */
