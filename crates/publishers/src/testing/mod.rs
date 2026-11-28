@@ -8,10 +8,12 @@ pub mod fixtures;
 pub mod github;
 pub mod lab;
 pub mod notion;
+pub mod oauth;
 pub mod server;
 
 pub use discord::FakeDiscord;
 pub use discord_bot::FakeDiscordBot;
 pub use github::{FakeGithub, Visibility};
 pub use notion::FakeNotion;
+pub use oauth::FakeOAuth;
 pub use server::{FakeServer, Fault, Recorded, Reply};

@@ -12,6 +12,7 @@ import type {
   WizardCreateResult,
 } from "../ipc/types";
 import { MODE_HELP, MODE_NAMES, REPORT_MODES } from "../report-gate";
+import { GithubFixHelp, needsTokenHelp } from "./GithubFixHelp";
 import { Modal } from "./Modal";
 
 export interface ProjectWizardProps {
@@ -647,6 +648,9 @@ export function ProjectWizard({ onClose, onCreated }: ProjectWizardProps) {
           >
             {result.github.message}
           </p>
+          {result.github.status !== "created" && needsTokenHelp(result.github.message) && (
+            <GithubFixHelp />
+          )}
           {result.github.url && <p className="person-meta">{result.github.url}</p>}
           <div className="actions">
             <button
