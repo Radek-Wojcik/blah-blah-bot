@@ -1448,7 +1448,7 @@ fn auto_publish_with_a_notion_database_but_no_token_freezes_nothing() {
         token: "cred:notion/nomad".into(),
         database: "0123456789abcdef0123456789abcdef".into(),
         data_source: None,
-        publish: PublishMode::Auto,
+        publish: Some(PublishMode::Auto),
         properties: cycle_store::NotionProperties::default(),
     });
     let (rig, _lab) = Rig::local(Some(cycle));
