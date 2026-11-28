@@ -42,6 +42,9 @@ async function click(el: HTMLElement) {
   await flush();
 }
 
+/** One poll interval of the mock (1 s) plus the margin the component adds. */
+const INTERVAL = 1250;
+
 /** Lets the timer of the poll fire and its promises settle. */
 async function tick(ms: number) {
   await act(async () => {
@@ -94,10 +97,10 @@ describe("Connect account (GitHub device flow)", () => {
     expect(link.target).toBe("_blank");
     expect(link.rel).toContain("noopener");
     expect(poll).not.toHaveBeenCalled();
-    await tick(1000);
+    await tick(INTERVAL);
     expect(poll).toHaveBeenCalledTimes(1);
     expect(host.textContent).toContain("Waiting for approval");
-    await tick(1000);
+    await tick(INTERVAL);
     expect(poll).toHaveBeenCalledTimes(2);
     expect(host.querySelector('[data-testid="github-connected"]')?.textContent).toBe(
       "Connected as demo-user",
@@ -116,18 +119,18 @@ describe("Connect account (GitHub device flow)", () => {
     });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     await click(button("Connect account"));
-    await tick(1000);
+    await tick(INTERVAL);
     expect(poll).toHaveBeenCalledTimes(1);
-    await tick(3000);
+    await tick(4000);
     expect(poll).toHaveBeenCalledTimes(1);
-    await tick(1000);
+    await tick(250);
     expect(poll).toHaveBeenCalledTimes(2);
     expect(host.querySelector('[role="alert"]')?.textContent).toMatch(/denied/i);
     expect(host.querySelector('[data-testid="github-device-code"]')).toBeNull();
 
     hooks().setGithubConnect({ script: [{ state: "expired" }] });
     await click(button("Connect account"));
-    await tick(1000);
+    await tick(INTERVAL);
     expect(host.querySelector('[role="alert"]')?.textContent).toMatch(/expired/i);
   });
 
@@ -174,6 +177,148 @@ describe("Connect account (GitHub device flow)", () => {
   });
 });
 
+describe("Connect account: races and safety", () => {
+  const start = {
+    userCode: "WDJB-MJHT",
+    verificationUri: "https://github.com/login/device",
+    interval: 1,
+    expiresIn: 900,
+  };
+  const deferred = <T,>() => {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((r) => (resolve = r));
+    return { promise, resolve };
+  };
+
+  it("cancels the backend when unmounted while the start is still out", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    const gate = deferred<typeof start>();
+    vi.spyOn(backend, "githubDeviceStart").mockReturnValue(gate.promise);
+    const poll = vi.spyOn(backend, "githubDevicePoll");
+    const cancel = vi.spyOn(backend, "githubDeviceCancel");
+    await mount(backend);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await click(button("Connect account"));
+    expect(button("Starting…").disabled).toBe(true);
+    act(() => root.unmount());
+    expect(cancel).toHaveBeenCalledTimes(1);
+    await act(async () => gate.resolve(start));
+    // The late answer is dropped: the session it made is cancelled too, and nothing polls.
+    expect(cancel).toHaveBeenCalledTimes(2);
+    await tick(10_000);
+    expect(poll).not.toHaveBeenCalled();
+    root = createRoot(host);
+  });
+
+  it("a double click starts once, and Disconnect is not offered while starting", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    const gate = deferred<typeof start>();
+    const startSpy = vi.spyOn(backend, "githubDeviceStart").mockReturnValue(gate.promise);
+    await mount(backend);
+    const connect = button("Connect account");
+    await act(async () => {
+      connect.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      connect.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(startSpy).toHaveBeenCalledTimes(1);
+    expect([...host.querySelectorAll("button")].some((b) => b.textContent === "Disconnect")).toBe(
+      false,
+    );
+    await act(async () => gate.resolve(start));
+  });
+
+  it("a cancel during the start drops the late answer", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    const gate = deferred<typeof start>();
+    vi.spyOn(backend, "githubDeviceStart").mockReturnValue(gate.promise);
+    const poll = vi.spyOn(backend, "githubDevicePoll");
+    await mount(backend);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await click(button("Connect account"));
+    await act(async () => gate.resolve(start));
+    await click(button("Cancel"));
+    await tick(10_000);
+    expect(poll).not.toHaveBeenCalled();
+    expect(host.querySelector('[data-testid="github-device-code"]')).toBeNull();
+  });
+
+  it("opens only github.com without a port: any other page is refused", async () => {
+    for (const verificationUri of [
+      "https://evil.example/login/device",
+      "https://github.com.evil.example/login/device",
+      "https://github.com:8443/login/device",
+      "http://github.com/login/device",
+    ]) {
+      const backend = createMockBackend({ clockRate: 0 });
+      vi.spyOn(backend, "githubDeviceStart").mockResolvedValue({ ...start, verificationUri });
+      await mount(backend);
+      await click(button("Connect account"));
+      expect(host.querySelector('[data-testid="github-device-code"]')).not.toBeNull();
+      expect(
+        [...host.querySelectorAll("a")].some((a) => a.textContent?.includes("github.com/login")),
+        verificationUri,
+      ).toBe(false);
+      expect(host.querySelector('[role="alert"]')?.textContent).toMatch(/safe page/i);
+      await click(button("Cancel"));
+      act(() => root.unmount());
+      root = createRoot(host);
+    }
+  });
+
+  it("a failed poll goes back to idle and cancels the dead session", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    vi.spyOn(backend, "githubDevicePoll").mockRejectedValue(new Error("GitHub refused"));
+    const cancel = vi.spyOn(backend, "githubDeviceCancel");
+    await mount(backend);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await click(button("Connect account"));
+    await tick(INTERVAL);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("GitHub refused");
+    expect(button("Connect account").disabled).toBe(false);
+  });
+
+  it("unmounting while waiting stops the polling and cancels", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    const poll = vi.spyOn(backend, "githubDevicePoll");
+    const cancel = vi.spyOn(backend, "githubDeviceCancel");
+    await mount(backend);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await click(button("Connect account"));
+    act(() => root.unmount());
+    await tick(10_000);
+    expect(poll).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalled();
+    root = createRoot(host);
+  });
+
+  it("forgets Connected when the token is removed in the field below", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    await mount(backend);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await click(button("Connect account"));
+    await tick(INTERVAL);
+    await tick(INTERVAL);
+    expect(host.querySelector('[data-testid="github-connected"]')).not.toBeNull();
+    const form = host.querySelector('form[aria-label="GitHub Token (api.github.com)"]')!;
+    const clear = [...form.querySelectorAll("button")].find((b) => b.textContent === "Clear")!;
+    await click(clear);
+    expect(host.querySelector('[data-testid="github-connected"]')).toBeNull();
+  });
+
+  it("Disconnect is disabled while the request is out and ignored after unmount", async () => {
+    const backend = createMockBackend({ clockRate: 0 });
+    const gate = deferred<void>();
+    vi.spyOn(backend, "clearGithubToken").mockReturnValue(gate.promise);
+    await mount(backend);
+    await click(button("Disconnect"));
+    expect(button("Disconnect").disabled).toBe(true);
+    act(() => root.unmount());
+    await act(async () => gate.resolve());
+    root = createRoot(host);
+  });
+});
+
 describe("Open token page buttons", () => {
   it("every connector with a token has one that opens an https provider page", async () => {
     await mount(createMockBackend({ clockRate: 0 }));
@@ -181,6 +326,12 @@ describe("Open token page buttons", () => {
       [...(host.querySelector(`form[aria-label="${form}"]`)?.querySelectorAll("a") ?? [])]
         .filter((a) => a.textContent === "Open token page")
         .map((a) => a.getAttribute("href"));
+    const labels = [...host.querySelectorAll("a, button")]
+      .filter((e) => e.textContent === "Open token page")
+      .map((e) => e.getAttribute("aria-label"));
+    // Every one says whose token page it opens, and no two read alike.
+    expect(labels.every(Boolean)).toBe(true);
+    expect(new Set(labels).size).toBe(labels.length);
     expect(hrefs("GitHub Token (api.github.com)")).toEqual([
       "https://github.com/settings/personal-access-tokens/new",
     ]);

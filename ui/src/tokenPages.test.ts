@@ -16,6 +16,8 @@ describe("token pages", () => {
     expect(cloudKeyPage("https://api.openai.com/v1")).toBe("https://platform.openai.com/api-keys");
     expect(cloudKeyPage(" https://OpenRouter.ai/api/v1 ")).toBe("https://openrouter.ai/keys");
     expect(cloudKeyPage("https://api.example.com/v1")).toBeNull();
+    expect(cloudKeyPage("https://constructor/v1")).toBeNull();
+    expect(cloudKeyPage("https://__proto__/v1")).toBeNull();
     expect(cloudKeyPage("not a url")).toBeNull();
     expect(cloudKeyPage("")).toBeNull();
   });

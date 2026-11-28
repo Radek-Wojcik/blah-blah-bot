@@ -4,6 +4,21 @@ import { errorMessage } from "../../hooks";
 import type { GithubDeviceStart } from "../../ipc/types";
 import { safeHttpsUrl } from "../../publish";
 
+/** Slack added to GitHub's interval so a timer that fires a hair early never costs a whole round. */
+const POLL_MARGIN_MS = 250;
+
+/** The verification page, only when it is github.com over https with no port. */
+function githubPage(uri: string): string | null {
+  const safe = safeHttpsUrl(uri);
+  if (!safe) return null;
+  try {
+    const u = new URL(safe);
+    return u.hostname === "github.com" && u.port === "" ? safe : null;
+  } catch {
+    return null;
+  }
+}
+
 type Phase =
   | { kind: "idle" }
   | { kind: "starting" }
@@ -23,7 +38,12 @@ export function GithubConnect(props: { tokenSet: boolean; onChanged: () => void 
   const [message, setMessage] = useState<{ text: string; kind: "status" | "error" } | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const alive = useRef(true);
+  /** A connection is starting or waiting: the backend holds (or is about to hold) a session. */
   const running = useRef(false);
+  /** Bumped by every start, cancel and disconnect: an answer of an older attempt is dropped. */
+  const attempt = useRef(0);
+  const prevTokenSet = useRef(tokenSet);
+  const [disconnecting, setDisconnecting] = useState(false);
 
   useEffect(() => {
     alive.current = true;
@@ -34,7 +54,10 @@ export function GithubConnect(props: { tokenSet: boolean; onChanged: () => void 
     return () => {
       alive.current = false;
       if (timer.current) clearTimeout(timer.current);
-      if (running.current) void backend.githubDeviceCancel().catch(() => undefined);
+      if (running.current) {
+        attempt.current += 1;
+        void backend.githubDeviceCancel().catch(() => undefined);
+      }
     };
   }, [backend]);
 
@@ -43,6 +66,21 @@ export function GithubConnect(props: { tokenSet: boolean; onChanged: () => void 
     timer.current = null;
     running.current = false;
   }, []);
+
+  /** Ends the attempt in progress, if any, and tells the backend to forget its device code. */
+  const abandon = useCallback(() => {
+    attempt.current += 1;
+    stop();
+    void backend.githubDeviceCancel().catch(() => undefined);
+  }, [backend, stop]);
+
+  // The token was removed in the field below: the "connected" line would be a lie.
+  useEffect(() => {
+    if (prevTokenSet.current && !tokenSet) {
+      setPhase((p) => (p.kind === "connected" ? { kind: "idle" } : p));
+    }
+    prevTokenSet.current = tokenSet;
+  }, [tokenSet]);
 
   const pollRef = useRef<(seconds: number) => void>(() => undefined);
   const poll = useCallback(
@@ -85,16 +123,17 @@ export function GithubConnect(props: { tokenSet: boolean; onChanged: () => void 
               }
             })
             .catch((e) => {
-              if (!alive.current) return;
-              stop();
+              if (!alive.current || !running.current) return;
+              // The backend dropped the session with the error; make sure of it.
+              abandon();
               setPhase({ kind: "idle" });
               setMessage({ text: errorMessage(e), kind: "error" });
             });
         },
-        Math.max(1, seconds) * 1000,
+        Math.max(1, seconds) * 1000 + POLL_MARGIN_MS,
       );
     },
-    [backend, onChanged, stop],
+    [abandon, backend, onChanged, stop],
   );
 
   useEffect(() => {
@@ -102,45 +141,61 @@ export function GithubConnect(props: { tokenSet: boolean; onChanged: () => void 
   }, [poll]);
 
   const connect = () => {
+    // Synchronous guard: a second click before the state has caught up does nothing.
+    if (running.current) return;
+    running.current = true;
+    attempt.current += 1;
+    const mine = attempt.current;
     setMessage(null);
     setPhase({ kind: "starting" });
     backend
       .githubDeviceStart()
       .then((start) => {
-        if (!alive.current) return;
-        running.current = true;
+        if (!alive.current || attempt.current !== mine) {
+          // Cancelled, disconnected or unmounted while starting: drop the session just made.
+          void backend.githubDeviceCancel().catch(() => undefined);
+          return;
+        }
         setPhase({ kind: "waiting", start });
         poll(start.interval);
       })
       .catch((e) => {
-        if (!alive.current) return;
+        if (!alive.current || attempt.current !== mine) return;
+        running.current = false;
         setPhase({ kind: "idle" });
         setMessage({ text: errorMessage(e), kind: "error" });
       });
   };
 
   const cancel = () => {
-    stop();
-    void backend.githubDeviceCancel().catch(() => undefined);
+    abandon();
     setPhase({ kind: "idle" });
   };
 
   const disconnect = () => {
+    if (disconnecting) return;
     setMessage(null);
+    setDisconnecting(true);
     backend
       .clearGithubToken()
       .then(() => {
+        if (!alive.current) return;
+        setDisconnecting(false);
         setPhase({ kind: "idle" });
         onChanged();
         setMessage({ text: "Disconnected: the stored token was removed.", kind: "status" });
       })
-      .catch((e) => setMessage({ text: errorMessage(e), kind: "error" }));
+      .catch((e) => {
+        if (!alive.current) return;
+        setDisconnecting(false);
+        setMessage({ text: errorMessage(e), kind: "error" });
+      });
   };
 
-  const page = phase.kind === "waiting" ? safeHttpsUrl(phase.start.verificationUri) : null;
+  const page = phase.kind === "waiting" ? githubPage(phase.start.verificationUri) : null;
 
   return (
-    <div className="settings-subcard" aria-label="GitHub account sign-in">
+    <section className="settings-subcard" aria-label="GitHub account sign-in">
       <p className="token-state" style={{ marginTop: 0 }}>
         Connect your GitHub account
       </p>
@@ -198,12 +253,17 @@ export function GithubConnect(props: { tokenSet: boolean; onChanged: () => void 
             {phase.kind === "starting" ? "Starting…" : "Connect account"}
           </button>
         )}
-        {tokenSet && phase.kind !== "waiting" && (
-          <button type="button" className="btn btn-ghost" onClick={disconnect}>
+        {tokenSet && (phase.kind === "idle" || phase.kind === "connected") && (
+          <button
+            type="button"
+            className="btn btn-ghost"
+            disabled={disconnecting}
+            onClick={disconnect}
+          >
             Disconnect
           </button>
         )}
       </div>
-    </div>
+    </section>
   );
 }

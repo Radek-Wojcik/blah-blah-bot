@@ -25,8 +25,7 @@ const CLOUD_KEY_PAGES: Record<string, string> = {
 export function cloudKeyPage(baseUrl: string): string | null {
   try {
     const host = new URL(baseUrl.trim()).hostname.toLowerCase();
-    const known = CLOUD_KEY_PAGES[host];
-    return known ? safeHttpsUrl(known) : null;
+    return Object.hasOwn(CLOUD_KEY_PAGES, host) ? safeHttpsUrl(CLOUD_KEY_PAGES[host]) : null;
   } catch {
     return null;
   }

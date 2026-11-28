@@ -193,3 +193,128 @@ fn a_server_that_is_down_is_an_error_without_secrets() {
     assert!(!err.message.contains(DEVICE_CODE));
     assert!(!err.message.is_empty());
 }
+
+fn flow_on(base: &str) -> DeviceFlow {
+    DeviceFlow::with_bases("Iv1.testclientid", base, "http://127.0.0.1:2")
+        .unwrap()
+        .with_timeouts(Duration::from_secs(2), Duration::from_secs(5))
+}
+
+#[test]
+fn a_redirect_is_refused_at_start_and_poll() {
+    use crate::testing::{FakeServer, Reply};
+    let server = FakeServer::start(|_| {
+        Reply::empty(302).with_header("Location", "https://evil.example/login/device/code")
+    });
+    let flow = flow_on(&server.base_url());
+    let err = flow.start().unwrap_err();
+    assert!(err.message.contains("redirect"), "{err}");
+    let err = flow.poll(DEVICE_CODE).unwrap_err();
+    assert!(err.message.contains("redirect"), "{err}");
+    // Nothing else was asked for.
+    assert_eq!(server.request_count(), 2);
+}
+
+#[test]
+fn the_device_code_is_redacted_from_an_http_error() {
+    use crate::testing::{FakeServer, Reply};
+    let server = FakeServer::start(|_| {
+        Reply::json(
+            400,
+            &serde_json::json!({ "message": format!("bad code {DEVICE_CODE}") }),
+        )
+    });
+    let err = flow_on(&server.base_url()).poll(DEVICE_CODE).unwrap_err();
+    assert!(!err.message.contains(DEVICE_CODE), "{err}");
+    assert!(err.message.contains("HTTP 400"), "{err}");
+}
+
+#[test]
+fn production_rules_take_only_the_exact_github_pages() {
+    for ok in [
+        "https://github.com",
+        "https://github.com/",
+        "https://github.com/login/device",
+        "https://GitHub.com/login/device/",
+    ] {
+        assert!(
+            allowed_url(ok, OAUTH_HOST, VERIFICATION_PATH, false).is_ok(),
+            "{ok}"
+        );
+    }
+    for bad in [
+        "http://127.0.0.1/login/device",
+        "https://localhost/login/device",
+        "https://127.0.0.1:8443",
+        "http://github.com/login/device",
+        "https://github.com:8443/login/device",
+        "https://github.com:443/login/device",
+        "https://github.com/login/oauth/authorize",
+        "https://github.com/login/device?x=1",
+        "https://github.com/login/device#frag",
+        "https://github.com/other",
+        "https://github.com.evil.example/login/device",
+    ] {
+        assert!(
+            allowed_url(bad, OAUTH_HOST, VERIFICATION_PATH, false).is_err(),
+            "{bad}"
+        );
+    }
+    // Test builds may talk to this machine, but only for the bases, and with no path.
+    assert!(allowed_url("http://127.0.0.1:99", OAUTH_HOST, "", true).is_ok());
+    assert!(allowed_url("http://127.0.0.1:99/x", OAUTH_HOST, "", true).is_err());
+    assert!(allowed_url("https://api.github.com:8443", API_HOST, "", true).is_err());
+    assert!(allowed_url("https://api.github.com/v3", API_HOST, "", true).is_err());
+}
+
+#[test]
+fn a_verification_page_on_this_machine_or_with_a_port_is_refused() {
+    let (oauth, api) = servers();
+    let flow = flow(&oauth, &api);
+    for uri in [
+        "http://127.0.0.1/login/device",
+        "https://localhost/login/device",
+        "https://github.com:8443/login/device",
+        "https://github.com/evil",
+    ] {
+        oauth.set_start_answer(serde_json::json!({
+            "device_code": DEVICE_CODE, "user_code": USER_CODE,
+            "verification_uri": uri, "expires_in": 900, "interval": 5,
+        }));
+        assert!(flow.start().is_err(), "{uri}");
+    }
+}
+
+#[test]
+fn huge_or_zero_numbers_from_the_json_cannot_overflow() {
+    let (oauth, api) = servers();
+    let flow = flow(&oauth, &api);
+    oauth.set_start_answer(serde_json::json!({
+        "device_code": DEVICE_CODE, "user_code": USER_CODE,
+        "verification_uri": "https://github.com/login/device",
+        "expires_in": u64::MAX, "interval": u64::MAX,
+    }));
+    let code = flow.start().unwrap();
+    assert_eq!(code.interval_secs, MAX_INTERVAL_SECS);
+    assert_eq!(code.expires_in_secs, MAX_EXPIRES_SECS);
+    let mut session = DeviceSession::new(code, i64::MAX - 10);
+    oauth.script(&[Answer::SlowDown(u64::MAX)]);
+    // Neither the clock nor the interval wraps.
+    let _ = session.poll(&flow, i64::MAX);
+    assert!(session.interval_secs() <= MAX_INTERVAL_SECS);
+    oauth.set_start_answer(serde_json::json!({
+        "device_code": DEVICE_CODE, "user_code": USER_CODE,
+        "verification_uri": "https://github.com/login/device",
+        "expires_in": 0, "interval": 0,
+    }));
+    assert!(flow.start().is_err());
+    assert_eq!(MIN_INTERVAL_SECS, 1);
+}
+
+#[test]
+fn the_client_id_shape_is_checked_without_a_flow() {
+    assert!(DeviceFlow::client_id_is_valid(" Iv1.abc_-9 "));
+    for id in ["", "  ", "a b", "x\"y"] {
+        assert!(!DeviceFlow::client_id_is_valid(id), "{id:?}");
+    }
+}

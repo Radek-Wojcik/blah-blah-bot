@@ -48,6 +48,8 @@ function SecretCard(props: {
   onDraft?: (label: string, draft: SecretDraft | null) => void;
 }) {
   const { label, isSet } = props;
+  // The provider's name only: the field itself is labelled with the full `label`.
+  const service = label.replace(/ (Token|API Key).*$/, "");
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ text: string; kind: "status" | "error" } | null>(null);
@@ -142,6 +144,7 @@ function SecretCard(props: {
             <a
               className="btn btn-ghost"
               href={props.tokenPage}
+              aria-label={`Open token page for ${service}`}
               target="_blank"
               rel="noreferrer noopener"
             >
@@ -152,6 +155,7 @@ function SecretCard(props: {
               type="button"
               className="btn btn-ghost"
               disabled
+              aria-label={`Open token page for ${service}: not known for this provider`}
               title="The token page of this provider is not known: open it from the provider's website"
             >
               Open token page
