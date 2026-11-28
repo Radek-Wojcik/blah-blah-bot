@@ -4,6 +4,7 @@ import type {
   CycleTask,
   CycleTasks,
   DiscordMember,
+  NotionMappingProblem,
   NotionProperties,
   NotionPropertyType,
   OpResult,
@@ -381,7 +382,7 @@ export function parseWebhook(value: string): WebhookParts | string {
       return "The host is not a Discord address (discord.com, discordapp.com, canary.discord.com or ptb.discord.com).";
     if (port) return "A Discord webhook address has no port.";
   } else if (!LOOPBACK.includes(host)) {
-    return "Plain http is only accepted for this machine, use https.";
+    return "The webhook address must use https.";
   }
   const parts = path.replace(/^\/+|\/+$/g, "").split("/");
   let id: string | undefined;
@@ -967,4 +968,85 @@ export function correctionProblem(text: string, date: string): string | null {
 /** The corrections that were not queued yet: what Publish all would send. */
 export function unqueued(list: Correction[]): Correction[] {
   return list.filter((c) => c.state === "local");
+}
+
+// ----- the Notion field mapping (pure) --------------------------------------------------------
+
+export type MappedNotionField =
+  "title" | "key" | "assignee" | "due" | "status" | "meeting" | "cycle";
+
+/** The property types each field can be written to. */
+export const ALLOWED_NOTION_TYPES: Record<MappedNotionField, NotionPropertyType[]> = {
+  title: ["title"],
+  key: ["rich_text"],
+  assignee: ["rich_text", "select", "multi_select"],
+  due: ["date"],
+  status: ["status", "select"],
+  meeting: ["url", "rich_text"],
+  cycle: ["select", "rich_text"],
+};
+
+const FIELD_LABELS: Record<MappedNotionField, string> = {
+  title: "Task title",
+  key: "Key",
+  assignee: "Assignee",
+  due: "Due date",
+  status: "Status",
+  meeting: "Meeting link",
+  cycle: "Cycle",
+};
+
+const TYPE_LABELS: Record<NotionPropertyType, string> = {
+  title: "title",
+  rich_text: "text",
+  select: "select",
+  multi_select: "multi-select",
+  date: "date",
+  status: "status",
+  url: "link",
+  number: "number",
+  checkbox: "checkbox",
+  people: "people",
+};
+
+const MAPPED_FIELDS: MappedNotionField[] = [
+  "title",
+  "key",
+  "assignee",
+  "due",
+  "status",
+  "meeting",
+  "cycle",
+];
+
+/**
+ * What is wrong with a mapping against the properties of a database: a property that is not
+ * there, one of a type the field cannot use, a status without the value a new page gets.
+ */
+export function checkNotionMapping(
+  map: NotionProperties,
+  schema: { name: string; type: NotionPropertyType }[],
+): NotionMappingProblem[] {
+  const problems: NotionMappingProblem[] = [];
+  for (const field of MAPPED_FIELDS) {
+    const name = map[field];
+    if (name === undefined || name === "") continue;
+    const found = schema.find((p) => p.name === name);
+    if (!found) {
+      problems.push({
+        field,
+        message: `The database has no property "${name}" (${FIELD_LABELS[field]}).`,
+      });
+      continue;
+    }
+    const allowed = ALLOWED_NOTION_TYPES[field];
+    if (!allowed.includes(found.type))
+      problems.push({
+        field,
+        message: `"${name}" is a ${TYPE_LABELS[found.type]} property; ${FIELD_LABELS[field]} needs ${allowed.map((t) => TYPE_LABELS[t]).join(" or ")}.`,
+      });
+  }
+  if (map.status !== undefined && map.status !== "" && !map.statusValue)
+    problems.push({ field: "statusValue", message: "Choose the status a new page gets." });
+  return problems;
 }

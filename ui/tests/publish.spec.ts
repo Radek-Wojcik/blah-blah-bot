@@ -926,6 +926,26 @@ test.describe("Stage 7: Notion and Discord bot integrations", () => {
     expect(afterReexport[1].trashed).toBe(true);
   });
 
+  test("Discord delivery mode is a radio group with arrow keys and drops a pasted webhook", async ({
+    page,
+  }) => {
+    await page.goto(`${MAIN}&page=project&cycle=NOMAD`);
+    await openNomadSettings(page, "Integrations");
+    await page.getByRole("button", { name: "Discord details" }).click();
+    const modes = page.getByRole("radiogroup", { name: "Discord delivery mode" });
+    const webhook = modes.getByRole("radio", { name: "Webhook" });
+    const bot = modes.getByRole("radio", { name: "Bot" });
+    await expect(webhook).toHaveAttribute("tabindex", "0");
+    await expect(bot).toHaveAttribute("tabindex", "-1");
+    await webhook.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(bot).toBeChecked();
+    await expect(bot).toBeFocused();
+    await page.keyboard.press("ArrowLeft");
+    await expect(webhook).toBeChecked();
+    await expect(webhook).toBeFocused();
+  });
+
   test("Discord member search maps a participant and manual ID entry still works", async ({
     page,
   }) => {

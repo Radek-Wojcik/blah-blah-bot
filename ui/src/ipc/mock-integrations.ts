@@ -12,7 +12,13 @@
 import type { Backend } from "./backend";
 import type { CycleStore } from "./mock-cycles";
 import { fail } from "./mock-util";
-import { REQUIRED_BOT_PERMISSIONS, missingBotPermissions } from "../publish";
+import {
+  ALLOWED_NOTION_TYPES as ALLOWED_TYPES,
+  REQUIRED_BOT_PERMISSIONS,
+  checkNotionMapping,
+  missingBotPermissions,
+  type MappedNotionField as MappedField,
+} from "../publish";
 import type {
   CycleDto,
   CycleTargets,
@@ -22,7 +28,6 @@ import type {
   DiscordRef,
   DiscordRole,
   NotionAccess,
-  NotionMappingProblem,
   NotionProperties,
   NotionPropertyType,
   NotionSchema,
@@ -152,84 +157,6 @@ const CHANNELS: { id: string; name: string; kind: DiscordChannelKind }[] = [
 ];
 
 // ----- the field mapping (pure) ---------------------------------------------------------------
-
-type MappedField = "title" | "key" | "assignee" | "due" | "status" | "meeting" | "cycle";
-
-/** The property types each field can be written to. */
-const ALLOWED_TYPES: Record<MappedField, NotionPropertyType[]> = {
-  title: ["title"],
-  key: ["rich_text"],
-  assignee: ["rich_text", "select", "multi_select"],
-  due: ["date"],
-  status: ["status", "select"],
-  meeting: ["url", "rich_text"],
-  cycle: ["select", "rich_text"],
-};
-
-const FIELD_LABELS: Record<MappedField, string> = {
-  title: "Task title",
-  key: "Key",
-  assignee: "Assignee",
-  due: "Due date",
-  status: "Status",
-  meeting: "Meeting link",
-  cycle: "Cycle",
-};
-
-const TYPE_LABELS: Record<NotionPropertyType, string> = {
-  title: "title",
-  rich_text: "text",
-  select: "select",
-  multi_select: "multi-select",
-  date: "date",
-  status: "status",
-  url: "link",
-  number: "number",
-  checkbox: "checkbox",
-  people: "people",
-};
-
-const MAPPED_FIELDS: MappedField[] = [
-  "title",
-  "key",
-  "assignee",
-  "due",
-  "status",
-  "meeting",
-  "cycle",
-];
-
-/**
- * What is wrong with a mapping against the properties of a database: a property that is not
- * there, one of a type the field cannot use, a status without the value a new page gets.
- */
-export function checkNotionMapping(
-  map: NotionProperties,
-  schema: { name: string; type: NotionPropertyType }[],
-): NotionMappingProblem[] {
-  const problems: NotionMappingProblem[] = [];
-  for (const field of MAPPED_FIELDS) {
-    const name = map[field];
-    if (name === undefined || name === "") continue;
-    const found = schema.find((p) => p.name === name);
-    if (!found) {
-      problems.push({
-        field,
-        message: `The database has no property "${name}" (${FIELD_LABELS[field]}).`,
-      });
-      continue;
-    }
-    const allowed = ALLOWED_TYPES[field];
-    if (!allowed.includes(found.type))
-      problems.push({
-        field,
-        message: `"${name}" is a ${TYPE_LABELS[found.type]} property; ${FIELD_LABELS[field]} needs ${allowed.map((t) => TYPE_LABELS[t]).join(" or ")}.`,
-      });
-  }
-  if (map.status !== undefined && map.status !== "" && !map.statusValue)
-    problems.push({ field: "statusValue", message: "Choose the status a new page gets." });
-  return problems;
-}
 
 /** The mapping the properties of a database suggest: names and types decide, nothing else. */
 export function proposeNotionMapping(
